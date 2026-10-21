@@ -3,10 +3,7 @@ Subject: [PATCH 0081] arm64: sleh: emulate ARMv8.1-A LSE atomics
 
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
-@@ -78,3 +78,99 @@
- #include <kern/debug.h>
- #include <arm64/proc_reg.h>
- 
+@@ -100,2 +100,102 @@
 +static inline uint64_t
 +lse_get_reg(arm_saved_state64_t *ss64, uint32_t reg)
 +{
@@ -103,11 +100,13 @@ Subject: [PATCH 0081] arm64: sleh: emulate ARMv8.1-A LSE atomics
 +
 +	return 0;
 +}
-@@ -91,4 +187,7 @@
++
+ void
+ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
+@@ -200,3 +300,6 @@
  	switch (class) {
  	case ESR_EC_UNCATEGORIZED:
 +		if (arm64_emulate_lse_atomic(state)) {
 +			return;
 +		}
  		handle_uncategorized(state);
- 		break;
