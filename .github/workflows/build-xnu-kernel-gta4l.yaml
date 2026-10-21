@@ -69,9 +69,9 @@ jobs:
         run: cd UniXNU && ./unixnu fetch
         timeout-minutes: 60
 
-      #name: Fetch IPSW
-       # run: cd UniXNU && ./unixnu ipsw fetch
-       # timeout-minutes: 60
+       name: Fetch IPSW
+       run: cd UniXNU && ./unixnu ipsw fetch
+       timeout-minutes: 60
 
       - name: Assemble tree
         run: cd UniXNU && ./unixnu tree
