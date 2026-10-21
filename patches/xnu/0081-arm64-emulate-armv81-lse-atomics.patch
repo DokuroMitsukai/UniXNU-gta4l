@@ -1,10 +1,9 @@
 From: V6lhost <v6lhost@proton.me>
-Subject: [PATCH 0081] arm64: sleh: emulate ARMv8.1-A LSE atomic instructions on ARMv8.0-A (Kryo 260 / SM6115)
+Subject: [PATCH 0081] arm64: sleh: emulate ARMv8.1-A LSE atomics
 
-diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
-@@ -78,6 +78,125 @@
+@@ -78,3 +78,99 @@
  #include <kern/debug.h>
  #include <arm64/proc_reg.h>
  
@@ -15,18 +14,18 @@ diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
 +}
 +
 +static inline void
-+lse_set_reg(arm_saved_state64_t *ss64, uint32_t reg, uint64_t val, bool is_64)
++lse_set_reg(arm_saved_state64_t *ss64, uint32_t reg, uint64_t val, int is_64)
 +{
 +	if (reg < 31) {
 +		ss64->x[reg] = is_64 ? val : (uint32_t)val;
 +	}
 +}
 +
-+static bool
++static int
 +arm64_emulate_lse_atomic(arm_saved_state_t *state)
 +{
 +	if (!is_saved_state64(state)) {
-+		return false;
++		return 0;
 +	}
 +	arm_saved_state64_t *ss64 = saved_state64(state);
 +	uint32_t insn = 0;
@@ -46,18 +45,18 @@ diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
 +			uint64_t old = lse_get_reg(ss64, rs);
 +			uint64_t desired = lse_get_reg(ss64, rt);
 +			__atomic_compare_exchange_n((uint64_t *)addr, &old, desired,
-+			    false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-+			lse_set_reg(ss64, rs, old, true);
++			    0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
++			lse_set_reg(ss64, rs, old, 1);
 +			ss64->pc += 4;
-+			return true;
++			return 1;
 +		} else if (size == 2) {
 +			uint32_t old = (uint32_t)lse_get_reg(ss64, rs);
 +			uint32_t desired = (uint32_t)lse_get_reg(ss64, rt);
 +			__atomic_compare_exchange_n((uint32_t *)addr, &old, desired,
-+			    false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-+			lse_set_reg(ss64, rs, old, false);
++			    0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
++			lse_set_reg(ss64, rs, old, 0);
 +			ss64->pc += 4;
-+			return true;
++			return 1;
 +		}
 +	}
 +
@@ -70,7 +69,7 @@ diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
 +		uintptr_t addr = (rn == 31) ? ss64->sp : ss64->x[rn];
 +		uint64_t val = lse_get_reg(ss64, rs);
 +		uint64_t old = 0;
-+		bool is_64 = (size == 3);
++		int is_64 = (size == 3);
 +
 +		if (size == 3) {
 +			uint64_t *ptr = (uint64_t *)addr;
@@ -80,7 +79,7 @@ diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
 +			case 0x2: old = __atomic_fetch_xor(ptr, val, __ATOMIC_SEQ_CST); break;
 +			case 0x3: old = __atomic_fetch_or(ptr, val, __ATOMIC_SEQ_CST); break;
 +			case 0x8: old = __atomic_exchange_n(ptr, val, __ATOMIC_SEQ_CST); break;
-+			default: return false;
++			default: return 0;
 +			}
 +		} else if (size == 2) {
 +			uint32_t *ptr = (uint32_t *)addr;
@@ -91,24 +90,20 @@ diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
 +			case 0x2: old = __atomic_fetch_xor(ptr, v32, __ATOMIC_SEQ_CST); break;
 +			case 0x3: old = __atomic_fetch_or(ptr, v32, __ATOMIC_SEQ_CST); break;
 +			case 0x8: old = __atomic_exchange_n(ptr, v32, __ATOMIC_SEQ_CST); break;
-+			default: return false;
++			default: return 0;
 +			}
 +		} else {
-+			return false;
++			return 0;
 +		}
 +
 +		lse_set_reg(ss64, rt, old, is_64);
 +		ss64->pc += 4;
-+		return true;
++		return 1;
 +	}
 +
-+	return false;
++	return 0;
 +}
-+
- void
- sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
- {
-@@ -91,6 +210,11 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
+@@ -91,4 +187,7 @@
  	switch (class) {
  	case ESR_EC_UNCATEGORIZED:
 +		if (arm64_emulate_lse_atomic(state)) {
