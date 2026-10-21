@@ -108,36 +108,36 @@ jobs:
           print("total:", patched)
           PY
 
-      - name: Pre-cache XNU headers to /tmp (no API calls during build)
-        run: |
-          cd UniXNU/out/gta4l/tree
-          mkdir -p .cache/sources
-          TAG="xnu-10063.121.3"
-          TRUST_TAG="xnu-8796.101.5"
-          SHORT=${TAG#xnu-}
-          TSHORT=${TRUST_TAG#xnu-}
-          echo "TAG=$TAG TRUST_TAG=$TRUST_TAG"
+     # - name: Pre-cache XNU headers to /tmp (no API calls during build)
+       # run: |
+        #  cd UniXNU/out/gta4l/tree
+         # mkdir -p .cache/sources
+          # TAG="xnu-10063.121.3"
+        # TRUST_TAG="xnu-8796.101.5"
+         # SHORT=${TAG#xnu-}
+         # TSHORT=${TRUST_TAG#xnu-}
+         # echo "TAG=$TAG TRUST_TAG=$TRUST_TAG"
           
           # Auth headers for curl
-          AUTH_HEADER=""
-          if [ -n "${{ env.GITHUB_TOKEN }}" ]; then
-            AUTH_HEADER="Authorization: Bearer ${{ env.GITHUB_TOKEN }}"
-          fi
+         # AUTH_HEADER=""
+         # if [ -n "${{ env.GITHUB_TOKEN }}" ]; then
+          #  AUTH_HEADER="Authorization: Bearer ${{ env.GITHUB_TOKEN }}"
+         # fi
 
-          curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit?ref=$TAG" \
-            -o ".cache/sources/xnu-driverkit-$SHORT.json" || true
-          curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit/crypto?ref=$TAG" \
-            -o ".cache/sources/xnu-driverkit-crypto-$SHORT.json" || true
-          curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/apple-oss-distributions/xnu/contents/EXTERNAL_HEADERS/TrustCache?ref=$TRUST_TAG" \
-            -o ".cache/sources/xnu-trustcache-$TSHORT.json" || true
-          echo "=== cached json ==="
-          ls -la .cache/sources/
+         # curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
+          #  "https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit?ref=$TAG" \
+          #  -o ".cache/sources/xnu-driverkit-$SHORT.json" || true
+         # curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
+          #  "https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit/crypto?ref=$TAG" \
+           # -o ".cache/sources/xnu-driverkit-crypto-$SHORT.json" || true
+         # curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
+          #  "https://api.github.com/repos/apple-oss-distributions/xnu/contents/EXTERNAL_HEADERS/TrustCache?ref=$TRUST_TAG" \
+           # -o ".cache/sources/xnu-trustcache-$TSHORT.json" || true
+         # echo "=== cached json ==="
+         # ls -la .cache/sources/
 
-          - name: Clean build cache and fix setup
-          run: |
+      - name: Clean build cache and fix setup
+        run: |
           cd UniXNU
           rm -rf out/gta4l/tree/.cache/xnu-work out/gta4l/build
           # Xcode 16 uyarılarını susturmak için derleme bayrağını zorla
