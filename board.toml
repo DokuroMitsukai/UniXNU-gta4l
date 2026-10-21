@@ -1,0 +1,118 @@
+[board]
+name = "gta4l"
+soc = "SM6115"
+description = "Samsung Galaxy Tab A7 10.4 (2020)"
+kit = "gta4l"
+
+[ipsw]
+url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+product = "iPad7,1"
+version = "17.7.11"
+build = "21H461"
+device_class = "j120ap"
+chip_id = 0x8011
+board_id = 12
+fetch = ["KernelCache", "DeviceTree", "OS", "Cryptex1,SystemOS"]
+
+[userdata]
+first_lba = 0xe74000
+last_lba = 0x3a3dfde
+lba_bytes = 512
+windows = [
+    { name = "OS", component = "OS" },
+    { name = "SystemOS", component = "Cryptex1,SystemOS" },
+]
+
+[kernel]
+defconfig = "gta4l_defconfig"
+
+[kernel.prelink]
+tool = "kits/NativePrelink/emit_prelink.py"
+kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
+kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
+slide = "-0x1000000"
+early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
+roots = [
+    "com.apple.driver.AppleMobileFileIntegrity",
+    "com.apple.security.sandbox",
+    "com.apple.iokit.IOStorageFamily",
+    "com.apple.filesystems.apfs",
+]
+
+[firmware]
+config = "gta4l"
+dsc = "Platforms/Samsung/gta4lPkg/gta4l.dsc"
+fd = "/root/UniXNU/UniXNU-gta4l/SILICIUM_UEFI.fd"
+preflight = ["scripts/check-gta4l.py"]
+submodules = [
+    "Common/Mu",
+    "Common/Mu_OEM_Sample",
+    "Silicium-ACPI",
+    "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl",
+]
+
+[firmware.defines]
+ENABLE_SECUREBOOT = "1"
+DEVICE_MODEL = "gta4l"
+MEMORY_PROTECTION = "TRUE"
+SHIP_MODE = "FALSE"
+BUILDID_STRING = "gta4l-research"
+
+[bootimg.image]
+base = 0x40000000
+kernel_offset = 0x00008000
+ramdisk_offset = 0x01000000
+tags_offset = 0x00000100
+pagesize = 4096
+
+[[bootimg.dtb_node]]
+path = "/chosen/framebuffer@5c000000"
+reg = [0x0, 0x5c000000, 0x0, 0x00927c00]
+width = 1200
+height = 2000
+stride = 4800
+format = "a8r8g8b8"
+
+[[bootimg.dtb_node]]
+path = "/soc/spi@4a80000/himax_ts@0"
+status = "disabled"
+
+[[bootimg.dtb_node]]
+path = "/soc/spi@4a80000/novatek@0"
+status = "disabled"
+
+[[bootimg.dtb_node]]
+path = "/soc/spi@4a80000/focaltech@0"
+status = "disabled"
+
+[payload]
+volume = "GTA4LESP"
+size_mib = 192
+loader = "firmware"
+title = "gta4l first boot: source 4K XNU to console"
+dram_size = "0xC0000000"
+skip_setup_tool = "scripts/seed-data-skip-setup.py"
+panic_screen = true
+kernel_args = [
+    "serial=3",
+    "debug=0x14e",
+    "keepsym=1",
+    "-v",
+    "amfi_get_out_of_my_way=1",
+    "cs_enforcement_disable=1",
+    "fb-base=0x5c000000",
+    "fb-width=1200",
+    "fb-height=2000",
+    "fb-stride=4800",
+    "panel-rot=270",
+]
+
+[payload.adt]
+tool = "scripts/make-gta4l-adt.py"
+chip_id = "444"
+owned_memory_size = "0xC0000000"
+root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
+cpu_regs = "0x0,0x1,0x2,0x3,0x100,0x101,0x102,0x103"
+packed_data_ramdisk = true
+ipad_identity = true
+unique_chip_id = "required"

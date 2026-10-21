@@ -1,0 +1,5 @@
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = gta4lPkg
+  PACKAGE_GUID                   = 9A4D5E12-8C3A-4F90-B12E-6F7C8A9D0E11
+  PACKAGE_VERSION                = 0.1
