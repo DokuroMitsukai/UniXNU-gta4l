@@ -1,0 +1,10 @@
+From: V6lhost <v6lhost@proton.me>
+Subject: [PATCH 0082] makedefs: disable -Werror to allow building with newer Xcode
+
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -52,3 +52,3 @@
+ ifeq ($(USE_WERROR),1)
+-WERROR := -Werror
++#WERROR := -Werror
+ endif
