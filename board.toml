@@ -25,6 +25,14 @@ windows = [
 
 [kernel]
 defconfig = "gta4l_defconfig"
+# Builders that run before the kernel link. Only these exist in this repository and the driver:
+# corecrypto (plain + namespaced), the DT platform expert and ArmCpu.
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "build-arm-driver.py ArmDTPlatform",
+  "build-arm-driver.py ArmCpu",
+]
 
 [kernel.prelink]
 tool = "kits/NativePrelink/emit_prelink.py"
