@@ -1,0 +1,156 @@
+name: build-xnu-kernel-gta4l
+
+on:
+  workflow_dispatch:
+    inputs:
+      device_repository:
+        description: Device repository as owner/name
+        required: true
+        default: Mizanla/UniXNU-gta4l
+      device_ref:
+        description: Device repository ref
+        required: true
+        default: main
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 350
+    env:
+      GITHUB_TOKEN: ${{ secrets.GH_PAT || github.token }}
+      UNIXNU_DEBUG_LDFILELIST: "1"
+      XNU_MAKE_V: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: |
+          echo "=== available Xcode ==="
+          ls -d /Applications/Xcode*.app 2>/dev/null || echo none
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          echo "picked: $XC"
+          if [ -n "$XC" ]; then
+            sudo xcode-select -s "$XC/Contents/Developer"
+            echo "DEVELOPER_DIR=$XC/Contents/Developer" >> $GITHUB_ENV
+            echo "exported DEVELOPER_DIR=$XC/Contents/Developer"
+          else
+            echo "no Xcode 16 found"
+          fi
+          xcodebuild -version
+          xcrun --find clang
+
+      - name: Environment check
+        run: |
+          xcodebuild -version
+          python3 --version
+          uname -m
+          df -h /
+
+      - name: Clone UniXNU
+        run: |
+          git clone --recurse-submodules --depth 1 --shallow-submodules https://github.com/Mizanla/UniXNU.git UniXNU
+
+      - name: Checkout Device Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.device_repository }}
+          ref: ${{ inputs.device_ref }}
+          path: device
+          submodules: recursive
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Select defconfig
+        run: |
+          cd UniXNU
+          chmod +x unixnu
+          ./unixnu defconfig gta4l_defconfig -D "$GITHUB_WORKSPACE/device"
+
+      - name: Fetch sources
+        run: cd UniXNU && ./unixnu fetch
+        timeout-minutes: 60
+
+      - name: Fetch IPSW
+        run: cd UniXNU && ./unixnu ipsw fetch
+        timeout-minutes: 60
+
+      - name: Assemble tree
+        run: cd UniXNU && ./unixnu tree
+        timeout-minutes: 30
+
+      - name: Inject GITHUB_TOKEN into API scripts
+        run: |
+          cd UniXNU/out/gta4l/tree
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, glob
+          token = os.environ.get("GITHUB_TOKEN", "")
+          print("token present:", bool(token))
+          patched = 0
+          for f in glob.glob("scripts/*.py"):
+              p = Path(f)
+              s = p.read_text()
+              if "api.github.com" not in s or "_UNIXNU_TOKEN_PATCH" in s:
+                  continue
+              if "import urllib.request" not in s:
+                  continue
+              patch = "import urllib.request\n_gh_token = __import__(\"os\").environ.get(\"GITHUB_TOKEN\", \"\")\nif _gh_token:\n    _orig_urlopen = urllib.request.urlopen\n    def _urlopen(url, *a, **kw):\n        req = urllib.request.Request(url) if isinstance(url, str) else url\n        req.add_header(\"Authorization\", \"Bearer \" + _gh_token)\n        req.add_header(\"Accept\", \"application/vnd.github+json\")\n        return _orig_urlopen(req, *a, **kw)\n    urllib.request.urlopen = _urlopen"
+              s = s.replace("import urllib.request", patch, 1)
+              p.write_text(s)
+              patched += 1
+              print("patched:", f)
+          print("total:", patched)
+          PY
+
+      - name: Pre-cache XNU headers to /tmp (no API calls during build)
+        run: |
+          cd UniXNU/out/gta4l/tree
+          mkdir -p .cache/sources
+          TAG="xnu-10063.121.3"
+          TRUST_TAG="xnu-8796.101.5"
+          SHORT=${TAG#xnu-}
+          TSHORT=${TRUST_TAG#xnu-}
+          echo "TAG=$TAG TRUST_TAG=$TRUST_TAG"
+          
+          # Auth headers for curl
+          AUTH_HEADER=""
+          if [ -n "${{ env.GITHUB_TOKEN }}" ]; then
+            AUTH_HEADER="Authorization: Bearer ${{ env.GITHUB_TOKEN }}"
+          fi
+
+          curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit?ref=$TAG" \
+            -o ".cache/sources/xnu-driverkit-$SHORT.json" || true
+          curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit/crypto?ref=$TAG" \
+            -o ".cache/sources/xnu-driverkit-crypto-$SHORT.json" || true
+          curl -sL --fail ${AUTH_HEADER:+-H "$AUTH_HEADER"} -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/apple-oss-distributions/xnu/contents/EXTERNAL_HEADERS/TrustCache?ref=$TRUST_TAG" \
+            -o ".cache/sources/xnu-trustcache-$TSHORT.json" || true
+          echo "=== cached json ==="
+          ls -la .cache/sources/
+
+      - name: Build kernel
+        run: |
+          cd UniXNU
+          ./unixnu fetch xnu || true
+          ./unixnu tree || true
+          ls -la out/gta4l/tree/refer/ || true
+          ./unixnu build kernel
+          ls -lh out/gta4l/kernel/ || true
+        timeout-minutes: 180
+
+      - name: Dump build log on failure
+        if: failure()
+        run: |
+          echo "===== kernel-bootstrap.log ====="
+          tail -100 UniXNU/out/gta4l/logs/kernel-bootstrap.log 2>/dev/null || echo "(missing)"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-gta4l
+          path: |
+            UniXNU/out/gta4l/kernel/
+            UniXNU/out/gta4l/logs/
+          if-no-files-found: warn
