@@ -5,14 +5,14 @@ description = "Samsung Galaxy Tab A7 10.4 (2020)"
 kit = "gta4l"
 
 [ipsw]
-url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+url = "https://updates.cdn-apple.com/2024SummerFCS/fullrestores/052-87005/1C50C315-7B03-4E80-8AD9-8800AD2C9DF7/iPad_Pro_HFR_16.7.10_20G346_Restore.ipsw"
 product = "iPad7,1"
-version = "17.7.11"
-build = "21H461"
+version = "16.7.10"
+build = "20G346"
 device_class = "j120ap"
 chip_id = 0x8011
 board_id = 12
-fetch = ["KernelCache", "DeviceTree", "OS", "Cryptex1,SystemOS"]
+fetch = ["KernelCache", "DeviceTree", "OS", "SystemOS", "Cryptex1,SystemOS"]
 
 [userdata]
 first_lba = 0xe74000
