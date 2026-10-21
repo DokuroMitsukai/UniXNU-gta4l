@@ -83,6 +83,13 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import os, glob
+          # Fix prepare-xnu-source.py if it exists
+          prep_script = Path("scripts/prepare-xnu-source.py")
+          if prep_script.exists():
+              code = prep_script.read_text()
+              if "import pathlib" not in code:
+                  prep_script.write_text("import pathlib\nimport os\nimport urllib.request\nimport json\nimport sys\n" + code)
+                  print("Fixed missing imports in prepare-xnu-source.py")
           token = os.environ.get("GITHUB_TOKEN", "")
           print("token present:", bool(token))
           patched = 0
