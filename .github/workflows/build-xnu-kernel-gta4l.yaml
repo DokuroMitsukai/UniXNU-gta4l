@@ -77,6 +77,28 @@ jobs:
         run: cd UniXNU && ./unixnu tree
         timeout-minutes: 30
 
+      - name: Inject Xcode 16 Fixes for Host Tools
+        run: |
+          cd UniXNU/out/gta4l/tree
+          python3 - << 'EOF'
+          import pathlib
+          p = pathlib.Path("scripts/build-xnu-4k-baseline.sh")
+          if p.exists():
+              lines = p.read_text().splitlines()
+              new_lines = []
+              for line in lines:
+                  # Intercept the exact line where it compiles the host tools
+                  if 'make -C .cache/xnu-work installhdrs' in line:
+                      new_lines.append('echo "=> Stripping strict Xcode 16 warnings from SETUP host tools..."')
+                      new_lines.append('find .cache/xnu-work/SETUP -type f -name "Makefile*" -exec sed -i \'\' \'s/-Werror//g\' {} + || true')
+                      new_lines.append('find .cache/xnu-work/SETUP -type f -name "*.c" -exec sed -i \'\' \'s/int lpos, len = 0;/int len = 0;/g\' {} + || true')
+                      # Force disable all implicit function errors on the Make command
+                      line = line.replace('make -C', 'make WERROR="" HOST_WERROR="" HOST_CFLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int" -C')
+                  new_lines.append(line)
+              p.write_text("\n".join(new_lines) + "\n")
+              print("Successfully injected Xcode 16 bypass into baseline script!")
+          EOF
+
       - name: Inject GITHUB_TOKEN into API scripts
         run: |
           cd UniXNU/out/gta4l/tree
