@@ -69,9 +69,9 @@ jobs:
         run: cd UniXNU && ./unixnu fetch
         timeout-minutes: 60
 
-      - name: Fetch IPSW
-        run: cd UniXNU && ./unixnu ipsw fetch
-        timeout-minutes: 60
+      #name: Fetch IPSW
+       # run: cd UniXNU && ./unixnu ipsw fetch
+       # timeout-minutes: 60
 
       - name: Assemble tree
         run: cd UniXNU && ./unixnu tree
@@ -135,6 +135,14 @@ jobs:
             -o ".cache/sources/xnu-trustcache-$TSHORT.json" || true
           echo "=== cached json ==="
           ls -la .cache/sources/
+
+          - name: Clean build cache and fix setup
+          run: |
+          cd UniXNU
+          rm -rf out/gta4l/tree/.cache/xnu-work out/gta4l/build
+          # Xcode 16 uyarılarını susturmak için derleme bayrağını zorla
+          export CFLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations"
+          export HOST_CFLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations"
 
       - name: Build kernel
         run: |
