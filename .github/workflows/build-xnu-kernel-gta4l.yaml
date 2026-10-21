@@ -140,8 +140,8 @@ jobs:
         run: |
           cd UniXNU
           rm -rf out/gta4l/tree/.cache/xnu-work out/gta4l/build
-         export CFLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations"
-         export HOST_CFLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations"
+          export CFLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations"
+          export HOST_CFLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations"
 
       - name: Build kernel
         run: |
