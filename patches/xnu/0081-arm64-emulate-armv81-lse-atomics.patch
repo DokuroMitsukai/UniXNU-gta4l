@@ -1,9 +1,22 @@
-From: V6lhost <v6lhost@proton.me>
-Subject: [PATCH 0081] arm64: sleh: emulate ARMv8.1-A LSE atomics
-
+diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
+index ff5296d..654809d 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
-@@ -100,2 +100,102 @@
+@@ -513,6 +513,9 @@ sleh_synchronous_sp1(arm_context_t *context, uint32_t esr, vm_offset_t far __unu
+ 
+ 	switch (class) {
+ 	case ESR_EC_UNCATEGORIZED:
++		if (arm64_emulate_lse_atomic(state)) {
++			return;
++		}
+ 	{
+ #if (DEVELOPMENT || DEBUG)
+ 		uint32_t instr = *((uint32_t*)get_saved_state_pc(state));
+@@ -603,6 +606,104 @@ is_platform_error(uint32_t esr)
+ 	return fault_code == FSC_SYNC_PARITY;
+ }
+ 
++
 +static inline uint64_t
 +lse_get_reg(arm_saved_state64_t *ss64, uint32_t reg)
 +{
@@ -102,11 +115,5 @@ Subject: [PATCH 0081] arm64: sleh: emulate ARMv8.1-A LSE atomics
 +}
 +
  void
- sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
-@@ -200,3 +300,6 @@
- 	switch (class) {
- 	case ESR_EC_UNCATEGORIZED:
-+		if (arm64_emulate_lse_atomic(state)) {
-+			return;
-+		}
- 		handle_uncategorized(state);
+ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far, __unused bool did_initiate_panic_lockdown)
+ {
