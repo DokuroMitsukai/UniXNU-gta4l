@@ -143,6 +143,15 @@ jobs:
           export CFLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations"
           export HOST_CFLAGS="-Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations"
 
+      - name: Force patch SETUP config Makefile for Xcode 16
+        run: |
+          cd UniXNU
+          find . -path "*/SETUP/config/Makefile.in" -o -path "*/config/Makefile.in" | while read -r f; do
+            echo "Patching $f"
+            echo "CFLAGS += -w -Wno-error -Wno-unused-but-set-variable -Wno-deprecated-declarations" >> "$f"
+          done
+          find . -name "mkmakefile.c" -exec sed -i '' 's/int lpos, len = 0;/int len = 0; \/* lpos removed *\/ /g' {} +
+
       - name: Build kernel
         run: |
           cd UniXNU
