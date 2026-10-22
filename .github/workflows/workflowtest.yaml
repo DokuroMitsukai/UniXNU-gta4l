@@ -144,6 +144,7 @@ jobs:
           ./unixnu build kernel
           ls -lh out/gta4l/kernel/ || true
         timeout-minutes: 180
+<<<<<<< HEAD
 
       - name: Build payload
         run: |
@@ -152,6 +153,8 @@ jobs:
           ./unixnu build payload
           ls -lh out/gta4l/payload/ || true
         timeout-minutes: 60
+=======
+>>>>>>> parent of 3ae8a56 (Add payload build step to workflow)
 
       - name: Dump build log on failure
         if: failure()
@@ -183,6 +186,5 @@ jobs:
           name: kernel-gta4l
           path: |
             UniXNU/out/gta4l/kernel/
-            UniXNU/out/gta4l/payload/
             UniXNU/out/gta4l/logs/
           if-no-files-found: warn
