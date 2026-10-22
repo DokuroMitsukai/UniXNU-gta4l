@@ -137,6 +137,7 @@ jobs:
       - name: Build payload
         run: |
           cd UniXNU
+          export UNIXNU_UNIQUE_CHIP_ID="0x1122334455667788"
           ./unixnu build payload
           ls -lh out/gta4l/payload/ || true
         timeout-minutes: 60
