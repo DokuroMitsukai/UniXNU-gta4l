@@ -64,6 +64,16 @@ jobs:
         run: cd UniXNU && ./unixnu ipsw fetch
         timeout-minutes: 60
 
+      - name: Fetch IOStorageFamily (Source Level)
+        run: |
+          cd UniXNU
+          mkdir -p refer
+          if [ ! -d refer/IOStorageFamily/.git ]; then
+            git clone --filter=blob:none https://github.com/apple-oss-distributions/IOStorageFamily.git refer/IOStorageFamily
+          fi
+          git -C refer/IOStorageFamily checkout -q e45fbe30a7879e0b16e26dddb78538f1b00e0bff
+          echo "IOStorageFamily HEAD: $(git -C refer/IOStorageFamily rev-parse HEAD)"
+
       - name: Assemble tree
         run: cd UniXNU && ./unixnu tree
         timeout-minutes: 30
@@ -130,34 +140,13 @@ jobs:
           echo "=== cached json ==="
           ls -la .cache/sources/
 
-      - name: Fetch IOStorageFamily (public Apple Darwin 23 source)
-        run: |
-          cd UniXNU/out/gta4l/tree
-          mkdir -p refer
-          if [ ! -d refer/IOStorageFamily/.git ]; then
-            git clone --filter=blob:none https://github.com/apple-oss-distributions/IOStorageFamily.git refer/IOStorageFamily
-          fi
-          git -C refer/IOStorageFamily checkout -q e45fbe30a7879e0b16e26dddb78538f1b00e0bff
-          echo "IOStorageFamily HEAD: $(git -C refer/IOStorageFamily rev-parse HEAD)"
-
-      - name: Build kernel
-        run: |
-          cd UniXNU
-          # The tree was already assembled (and patched) by the "Assemble tree" step.
-          # Re-running `unixnu tree` here applied the patches a second time, failed on
-          # the ones that are not idempotent, and the `|| true` hid it -- leaving make to
-          # build a half-patched tree. Build the tree that was actually assembled.
-          ./unixnu build kernel
-          ls -lh out/gta4l/kernel/ || true
-        timeout-minutes: 180
-        
       - name: Build payload
         run: |
           cd UniXNU
           export UNIXNU_UNIQUE_CHIP_ID="0x1122334455667788"
           ./unixnu build payload
           ls -lh out/gta4l/payload/ || true
-        timeout-minutes: 60
+        timeout-minutes: 180
 
       - name: Dump build log on failure
         if: failure()
