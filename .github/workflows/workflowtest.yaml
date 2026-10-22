@@ -54,7 +54,7 @@ jobs:
         run: |
           cd UniXNU
           chmod +x unixnu
-          ./unixnu defconfig gta4l_defconfig -D "$GITHUB_WORKSPACE/configs"
+          ./unixnu defconfig gta4l_defconfig -D "$GITHUB_WORKSPACE"
 
       - name: Fetch sources
         run: cd UniXNU && ./unixnu fetch
