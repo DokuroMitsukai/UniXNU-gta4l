@@ -133,6 +133,13 @@ jobs:
           ./unixnu build kernel
           ls -lh out/gta4l/kernel/ || true
         timeout-minutes: 180
+        
+      - name: Build payload
+        run: |
+          cd UniXNU
+          ./unixnu build payload
+          ls -lh out/gta4l/payload/ || true
+        timeout-minutes: 60
 
       - name: Dump build log on failure
         if: failure()
@@ -164,5 +171,6 @@ jobs:
           name: kernel-gta4l
           path: |
             UniXNU/out/gta4l/kernel/
+            UniXNU/out/gta4l/payload/
             UniXNU/out/gta4l/logs/
           if-no-files-found: warn
