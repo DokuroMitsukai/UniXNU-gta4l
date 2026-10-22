@@ -15,6 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fix Windows Line Endings (CRLF -> LF)
+        run: |
+          find . -type f \( -name "*_defconfig" -o -name "*.toml" \) -exec perl -pi -e 's/\r\n/\n/g' {} +
+
       - name: Select Oldest Xcode (Fixes XNU-10063 MIG/Headers)
         run: |
           echo "=== available Xcode ==="
