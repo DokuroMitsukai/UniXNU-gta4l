@@ -76,8 +76,8 @@ jobs:
 
       - name: Erase Nabu Telemetry (Dummy Header)
         run: |
-          mkdir -p UniXNU/out/gta4l/tree/.cache/xnu-work/osfmk/arm
-          cat << 'EOF' > UniXNU/out/gta4l/tree/.cache/xnu-work/osfmk/arm/nabu_early_mark.h
+          cd UniXNU/out/gta4l/tree/refer/xnu
+          cat << 'EOF' > osfmk/arm/nabu_early_mark.h
           #ifndef _NABU_EARLY_MARK_H_
           #define _NABU_EARLY_MARK_H_
           
@@ -90,6 +90,10 @@ jobs:
           
           #endif
           EOF
+          git add osfmk/arm/nabu_early_mark.h
+          git config user.name "Build Bot"
+          git config user.email "bot@example.com"
+          git commit -m "Inject dummy telemetry header"
 
       - name: Inject GITHUB_TOKEN into API scripts
         run: |
