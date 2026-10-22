@@ -36,7 +36,6 @@ archives = [
   "build-arm-driver.py ArmCpu",
   "build-arm-driver.py NativeAES",
   "audit-storage-interface.py",
-  "build-arm-driver.py NativeUfs",
 ]
 
 [kernel.prelink]
