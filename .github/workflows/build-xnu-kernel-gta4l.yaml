@@ -179,6 +179,22 @@ jobs:
           cd UniXNU
           ./unixnu fetch xnu || true
           ./unixnu tree || true
+          # 2. Re-apply the script patches NOW, before the build can wipe them
+          cd out/gta4l/tree
+          python3 - <<'PY'
+          import os, glob, pathlib
+          for f in glob.glob("scripts/*.py"):
+              p = pathlib.Path(f)
+              s = p.read_text()
+              
+              # Fix missing pathlib import
+              if "pathlib.Path" in s and "import pathlib" not in s:
+                  s = "import pathlib\n" + s
+              
+              # Inject GITHUB_TOKEN authentication to bypass rate limits
+              if "api.github.com" in s and "import urllib.request" in s and "_UNIXNU_TOKEN_PATCH" not in s:
+                  patch = "import urllib.request\n_gh_token = __import__(\"os\").environ.get(\"GITHUB_TOKEN\", \"\")\nif _gh_token:\n    _orig_urlopen = urllib.request.urlopen\n    def _urlopen(url, *a, **kw):\n        req = urllib.request.Request(url) if isinstance(url, str) else url\n        req.add_header(\"Authorization\", \"Bearer \" + _gh_token)\n        req.add_header(\"Accept\", \"application/vnd.github+json\")\n        return _orig_urlopen(req, *a, **kw)\n    urllib.request.urlopen = _urlopen\n_UNIXNU_TOKEN_PATCH = True"
+                  s = s.replace("import urllib.request", patch, 1)
           ls -la out/gta4l/tree/refer/ || true
           ./unixnu build kernel
           ls -lh out/gta4l/kernel/ || true
