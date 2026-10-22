@@ -2,7 +2,7 @@
 name = "gta4l"
 soc = "SM6115"
 description = "Samsung Galaxy Tab A7 10.4 (2020)"
-kit = "nabu"
+kit = "gta4l"
 
 [ipsw]
 url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
