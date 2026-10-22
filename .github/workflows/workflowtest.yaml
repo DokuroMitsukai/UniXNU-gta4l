@@ -1,4 +1,4 @@
-name: build-xnu-kernel-gta4l
+name: build-xnu-kerneltest-gta4l
 
 on:
   workflow_dispatch:
