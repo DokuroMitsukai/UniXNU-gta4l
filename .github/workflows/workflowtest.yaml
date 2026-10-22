@@ -21,16 +21,16 @@ jobs:
 
       - name: Select Oldest Xcode (Fixes XNU-10063 MIG/Headers)
         run: |
-          echo "=== available Xcode ==="
-          ls -d /Applications/Xcode*.app 2>/dev/null || echo none
-          XC=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | head -1)
+          # Force Xcode 15.0.1 to resolve IORPCMessageFromMach compiler errors
+          XC="/Applications/Xcode_15.0.1.app"
           echo "picked: $XC"
-          if [ -n "$XC" ]; then
+          if [ -d "$XC" ]; then
             sudo xcode-select -s "$XC/Contents/Developer"
             echo "DEVELOPER_DIR=$XC/Contents/Developer" >> $GITHUB_ENV
             echo "exported DEVELOPER_DIR=$XC/Contents/Developer"
           else
-            echo "no Xcode found"
+            echo "Xcode 15.0.1 not found on runner!"
+            exit 1
           fi
           xcodebuild -version
           xcrun --find clang
