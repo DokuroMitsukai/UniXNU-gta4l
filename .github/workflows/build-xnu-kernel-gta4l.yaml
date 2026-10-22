@@ -74,6 +74,14 @@ jobs:
 #        run: cd UniXNU && ./unixnu ipsw fetch
 #        timeout-minutes: 60
 
+      - name: Sync missing Nabu injection scripts
+        run: |
+          git clone --depth 1 https://github.com/lux12138/unixnu-nabu.git /tmp/nabu
+          mkdir -p kits
+          cp -r /tmp/nabu/kits/nabu kits/
+          cp /tmp/nabu/scripts/inject-early-marks.sh scripts/
+          chmod +x scripts/inject-early-marks.sh
+
       - name: Assemble tree
         run: cd UniXNU && ./unixnu tree
         timeout-minutes: 30
