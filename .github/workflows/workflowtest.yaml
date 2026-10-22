@@ -64,17 +64,26 @@ jobs:
         run: cd UniXNU && ./unixnu ipsw fetch
         timeout-minutes: 60
 
-      - name: Sync missing Nabu injection scripts
-        run: |
-          git clone --depth 1 https://github.com/lux12138/unixnu-nabu.git /tmp/nabu
-          mkdir -p kits
-          cp -r /tmp/nabu/kits/nabu kits/
-          cp /tmp/nabu/scripts/inject-early-marks.sh scripts/
-          chmod +x scripts/inject-early-marks.sh
-
       - name: Assemble tree
         run: cd UniXNU && ./unixnu tree
         timeout-minutes: 30
+
+      - name: Erase Nabu Telemetry (Dummy Header)
+        run: |
+          mkdir -p UniXNU/out/gta4l/tree/.cache/xnu-work/osfmk/arm
+          cat << 'EOF' > UniXNU/out/gta4l/tree/.cache/xnu-work/osfmk/arm/nabu_early_mark.h
+          #ifndef _NABU_EARLY_MARK_H_
+          #define _NABU_EARLY_MARK_H_
+          
+          #ifdef __ASSEMBLER__
+          .macro nabu_mark
+          .endmacro
+          #else
+          #define nabu_mark(x)
+          #endif
+          
+          #endif
+          EOF
 
       - name: Inject GITHUB_TOKEN into API scripts
         run: |
