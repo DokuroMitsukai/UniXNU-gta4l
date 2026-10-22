@@ -1,0 +1,166 @@
+version: 2.1
+
+jobs:
+  build:
+    macos:
+      xcode: "15.4.0"
+    resource_class: macos.m1.medium.gen1
+    environment:
+      GITHUB_TOKEN: ${GH_PAT:-$GITHUB_TOKEN}
+      UNIXNU_DEBUG_LDFILELIST: "1"
+      XNU_MAKE_V: "1"
+      GH_TOKEN: ${GH_PAT:-$GITHUB_TOKEN}
+    steps:
+      - checkout
+
+      - run:
+          name: Fix Windows Line Endings (CRLF -> LF)
+          command: |
+            find . -type f \( -name "*_defconfig" -o -name "*.toml" \) -exec perl -pi -e 's/\r\n/\n/g' {} +
+
+      - run:
+          name: Select Oldest Xcode (Fixes XNU-10063 MIG/Headers)
+          command: |
+            echo "=== available Xcode ==="
+            ls -d /Applications/Xcode*.app 2>/dev/null || echo none
+            XC=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | head -1)
+            echo "picked: $XC"
+            if [ -n "$XC" ]; then
+              sudo xcode-select -s "$XC/Contents/Developer"
+              echo "export DEVELOPER_DIR=$XC/Contents/Developer" >> $BASH_ENV
+              echo "exported DEVELOPER_DIR=$XC/Contents/Developer"
+            else
+              echo "no Xcode found"
+            fi
+            xcodebuild -version
+            xcrun --find clang
+
+      - run:
+          name: Environment check
+          command: |
+            xcodebuild -version
+            python3 --version
+            uname -m
+            df -h /
+
+      - run:
+          name: Clone UniXNU
+          command: |
+            git clone --recurse-submodules --depth 1 --shallow-submodules https://github.com/Lux12138/UniXNU.git UniXNU
+
+      - run:
+          name: Select defconfig
+          command: |
+            cd UniXNU
+            chmod +x unixnu
+            ./unixnu defconfig gta4l_defconfig -D "$PWD/.."
+
+      - run:
+          name: Fetch sources
+          no_output_timeout: 60m
+          command: cd UniXNU && ./unixnu fetch
+
+      - run:
+          name: Fetch IPSW
+          no_output_timeout: 60m
+          command: cd UniXNU && ./unixnu ipsw fetch
+
+      - run:
+          name: Assemble tree
+          no_output_timeout: 30m
+          command: cd UniXNU && ./unixnu tree
+
+      - run:
+          name: Inject GITHUB_TOKEN into API scripts
+          command: |
+            cd UniXNU/out/gta4l/tree
+            python3 - \<<'PY'
+            from pathlib import Path
+            import os, glob
+            token = os.environ.get("GITHUB_TOKEN", "")
+            print("token present:", bool(token))
+            patched = 0
+            for f in glob.glob("scripts/*.py"):
+                p = Path(f)
+                s = p.read_text()
+                if "api.github.com" not in s or "_UNIXNU_TOKEN_PATCH" in s:
+                    continue
+                if "import urllib.request" not in s:
+                    continue
+                patch = "import urllib.request\n_gh_token = __import__(\"os\").environ.get(\"GITHUB_TOKEN\", \"\")\nif _gh_token:\n    _orig_urlopen = urllib.request.urlopen\n    def _urlopen(url, *a, **kw):\n        req = urllib.request.Request(url) if isinstance(url, str) else url\n        req.add_header(\"Authorization\", \"Bearer \" + _gh_token)\n        req.add_header(\"Accept\", \"application/vnd.github+json\")\n        return _orig_urlopen(req, *a, **kw)\n    urllib.request.urlopen = _urlopen"
+                s = s.replace("import urllib.request", patch, 1)
+                p.write_text(s)
+                patched += 1
+                print("patched:", f)
+            print("total:", patched)
+            PY
+
+      - run:
+          name: Pre-cache XNU headers to /tmp (no API calls during build)
+          command: |
+            cd UniXNU/out/gta4l/tree
+            mkdir -p .cache/sources
+            TAG="xnu-10063.121.3"
+            TRUST_TAG="xnu-8796.101.5"
+            SHORT=${TAG#xnu-}
+            TSHORT=${TRUST_TAG#xnu-}
+            echo "TAG=$TAG TRUST_TAG=$TRUST_TAG"
+            curl -sL --fail -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit?ref=$TAG" \
+              -o ".cache/sources/xnu-driverkit-$SHORT.json"
+            curl -sL --fail -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/apple-oss-distributions/xnu/contents/iokit/DriverKit/crypto?ref=$TAG" \
+              -o ".cache/sources/xnu-driverkit-crypto-$SHORT.json"
+            curl -sL --fail -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/apple-oss-distributions/xnu/contents/EXTERNAL_HEADERS/TrustCache?ref=$TRUST_TAG" \
+              -o ".cache/sources/xnu-trustcache-$TSHORT.json"
+            echo "=== cached json ==="
+            ls -la .cache/sources/
+
+      - run:
+          name: Fetch IOStorageFamily (public Apple Darwin 23 source)
+          command: |
+            cd UniXNU/out/gta4l/tree
+            mkdir -p refer
+            if [ ! -d refer/IOStorageFamily/.git ]; then
+              git clone --filter=blob:none https://github.com/apple-oss-distributions/IOStorageFamily.git refer/IOStorageFamily
+            fi
+            git -C refer/IOStorageFamily checkout -q e45fbe30a7879e0b16e26dddb78538f1b00e0bff
+            echo "IOStorageFamily HEAD: $(git -C refer/IOStorageFamily rev-parse HEAD)"
+
+      - run:
+          name: Build kernel
+          no_output_timeout: 180m
+          command: |
+            cd UniXNU
+            ./unixnu build kernel
+            ls -lh out/gta4l/kernel/ || true
+
+      - run:
+          name: Dump build log on failure
+          when: on_fail
+          command: |
+            echo "===== kernel.log (real build) ====="
+            tail -250 UniXNU/out/gta4l/logs/kernel.log 2>/dev/null || echo "(missing)"
+            echo "===== kernel-bootstrap.log (record pass) ====="
+            tail -60 UniXNU/out/gta4l/logs/kernel-bootstrap.log 2>/dev/null || echo "(missing)"
+            echo "===== bootstrap errors (full file scan) ====="
+            grep -a -nE 'error:|Error [0-9]|\*\*\*|undefined symbol|No such file|cannot find' \
+              UniXNU/out/gta4l/logs/kernel-bootstrap.log 2>/dev/null | head -25 || echo "(no error lines)"
+            echo "===== bootstrap log size / tail of make output ====="
+            wc -l UniXNU/out/gta4l/logs/kernel-bootstrap.log 2>/dev/null
+            grep -a -nE 'make([[0-9]])?:' UniXNU/out/gta4l/logs/kernel-bootstrap.log 2>/dev/null | tail -10
+
+      - store_artifacts:
+          path: UniXNU/out/gta4l/kernel/
+          destination: kernel-gta4l/kernel
+
+      - store_artifacts:
+          path: UniXNU/out/gta4l/logs/
+          destination: kernel-gta4l/logs
+
+workflows:
+  version: 2
+  build-xnu-kerneltest-gta4l:
+    jobs:
+      - build
