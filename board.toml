@@ -12,7 +12,11 @@ build = "21H461"
 device_class = "j120ap"
 chip_id = 0x8011
 board_id = 12
-fetch = ["KernelCache", "DeviceTree", "OS", "Cryptex1,SystemOS"]
+fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
+
+[ipsw.sha256]
+"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
+"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
 
 [userdata]
 first_lba = 0xe74000
@@ -25,6 +29,15 @@ windows = [
 
 [kernel]
 defconfig = "gta4l_defconfig"
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "build-arm-driver.py ArmDTPlatform",
+  "build-arm-driver.py ArmCpu",
+  "build-arm-driver.py NativeAES",
+  "audit-storage-interface.py",
+  "build-arm-driver.py NativeUfs",
+]
 
 [kernel.prelink]
 tool = "kits/NativePrelink/emit_prelink.py"
@@ -33,10 +46,25 @@ kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2
 slide = "-0x1000000"
 early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
 roots = [
-    "com.apple.driver.AppleMobileFileIntegrity",
-    "com.apple.security.sandbox",
-    "com.apple.iokit.IOStorageFamily",
-    "com.apple.filesystems.apfs",
+  "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
+  "com.apple.driver.AppleARMPlatform",
+  "com.apple.driver.AppleARMWatchdogTimer",
+  "com.apple.driver.AppleEffaceableStorage",
+  "com.apple.driver.AppleMobileFileIntegrity",
+  "com.apple.driver.ApplePMGR",
+  "com.apple.driver.IODARTFamily",
+  "com.apple.filesystems.apfs",
+  "com.apple.iokit.IOCryptoAcceleratorFamily",
+  "com.apple.iokit.IOGPUFamily",
+  "com.apple.iokit.IOReportFamily",
+  "com.apple.kec.pthread",
+  "com.apple.kec.Libm",
+  "com.apple.kec.corecrypto",
+  "com.apple.kext.AppleMatch",
+  "com.apple.kext.CoreTrust",
+  "com.apple.security.AppleImage4",
+  "com.apple.security.sandbox",
+  "com.apple.iokit.IOHIDFamily",
 ]
 
 [firmware]
