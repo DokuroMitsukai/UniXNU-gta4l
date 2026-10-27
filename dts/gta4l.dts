@@ -1,0 +1,29 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+//
+// Samsung Galaxy Tab A7 10.4 (2020), SM-T505N / gta4l.
+// Memory and the framebuffer reservation come from the live SM-T505N FDT
+// captured from the tablet. The SoC DTSI supplies CPU, PSCI, GIC and timer
+// resources; board-specific peripherals stay here.
+/dts-v1/;
+/include/ "sm6115.dtsi"
+
+/ {
+    model = "Samsung Galaxy Tab A7 10.4 (2020)";
+    compatible = "samsung,gta4l", "qcom,sm6115";
+
+    memory@40000000 {
+        device_type = "memory";
+        reg = <0 0x40000000 0 0xc0000000>;
+    };
+
+    reserved-memory {
+        #address-cells = <2>;
+        #size-cells = <2>;
+        ranges;
+
+        framebuffer@5c000000 {
+            reg = <0 0x5c000000 0 0x00927c00>;
+            no-map;
+        };
+    };
+};

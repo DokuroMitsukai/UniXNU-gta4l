@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Legacy format-1 ADT generator. Format 2 uses dts/gta4l.dts with the common
+# UniXNU ADT generator; keep this file only as a historical reference.
 import argparse
 import json
 import os
