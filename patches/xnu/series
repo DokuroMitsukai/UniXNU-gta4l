@@ -1,0 +1,2 @@
+# Board XNU patches, in application order.
+# None yet. Shared patches come from the ARM64, SM6115 and OS profiles.
