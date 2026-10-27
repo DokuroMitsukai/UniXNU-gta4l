@@ -28,7 +28,8 @@ The primary `board.toml` is Format 2:
 It keeps:
 
 - `ENABLE_SECUREBOOT = "1"`
-- the existing `gta4l_defconfig` PAN setting
+- `CONFIG_XNU_NATIVE_PAN=n` in `gta4l_defconfig`: the SM6115 Cortex-A73/A53
+  cores are ARMv8.0 and do not implement PAN
 - payload size 192 MiB
 - `panic_screen = true`
 - `debug=0x14e`
@@ -36,10 +37,12 @@ It keeps:
 The S7 Edge `board.toml` currently sets `ENABLE_SECUREBOOT = "0"`; its firmware
 build is a development image, not a security-preserving result.
 
-The NoNameBuilder working-copy test settings (`ENABLE_SECUREBOOT=0`,
-`CONFIG_XNU_NATIVE_PAN=n`, the smaller payload, the reset probes and the
-`cs_enforcement_disable` argument) were **not** ported. Keep those in a
-separate diagnostic branch if they are still needed.
+The NoNameBuilder working-copy test settings (`ENABLE_SECUREBOOT=0`, the
+smaller payload, the reset probes and the `cs_enforcement_disable` argument)
+were **not** ported. Keep those in a separate diagnostic branch if they are
+still needed. Its `CONFIG_XNU_NATIVE_PAN=n` is the exception: that is a
+hardware requirement for the ARMv8.0 cores, not a diagnostic setting, and is
+now part of the board defconfig.
 
 The board still carries `amfi_get_out_of_my_way=1` and
 `cs_enforcement_disable=1` in `[payload] kernel_args` even though
@@ -54,8 +57,11 @@ claiming a security-preserving boot.
 - The resolver reports `schema_version 2` with arch/SM6115/OS/device profiles,
   canonical components and the output path
   `out/gta4l/ipados-17.7.11-21H461/gta4l`.
-- `dts/gta4l.dts` compiles with `dts/sm6115.dtsi`; the hardware tree has one
-  contiguous 3 GiB memory range at `0x40000000`.
+- `dts/gta4l.dts` compiles with `dts/sm6115.dtsi`. The ADT uses one 3 GiB
+  range at `0x40000000` because the common generator requires one range; the
+  live FDT reports three banks with a `0x7cc00000..0x80000000` hole. This is
+  not a measured contiguous map; revalidate the DarwinBoot window against the
+  firmware memory map before hardware use.
 - The common ADT generator produced a 13,552-byte ADT with `/chosen`,
   `/cpus`, `/psci`, `/arm-io`, `/defaults`, `/options` and `/product`, plus the
   CHRP NVRAM proxy, `crypto-hash-method=sha2-384` and

@@ -10,13 +10,26 @@ partition layout, payload policy and packaging.
   iPadOS 17.7.11 OS profile, layered ARM64/SoC/OS/device inputs and board DTS.
 - The shared SM6115 tree describes eight CPUs, PSCI 1.0 SMC, GICv3 at
   `0xf200000` and the 19.2 MHz timer. UFS is described but disabled.
-- The firmware builds with `ENABLE_SECUREBOOT=1`.
-- The kernel build is not yet validated. It currently stops at the corecrypto
-  archive step because the Linux XNU bootstrap object set is incomplete.
+- The firmware builds with `ENABLE_SECUREBOOT=1`, but the kernel build has not
+  produced a linked image yet. A fresh Format 2 tree first stopped in
+  `prepare-xnu-source.py` while fetching omitted DriverKit headers; the
+  retry-safe fetch is being validated. The earlier Format 1 tree stopped at
+  the corecrypto archive because the Linux bootstrap object set was
+  incomplete.
 - Display, input, storage, power, GPU and network drivers remain unimplemented
   or unvalidated. A firmware build is not a hardware boot.
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
   input requirements, not gta4l hardware evidence.
+
+## TB128FU reference
+
+The Lenovo Xiaoxin Pad 2022 (TB128FU, Snapdragon 680 / SM6225) port by
+[xVanTuring](https://github.com/xVanTuring/UniXNU-tb128fu) is the closest
+proven reference: same Bengal family, A53/A73 cores, GICv3 addresses, timer
+PPI list, PAN constraint and Adreno 610. Its timer, IPI and original-PMGR
+findings are compared at pinned revisions in
+[docs/tb128fu-comparison.md](docs/tb128fu-comparison.md), with the upstream
+BSD-2-Clause-Patent credit. No TB128FU source is imported here.
 
 ## Inputs
 
@@ -25,7 +38,7 @@ partition layout, payload policy and packaging.
 | SoC | Qualcomm SM6115 (Bengal) |
 | SoC source | `DokuroMitsukai/UniXNU-sm6115-common` |
 | OS profile | `ipados-17.7.11-21H461` |
-| DRAM | `0x40000000` + `0xC0000000` |
+| DRAM | `0x40000000` + `0xC0000000` (single ADT range; the live FDT reports three banks with a hole) |
 | Framebuffer | `0x5C000000`, 1200x2000, stride 4800 |
 | Boot image | v0, base `0x40000000`, kernel `0x40008000`, tags `0x40000100`, page 4096 |
 | Firmware | Mu-Silicium `gta4lPkg`, `SILICIUM_UEFI.fd` |
