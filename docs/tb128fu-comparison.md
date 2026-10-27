@@ -79,7 +79,7 @@ reference, not a board configuration to import.
 | Graphics | Adreno 610 without GMU; SMMU context, zap shader, CP, interrupts and `NativeAdreno`; Metal user space not complete | **Adapt later.** Verify our GPU revision, firmware and SMMU topology. Do not adapt the Adreno 740 path as a substitute. Console/timer stability comes first. |
 | Display / touch | GOP framebuffer plus a legacy display probe; Himax HX83102E on QUP SE0 SPI | **Compare before reuse.** The Tab A7 panel and touch controller are not established in the current record. Reuse only after matching the hardware IDs and firmware protocol. |
 | Storage | SM6225 UFS link, `Tb128fuUfs` and the verified-root policy | **Do not reuse.** gta4l boots from eMMC (`4744000.sdhci`, `fstab_suffix=emmc`). UFS is a different controller and root policy. |
-| Memory | `dram_size=0x180000000` (span across the hole), `owned_memory_size=0x100000000` (4 GiB) | **Do not copy.** Our captured SM-T505N reports a 3 GiB unit; the ADT currently uses `0x40000000+0xc0000000`, which includes the hole. Revalidate the usable DarwinBoot window against the firmware map. |
+| Memory | `dram_size=0x180000000` (span across the hole), `owned_memory_size=0x100000000` (4 GiB) | **Do not copy.** Our SM-T505N is 3 GiB in three banks; the ADT span is `0x40000000+0xc0000000`, and the largest free run is 2 GiB at `0x80000000`. See [memory-map.md](memory-map.md). |
 | Firmware | Mu-only `tb128fuPkg`; no vendor DXE; splash framebuffer; UEFI memory map in `MemoryMapLib` | **Compare, do not import.** Both boards use Mu-Silicium, but the reservation tables and boot image limits are board-specific. |
 | Board layout | Format 1-style `board.toml`, TB128FU boot arguments and flashing flow | **Do not import.** Our tree is Format 2. Use only the pinned component sources and record every adaptation. |
 
@@ -148,11 +148,13 @@ f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7
 
 Our extracted kernelcache at `out/ipsw/21H461/kernelcache.decompressed` now
 hashes to exactly `f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7`,
-the value pinned by the TB128FU audit. The source image is therefore the same
-one the bridge was qualified against. The bridge still needs our prelink
-layout, object sizes, virtual slots and symbol bindings to pass. Until then,
-gta4l's existing `amfi_get_out_of_my_way=1`/`cs_enforcement_disable=1`
-arguments remain a diagnostic bypass, not a solution.
+the value pinned by the TB128FU audit. The bridge's static contract audit
+passes against our prelinked kernel, and the linked image contains
+`ShengPlatformPower`, `sheng_pmgr_run` and the `bsd_init` hook. QEMU TCG with
+`sheng-pmgr=2` and no AMFI bypass reaches `_bsd_init`, `_sheng_pmgr_run` and
+`_IOKitBSDInit` without the "No PMGR" panic, then stalls at
+`_ml_get_timebase` before `_vfs_mountroot`. The tablet image still carries the
+AMFI bypass arguments until a hardware run proves the bridge on this board.
 
 ### 5. The ArmCpu fork is not a drop-in
 
@@ -170,8 +172,9 @@ the shared pin.
 - **Storage:** TB128FU's UFS driver and verified-root policy do not apply to
   gta4l's eMMC.
 - **Memory:** TB128FU's 6 GiB span and 4 GiB owned window do not describe our
-  3 GiB SM-T505N. The current gta4l ADT range is a generator constraint, not a
-  measured contiguous map.
+  3 GiB SM-T505N. The gta4l ADT range is a generator constraint, not a
+  contiguous map, and the largest free DarwinBoot run is 2 GiB at
+  `0x80000000`.
 
 ## What changed in gta4l from this comparison
 
@@ -180,20 +183,24 @@ the shared pin.
 - `dts/gta4l.dts` and `docs/build-revisions.md`: the single 3 GiB ADT range is
   documented as a generator constraint spanning three live banks and a hole,
   not as contiguous RAM.
-- The Format 2 kernel host build and prelink now pass, producing
-  `kernel.macho` with SHA-256
-  `ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd`. This
-  also confirmed the original kernelcache hash used by the PMGR audit.
+- `package/ShengPlatformPower.cpp`, `scripts/build-platform-power.py` and
+  `patches/xnu/sheng-platform-power.patch` adapt the TB128FU bridge with the
+  upstream MIT/BSD notices and the pinned commit credit. The static audit
+  passes; the PMGR-linked kernel SHA-256 is
+  `dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60`.
+- The PMGR QEMU run reaches `_bsd_init` → `_sheng_pmgr_run` →
+  `_IOKitBSDInit` with no AMFI bypass, then stalls at `_ml_get_timebase`.
+  No tablet test has run.
 
-Nothing from TB128FU has been copied. The timer, IPI, PMGR, GPU and touch work
-remain gated on local evidence.
+The PMGR bridge is the first TB128FU code adapted into this repository, with
+credit and its original license notices. Timer, IPI, GPU and touch code remain
+uncopied and gated on local evidence.
 
 ## Next actions
 
-1. Build the payload and boot image from the host kernel; run one bounded QEMU
-   regression and record the result separately from hardware.
+1. Build the tablet payload/boot image from the PMGR kernel; request owner
+   approval for a bounded test without the AMFI bypass.
 2. Add the timer selection with the 27 default; test INTID 19 on the boot CPU.
 3. Measure SGI delivery and GIC capacity before any SPI-IPI change.
-4. Audit the PMGR bridge against our prelinked kernel; only then remove the
-   AMFI bypass and claim a security-preserving boot.
+4. Resolve the QEMU `_ml_get_timebase` stall if it blocks shared-kernel testing.
 5. Keep GPU, touch and eMMC work separate from the console/timer milestone.

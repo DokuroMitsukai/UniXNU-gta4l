@@ -58,10 +58,12 @@ claiming a security-preserving boot.
   canonical components and the output path
   `out/gta4l/ipados-17.7.11-21H461/gta4l`.
 - `dts/gta4l.dts` compiles with `dts/sm6115.dtsi`. The ADT uses one 3 GiB
-  range at `0x40000000` because the common generator requires one range; the
-  live FDT reports three banks with a `0x7cc00000..0x80000000` hole. This is
-  not a measured contiguous map; revalidate the DarwinBoot window against the
-  firmware memory map before hardware use.
+  range at `0x40000000` because the common generator requires one range. The
+  live FDT reports three banks (`0x40000000+0x3e580000`, `0x80000000+0x20000000`,
+  `0xa0000000+0x60000000`) with a `0x7e580000..0x80000000` hole. The largest
+  contiguous free run after the live and Mu reservations is 2 GiB at
+  `0x80000000`, so [memory-map.md](memory-map.md) sets the DarwinBoot window to
+  `0x80000000`. This is a host derivation, not a hardware result.
 - The common ADT generator produced a 13,552-byte ADT with `/chosen`,
   `/cpus`, `/psci`, `/arm-io`, `/defaults`, `/options` and `/product`, plus the
   CHRP NVRAM proxy, `crypto-hash-method=sha2-384` and
@@ -86,7 +88,9 @@ Run from `src/UniXNU` unless noted.
 | `dtc -I dts -O dtb -i ../UniXNU-sm6115-common/dts ...` | PASS |
 | `python3 scripts/make-adt.py --dtb ... --os-profile ... --board ../UniXNU-gta4l/board.toml ...` | PASS; 13,552-byte ADT with `/options`, NVRAM, crypto hash and AMFI platform code |
 | `python3 scripts/test_prepare_xnu_source.py` | PASS; transient timeout retried, HTTP 404 not retried |
-| `./unixnu build kernel -D ../UniXNU-gta4l -j "$(nproc)"` | PASS; 49 MiB `kernel.macho`, SHA-256 `ef85af54...`, 1006/1006 link objects, PAN=0 compile records |
+| `./unixnu build kernel -D ../UniXNU-gta4l -j "$(nproc)"` | PASS; 49 MiB `kernel.macho`; no-bridge `ef85af54...`, PMGR `dc8184da...`; 1006/1006 link objects; PAN=0 compile records |
+| `python3 scripts/audit-amfi-pmgr-contract.py --candidate .../kernel.macho` | PASS; original AMFI read/OR/write and PMGR dispatch; target slots read `0xffffffff` and write no MMIO |
+| `qemu-smoke.py` with `sheng-pmgr=2`, no AMFI bypass | REACHED `_bsd_init`, `_sheng_pmgr_run`, `_IOKitBSDInit`; no `_panic`; timed out at `_ml_get_timebase` before `_vfs_mountroot` |
 
 ## Firmware builds
 
@@ -138,8 +142,8 @@ stays `4561854` until that branch is merged and the result is retested.
 
 The clean Format 2 run completed on 2026-10-27:
 
-- `out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho` is a 49 MiB
-  Mach-O arm64 image with SHA-256
+- The clean no-bridge `kernel.macho` was a 49 MiB Mach-O arm64 image with
+  SHA-256
   `ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd`.
 - `link.filelist` has 1006 entries and none are missing.
 - The `copyio.o`, `pcb.o` and `prng_random.o` compile records contain
@@ -148,8 +152,30 @@ The clean Format 2 run completed on 2026-10-27:
   SHA-256 `f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7`,
   exactly the value pinned by TB128FU's PMGR audit.
 
-This is a host build and prelink result, not a hardware or QEMU boot. No
-payload or boot image has been produced from this kernel yet.
+### PMGR bridge
+
+The opt-in bridge is adapted with credit from xVanTuring's
+`UniXNU-tb128fu`:
+
+- `package/ShengPlatformPower.cpp` (MIT; copied from TB128FU commit
+  `a9c3863dedbee6f319bff16d3b609ec6cef409bf`)
+- `scripts/build-platform-power.py` (BSD-2-Clause-Patent; adapted for the
+  Format 2 tree and IPSW cache)
+- `patches/xnu/sheng-platform-power.patch` (the shared `bsd_init` hook)
+
+`board.toml` keeps the full ordered archive plan and appends
+`build-platform-power.py`; `CONFIG_XNU_SHENG_PMGR=y` enables the hook. The
+bridge audit passes against the original kernelcache and the prelinked
+kernel. The resulting kernel contains `ShengPlatformPower`, `sheng_pmgr_run`
+and the `bsd_init` call; its SHA-256 is
+`dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60`.
+
+QEMU TCG with `sheng-pmgr=2` and **no** `amfi_get_out_of_my_way` /
+`cs_enforcement_disable` reaches `_bsd_init`, `_sheng_pmgr_run` and
+`_IOKitBSDInit`, then stalls at `_ml_get_timebase` before `_vfs_mountroot`.
+There is no AMFI "No PMGR" panic and no `_panic` checkpoint. The bridge's
+publication was not independently read back; this is a bounded host result,
+not a tablet result. No payload or boot image has been produced yet.
 
 The kernel step consumes the generated `out/gta4l/ipados-17.7.11-21H461/gta4l/.config`.
 Editing `configs/gta4l_defconfig` alone does not change it: rerun

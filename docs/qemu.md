@@ -152,6 +152,14 @@ These are observations, not a boot claim:
   the kernel then reached `_bsd_init` and `_IOKitBSDInit`. AMFI then stopped
   at the missing `ApplePMGRNub` service, which is a platform-provider gap.
   Do not add fake nonces or skip the AMFI check to get past it.
+- The PMGR-linked kernel was run with
+  `--kernel-args "-v serial=3 debug=0x14e keepsym=1 sheng-pmgr=2"` and no
+  `amfi_get_out_of_my_way`/`cs_enforcement_disable`. It reached `_bsd_init`,
+  `_sheng_pmgr_run` and `_IOKitBSDInit` with no AMFI "No PMGR" panic and no
+  `_panic` checkpoint. The run timed out before `_vfs_mountroot` with the PC
+  at `_ml_get_timebase` (`0xfffffff00741a110`). The QEMU serial layer still
+  has no Apple-compatible UART, so this is checkpoint evidence only. The
+  bridge's publication was not independently read back.
 - The raw `qemu-entry` flat fixture reaches `_arm_init` but faults before
   `_arm_vm_init`. That is a flat-loader/prelinked-segment mapping artifact.
   Use the ESP/DarwinBoot route for kernel conclusions.
