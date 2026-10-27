@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import pathlib
 import struct
 import sys
@@ -30,6 +31,10 @@ GTA4L_HARDWARE_SPEC = {
         {"name": "ramoops",         "base": 0x71300000, "size": 0x00100000},
         {"name": "sec_debug_mem",   "base": 0x71400000, "size": 0x00800000},
     ],
+    # 16 MiB-aligned window covering the GIC distributor/redistributor and the
+    # MMIO timer frames (live DTS: interrupt-controller@f200000, timer@f120000).
+    # XNU reads the parent base as the SoC physical base and requires it nonzero.
+    "soc_window": {"base": 0x0F000000, "size": 0x00400000},
 }
 
 def pack_adt_prop(name: str, value: bytes) -> bytes:
@@ -48,13 +53,19 @@ def cstr(val: str) -> bytes:
     return val.encode("utf-8") + b"\x00"
 
 def build_cpu_node(cpu_idx: int, mpidr: int) -> bytes:
-    cluster_type = b"ECore\x00" if mpidr < 0x100 else b"PCore\x00"
+    # This kernel uses the BCM2837 board config: MAX_CPU_CLUSTERS=1 and
+    # HAS_CLUSTER=0.  Emitting cluster-type 'E'/'P' makes
+    # ml_parse_cpu_topology() derive phys_cluster_id 1 for the P-cores, which
+    # trips assert(phys_cluster_id <= MAX_CPU_CLUSTER_PHY_ID) (the default is
+    # MAX_CPU_CLUSTERS - 1 == 0).  Omit the property so the parser defaults to
+    # CLUSTER_TYPE_SMP and presents all CPUs as one cluster, as this kernel
+    # configuration supports.
     props = [
         pack_adt_prop("name", cstr(f"cpu{cpu_idx}")),
         pack_adt_prop("device_type", cstr("cpu")),
+        pack_adt_prop("state", cstr("running" if cpu_idx == 0 else "waiting")),
         pack_adt_prop("reg", u32(mpidr)),
         pack_adt_prop("cpu-id", u32(cpu_idx)),
-        pack_adt_prop("cluster-type", cluster_type),
         pack_adt_prop("timebase-frequency", u32(19200000)),
         pack_adt_prop("fixed-frequency-khz", u32(1804800 if mpidr < 0x100 else 2016000)),
     ]
@@ -77,6 +88,8 @@ def generate_adt(args: argparse.Namespace) -> bytes:
 
     chosen_props = [
         pack_adt_prop("name", cstr("chosen")),
+        # bootseed_init() refuses to start without the full 64-byte boot seed.
+        pack_adt_prop("random-seed", os.urandom(64)),
         pack_adt_prop("root-matching", cstr(args.root_match_volume_uuid)),
         pack_adt_prop("dram-base", u64(0x40000000)),
         pack_adt_prop("dram-size", u64(int(args.owned_memory_size, 0))),
@@ -90,12 +103,16 @@ def generate_adt(args: argparse.Namespace) -> bytes:
         chosen_props.append(pack_adt_prop("unique-chip-id", u64(int(args.unique_chip_id, 0))))
     chosen_node = struct.pack("<II", len(chosen_props), 0) + b"".join(chosen_props)
 
+    soc_window = GTA4L_HARDWARE_SPEC["soc_window"]
     arm_io_props = [
         pack_adt_prop("name", cstr("arm-io")),
         pack_adt_prop("device_type", cstr("arm-io")),
         pack_adt_prop("compatible", cstr("arm-io,s8000")),
         pack_adt_prop("chip-id", u32(int(args.chip_id, 0))),
         pack_adt_prop("clock-frequency", u32(19200000)),
+        pack_adt_prop("#address-cells", u32(2)),
+        pack_adt_prop("#size-cells", u32(2)),
+        pack_adt_prop("ranges", u64(0) + u64(soc_window["base"]) + u64(soc_window["size"])),
     ]
     arm_io_node = struct.pack("<II", len(arm_io_props), 0) + b"".join(arm_io_props)
 
