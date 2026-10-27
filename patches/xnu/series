@@ -1,2 +1,6 @@
 # Board XNU patches, in application order.
-# None yet. Shared patches come from the ARM64, SM6115 and OS profiles.
+# Shared patches come from the ARM64, SM6115 and OS profiles; board-specific
+# patches stay in this repository.
+
+# Board opt-in PMGR bridge hook; paired with CONFIG_XNU_SHENG_PMGR and build-platform-power.py.
+sheng-platform-power.patch

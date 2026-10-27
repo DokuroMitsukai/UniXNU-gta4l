@@ -5,6 +5,7 @@ CONFIG_XNU_NATIVE_ARCH_TIMER=y
 # SM6115 uses Cortex-A73/A53 (ARMv8.0), which do not implement PAN. The
 # shared ARM64 profile enables it; `msr PAN, #1` is undefined on this SoC.
 CONFIG_XNU_NATIVE_PAN=n
+CONFIG_XNU_SHENG_PMGR=y
 CONFIG_XNU_DT_PANIC_REGION=y
 CONFIG_XNU_SOURCE_CORECRYPTO14=y
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
