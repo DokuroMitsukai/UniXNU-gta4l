@@ -119,8 +119,6 @@ kernel_args = [
     "debug=0x14e",
     "keepsym=1",
     "-v",
-    "amfi_get_out_of_my_way=1",
-    "cs_enforcement_disable=1",
     "fb-base=0x5c000000",
     "fb-width=1200",
     "fb-height=2000",
@@ -132,10 +130,11 @@ kernel_args = [
 chip_id = "444"
 # The live 3 GiB map has no single 3 GiB free run. After the live reserved
 # regions and the Mu-Silicium DDR reservations, the largest contiguous free
-# run is 0x80000000..0x100000000 (2 GiB); DarwinBoot allocates the window
-# there. See docs/memory-map.md. The ADT's dram-size above remains the full
-# 0x40000000..0x100000000 physical span, not this owned window.
-owned_memory_size = "0x80000000"
+# run is 0x80000000..0x100000000. DarwinBoot offsets the allocation by the
+# kernel's 0x7c000 base offset, so the usable request is 2046 MiB, not the
+# full 2048 MiB. See docs/memory-map.md. The ADT's dram-size above remains
+# the full 0x40000000..0x100000000 physical span, not this owned window.
+owned_memory_size = "0x7fe00000"
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 packed_data_ramdisk = true
 unique_chip_id = "required"

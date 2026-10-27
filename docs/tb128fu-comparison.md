@@ -153,8 +153,9 @@ passes against our prelinked kernel, and the linked image contains
 `ShengPlatformPower`, `sheng_pmgr_run` and the `bsd_init` hook. QEMU TCG with
 `sheng-pmgr=2` and no AMFI bypass reaches `_bsd_init`, `_sheng_pmgr_run` and
 `_IOKitBSDInit` without the "No PMGR" panic, then stalls at
-`_ml_get_timebase` before `_vfs_mountroot`. The tablet image still carries the
-AMFI bypass arguments until a hardware run proves the bridge on this board.
+`_ml_get_timebase` before `_vfs_mountroot`. The tablet RAM-root fixture later
+booted through the PMGR-linked kernel without either AMFI bypass argument; the
+PMGR publication was still not independently read back.
 
 ### 5. The ArmCpu fork is not a drop-in
 
