@@ -146,12 +146,13 @@ bridge. Its audit pins the original kernelcache SHA-256:
 f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7
 ```
 
-Our IPSW is the same iPad7,1 iPadOS 17.7.11 21H461 image, but the hash must be
-verified against our extracted kernelcache before relying on the audit. The
-bridge also needs our prelink layout, object sizes, virtual slots and symbol
-bindings to pass. Until then, gta4l's existing
-`amfi_get_out_of_my_way=1`/`cs_enforcement_disable=1` arguments remain a
-diagnostic bypass, not a solution.
+Our extracted kernelcache at `out/ipsw/21H461/kernelcache.decompressed` now
+hashes to exactly `f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7`,
+the value pinned by the TB128FU audit. The source image is therefore the same
+one the bridge was qualified against. The bridge still needs our prelink
+layout, object sizes, virtual slots and symbol bindings to pass. Until then,
+gta4l's existing `amfi_get_out_of_my_way=1`/`cs_enforcement_disable=1`
+arguments remain a diagnostic bypass, not a solution.
 
 ### 5. The ArmCpu fork is not a drop-in
 
@@ -179,16 +180,20 @@ the shared pin.
 - `dts/gta4l.dts` and `docs/build-revisions.md`: the single 3 GiB ADT range is
   documented as a generator constraint spanning three live banks and a hole,
   not as contiguous RAM.
+- The Format 2 kernel host build and prelink now pass, producing
+  `kernel.macho` with SHA-256
+  `ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd`. This
+  also confirmed the original kernelcache hash used by the PMGR audit.
 
 Nothing from TB128FU has been copied. The timer, IPI, PMGR, GPU and touch work
 remain gated on local evidence.
 
 ## Next actions
 
-1. Finish the Format 2 kernel build and reproduce the archive/bootstrap
-   failure with a fresh output tree.
+1. Build the payload and boot image from the host kernel; run one bounded QEMU
+   regression and record the result separately from hardware.
 2. Add the timer selection with the 27 default; test INTID 19 on the boot CPU.
 3. Measure SGI delivery and GIC capacity before any SPI-IPI change.
-4. Audit the PMGR bridge against our kernelcache and prelink; only then
-   remove the AMFI bypass and claim a security-preserving boot.
+4. Audit the PMGR bridge against our prelinked kernel; only then remove the
+   AMFI bypass and claim a security-preserving boot.
 5. Keep GPU, touch and eMMC work separate from the console/timer milestone.

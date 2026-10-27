@@ -4,7 +4,7 @@ schema_version = 1
 name = "gta4l"
 soc = "SM6115"
 os_profile = "ipados-17.7.11-21H461"
-summary = "Samsung Galaxy Tab A7 10.4 (2020) Format 2 migration; SM6115 PAN and memory-map facts recorded, kernel build and hardware bring-up pending."
+summary = "Samsung Galaxy Tab A7 10.4 (2020) Format 2 migration; SM6115 PAN and memory-map facts recorded, host kernel/prelink pass, hardware bring-up pending."
 
 [[area]]
 id = "configuration"
@@ -16,8 +16,8 @@ configuration = ["board.toml schema_version=2, soc_source=sm6115 and os_profile=
 procedure = ["./unixnu defconfig gta4l_defconfig -D ../UniXNU-gta4l; ./unixnu fetch -D ../UniXNU-gta4l; ./unixnu status --json -D ../UniXNU-gta4l; ./unixnu build kernel -D ../UniXNU-gta4l."]
 findings = ["The SM6115 Cortex-A73/A53 cores are ARMv8.0 and do not implement PAN; the shared ARM64 profile enables PAN, so the board overrides CONFIG_XNU_NATIVE_PAN=n. TB128FU records the same undefined-instruction failure and the same override.", "The Format 2 resolver selects the expected arch/SM6115/OS/device layers and the output path above; the PT_LOAD/ADT records are built from dts/gta4l.dts and the shared SM6115 DTSI.", "The TB128FU device repository (xVanTuring/UniXNU-tb128fu) is the pinned reference for the timer, IPI and PMGR questions; docs/tb128fu-comparison.md records its credit, revisions and the limits on reuse."]
 completion = ["All source pins resolve; every selected component has a record; status shows the intended overrides and patch order."]
-limits = ["No linked or prelinked gta4l kernel exists yet. The fresh Format 2 tree first stopped while fetching omitted DriverKit headers; the retry-safe fetch change is not yet part of a completed build.", "The AMFI bypass arguments in [payload] kernel_args remain a diagnostic workaround, not a security-preserving configuration."]
-next_action = ["Complete the Format 2 kernel build, then reproduce the archive/bootstrap failure in a clean output tree without deleting the existing logs."]
+limits = ["The host kernel build and prelink pass; no hardware or QEMU boot has run. The AMFI bypass arguments in [payload] kernel_args remain a diagnostic workaround, not a security-preserving configuration."]
+next_action = ["Build the payload and boot image from the host kernel, then run one bounded QEMU regression; keep hardware results separate."]
 evidence = []
 
 [[area]]
@@ -154,10 +154,10 @@ paths = ["package/*Battery*", "package/*Battmgr*", "package/*Power*", "package/*
 inputs = ["Original ApplePMGR consumer in the prelinked kernel; TB128FU original-PMGR bridge reference; gta4l PMIC, RPMh/RPM and clock resources are not yet inventoried."]
 configuration = ["No PMGR provider is linked yet. board.toml still carries amfi_get_out_of_my_way=1 and cs_enforcement_disable=1 as diagnostic arguments; CONFIG_XNU_SHENG_PMGR is not set."]
 procedure = ["Audit the TB128FU bridge against gta4l's kernelcache, prelink layout, object sizes, slots and symbol bindings; run it only after the contract checks pass."]
-findings = ["TB128FU's ShengPlatformPower bridge publishes the original ApplePMGRNub through an ABI-audited provider, reads and writes no hardware, and fails unsupported power operations explicitly. It is the best candidate for the AMFI 'No PMGR' dependency.", "The bridge pins original kernelcache SHA-256 f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7. Our IPSW is the same product/build, but the hash and the prelink contract have not been verified against the gta4l tree."]
+findings = ["TB128FU's ShengPlatformPower bridge publishes the original ApplePMGRNub through an ABI-audited provider, reads and writes no hardware, and fails unsupported power operations explicitly. It is the best candidate for the AMFI 'No PMGR' dependency.", "The bridge pins original kernelcache SHA-256 f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7. Our extracted out/ipsw/21H461/kernelcache.decompressed has exactly that hash, so the source image matches the bridge's audit pin. The prelink contract has not been audited yet."]
 completion = ["Declared power controls and battery readings match observations; each claimed sleep/resume transition restores its dependent peripherals."]
 limits = ["No power provider is implemented. The current AMFI bypass is not a security-preserving solution and must not be presented as one."]
-next_action = ["Verify the original kernelcache hash and audit the bridge contract against the first gta4l prelinked kernel; only then remove the AMFI bypass arguments."]
+next_action = ["Audit the bridge contract against the prelinked kernel (kernel.macho sha256 ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd); only then remove the AMFI bypass arguments."]
 evidence = []
 
 [[area]]
@@ -168,10 +168,10 @@ paths = ["scripts/*payload*", "scripts/*image*", "scripts/*flash*", "patches/**"
 inputs = ["Format 2 kernel step, archive builders, prelink, payload and boot image; 192 MiB payload size; iPad7,1 17.7.11 21H461 kernelcache."]
 configuration = ["board.toml payload size_mib=192, loader=firmware, panic_screen=true, dram_size=0xC0000000; CONFIG_XNU_BUILD_ARCHIVES=y; output out/gta4l/ipados-17.7.11-21H461/gta4l."]
 procedure = ["./unixnu build kernel -D ../UniXNU-gta4l; ./unixnu build package; ./unixnu build firmware; ./unixnu build payload; ./unixnu bootimg."]
-findings = ["The fresh Format 2 kernel build first stopped in prepare-xnu-source.py while fetching omitted DriverKit headers from GitHub. The retry-safe fetch restored 26 headers and the clean tree reached the XNU bootstrap pass; no kernel has linked yet.", "The earlier Format 1 corecrypto failure was stale state, not a missing bootstrap object set: link.filelist had 1006 entries and only prng_random.o was absent, while startup.o.json remained. A crypto-mode change deletes prng_random.o, and the skipped bootstrap left the archive builder to run before the final make could recreate it."]
+findings = ["The clean Format 2 kernel build and prelink pass: kernel.macho is a 49 MiB Mach-O arm64 image with SHA-256 ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd. link.filelist has 1006 entries and none are missing.", "The fresh tree first stopped in prepare-xnu-source.py while fetching omitted DriverKit headers; the retry-safe fetch restored 26 headers. The earlier Format 1 corecrypto failure was stale state, not a missing bootstrap object set: link.filelist had 1006 entries and only prng_random.o was absent, while startup.o.json remained."]
 completion = ["Kernel and prelink succeed, payload contains all declared inputs, and the boot image matches the bootloader format and size limit."]
-limits = ["No gta4l kernel, prelink, payload or boot image has been produced from the Format 2 tree. Firmware build success is not a kernel or hardware result."]
-next_action = ["Complete the Format 2 kernel build, then reproduce or clear the archive/bootstrap failure in a fresh output tree."]
+limits = ["The kernel host build and prelink pass; the payload and boot image have not been built from this kernel, and no hardware or QEMU boot has run."]
+next_action = ["Build package, firmware, payload and boot image from the host kernel; record sizes and the boot image hash before any QEMU run."]
 evidence = []
 
 [[area]]
@@ -182,8 +182,8 @@ paths = ["scripts/check-*", "scripts/probe-*", "scripts/audit-*", "scripts/read-
 inputs = ["Build logs for the fresh Format 2 tree; the shared prepare-xnu-source.py fetch path; the TB128FU reference revisions."]
 configuration = ["UNIXNU_XNU_TAG=xnu-10063.141.1 and the pinned source revision; GITHUB_TOKEN can be supplied to prepare-xnu-source.py but is not required."]
 procedure = ["Run the kernel build with a log; on a fetch failure, preserve the log and retry with the retry-safe prepare-xnu-source.py; compare failures across clean output trees."]
-findings = ["prepare-xnu-source.py used four threads with a 30 s TLS timeout and no retry. A GitHub raw fetch timed out during the first Format 2 kernel build, before any XNU compilation. The shared script now retries transient failures with a 60 s timeout and exponential backoff.", "The earlier corecrypto archive failure is documented in docs/build-revisions.md; it must not be confused with the newer fetch failure."]
+findings = ["prepare-xnu-source.py used four threads with a 30 s TLS timeout and no retry. A GitHub raw fetch timed out during the first Format 2 kernel build, before any XNU compilation. The shared script now retries transient failures with a 60 s timeout and exponential backoff; scripts/test_prepare_xnu_source.py covers the retry and non-retry paths.", "The clean build completed with exit 0. The kernel.macho hash, 1006/1006 link objects and the XNU_NATIVE_PAN=0 compile records are recorded in docs/build-revisions.md; the old corecrypto failure was a stale prng_random.o/startup.o.json state, not a compiler failure."]
 completion = ["Each claimed milestone has a reproducible command, a matching source/image revision and an accessible result."]
-limits = ["The fetch retry has not yet produced a completed kernel build. The original DriverKit entries are cached per tree, so a retry resumes rather than refetches everything."]
-next_action = ["Record the second build's final stage and exit code, then add the result to docs/build-revisions.md and this area."]
+limits = ["The retry test is a host unit test and the kernel result is a host build; no hardware or QEMU log exists yet."]
+next_action = ["Archive the successful build log with the payload/QEMU result, then record the first hardware stage separately."]
 evidence = []
