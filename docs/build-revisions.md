@@ -44,7 +44,7 @@ Run from `src/UniXNU` unless noted.
 | `python3 src/Mu-Silicium/Resources/Scripts/test_bootshim.py` | PASS |
 | `python3 scripts/check-gta4l.py` (device repo) | PASS |
 | `python3 scripts/qemu-smoke.py --help` (device repo) | PASS |
-| `./unixnu status --json -D ../UniXNU-gta4l` | PASS; device `a472a00`, base `4561854` |
+| `./unixnu status --json -D ../UniXNU-gta4l` | PASS; base `4561854`, device branch `bringup/tab-a7-qemu-fixture` |
 
 ## Firmware builds
 
