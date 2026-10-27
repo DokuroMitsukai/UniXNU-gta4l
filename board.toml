@@ -15,6 +15,23 @@ include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot"]
 defconfig = "gta4l_defconfig"
 config_fragments = ["arch:configs/common.config", "soc:configs/sm6115.config", "os:configs/ipados.config"]
 patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+# Full ordered plan: setting this array replaces the architecture profile's
+# list, so keep every entry and append the board-specific bridge.
+# The opt-in original-PMGR bridge is adapted with credit from
+# xVanTuring/UniXNU-tb128fu a9c3863. It publishes the original ApplePMGRNub;
+# it does not implement clocks, sleep or reset. The first build links a no-op
+# stub, then the next build audits the prelinked kernel and links the bridge.
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  "component:SoftwareAES",
+  "build-software-aes-bindings.py",
+  "build-mockfs-fixture.py",
+  "build-libpthread-kernel.py",
+  "build-platform-power.py",
+]
 
 [device_tree]
 source = "device:dts/gta4l.dts"
@@ -113,7 +130,12 @@ kernel_args = [
 
 [payload.adt]
 chip_id = "444"
-owned_memory_size = "0xC0000000"
+# The live 3 GiB map has no single 3 GiB free run. After the live reserved
+# regions and the Mu-Silicium DDR reservations, the largest contiguous free
+# run is 0x80000000..0x100000000 (2 GiB); DarwinBoot allocates the window
+# there. See docs/memory-map.md. The ADT's dram-size above remains the full
+# 0x40000000..0x100000000 physical span, not this owned window.
+owned_memory_size = "0x80000000"
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 packed_data_ramdisk = true
 unique_chip_id = "required"
