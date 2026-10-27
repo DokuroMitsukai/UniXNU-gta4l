@@ -11,14 +11,20 @@ partition layout, payload policy and packaging.
 - The shared SM6115 tree describes eight CPUs, PSCI 1.0 SMC, GICv3 at
   `0xf200000` and the 19.2 MHz timer. UFS is described but disabled.
 - The kernel host build and prelink pass from the regenerated Format 2
-  `.config` (`CONFIG_XNU_NATIVE_PAN=n`): `out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho`
+  `.config` (`CONFIG_XNU_NATIVE_PAN=n`): the PMGR-linked
+  `out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho`
   is a 49 MiB Mach-O arm64 image with SHA-256
-  `ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd`.
+  `dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60`.
   See [docs/build-revisions.md](docs/build-revisions.md#kernel-build) for the
-  two earlier failures and their fixes.
-- The firmware builds with `ENABLE_SECUREBOOT=1`. A host kernel build is not a
-  hardware boot, and no boot image or payload has been produced from this
-  kernel yet.
+  earlier failures and the no-bridge hash.
+- The original-PMGR bridge is adapted with credit from TB128FU; its
+  AMFI/PMGR contract audit passes, and the kernel contains
+  `ShengPlatformPower`, `sheng_pmgr_run` and the `bsd_init` hook. A QEMU run
+  with `sheng-pmgr=2` and no AMFI bypass reaches `_bsd_init`,
+  `_sheng_pmgr_run` and `_IOKitBSDInit`, then stalls at `_ml_get_timebase`
+  before `_vfs_mountroot`. This is host evidence, not a tablet boot.
+- The firmware builds with `ENABLE_SECUREBOOT=1`. No boot image or payload has
+  been produced from this kernel yet.
 - Display, input, storage, power, GPU and network drivers remain unimplemented
   or unvalidated.
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
@@ -41,7 +47,7 @@ BSD-2-Clause-Patent credit. No TB128FU source is imported here.
 | SoC | Qualcomm SM6115 (Bengal) |
 | SoC source | `DokuroMitsukai/UniXNU-sm6115-common` |
 | OS profile | `ipados-17.7.11-21H461` |
-| DRAM | `0x40000000` + `0xC0000000` (single ADT range; the live FDT reports three banks with a hole) |
+| DRAM | 3 GiB in three live banks (`0x40000000+0x3e580000`, `0x80000000+0x20000000`, `0xa0000000+0x60000000`); ADT span `0x40000000+0xC0000000`; 2 GiB DarwinBoot window at `0x80000000` |
 | Framebuffer | `0x5C000000`, 1200x2000, stride 4800 |
 | Boot image | v0, base `0x40000000`, kernel `0x40008000`, tags `0x40000100`, page 4096 |
 | Firmware | Mu-Silicium `gta4lPkg`, `SILICIUM_UEFI.fd` |

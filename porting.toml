@@ -4,7 +4,7 @@ schema_version = 1
 name = "gta4l"
 soc = "SM6115"
 os_profile = "ipados-17.7.11-21H461"
-summary = "Samsung Galaxy Tab A7 10.4 (2020) Format 2 migration; SM6115 PAN and memory-map facts recorded, host kernel/prelink pass, hardware bring-up pending."
+summary = "Samsung Galaxy Tab A7 10.4 (2020) Format 2 migration; PMGR-linked host kernel and bounded QEMU checkpoint pass, tablet bring-up pending."
 
 [[area]]
 id = "configuration"
@@ -54,12 +54,12 @@ status = "planned"
 components = []
 paths = ["dts/**", "package/*Smmu*", "package/*Memory*", "scripts/*smmu*", "scripts/*memory*"]
 inputs = ["Captured SM-T505N FDT memory map; DarwinBoot/firmware reservations; 3 GiB dram_info; ADT generator's one-range requirement."]
-configuration = ["dts/gta4l.dts memory@40000000 reg = <0 0x40000000 0 0xc0000000>; board.toml payload dram_size=0xC0000000 and payload.adt owned_memory_size=0xC0000000."]
+configuration = ["dts/gta4l.dts memory@40000000 reg = <0 0x40000000 0 0xc0000000>; board.toml payload dram_size=0xC0000000 and payload.adt owned_memory_size=0x80000000."]
 procedure = ["Compare the three live banks, the ADT span and the firmware reserved-memory map; confirm the free window before any hardware test."]
-findings = ["The live FDT reports three banks: 0x40000000+0x3cc00000, 0x80000000+0x40000000 and 0xc0000000+0x100000000, with a hole at 0x7cc00000..0x80000000. The ADT generator requires one range, so the current 0x40000000+0xc0000000 value includes the hole and is not a measured contiguous map.", "The captured unit reports 3 GiB; TB128FU's 0x180000000 span and 0x100000000 owned window describe a different memory population and must not be copied."]
+findings = ["The live FDT reports three banks: 0x40000000+0x3e580000, 0x80000000+0x20000000 and 0xa0000000+0x60000000, with a hole at 0x7e580000..0x80000000. The ADT generator requires one range, so 0x40000000+0xc0000000 is a physical span that includes the hole, not a contiguous free map.", "After the live no-map regions and the Mu-Silicium DDR reservations, the largest contiguous free run is 0x80000000..0x100000000 (2 GiB). DarwinBoot requests that window; the previous 3 GiB request had no qualifying run and would stop at NO WINDOW.", "The captured unit reports 3 GiB; TB128FU's 0x180000000 span and 0x100000000 owned window describe a different memory population and must not be copied."]
 completion = ["All handoff regions are accounted for and each enabled DMA engine accesses its allocated range with the documented cache policy."]
-limits = ["The usable DarwinBoot window and the treatment of the 0x7cc00000..0x80000000 hole are unresolved. No hardware memory test has run."]
-next_action = ["Reconcile the live banks, firmware reservations and board.toml values, then record the exact owned window before the first hardware test."]
+limits = ["The 2 GiB window is a static derivation from the live FDT and Mu-Silicium map; the runtime UEFI map has not been observed on the tablet. The first boot must validate DarwinBoot's allocation."]
+next_action = ["Boot the diagnostic image with the 2 GiB request and capture DarwinBoot's BIG RUN/FREE rows if it fails; do not change the window without those rows."]
 evidence = []
 
 [[area]]
@@ -152,12 +152,12 @@ status = "planned"
 components = []
 paths = ["package/*Battery*", "package/*Battmgr*", "package/*Power*", "package/*PlatformPower*", "package/QcomQmp*", "package/QcomRpmh*", "package/QcomScm.h", "scripts/*power*", "scripts/*battery*", "scripts/*pmgr*"]
 inputs = ["Original ApplePMGR consumer in the prelinked kernel; TB128FU original-PMGR bridge reference; gta4l PMIC, RPMh/RPM and clock resources are not yet inventoried."]
-configuration = ["No PMGR provider is linked yet. board.toml still carries amfi_get_out_of_my_way=1 and cs_enforcement_disable=1 as diagnostic arguments; CONFIG_XNU_SHENG_PMGR is not set."]
-procedure = ["Audit the TB128FU bridge against gta4l's kernelcache, prelink layout, object sizes, slots and symbol bindings; run it only after the contract checks pass."]
-findings = ["TB128FU's ShengPlatformPower bridge publishes the original ApplePMGRNub through an ABI-audited provider, reads and writes no hardware, and fails unsupported power operations explicitly. It is the best candidate for the AMFI 'No PMGR' dependency.", "The bridge pins original kernelcache SHA-256 f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7. Our extracted out/ipsw/21H461/kernelcache.decompressed has exactly that hash, so the source image matches the bridge's audit pin. The prelink contract has not been audited yet."]
+configuration = ["CONFIG_XNU_SHENG_PMGR=y; board.toml archives append build-platform-power.py; device series applies patches/xnu/sheng-platform-power.patch; package/ShengPlatformPower.cpp and scripts/build-platform-power.py are adapted with credit from TB128FU a9c3863."]
+procedure = ["Run the bridge audit against the original kernelcache and prelinked kernel, then boot with sheng-pmgr=2 and no AMFI bypass for the first bounded test."]
+findings = ["TB128FU's ShengPlatformPower bridge publishes the original ApplePMGRNub through an ABI-audited provider, reads and writes no hardware, and fails unsupported power operations explicitly.", "The audit passes against our original kernelcache f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7 and prelinked kernel. The PMGR-linked kernel sha256 is dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60; bsd_init.o has XNU_SHENG_PMGR=1 and the kernel contains ShengPlatformPower and sheng_pmgr_run.", "QEMU TCG with sheng-pmgr=2 and no AMFI bypass reaches _bsd_init, _sheng_pmgr_run and _IOKitBSDInit with no AMFI 'No PMGR' panic and no _panic checkpoint; it stalls at _ml_get_timebase before _vfs_mountroot. Publication was not read back independently."]
 completion = ["Declared power controls and battery readings match observations; each claimed sleep/resume transition restores its dependent peripherals."]
-limits = ["No power provider is implemented. The current AMFI bypass is not a security-preserving solution and must not be presented as one."]
-next_action = ["Audit the bridge contract against the prelinked kernel (kernel.macho sha256 ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd); only then remove the AMFI bypass arguments."]
+limits = ["No power backend (clocks, sleep, reset) is implemented. The bridge is runtime-unqualified and the QEMU stall is unresolved. The tablet image still carries the AMFI bypass arguments until the bridge is tested on hardware without them."]
+next_action = ["Prepare a tablet diagnostic image with sheng-pmgr=2 and no AMFI bypass, get owner approval, and capture the first console/PMGR result; do not claim power support from the bridge."]
 evidence = []
 
 [[area]]
@@ -168,10 +168,10 @@ paths = ["scripts/*payload*", "scripts/*image*", "scripts/*flash*", "patches/**"
 inputs = ["Format 2 kernel step, archive builders, prelink, payload and boot image; 192 MiB payload size; iPad7,1 17.7.11 21H461 kernelcache."]
 configuration = ["board.toml payload size_mib=192, loader=firmware, panic_screen=true, dram_size=0xC0000000; CONFIG_XNU_BUILD_ARCHIVES=y; output out/gta4l/ipados-17.7.11-21H461/gta4l."]
 procedure = ["./unixnu build kernel -D ../UniXNU-gta4l; ./unixnu build package; ./unixnu build firmware; ./unixnu build payload; ./unixnu bootimg."]
-findings = ["The clean Format 2 kernel build and prelink pass: kernel.macho is a 49 MiB Mach-O arm64 image with SHA-256 ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd. link.filelist has 1006 entries and none are missing.", "The fresh tree first stopped in prepare-xnu-source.py while fetching omitted DriverKit headers; the retry-safe fetch restored 26 headers. The earlier Format 1 corecrypto failure was stale state, not a missing bootstrap object set: link.filelist had 1006 entries and only prng_random.o was absent, while startup.o.json remained."]
+findings = ["The PMGR-linked kernel/prelink pass: kernel.macho is a 49 MiB Mach-O arm64 image with SHA-256 dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60; link.filelist has 1006 entries and none are missing. The earlier no-bridge hash was ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd.", "The full ordered archive plan is required: replacing it with only build-platform-power.py dropped the NativeAES bindings and failed the final link. board.toml now keeps the architecture list and appends the PMGR builder.", "The fresh tree first stopped in prepare-xnu-source.py while fetching omitted DriverKit headers; the retry-safe fetch restored 26 headers. The earlier Format 1 corecrypto failure was stale state, not a missing bootstrap object set."]
 completion = ["Kernel and prelink succeed, payload contains all declared inputs, and the boot image matches the bootloader format and size limit."]
-limits = ["The kernel host build and prelink pass; the payload and boot image have not been built from this kernel, and no hardware or QEMU boot has run."]
-next_action = ["Build package, firmware, payload and boot image from the host kernel; record sizes and the boot image hash before any QEMU run."]
+limits = ["The PMGR kernel host build/prelink and one QEMU checkpoint run pass; the payload and boot image have not been built from this kernel, and no hardware boot has run."]
+next_action = ["Build package, firmware, payload and boot image from the PMGR kernel; record sizes/hashes, then request owner approval for a bounded tablet test."]
 evidence = []
 
 [[area]]
@@ -182,8 +182,8 @@ paths = ["scripts/check-*", "scripts/probe-*", "scripts/audit-*", "scripts/read-
 inputs = ["Build logs for the fresh Format 2 tree; the shared prepare-xnu-source.py fetch path; the TB128FU reference revisions."]
 configuration = ["UNIXNU_XNU_TAG=xnu-10063.141.1 and the pinned source revision; GITHUB_TOKEN can be supplied to prepare-xnu-source.py but is not required."]
 procedure = ["Run the kernel build with a log; on a fetch failure, preserve the log and retry with the retry-safe prepare-xnu-source.py; compare failures across clean output trees."]
-findings = ["prepare-xnu-source.py used four threads with a 30 s TLS timeout and no retry. A GitHub raw fetch timed out during the first Format 2 kernel build, before any XNU compilation. The shared script now retries transient failures with a 60 s timeout and exponential backoff; scripts/test_prepare_xnu_source.py covers the retry and non-retry paths.", "The clean build completed with exit 0. The kernel.macho hash, 1006/1006 link objects and the XNU_NATIVE_PAN=0 compile records are recorded in docs/build-revisions.md; the old corecrypto failure was a stale prng_random.o/startup.o.json state, not a compiler failure."]
+findings = ["prepare-xnu-source.py used four threads with a 30 s TLS timeout and no retry. A GitHub raw fetch timed out during the first Format 2 kernel build, before any XNU compilation. The shared script now retries transient failures with a 60 s timeout and exponential backoff; scripts/test_prepare_xnu_source.py covers the retry and non-retry paths.", "The clean build completed with exit 0. The PMGR kernel.macho hash dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60, 1006/1006 link objects and XNU_NATIVE_PAN=0 records are in docs/build-revisions.md.", "QEMU TCG reached _bsd_init, _sheng_pmgr_run and _IOKitBSDInit with sheng-pmgr=2 and no AMFI bypass, then timed out at _ml_get_timebase before _vfs_mountroot; the PMGR archive audit and build report are retained."]
 completion = ["Each claimed milestone has a reproducible command, a matching source/image revision and an accessible result."]
-limits = ["The retry test is a host unit test and the kernel result is a host build; no hardware or QEMU log exists yet."]
-next_action = ["Archive the successful build log with the payload/QEMU result, then record the first hardware stage separately."]
+limits = ["The retry test is a host unit test; the kernel/QEMU result is host-only. The QEMU serial layer has no Apple-compatible UART, and no hardware log exists."]
+next_action = ["Archive the QEMU logs, build the tablet payload/boot image, and record the first hardware stage separately after approval."]
 evidence = []
