@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 UNIXNU = ROOT / "src" / "UniXNU"
-BOARD = ROOT / "src" / "UniXNU-gta4l"
+BOARD = Path(__file__).resolve().parents[1]
 DEFAULT_KERNEL = ROOT / "out" / "gta4l" / "kernel" / "kernel.macho"
 DEFAULT_UNIXNU = ROOT / "out" / "gta4l" / "package" / "Build" / "Out" / "AARCH64-DEBUG" / "UniXNU.efi"
 DEFAULT_DARWINBOOT = ROOT / "src" / "Mu-Silicium" / "Build" / "gta4lPkg" / "DEBUG_CLANGPDB" / "AARCH64" / "DarwinBoot.efi"
