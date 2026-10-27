@@ -115,10 +115,33 @@ S7 Edge image as a development build, not a security-preserving result.
 ## Kernel build
 
 Attempted for Tab A7 on this Linux host with the S7 Edge workspace toolchain
-plus locally built `tcsh` and `unifdef`. The build stopped at the corecrypto
-archive step because the XNU bootstrap object set was incomplete
-(`vm_kern.o`, `prng_random.o` missing). This is a host/build-order blocker, not
-a code failure. The kernel build remains unvalidated for both devices.
+plus locally built `tcsh` and `unifdef`.
+
+The old Format 1 tree stopped at the corecrypto archive step, but the XNU
+bootstrap object set was not generally incomplete: `link.filelist` listed 1006
+objects and only `osfmk/DEVELOPMENT/prng_random.o` was absent, while
+`startup.o.json` existed. The script deletes `prng_random.o` when
+`XNU_CRYPTO_BOOTSTRAP` changes; an earlier pass had left the object absent. The
+driver skips the bootstrap pass when `startup.o.json` exists, so the archive
+builder ran before any make could recreate the object. A clean `build/xnu`
+avoids that stale state. This was a stale-object ordering failure, not a
+compiler failure.
+
+The fresh Format 2 tree stopped even earlier, in `prepare-xnu-source.py`: a
+GitHub raw fetch timed out while restoring omitted DriverKit headers. The
+shared script now retries transient TLS failures; a retry restored 26 headers
+and reached the XNU bootstrap pass. The local build uses the shared topic
+branch `fix/xnu-header-fetch-retry` (`09b2877`, test `b3d8515`); the gta4l pin
+stays `4561854` until that branch is merged and the result is retested. The
+kernel build remains unvalidated until that clean pass and the following
+archive and link steps finish.
+
+The kernel step consumes the generated `out/gta4l/ipados-17.7.11-21H461/gta4l/.config`.
+Editing `configs/gta4l_defconfig` alone does not change it: rerun
+`./unixnu defconfig gta4l_defconfig -D ../UniXNU-gta4l` after a defconfig
+change. A first clean attempt retained `XNU_NATIVE_PAN=1` for this reason and
+was discarded; the current clean run starts from the regenerated `.config`
+with `XNU_NATIVE_PAN=n`.
 
 ## Device notes
 
@@ -128,6 +151,9 @@ a code failure. The kernel build remains unvalidated for both devices.
   test configuration.
 - The old format-1 `out/gta4l` tree is superseded by
   `out/gta4l/ipados-17.7.11-21H461/gta4l`.
+- [TB128FU comparison](tb128fu-comparison.md) pins xVanTuring's Lenovo
+  Xiaoxin Pad 2022 / SM6225 port and records the timer, IPI, PAN, memory and
+  PMGR findings. It is a reference with upstream credit, not imported code.
 - `scripts/make-gta4l-adt.py` is kept only as a historical format-1 reference;
   the Format 2 payload uses `dts/gta4l.dts` plus the common ADT generator.
 - Do not treat a QEMU checkpoint or a firmware build as a hardware boot result.
