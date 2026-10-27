@@ -132,16 +132,29 @@ GitHub raw fetch timed out while restoring omitted DriverKit headers. The
 shared script now retries transient TLS failures; a retry restored 26 headers
 and reached the XNU bootstrap pass. The local build uses the shared topic
 branch `fix/xnu-header-fetch-retry` (`09b2877`, test `b3d8515`); the gta4l pin
-stays `4561854` until that branch is merged and the result is retested. The
-kernel build remains unvalidated until that clean pass and the following
-archive and link steps finish.
+stays `4561854` until that branch is merged and the result is retested.
+
+The clean Format 2 run completed on 2026-10-27:
+
+- `out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho` is a 49 MiB
+  Mach-O arm64 image with SHA-256
+  `ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd`.
+- `link.filelist` has 1006 entries and none are missing.
+- The `copyio.o`, `pcb.o` and `prng_random.o` compile records contain
+  `XNU_NATIVE_PAN=0`.
+- The original kernelcache at `out/ipsw/21H461/kernelcache.decompressed` has
+  SHA-256 `f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7`,
+  exactly the value pinned by TB128FU's PMGR audit.
+
+This is a host build and prelink result, not a hardware or QEMU boot. No
+payload or boot image has been produced from this kernel yet.
 
 The kernel step consumes the generated `out/gta4l/ipados-17.7.11-21H461/gta4l/.config`.
 Editing `configs/gta4l_defconfig` alone does not change it: rerun
 `./unixnu defconfig gta4l_defconfig -D ../UniXNU-gta4l` after a defconfig
 change. A first clean attempt retained `XNU_NATIVE_PAN=1` for this reason and
-was discarded; the current clean run starts from the regenerated `.config`
-with `XNU_NATIVE_PAN=n`.
+was discarded; the successful run used the regenerated `.config` with
+`XNU_NATIVE_PAN=n`.
 
 ## Device notes
 

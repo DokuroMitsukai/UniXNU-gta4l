@@ -10,14 +10,17 @@ partition layout, payload policy and packaging.
   iPadOS 17.7.11 OS profile, layered ARM64/SoC/OS/device inputs and board DTS.
 - The shared SM6115 tree describes eight CPUs, PSCI 1.0 SMC, GICv3 at
   `0xf200000` and the 19.2 MHz timer. UFS is described but disabled.
-- The firmware builds with `ENABLE_SECUREBOOT=1`, but the kernel build has not
-  produced a linked image yet. A fresh Format 2 tree first stopped in
-  `prepare-xnu-source.py` while fetching omitted DriverKit headers; the
-  retry-safe fetch is being validated. The earlier Format 1 tree stopped at
-  the corecrypto archive because the Linux bootstrap object set was
-  incomplete.
+- The kernel host build and prelink pass from the regenerated Format 2
+  `.config` (`CONFIG_XNU_NATIVE_PAN=n`): `out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho`
+  is a 49 MiB Mach-O arm64 image with SHA-256
+  `ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd`.
+  See [docs/build-revisions.md](docs/build-revisions.md#kernel-build) for the
+  two earlier failures and their fixes.
+- The firmware builds with `ENABLE_SECUREBOOT=1`. A host kernel build is not a
+  hardware boot, and no boot image or payload has been produced from this
+  kernel yet.
 - Display, input, storage, power, GPU and network drivers remain unimplemented
-  or unvalidated. A firmware build is not a hardware boot.
+  or unvalidated.
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
   input requirements, not gta4l hardware evidence.
 
