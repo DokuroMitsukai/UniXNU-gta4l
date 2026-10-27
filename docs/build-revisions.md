@@ -13,7 +13,7 @@ These are development integration pins, not hardware-qualified releases.
 | DarwinBoot | `DokuroMitsukai/DarwinBoot` | `bringup/shared-video` | `3f2f304784f8fbfbf2ebfdc8eba3af3577d92967` |
 | ArmCpu | `DokuroMitsukai/ArmCpu` | `main` | `c9c4bd87cabc1fe6736e171cd2540313ac4b7883` |
 | UniXNU-exynos8890-common | `DokuroMitsukai/UniXNU-exynos8890-common` | `main` | `0258950adf615983aec3c87ca65cb52b2310ec95` |
-| Tab A7 device | `DokuroMitsukai/UniXNU-gta4l` | `bringup/tab-a7-qemu-fixture` | `a472a00` (before this pin file) |
+| Tab A7 device | `DokuroMitsukai/UniXNU-gta4l` | `bringup/tab-a7-qemu-fixture` | this repository; use the branch head |
 
 ## Board policy
 
@@ -24,6 +24,9 @@ The primary `board.toml` keeps:
 - payload size 192 MiB
 - `panic_screen = true`
 - `debug=0x14e`
+
+The S7 Edge `board.toml` currently sets `ENABLE_SECUREBOOT = "0"`; its firmware
+build is a development image, not a security-preserving result.
 
 The NoNameBuilder working-copy test settings (`ENABLE_SECUREBOOT=0`,
 `CONFIG_XNU_NATIVE_PAN=n`, the smaller payload, the reset probes and the
@@ -43,7 +46,9 @@ Run from `src/UniXNU` unless noted.
 | `python3 scripts/qemu-smoke.py --help` (device repo) | PASS |
 | `./unixnu status --json -D ../UniXNU-gta4l` | PASS; device `a472a00`, base `4561854` |
 
-## Firmware build
+## Firmware builds
+
+### Tab A7
 
 PASS on this host:
 
@@ -51,20 +56,29 @@ PASS on this host:
 ./unixnu build firmware --uefi ../Mu-Silicium -D ../UniXNU-gta4l -j "$(nproc)"
 ```
 
-Output:
+Output: `src/Mu-Silicium/Build/gta4lPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd`.
+Built with `ENABLE_SECUREBOOT=1`.
 
-```text
-src/Mu-Silicium/Build/gta4lPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd
+### S7 Edge
+
+PASS on this host. Run from the S7 Edge workspace `src/UniXNU`:
+
+```sh
+./unixnu build firmware --uefi ../Mu-Silicium -D ../UniXNU-hero2lte -j "$(nproc)"
 ```
 
-The command built with `ENABLE_SECUREBOOT=1`.
+Output: `src/Mu-Silicium/Build/hero2ltePkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd`.
+Built with `ENABLE_SECUREBOOT=0` from
+`UniXNU-hero2lte/board.toml`; this pin does not change that setting. Treat the
+S7 Edge image as a development build, not a security-preserving result.
 
 ## Kernel build
 
-The Linux kernel step uses the toolchain described by
-`scripts/linux/setup-toolchain.py`; the full macOS/Xcode-only steps are not
-available on this host. A kernel build attempt and its result should be
-recorded here when run.
+Attempted for Tab A7 on this Linux host with the S7 Edge workspace toolchain
+plus locally built `tcsh` and `unifdef`. The build stopped at the corecrypto
+archive step because the XNU bootstrap object set was incomplete
+(`vm_kern.o`, `prng_random.o` missing). This is a host/build-order blocker, not
+a code failure. The kernel build remains unvalidated for both devices.
 
 ## Device notes
 
