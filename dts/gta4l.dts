@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 //
 // Samsung Galaxy Tab A7 10.4 (2020), SM-T505N / gta4l.
-// Memory and the framebuffer reservation come from the live SM-T505N FDT
-// captured from the tablet. The SoC DTSI supplies CPU, PSCI, GIC and timer
-// resources; board-specific peripherals stay here.
+//
+// The live SM-T505N FDT reports three DRAM banks:
+//   0x40000000+0x3cc00000, 0x80000000+0x40000000, 0xc0000000+0x100000000,
+// with a hole at 0x7cc00000..0x80000000. Format 2's ADT generator requires one
+// contiguous range, so this 3 GiB unit uses the range already used by the
+// previous gta4l ADT: 0x40000000+0xc0000000. That range includes the hole and
+// is not a claim that the physical map is contiguous. Revalidate the usable
+// DarwinBoot window against the firmware memory map before hardware use.
 /dts-v1/;
 /include/ "sm6115.dtsi"
 
@@ -13,6 +18,7 @@
 
     memory@40000000 {
         device_type = "memory";
+        // Single ADT range; see the file header for the three live banks.
         reg = <0 0x40000000 0 0xc0000000>;
     };
 
