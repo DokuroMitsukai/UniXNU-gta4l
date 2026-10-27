@@ -41,6 +41,13 @@ The NoNameBuilder working-copy test settings (`ENABLE_SECUREBOOT=0`,
 `cs_enforcement_disable` argument) were **not** ported. Keep those in a
 separate diagnostic branch if they are still needed.
 
+The board still carries `amfi_get_out_of_my_way=1` and
+`cs_enforcement_disable=1` in `[payload] kernel_args` even though
+`ENABLE_SECUREBOOT=1`. These are pre-existing test arguments. The Format 2 OS
+profile supplies `amfi-only-platform-code` and `crypto-hash-method`; a clean
+run should remove `cs_enforcement_disable=1` and decide the AMFI policy before
+claiming a security-preserving boot.
+
 ## Format 2 migration
 
 - `feeds.toml` pins `UniXNU-sm6115-common` at `4137c1c1`.
