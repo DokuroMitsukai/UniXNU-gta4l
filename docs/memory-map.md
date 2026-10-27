@@ -81,17 +81,27 @@ below `0x80000000`.
 
 ```toml
 [payload.adt]
-owned_memory_size = "0x80000000"
+owned_memory_size = "0x7fe00000"
 ```
 
-DarwinBoot scans the UEFI memory map for a run at least that large and allocates
-the window with `AllocatePages`. With the map above, the first qualifying run is
-`0x80000000..0x100000000`; the 192 MiB payload, kernel, ADT and ramdisk fit well
-inside it.
+DarwinBoot scans the UEFI memory map and allocates with
+`Candidate = ALIGN_VALUE(run_start, 2 MiB) + (Kernel.Base & (2 MiB - 1))`.
+The prelinked kernel base ends in `0x7c000`, so a request for the full
+`0x80000000` (2048 MiB) would end `0x7c000` past the `0x100000000` end of the
+run. The 2046 MiB request leaves 1.5 MiB of headroom while still fitting the
+kernel, ADT, ramdisk and payload.
+
+The first tablet attempt with `0x80000000` produced exactly:
+
+```text
+NO WINDOW 80000000 BIG RUN 80000000 @ 80000000
+```
+
+That confirms the run is present and that the offset, not the map, caused the
+failure. The next attempt uses `0x7fe00000`.
 
 The previous `0xC0000000` (3 GiB) request could not be satisfied by any one
-run. A tablet boot with that request would stop in DarwinBoot's `NO WINDOW`
-path before XNU.
+run either.
 
 ## Limits
 

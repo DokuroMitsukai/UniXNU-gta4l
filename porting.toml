@@ -4,7 +4,7 @@ schema_version = 1
 name = "gta4l"
 soc = "SM6115"
 os_profile = "ipados-17.7.11-21H461"
-summary = "Samsung Galaxy Tab A7 10.4 (2020) Format 2 migration; PMGR-linked host kernel and bounded QEMU checkpoint pass, tablet bring-up pending."
+summary = "Samsung Galaxy Tab A7 10.4 (2020) Format 2 migration; PMGR-linked host kernel, tablet RAM-root/EL0 fixture success and bounded QEMU checkpoints, eMMC bring-up pending."
 
 [[area]]
 id = "configuration"
@@ -16,9 +16,9 @@ configuration = ["board.toml schema_version=2, soc_source=sm6115 and os_profile=
 procedure = ["./unixnu defconfig gta4l_defconfig -D ../UniXNU-gta4l; ./unixnu fetch -D ../UniXNU-gta4l; ./unixnu status --json -D ../UniXNU-gta4l; ./unixnu build kernel -D ../UniXNU-gta4l."]
 findings = ["The SM6115 Cortex-A73/A53 cores are ARMv8.0 and do not implement PAN; the shared ARM64 profile enables PAN, so the board overrides CONFIG_XNU_NATIVE_PAN=n. TB128FU records the same undefined-instruction failure and the same override.", "The Format 2 resolver selects the expected arch/SM6115/OS/device layers and the output path above; the PT_LOAD/ADT records are built from dts/gta4l.dts and the shared SM6115 DTSI.", "The TB128FU device repository (xVanTuring/UniXNU-tb128fu) is the pinned reference for the timer, IPI and PMGR questions; docs/tb128fu-comparison.md records its credit, revisions and the limits on reuse."]
 completion = ["All source pins resolve; every selected component has a record; status shows the intended overrides and patch order."]
-limits = ["The host kernel build and prelink pass; no hardware or QEMU boot has run. The AMFI bypass arguments in [payload] kernel_args remain a diagnostic workaround, not a security-preserving configuration."]
-next_action = ["Build the payload and boot image from the host kernel, then run one bounded QEMU regression; keep hardware results separate."]
-evidence = []
+limits = ["The host kernel build and prelink pass. The successful tablet RAM-root image uses a test-scoped ad-hoc signed fixture and owner trust bundle; it is not an authenticated-root or production security result."]
+next_action = ["Preserve the successful RAM-root baseline, qualify the fs/timer fixture, then implement read-only eMMC against the recovery inventory."]
+evidence = ["RAM-root report fixture booted on the tablet: PID 1, 4096-byte pages, and mockfs exec observed. Image sha256 45ecc93049757e97a8d71edb776f67e69df5c9c58be13543295c154637273e24; fixture CDHash 1b0a5244d25b8d1fb523da9b7d9cfc5d20e84f64. Evidence: out/gta4l/ram-root-report-evidence/."]
 
 [[area]]
 id = "firmware"
@@ -70,11 +70,11 @@ paths = ["drivers/ShengUfs", "scripts/*ufs*", "scripts/*storage*", "scripts/*use
 inputs = ["Identify the storage and root hardware, resources and existing component interfaces for this board."]
 configuration = ["Record the board.toml fields, DTS properties and defconfig values used for storage and root."]
 procedure = ["Follow the storage and root stage in the porting guide and record the actual commands."]
-findings = ["Collect the first storage and root observation, its cause when established, and the resulting implementation decision."]
+findings = ["RAM-backed mockfs root and a signed static EL0 fixture succeeded on the tablet without the AMFI bypass arguments: PID 1 and 4096-byte page-size syscall observed. This is a bounded fixture result, not an eMMC or authenticated-root result.", "Recovery inventory: eMMC is mmcblk0 at /sys/firmware/devicetree/base/soc/sdhci@4744000, compatible qcom,sdhci-msm-v5/qcom,sdhci-msm-cqe; clocks are iface_clk, core_clk and ice_core_clk; reset is core_reset; supplies are vdd and vdd-io. Recovery reports HS400 Enhanced Strobe, CQHCI and 64-bit ADMA.", "The eMMC is a 29.1 GiB DX68MB (Samsung CID 150100445836384d42009005f4661900, CSD d02701320f5903fff6dbffef8e404000, 61,071,360 logical 512-byte sectors). These are recovery observations, not an XNU driver result."]
 completion = ["Host: register, clock, link and SMMU facts match the board inventory.", "Reads: SCSI capacity, GPT and known blocks are correct; OS/SystemOS windows stay within userdata.", "Root: the configured volume mounts and launchd starts. Persistence: writes survive reboot within the allocated Data region."]
-limits = ["Hardware inputs and implementation are pending for this example board."]
-next_action = ["Inventory the required storage and root inputs before implementation."]
-evidence = []
+limits = ["No XNU eMMC driver or XNU block-device result exists yet. Recovery inventory is read-only evidence and does not establish register, clock or DMA behavior under XNU."]
+next_action = ["Implement a new read-only SDHCI/MSM/eMMC path against the recovered inventory; compare known sectors before attempting any root or write path."]
+evidence = ["out/gta4l/ram-root-fs-timer-evidence/twrp-emmc-inventory.txt", "out/gta4l/ram-root-fs-timer-evidence/twrp-sdhci-node2.txt"]
 
 [[area]]
 id = "display"
@@ -156,9 +156,9 @@ configuration = ["CONFIG_XNU_SHENG_PMGR=y; board.toml archives append build-plat
 procedure = ["Run the bridge audit against the original kernelcache and prelinked kernel, then boot with sheng-pmgr=2 and no AMFI bypass for the first bounded test."]
 findings = ["TB128FU's ShengPlatformPower bridge publishes the original ApplePMGRNub through an ABI-audited provider, reads and writes no hardware, and fails unsupported power operations explicitly.", "The audit passes against our original kernelcache f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7 and prelinked kernel. The PMGR-linked kernel sha256 is dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60; bsd_init.o has XNU_SHENG_PMGR=1 and the kernel contains ShengPlatformPower and sheng_pmgr_run.", "QEMU TCG with sheng-pmgr=2 and no AMFI bypass reaches _bsd_init, _sheng_pmgr_run and _IOKitBSDInit with no AMFI 'No PMGR' panic and no _panic checkpoint; it stalls at _ml_get_timebase before _vfs_mountroot. Publication was not read back independently."]
 completion = ["Declared power controls and battery readings match observations; each claimed sleep/resume transition restores its dependent peripherals."]
-limits = ["No power backend (clocks, sleep, reset) is implemented. The bridge is runtime-unqualified and the QEMU stall is unresolved. The tablet image still carries the AMFI bypass arguments until the bridge is tested on hardware without them."]
-next_action = ["Prepare a tablet diagnostic image with sheng-pmgr=2 and no AMFI bypass, get owner approval, and capture the first console/PMGR result; do not claim power support from the bridge."]
-evidence = []
+limits = ["No power backend (clocks, sleep, reset) is implemented. The bridge is runtime-unqualified and the QEMU stall is unresolved. The RAM-root fixture booted through the PMGR-linked kernel without AMFI bypass arguments; PMGR publication and power operations remain unqualified."]
+next_action = ["Capture a separate PMGR publication/power result on the tablet; do not claim power support from the bridge or from the RAM-root fixture."]
+evidence = ["RAM-root fixture booted through the PMGR-linked kernel without AMFI bypass arguments; image sha256 45ecc93049757e97a8d71edb776f67e69df5c9c58be13543295c154637273e24. This does not independently qualify PMGR publication."]
 
 [[area]]
 id = "packaging"
@@ -170,9 +170,9 @@ configuration = ["board.toml payload size_mib=192, loader=firmware, panic_screen
 procedure = ["./unixnu build kernel -D ../UniXNU-gta4l; ./unixnu build package; ./unixnu build firmware; ./unixnu build payload; ./unixnu bootimg."]
 findings = ["The PMGR-linked kernel/prelink pass: kernel.macho is a 49 MiB Mach-O arm64 image with SHA-256 dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60; link.filelist has 1006 entries and none are missing. The earlier no-bridge hash was ef85af5417ace24e7b96f6c5a3224d2e7c40a163c1532bf2586f23fb5dd5f8bd.", "The full ordered archive plan is required: replacing it with only build-platform-power.py dropped the NativeAES bindings and failed the final link. board.toml now keeps the architecture list and appends the PMGR builder.", "The fresh tree first stopped in prepare-xnu-source.py while fetching omitted DriverKit headers; the retry-safe fetch restored 26 headers. The earlier Format 1 corecrypto failure was stale state, not a missing bootstrap object set."]
 completion = ["Kernel and prelink succeed, payload contains all declared inputs, and the boot image matches the bootloader format and size limit."]
-limits = ["The PMGR kernel host build/prelink and one QEMU checkpoint run pass; the payload and boot image have not been built from this kernel, and no hardware boot has run."]
-next_action = ["Build package, firmware, payload and boot image from the PMGR kernel; record sizes/hashes, then request owner approval for a bounded tablet test."]
-evidence = []
+limits = ["The PMGR kernel host build/prelink and one QEMU checkpoint run pass. Payload and boot images have been built from this kernel, and the RAM-root report fixture booted on the tablet; it is not an authenticated-root result."]
+next_action = ["Preserve the successful RAM-root baseline, qualify the fs/timer fixture, then implement read-only eMMC against the recovery inventory."]
+evidence = ["RAM-root report boot image sha256 45ecc93049757e97a8d71edb776f67e69df5c9c58be13543295c154637273e24; fs/timer image sha256 c12e601eceb8e5b5b9cf7a028c0f404653b67dc5ff5577813293673d2dea2b3a (flashed, boot pending). Evidence: out/gta4l/ram-root-report-evidence/ and out/gta4l/ram-root-fs-timer-evidence/."]
 
 [[area]]
 id = "diagnostics"
@@ -184,6 +184,6 @@ configuration = ["UNIXNU_XNU_TAG=xnu-10063.141.1 and the pinned source revision;
 procedure = ["Run the kernel build with a log; on a fetch failure, preserve the log and retry with the retry-safe prepare-xnu-source.py; compare failures across clean output trees."]
 findings = ["prepare-xnu-source.py used four threads with a 30 s TLS timeout and no retry. A GitHub raw fetch timed out during the first Format 2 kernel build, before any XNU compilation. The shared script now retries transient failures with a 60 s timeout and exponential backoff; scripts/test_prepare_xnu_source.py covers the retry and non-retry paths.", "The clean build completed with exit 0. The PMGR kernel.macho hash dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60, 1006/1006 link objects and XNU_NATIVE_PAN=0 records are in docs/build-revisions.md.", "QEMU TCG reached _bsd_init, _sheng_pmgr_run and _IOKitBSDInit with sheng-pmgr=2 and no AMFI bypass, then timed out at _ml_get_timebase before _vfs_mountroot; the PMGR archive audit and build report are retained."]
 completion = ["Each claimed milestone has a reproducible command, a matching source/image revision and an accessible result."]
-limits = ["The retry test is a host unit test; the kernel/QEMU result is host-only. The QEMU serial layer has no Apple-compatible UART, and no hardware log exists."]
-next_action = ["Archive the QEMU logs, build the tablet payload/boot image, and record the first hardware stage separately after approval."]
+limits = ["The retry test is a host unit test; the kernel/QEMU result is host-only. The QEMU serial layer has no Apple-compatible UART. The tablet result is a panic-screen report, not a serial log."]
+next_action = ["Preserve the QEMU evidence and the tablet panic-screen result; qualify the fs/timer diagnostic separately."]
 evidence = []

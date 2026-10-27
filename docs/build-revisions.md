@@ -44,12 +44,12 @@ still needed. Its `CONFIG_XNU_NATIVE_PAN=n` is the exception: that is a
 hardware requirement for the ARMv8.0 cores, not a diagnostic setting, and is
 now part of the board defconfig.
 
-The board still carries `amfi_get_out_of_my_way=1` and
+The board previously carried `amfi_get_out_of_my_way=1` and
 `cs_enforcement_disable=1` in `[payload] kernel_args` even though
-`ENABLE_SECUREBOOT=1`. These are pre-existing test arguments. The Format 2 OS
-profile supplies `amfi-only-platform-code` and `crypto-hash-method`; a clean
-run should remove `cs_enforcement_disable=1` and decide the AMFI policy before
-claiming a security-preserving boot.
+`ENABLE_SECUREBOOT=1`. Those pre-existing test arguments have been removed.
+The 2026-10-28 RAM-root fixture booted without either argument using a
+test-scoped trust bundle; this is still a bounded diagnostic result, not an
+authenticated-root or production security result.
 
 ## Format 2 migration
 
@@ -175,7 +175,29 @@ QEMU TCG with `sheng-pmgr=2` and **no** `amfi_get_out_of_my_way` /
 `_IOKitBSDInit`, then stalls at `_ml_get_timebase` before `_vfs_mountroot`.
 There is no AMFI "No PMGR" panic and no `_panic` checkpoint. The bridge's
 publication was not independently read back; this is a bounded host result,
-not a tablet result. No payload or boot image has been produced yet.
+not a tablet result. That QEMU checkpoint pass did not produce a payload or
+boot image; the later tablet images are recorded below.
+
+### Hardware RAM-root result
+
+The PMGR-linked kernel was packaged with an 80 MiB payload, a scoped ad-hoc
+signed static EL0 fixture and a `N4KROOT` mockfs image. It booted on the tablet
+without `amfi_get_out_of_my_way` or `cs_enforcement_disable`. The fixture
+reported PID 1 and a 4096-byte page size through a deliberate userspace panic.
+Image SHA-256:
+`45ecc93049757e97a8d71edb776f67e69df5c9c58be13543295c154637273e24`.
+This is a bounded fixture result, not an authenticated root.
+
+A second image adds `/probe.bin` reads with distinct 4 KiB page contents, a
+seek/reopen/EOF test, and a blocking `poll()` timeout measured with
+`cntvct_el0`. It was flashed but not booted during this record; image SHA-256:
+`c12e601eceb8e5b5b9cf7a028c0f404653b67dc5ff5577813293673d2dea2b3a`.
+
+Recovery inventory identifies `mmcblk0` at `soc/sdhci@4744000`, compatible
+`qcom,sdhci-msm-v5`/`qcom,sdhci-msm-cqe`, with HS400 Enhanced Strobe, CQHCI and
+64-bit ADMA. The card is a 29.1 GiB DX68MB. No XNU eMMC driver exists yet; the
+inventory is not a driver result. Evidence is in
+`out/gta4l/ram-root-fs-timer-evidence/`.
 
 The kernel step consumes the generated `out/gta4l/ipados-17.7.11-21H461/gta4l/.config`.
 Editing `configs/gta4l_defconfig` alone does not change it: rerun
