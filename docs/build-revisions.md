@@ -85,6 +85,8 @@ Run from `src/UniXNU` unless noted.
 | `python3 scripts/porting-record.py check --device ../UniXNU-gta4l` | PASS; 13 structured areas |
 | `dtc -I dts -O dtb -i ../UniXNU-sm6115-common/dts ...` | PASS |
 | `python3 scripts/make-adt.py --dtb ... --os-profile ... --board ../UniXNU-gta4l/board.toml ...` | PASS; 13,552-byte ADT with `/options`, NVRAM, crypto hash and AMFI platform code |
+| `python3 scripts/test_prepare_xnu_source.py` | PASS; transient timeout retried, HTTP 404 not retried |
+| `./unixnu build kernel -D ../UniXNU-gta4l -j "$(nproc)"` | PASS; 49 MiB `kernel.macho`, SHA-256 `ef85af54...`, 1006/1006 link objects, PAN=0 compile records |
 
 ## Firmware builds
 
