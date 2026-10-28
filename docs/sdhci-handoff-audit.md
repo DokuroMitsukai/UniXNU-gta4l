@@ -255,6 +255,7 @@ the recorded register layout.
 - Gate self-test: `scripts/test-gta4l-boot-image.py`
 - Host-local init source: `package/Gta4lSdhciHostInit.c` and `.h`
 - Host-local init static test: `scripts/test-gta4l-sdhci-host-init.py`
+- Payload/ADT contract check: `scripts/check-gta4l-payload.py`
 - Link input: `CONFIG_XNU_EXTRA_LD_ARCHIVES` in `configs/gta4l_defconfig`
 
 The boot-image gate must pass against the hardware-tested v5 image before any

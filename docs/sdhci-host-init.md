@@ -1,10 +1,9 @@
 # gta4l bounded host-local SDHCI initialization
 
-Status: probe implemented, static-tested, relinked into the kernel, packaged into
-an 80 MiB diagnostic payload and gated against the hardware-tested v5 baseline.
-The image is flashed to BOOT and verified by full image-byte readback; it has
-not been booted. The owner performs the manual reboot. The completed read-only
-audit is the baseline; see `sdhci-handoff-audit.md`.
+Status: the first host-init image was flashed but failed at the UniXNU picker
+with `Compromised Data`; BOOT was rolled back. The payload/ADT mismatch is
+understood and a corrected v2 image is built and gated, but not flashed. The
+completed read-only audit is the baseline; see `sdhci-handoff-audit.md`.
 
 ## Purpose
 
@@ -178,11 +177,18 @@ Completed on the host:
    `0x38`, `0x2F` and `0x2C`; all other stores are stack or the one-shot flag.
 6. The kernel relink succeeded and `bsd_init` calls preflight, audit, snapshot
    and host-init in that order.
-7. The 80 MiB host-init payload was built with only
-   `gta4l-sdhci-host-init=1`; the tracked `board.toml` was not modified.
-8. The boot image was packaged against the v5 baseline and passes all 18
-   component-gate checks. The independent dmaccess check passes the header,
-   FDT and Qualcomm-ID checks; its known FV/LZMA false positives are ignored.
+7. The first 80 MiB host-init payload was built with only
+   `gta4l-sdhci-host-init=1`, but the temporary board inherited
+   `packed_data_ramdisk = true`. Its ADT reserved `PackedRAMDisk` while the raw
+   `N4KROOT` fixture reports `RamdiskPacked = FALSE`. DarwinBoot therefore
+   returned `EFI_COMPROMISED_DATA` at the UniXNU picker.
+8. The corrected payload sets `packed_data_ramdisk = false`; its ADT reserves
+   `RAMDisk`. `scripts/check-gta4l-payload.py` now checks the placeholder
+   against the actual ramdisk layout and rejects the failed payload.
+9. Corrected v2 is packaged against the v5 baseline and passes all 18
+   component-gate checks plus the payload contract check. The independent
+   dmaccess check passes the header, FDT and Qualcomm-ID checks; its known
+   FV/LZMA false positives are ignored.
 
 Build evidence:
 
@@ -196,27 +202,30 @@ Build evidence:
   `ba52b6500ec3d064d173fa06fba23cb42aa4850c0bddd0df9a4178666c084646`.
 - Payload kernel SHA-256
   `72eae6f0c0850ac421d0048cb6cc3697cf70db7df176b34b30703d26132bbc3f`.
-- Payload image SHA-256
+- Failed v1 payload SHA-256
   `fd584c46a633d63456bff54c49b8c7315d02198fc8c74c7a46e81dd68c8ea244`.
-- Boot image SHA-256
+- Failed v1 boot image SHA-256
   `86c96ee8565d2639eb3d56c150f1573e8bea1da3d966f7b10c41f79c02b7485f`.
+- Corrected v2 payload SHA-256
+  `0afaae8d66251d61c74d80427289da5e79551e52652e5236adaac55c6c8ac8b1`.
+- Corrected v2 boot image SHA-256
+  `d4aee57a9d1874d23dc010b7de43384ace6ab29241f5ee18cb10f0a561bab133`.
 - Only `_PE_parse_boot_argn`, `_ml_io_map` and `_panic` are undefined in the
   host-init object.
 - Evidence:
   `out/gta4l/ram-root-sdhci-host-init-evidence/`.
 
-Remaining: the owner manually reboots and captures the complete
-`GTA4L-SDHCI HOST INIT` report. On any failure restore
-`boot-before-host-init-flash.img` and stop. The agent has issued no reboot.
+Remaining: approval to flash corrected v2, then the owner manually reboots and
+captures the complete `GTA4L-SDHCI HOST INIT` report. On any failure restore the
+fresh pre-flash BOOT image and stop. The agent has issued no reboot.
 
-Flash record:
+Failed v1 flash/rollback record:
 
 - Pre-flash backup SHA-256
   `55d80d52a7246acec8277a8aeb40e38b2b2aac1eadef1e5d439579d86a7cd701`.
-- Full partition readback SHA-256
+- Flashed partition readback SHA-256
   `73b7a586ee2498277dc77adc7b81714afa0662d36c8dfc48b8c0a2ec456e01b6`.
-- Image-byte readback matches the host image
-  `86c96ee8565d2639eb3d56c150f1573e8bea1da3d966f7b10c41f79c02b7485f` and
-  passes all 18 component-gate checks.
-- `flash-report.json` and `readback-gate-report.json` are in the evidence
-  directory.
+- Rollback readback SHA-256
+  `55d80d52a7246acec8277a8aeb40e38b2b2aac1eadef1e5d439579d86a7cd701`.
+- `flash-report.json`, `readback-gate-report.json` and
+  `failure-analysis.txt` are in the evidence directory.
