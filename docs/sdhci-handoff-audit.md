@@ -1,9 +1,9 @@
 # gta4l read-only SDHCI handoff audit
 
-Status: v1 was withdrawn after a BOOT-only packaging failure; the pre-flash
-BOOT partition was restored, the owner confirmed the restored v5 image works,
-and the corrected v2 image is now flashed and read back byte-for-byte. v2 has
-not yet been booted. It remains read-only and does not access the card.
+Status: v2 booted on the tablet and completed the read-only handoff audit. The
+v1 image was withdrawn after a BOOT-only packaging failure; its failure and
+verified rollback are retained below. The capture is register-level handoff
+evidence, not card or storage access.
 
 ## Activation
 
@@ -123,6 +123,51 @@ An unexpected MCI major version stops with
 `GTA4L-SDHCI AUDIT REFUSED: unexpected MCI version ...` before the GCC mapping
 and the remaining vendor reads.
 
+## Hardware result
+
+The owner manually booted `boot-ram-root-sdhci-audit-v2.img` (SHA-256
+`a34519c66820eb5f1f4c4790be5e10233ffd4c8a4ece2df4768e7dca151c8546`) with
+`gta4l-sdhci-audit=1`; the snapshot gate was absent. The audit reached its
+intentional panic. The values below were transcribed from the owner's
+photograph on 2026-10-28. Line wrapping is reconstructed for readability; the
+field values are as photographed.
+
+```text
+GTA4L-SDHCI AUDIT OK v=10000072 sv=7202 c=742dc8b2 c1=0000808f
+ps=01f800f0 clk=0003 pwr=00 hc=00 hc2=0000
+is=00000000 ie=00000000
+
+GTA4L-SDHCI AUDIT VENDOR g=00f04003 pst=00000000 pm=00000000
+vs=00300a0c vc=742dc8b2 ddr=80040873 dll=00000000
+
+GTA4L-SDHCI AUDIT GCC bcr=00000000 ac=00004221 ahb=00000001 ice=00004229
+cmd=00000000 cfg=00000401
+m=00000001 n=000000fe d=000000fd
+```
+
+The complete capture and parsed fields are retained in
+`out/gta4l/ram-root-sdhci-audit-evidence/audit-capture.txt` and
+`audit-result.json`.
+
+| Area | Observation | Limit |
+| --- | --- | --- |
+| GCC reset | `bcr=00000000`; the SDCC1 block reset bit is clear | Does not prove the controller is initialized |
+| GCC branches | `ac=00004221`, `ahb=00000001`, `ice=00004229`; the enable bits are set and the standard halt bits are clear | Does not measure frequency or prove the branch is actually clocking hardware |
+| Apps RCG | `cfg=00000401`: parent select 4, divider encoding 1, M/N mode disabled; `cmd=00000000`; `m/n/d=1/fe/fd` | Consistent with the reference nominal GPLL6 384 MHz entry; the PLL rate was not measured |
+| SDHCI clock | `clk=0003`: internal clock enable and stable bits set; SD/card clock enable clear | No card-clock output or card communication |
+| SDHCI power | `pwr=00`: standard bus-power enable clear | External PMIC rail state is unknown |
+| Power requests | `pst=00000000`, `pm=00000000`: no observed request or mask bits | Does not prove regulator voltage or retained rail state |
+| DLL | `dll=00000000` | No DLL lock or high-speed readiness is established |
+| Present state | `ps=01f800f0`: standard CMD/DAT inhibit bits are clear | Other present-state fields are not used as storage proof |
+| Interrupts | `is=00000000`, `ie=00000000` | No status or enable is used to infer card state |
+
+This confirms the boot path, both MMIO read paths, the v5 version gate and the
+report path on hardware. It does **not** establish that the eMMC VDD/VDD-IO
+rails are powered, that VDDCX or interconnect votes are present, that the
+external card clock is running, or that the card can accept a command. The
+nominal 384 MHz GPLL6 interpretation is a decoded configuration, not a measured
+rate.
+
 ## Withdrawn v1 artifact
 
 - Image: `out/gta4l/boot/boot-ram-root-sdhci-audit.img`
@@ -159,9 +204,10 @@ changes to the audit.
 - Ramdisk / audit payload `31b78bec7529706407f682e64dbc9c4c990e86009025174fd3f791606b29ea31`.
 - Component report: `out/gta4l/ram-root-sdhci-audit-evidence/v2-verification.json`.
 
-v2 is flashed and read back byte-for-byte. The owner confirmed the restored v5
-BOOT partition works before this flash. v2 has **not** been booted; the agent
-issued no reboot.
+v2 was flashed and read back byte-for-byte. The owner confirmed the restored v5
+BOOT partition worked before this flash, then manually booted v2 and captured
+the completed audit. The agent issued no reboot. The hardware result is recorded
+above; the flash and readback are recorded in `flash-report-v2.json`.
 
 ## Packaging failure and rollback
 
@@ -203,14 +249,32 @@ the recorded register layout.
   into `libGta4lSdhciSnapshot.a`)
 - Kernel hook: `patches/xnu/gta4l-sdhci-handoff-audit.patch`
 - Static test: `scripts/test-gta4l-sdhci-handoff-audit.py`
+- Diagnostic packager: `scripts/package-gta4l-diagnostic.py`
+- Packager self-test: `scripts/test-gta4l-diagnostic-package.py`
 - Boot-image gate: `scripts/check-gta4l-boot-image.py`
+- Gate self-test: `scripts/test-gta4l-boot-image.py`
 - Link input: `CONFIG_XNU_EXTRA_LD_ARCHIVES` in `configs/gta4l_defconfig`
 
 The boot-image gate must pass against the hardware-tested v5 image before any
-flash. It verifies the boot header, firmware + BootShim, boot kernel section,
-appended boot DTB and ramdisk size, and requires the Qualcomm identification
-properties in the appended DTB. The withdrawn v1 image fails this gate; v2
-passes it.
+flash. It verifies the header page except the deterministic boot-image ID, the
+recomputed ID, firmware + BootShim, boot kernel section, appended boot DTB,
+zero kernel padding, absence of trailing data, the appended FDT total size and
+the Qualcomm identification properties. It can also require an exact expected
+ramdisk/payload hash. The withdrawn v1 image fails this gate; v2 passes it.
+
+The diagnostic packager copies the pinned v5 header page, kernel section and
+padding byte-for-byte, replaces only the ramdisk, recomputes the Android
+boot-image ID, runs the gate, and publishes an output plus manifest. It does not
+read or modify `board.toml`, so no temporary configuration substitution is
+needed. Rebuilding v2 from the v5 baseline and audit payload is byte-identical:
+`a34519c66820eb5f1f4c4790be5e10233ffd4c8a4ece2df4768e7dca151c8546`.
+
+An independent ABL/LinuxLoader-oriented check with `bootimg_tool.py`, provided
+by **dmaccess**, was used as a second opinion and is recorded in
+`out/gta4l/ram-root-sdhci-audit-evidence/independent-bootimg-verification.txt`.
+It confirms the v2 header, appended FDT and Qualcomm ID properties; it rejects
+the v1 DTB as expected. The script is not vendored because the supplied copy has
+no license header.
 
 The patch calls the audit before the snapshot probe. Both functions are
 one-shot and return when their boot argument is absent. On a clean tree the
@@ -226,3 +290,8 @@ stream ID or card protocol state. The next write-capable host-init probe must
 be justified by this capture, must not acknowledge a power request without the
 corresponding regulator action or proven retained state, and must keep the
 RAM-root path unchanged.
+
+The next probe's design is in `sdhci-host-init.md`. The live FDT resolves the
+supplies to RPM-SMD PM6125 L24/L11, but this tree has no XNU RPM/SPMI/regulator
+path, so the first host-init milestone keeps bus power and the card clock off
+and reports the power stage as blocked.

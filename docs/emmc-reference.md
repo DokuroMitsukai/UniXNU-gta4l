@@ -101,4 +101,12 @@ audit in `docs/sdhci-handoff-audit.md`; it observes the GCC and v5 vendor
 state at the audit point in `bsd_init` without writing or acknowledging power
 requests. Its first boot image was withdrawn after a packaging failure; the
 corrected image preserves the working v5 boot header, firmware, boot DTB and
-boot kernel section, and has been flashed and read back but not yet booted.
+boot kernel section, and then booted and completed the read-only capture. The
+capture reports `bcr=00000000`, `ac=00004221`, `ahb=00000001`, `ice=00004229`,
+`cmd=00000000`, `cfg=00000401`, `clk=0003`, `pwr=00`, `pst=00000000` and
+`dll=00000000`. This is register-level handoff evidence, not proof that the
+eMMC rails are powered or that the card can communicate. The live FDT resolves
+`vdd`/`vdd-io` to RPM-SMD PM6125 L24/L11, but this tree has no XNU
+RPM/SPMI/regulator path. The bounded host-local probe in `sdhci-host-init.md`
+therefore keeps bus power and the card clock off and treats the power stage as
+blocked.

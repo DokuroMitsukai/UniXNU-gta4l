@@ -22,8 +22,10 @@ confirms the v5 vendor version offset and the gate, mapping, read and panic
 paths on the tablet. It does not confirm card protocol state or storage
 access. The v5 snapshot evidence remains the working baseline. The first audit
 boot image was withdrawn after a BOOT-only packaging failure; BOOT was restored
-and confirmed, and the corrected audit image is now flashed and read back but
-not yet booted.
+and confirmed, and the corrected audit image then booted and completed the
+read-only capture. The audit result is in
+`out/gta4l/ram-root-sdhci-audit-evidence/audit-capture.txt`; it remains
+register-level handoff evidence, not card access.
 
 ## Activation
 
@@ -130,5 +132,6 @@ A fixed number of reads is not a guarantee against a bus hang. The v5
 snapshot is hardware-observed, but the controller clock, power domain,
 interconnect and PMIC prerequisites have not been proven under XNU. This
 diagnostic only observes the handoff state; it does not establish card
-protocol state, initialize eMMC, or qualify a storage path. The next step is
-the read-only handoff audit, not a write-capable host-init sequence.
+protocol state, initialize eMMC, or qualify a storage path. The read-only
+handoff audit has since run; the next step is the bounded host-local probe in
+`sdhci-host-init.md`, with bus power and the card clock still off.
