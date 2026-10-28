@@ -1,10 +1,15 @@
 diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+index 7f79293..0a57b28 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -780,6 +780,10 @@
+@@ -780,10 +780,22 @@ bsd_init(void)
  	sheng_pmgr_run();
  #endif
  
++	/* Reject conflicting board diagnostics before either probe maps hardware. */
++	extern void gta4l_sdhci_host_init_preflight(void);
++	gta4l_sdhci_host_init_preflight();
++
 +	/* Board-only, boot-argument-gated handoff audit; returns when disabled. */
 +	extern void gta4l_sdhci_handoff_audit_run(void);
 +	gta4l_sdhci_handoff_audit_run();
@@ -12,3 +17,11 @@ diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
  	/* Board-only, boot-argument-gated observation probe; returns when disabled. */
  	extern void gta4l_sdhci_snapshot_run(void);
  	gta4l_sdhci_snapshot_run();
+ 
++	/* Board-only, boot-argument-gated host-local init; returns when disabled. */
++	extern void gta4l_sdhci_host_init_run(void);
++	gta4l_sdhci_host_init_run();
++
+ 	/*
+ 	 * Initialize the calendar.
+ 	 */
