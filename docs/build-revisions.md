@@ -190,14 +190,24 @@ This is a bounded fixture result, not an authenticated root.
 
 A second image adds `/probe.bin` reads with distinct 4 KiB page contents, a
 seek/reopen/EOF test, and a blocking `poll()` timeout measured with
-`cntvct_el0`. It was flashed but not booted during this record; image SHA-256:
+`cntvct_el0`. It passed on the tablet with:
+
+```text
+RAMROOT-FST PASS: pid=1 page=4096 fs=read+seek+eof timer=poll
+```
+
+Image SHA-256:
 `c12e601eceb8e5b5b9cf7a028c0f404653b67dc5ff5577813293673d2dea2b3a`.
+This is still a bounded fixture result, not sustained timer or userspace
+qualification.
 
 Recovery inventory identifies `mmcblk0` at `soc/sdhci@4744000`, compatible
 `qcom,sdhci-msm-v5`/`qcom,sdhci-msm-cqe`, with HS400 Enhanced Strobe, CQHCI and
-64-bit ADMA. The card is a 29.1 GiB DX68MB. No XNU eMMC driver exists yet; the
-inventory is not a driver result. Evidence is in
-`out/gta4l/ram-root-fs-timer-evidence/`.
+64-bit ADMA. The card is a 29.1 GiB DX68MB. The live FDT matches the pinned
+stock FDT (`da1cb76f...`); the primary and backup GPTs validate and agree, with
+80 partitions including `boot` and `userdata`. No XNU eMMC driver exists yet;
+the inventory is not a driver result. See [eMMC reference inputs](emmc-reference.md)
+for the decoded resources, credits and reference-only boundaries.
 
 The kernel step consumes the generated `out/gta4l/ipados-17.7.11-21H461/gta4l/.config`.
 Editing `configs/gta4l_defconfig` alone does not change it: rerun
