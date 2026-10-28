@@ -2,8 +2,10 @@
 
 Status: the first host-init image was flashed but failed at the UniXNU picker
 with `Compromised Data`; BOOT was rolled back. The payload/ADT mismatch is
-understood and a corrected v2 image is built and gated, but not flashed. The
-completed read-only audit is the baseline; see `sdhci-handoff-audit.md`.
+understood and corrected v2 is now flashed and verified by image-byte readback
+plus the payload contract check. It has not been booted; the owner performs the
+manual reboot. The completed read-only audit is the baseline; see
+`sdhci-handoff-audit.md`.
 
 ## Purpose
 
@@ -215,9 +217,9 @@ Build evidence:
 - Evidence:
   `out/gta4l/ram-root-sdhci-host-init-evidence/`.
 
-Remaining: approval to flash corrected v2, then the owner manually reboots and
-captures the complete `GTA4L-SDHCI HOST INIT` report. On any failure restore the
-fresh pre-flash BOOT image and stop. The agent has issued no reboot.
+Remaining: the owner manually reboots and captures the complete
+`GTA4L-SDHCI HOST INIT` report. On any failure restore the fresh pre-flash BOOT
+image and stop. The agent has issued no reboot.
 
 Failed v1 flash/rollback record:
 
@@ -229,3 +231,17 @@ Failed v1 flash/rollback record:
   `55d80d52a7246acec8277a8aeb40e38b2b2aac1eadef1e5d439579d86a7cd701`.
 - `flash-report.json`, `readback-gate-report.json` and
   `failure-analysis.txt` are in the evidence directory.
+
+Corrected v2 flash record:
+
+- Fresh pre-flash backup SHA-256
+  `55d80d52a7246acec8277a8aeb40e38b2b2aac1eadef1e5d439579d86a7cd701`.
+- Full partition readback SHA-256
+  `7ff725aacfbd5e205f98c6c71229e59908e432491cda91d2257f566d2925874a`.
+- Image-byte readback matches
+  `d4aee57a9d1874d23dc010b7de43384ace6ab29241f5ee18cb10f0a561bab133`.
+- Readback gate 18/18 pass; extracted readback payload
+  `0afaae8d66251d61c74d80427289da5e79551e52652e5236adaac55c6c8ac8b1`
+  passes the payload contract check.
+- `flash-report-v2.json`, `readback-gate-report-v2.json` and
+  `readback-payload-check-v2.json` are in the evidence directory.
