@@ -1,0 +1,14 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -780,6 +780,10 @@
+ 	sheng_pmgr_run();
+ #endif
+ 
++	/* Board-only, boot-argument-gated handoff audit; returns when disabled. */
++	extern void gta4l_sdhci_handoff_audit_run(void);
++	gta4l_sdhci_handoff_audit_run();
++
+ 	/* Board-only, boot-argument-gated observation probe; returns when disabled. */
+ 	extern void gta4l_sdhci_snapshot_run(void);
+ 	gta4l_sdhci_snapshot_run();

@@ -7,3 +7,6 @@ sheng-platform-power.patch
 
 # Board-only observation probe hook; the probe returns unless the matching boot argument is present.
 gta4l-sdhci-snapshot.patch
+
+# Board-only read-only handoff audit hook; the audit returns unless the matching boot argument is present.
+gta4l-sdhci-handoff-audit.patch

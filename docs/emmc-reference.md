@@ -95,4 +95,8 @@ The first hardware implementation must be observation-only: map verified
 registers, read only safe status/version fields, report them through the
 working RAM-root diagnostic, and perform no command submission or storage
 writes. The first opt-in probe and its register allowlist are documented in
-`docs/sdhci-snapshot.md`.
+`docs/sdhci-snapshot.md`. That probe ran on the tablet and reported a valid v5
+core version (`v=10000072`). The next step is the separate read-only handoff
+audit in `docs/sdhci-handoff-audit.md`; it observes the GCC and v5 vendor
+state at the audit point in `bsd_init` without writing or acknowledging power
+requests.
