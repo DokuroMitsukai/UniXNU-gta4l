@@ -1,8 +1,10 @@
 # gta4l read-only SDHCI handoff audit
 
-Status: flashed and read back byte-for-byte; not yet booted. This probe is the
-prerequisite audit before any write-capable host initialization. It preserves
-the working RAM-backed root and does not access the card.
+Status: v1 withdrawn after a BOOT-only packaging failure. The tablet entered
+download mode before UEFI/XNU and produced no audit data. BOOT has been restored
+from the pre-flash partition. A corrected v2 image is built and
+component-verified but not flashed; it remains blocked on a manual reboot test
+of the restored BOOT partition. Do not flash v1.
 
 ## Activation
 
@@ -122,7 +124,7 @@ An unexpected MCI major version stops with
 `GTA4L-SDHCI AUDIT REFUSED: unexpected MCI version ...` before the GCC mapping
 and the remaining vendor reads.
 
-## Built artifact
+## Withdrawn v1 artifact
 
 - Image: `out/gta4l/boot/boot-ram-root-sdhci-audit.img`
 - SHA-256 `57b15d67ecdf450047ee8f1ea9efef657e8156fbd23dc7954fcd7df80e956652`
@@ -130,7 +132,6 @@ and the remaining vendor reads.
 - Payload `31b78bec7529706407f682e64dbc9c4c990e86009025174fd3f791606b29ea31`;
   payload kernel `6e81598cd143c73f47b8d160433d87d84ca035f599187c334241762d4055854a`.
 - Prelinked kernel `172951570ac0ccbdd8fac87dc089001adc9971cd476122ec8f1a9f685e102e3a`;
-  payload kernel `6e81598cd143c73f47b8d160433d87d84ca035f599187c334241762d4055854a`;
   ADT `2c0c4f737dc43abbc5c8b86a441bff172126a50b74b33288945032e8d9a5ec2a`.
 - The archive contains both real probe objects. `_gta4l_sdhci_handoff_audit_run`
   is at `fffffff0079cf138`.
@@ -138,16 +139,46 @@ and the remaining vendor reads.
   (base `0x01438000`) and that no mapped-MMIO store is emitted.
 - The static self-test covers the mapped-window bound and alignment, and
   rejects a wrong GCC offset.
-- The image is flashed to the boot partition and read back byte-for-byte; the
-  agent issued no reboot. See
-  `out/gta4l/ram-root-sdhci-audit-evidence/flash-report.json`.
 
-The test image uses the 80 MiB, non-packed RAM-root payload configuration and
-the existing test-scoped trust cache. It does not enable
-`gta4l-sdhci-snapshot=1`. The boot-image configuration omits the stale
-`/soc/spi@4a80000/...` touch-node patches because the current minimal DTS has no
-such nodes. See `out/gta4l/ram-root-sdhci-audit-evidence/README.md` for the full
-record.
+This v1 boot image is withdrawn. It was flashed and read back byte-for-byte,
+but the tablet entered download mode instead of starting UEFI/XNU. The full
+pre-flash BOOT partition was restored and verified. The defect was the appended
+DTB: 2,598 bytes of minimal generated DTB instead of the 316,317-byte working
+v5 boot DTB, which lacks `qcom,msm-id` and `qcom,board-id`.
+
+## Corrected v2 artifact
+
+The v2 image preserves the working v5 boot header, firmware + BootShim, boot
+kernel section and 316,317-byte appended DTB exactly; only the 80 MiB payload
+changes to the audit.
+
+- Image: `out/gta4l/boot/boot-ram-root-sdhci-audit-v2.img`
+- SHA-256 `a34519c66820eb5f1f4c4790be5e10233ffd4c8a4ece2df4768e7dca151c8546`
+- 85,688,320 bytes.
+- Appended DTB `dc4c719d06e408654680524af26052d609baa14dd57da9082fd9f35c6509de9e`.
+- Boot kernel section `a4b054e04d506d118471495116e75ef234d1b45027e3cddcb87f97bc04c718b3`.
+- Ramdisk / audit payload `31b78bec7529706407f682e64dbc9c4c990e86009025174fd3f791606b29ea31`.
+- Component report: `out/gta4l/ram-root-sdhci-audit-evidence/v2-verification.json`.
+
+v2 is **not flash-ready yet**. The restored BOOT partition must first be
+manually rebooted and confirmed to reach the v5 snapshot again. v1 must not be
+reused.
+
+## Packaging failure and rollback
+
+- Flash/boot failure evidence:
+  `out/gta4l/ram-root-sdhci-audit-evidence/flash-report.json`.
+- Rollback evidence:
+  `out/gta4l/ram-root-sdhci-audit-evidence/rollback-report.json`.
+- Extracted working v5 boot DTB:
+  `out/gta4l/ram-root-sdhci-audit-evidence/boot-dtb-v5.bin`.
+- The test payload remains the 80 MiB, non-packed RAM-root configuration with
+  the existing test-scoped trust cache. The audit argument is
+  `gta4l-sdhci-audit=1`; `gta4l-sdhci-snapshot=1` is absent.
+
+The payload-side ADT DTB and the bootloader-facing boot DTB are separate inputs.
+The bootloader DTB must be copied byte-for-byte from the working image and must
+not be regenerated from the minimal DTS.
 
 ## Sources
 
@@ -173,7 +204,14 @@ the recorded register layout.
   into `libGta4lSdhciSnapshot.a`)
 - Kernel hook: `patches/xnu/gta4l-sdhci-handoff-audit.patch`
 - Static test: `scripts/test-gta4l-sdhci-handoff-audit.py`
+- Boot-image gate: `scripts/check-gta4l-boot-image.py`
 - Link input: `CONFIG_XNU_EXTRA_LD_ARCHIVES` in `configs/gta4l_defconfig`
+
+The boot-image gate must pass against the hardware-tested v5 image before any
+flash. It verifies the boot header, firmware + BootShim, boot kernel section,
+appended boot DTB and ramdisk size, and requires the Qualcomm identification
+properties in the appended DTB. The withdrawn v1 image fails this gate; v2
+passes it.
 
 The patch calls the audit before the snapshot probe. Both functions are
 one-shot and return when their boot argument is absent. On a clean tree the
