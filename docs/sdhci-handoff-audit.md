@@ -245,14 +245,16 @@ the recorded register layout.
 
 - Source: `package/Gta4lSdhciHandoffAudit.c`
 - Header: `package/Gta4lSdhciHandoffAudit.h`
-- Build recipe: `scripts/build-gta4l-sdhci-snapshot.py` (compiles both probes
-  into `libGta4lSdhciSnapshot.a`)
+- Build recipe: `scripts/build-gta4l-sdhci-snapshot.py` (compiles the snapshot,
+  audit and host-init probes into `libGta4lSdhciSnapshot.a`)
 - Kernel hook: `patches/xnu/gta4l-sdhci-handoff-audit.patch`
 - Static test: `scripts/test-gta4l-sdhci-handoff-audit.py`
 - Diagnostic packager: `scripts/package-gta4l-diagnostic.py`
 - Packager self-test: `scripts/test-gta4l-diagnostic-package.py`
 - Boot-image gate: `scripts/check-gta4l-boot-image.py`
 - Gate self-test: `scripts/test-gta4l-boot-image.py`
+- Host-local init source: `package/Gta4lSdhciHostInit.c` and `.h`
+- Host-local init static test: `scripts/test-gta4l-sdhci-host-init.py`
 - Link input: `CONFIG_XNU_EXTRA_LD_ARCHIVES` in `configs/gta4l_defconfig`
 
 The boot-image gate must pass against the hardware-tested v5 image before any

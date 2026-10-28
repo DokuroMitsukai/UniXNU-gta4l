@@ -21,13 +21,20 @@ PROBES = [
         'source': ROOT / 'kits/gta4l/Gta4lSdhciSnapshot.c',
         'header': ROOT / 'kits/gta4l/Gta4lSdhciSnapshot.h',
         'object': OUT / 'Gta4lSdhciSnapshot.o',
-        'symbol': 'gta4l_sdhci_snapshot_run',
+        'symbols': ['gta4l_sdhci_snapshot_run'],
     },
     {
         'source': ROOT / 'kits/gta4l/Gta4lSdhciHandoffAudit.c',
         'header': ROOT / 'kits/gta4l/Gta4lSdhciHandoffAudit.h',
         'object': OUT / 'Gta4lSdhciHandoffAudit.o',
-        'symbol': 'gta4l_sdhci_handoff_audit_run',
+        'symbols': ['gta4l_sdhci_handoff_audit_run'],
+    },
+    {
+        'source': ROOT / 'kits/gta4l/Gta4lSdhciHostInit.c',
+        'header': ROOT / 'kits/gta4l/Gta4lSdhciHostInit.h',
+        'object': OUT / 'Gta4lSdhciHostInit.o',
+        'symbols': ['gta4l_sdhci_host_init_preflight',
+                    'gta4l_sdhci_host_init_run'],
     },
 ]
 record_path = (ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
@@ -44,9 +51,9 @@ if not record_path.is_file():
     # real probes with the record from that bootstrap.
     stub = OUT / 'FirstPassStub.c'
     declarations = '\n'.join(
-        f'void {probe["symbol"]}(void);\n'
-        f'void {probe["symbol"]}(void)\n{{\n}}\n'
-        for probe in PROBES)
+        f'void {symbol}(void);\n'
+        f'void {symbol}(void)\n{{\n}}\n'
+        for probe in PROBES for symbol in probe['symbols'])
     stub.write_text('// Bootstrap only: the next kernel build links the real probes.\n'
                     + declarations)
     subprocess.run(['xcrun', '--sdk', 'iphoneos', 'clang', '-arch', 'arm64',
@@ -100,8 +107,10 @@ report = {
     'sources': source_records,
     'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
     'compile_record': str(record_path),
-    'mode': ('opt-in observation and read-only handoff audit; no register '
-             'writes, commands, DMA or storage access'),
+    'mode': ('opt-in snapshot and read-only audit; bounded host-local init '
+             'writes only SDHCI interrupt suppression, standard reset and '
+             'internal-clock enable; no bus power, card clock, commands, DMA '
+             'or storage access'),
     'runtime_qualified': False,
 }
 (OUT / 'build-report.json').write_text(json.dumps(report, indent=2) + '\n')

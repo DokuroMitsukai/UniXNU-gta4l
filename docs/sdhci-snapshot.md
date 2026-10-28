@@ -106,8 +106,9 @@ The tablet's live FDT and recovery inventory establish the 4 KiB host window at
 - Link input: `CONFIG_XNU_EXTRA_LD_ARCHIVES` in `configs/gta4l_defconfig`
 - Separate read-only handoff audit: `docs/sdhci-handoff-audit.md`
 
-The build recipe compiles both probes against the exact `bsd_init.o` compile
-record and writes `build/gta4l-sdhci-snapshot/libGta4lSdhciSnapshot.a`. On a
+The build recipe compiles the snapshot, audit and host-init probes against the
+exact `bsd_init.o` compile record and writes
+`build/gta4l-sdhci-snapshot/libGta4lSdhciSnapshot.a`. On a
 clean tree, where that record does not exist yet, it links a no-op bootstrap
 archive defining both symbols so the first kernel can be produced; the next
 kernel build links the real probes. The board-only patches call the handoff

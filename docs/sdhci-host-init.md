@@ -1,8 +1,9 @@
 # gta4l bounded host-local SDHCI initialization
 
-Status: design only. No host-init probe, no register writes and no new hardware
-test exists yet. The completed read-only audit is the baseline; see
-`sdhci-handoff-audit.md`.
+Status: probe implemented, static-tested, relinked into the kernel, packaged into
+an 80 MiB diagnostic payload and gated against the hardware-tested v5 baseline.
+It has not been flashed or run on hardware. The completed read-only audit is the
+baseline; see `sdhci-handoff-audit.md`.
 
 ## Purpose
 
@@ -159,18 +160,50 @@ GTA4L-SDHCI HOST INIT GCC bcr=... ac=... ahb=... ice=... cmd=... cfg=...
 GTA4L-SDHCI HOST INIT AFTER ps=... clk=... pwr=... ie=... se=... reset=...
 ```
 
-## Implementation and test plan
+## Implementation status
 
-1. Add `package/Gta4lSdhciHostInit.c` and `.h`; compile them into the existing
-   diagnostic archive.
-2. Add the call to the board patch after the audit and snapshot calls, with the
-   conflict check before any mapping.
-3. Add a static test covering the read/write allowlists, exact write masks,
-   forbidden offsets, conflict arguments, timeout/failure paths and absence of
-   command/DMA/storage symbols.
-4. Build a diagnostic payload with only `gta4l-sdhci-host-init=1`.
-5. Package it with `scripts/package-gta4l-diagnostic.py` against the pinned v5
-   baseline, run the component gate and the package tests.
-6. Hardware test only with owner approval, a fresh BOOT backup, readback
-   verification, manual reboot and a captured report. On any failure restore
-   the known-good BOOT image and stop.
+Completed on the host:
+
+1. `package/Gta4lSdhciHostInit.c` and `.h` define the allowlist and implement
+   the preflight and bounded stages.
+2. `scripts/build-gta4l-sdhci-snapshot.py` compiles the real object into
+   `libGta4lSdhciSnapshot.a`. The build report contains all three sources.
+3. The board patch calls the preflight before the audit and the run function
+   after the snapshot. The patch applies cleanly to the old `bsd_init` context.
+4. `scripts/test-gta4l-sdhci-host-init.py --self-test` passes. It checks the
+   read/write allowlist, exact write set, conflict check, bounded waits, helper
+   stores, forbidden paths and four negative mutations.
+5. Host disassembly shows MMIO stores only at controller offsets `0x34`,
+   `0x38`, `0x2F` and `0x2C`; all other stores are stack or the one-shot flag.
+6. The kernel relink succeeded and `bsd_init` calls preflight, audit, snapshot
+   and host-init in that order.
+7. The 80 MiB host-init payload was built with only
+   `gta4l-sdhci-host-init=1`; the tracked `board.toml` was not modified.
+8. The boot image was packaged against the v5 baseline and passes all 18
+   component-gate checks. The independent dmaccess check passes the header,
+   FDT and Qualcomm-ID checks; its known FV/LZMA false positives are ignored.
+
+Build evidence:
+
+- Source SHA-256 `bc228be74eedcda5289cc14b99e62471bbef92671b329f6120584f82e046c60c`.
+- Header SHA-256 `a91f76e6c0405315e6df3bca79d067ae798f688dac7b80f665d70f569482f0d5`.
+- Host-init object SHA-256
+  `2dac8c6e09d510e2d2c052aa599f630eec7950cc932547dd71657de793c7f2b9`.
+- Diagnostic archive SHA-256
+  `3cccb9e9d25a7e93b470c718e50b53edf50b975956259b37c851538f9c730b0f`.
+- Kernel SHA-256
+  `ba52b6500ec3d064d173fa06fba23cb42aa4850c0bddd0df9a4178666c084646`.
+- Payload kernel SHA-256
+  `72eae6f0c0850ac421d0048cb6cc3697cf70db7df176b34b30703d26132bbc3f`.
+- Payload image SHA-256
+  `fd584c46a633d63456bff54c49b8c7315d02198fc8c74c7a46e81dd68c8ea244`.
+- Boot image SHA-256
+  `86c96ee8565d2639eb3d56c150f1573e8bea1da3d966f7b10c41f79c02b7485f`.
+- Only `_PE_parse_boot_argn`, `_ml_io_map` and `_panic` are undefined in the
+  host-init object.
+- Evidence:
+  `out/gta4l/ram-root-sdhci-host-init-evidence/`.
+
+Remaining: owner approval for a BOOT-only flash, a fresh full BOOT backup,
+readback verification, manual reboot and a captured report. On any failure
+restore the known-good BOOT image and stop.
