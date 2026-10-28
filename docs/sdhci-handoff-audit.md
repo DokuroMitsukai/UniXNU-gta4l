@@ -1,6 +1,6 @@
 # gta4l read-only SDHCI handoff audit
 
-Status: host-built; not flashed and not yet run on the tablet. This probe is the
+Status: flashed and read back byte-for-byte; not yet booted. This probe is the
 prerequisite audit before any write-capable host initialization. It preserves
 the working RAM-backed root and does not access the card.
 
@@ -138,6 +138,9 @@ and the remaining vendor reads.
   (base `0x01438000`) and that no mapped-MMIO store is emitted.
 - The static self-test covers the mapped-window bound and alignment, and
   rejects a wrong GCC offset.
+- The image is flashed to the boot partition and read back byte-for-byte; the
+  agent issued no reboot. See
+  `out/gta4l/ram-root-sdhci-audit-evidence/flash-report.json`.
 
 The test image uses the 80 MiB, non-packed RAM-root payload configuration and
 the existing test-scoped trust cache. It does not enable

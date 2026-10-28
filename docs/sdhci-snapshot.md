@@ -21,7 +21,7 @@ ps=01f800f0 clk=0003 pwr=00 hc=00 hc2=0000 is=00000000 ie=00000000
 confirms the v5 vendor version offset and the gate, mapping, read and panic
 paths on the tablet. It does not confirm card protocol state or storage
 access. The next diagnostic is the separate read-only handoff audit described
-in `sdhci-handoff-audit.md`; it is host-built and not yet run.
+in `sdhci-handoff-audit.md`; it is flashed and read back, but not yet run.
 
 ## Activation
 
