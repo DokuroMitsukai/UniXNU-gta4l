@@ -72,6 +72,22 @@ From the shared UniXNU checkout:
 ./unixnu bootimg -D ../UniXNU-gta4l
 ```
 
+For a raw RAM-root diagnostic payload, use the explicit builder instead of
+editing `board.toml`:
+
+```sh
+python3 scripts/build-gta4l-diagnostic-payload.py \
+  --data-ramdisk <root.img> --trust-cache <trustcache.bundle> \
+  --owner-trust-cache --unique-chip-id <hex> --diagnostic host-init \
+  --kernel-arg rd=md0 --kernel-arg sheng-pmgr=2 \
+  --output out/gta4l/diagnostic-payload.img
+```
+
+It forces `payload.size_mib=80` and `packed_data_ramdisk=false` in a temporary
+device copy and requires the payload/ADT contract check. Package the result
+with `scripts/package-gta4l-diagnostic.py`; that packager also enforces the
+contract before publishing an image.
+
 Read [Port a device](https://unixnu.com/porting/) and
 [Device tree](https://unixnu.com/porting/device-tree) before changing inputs.
 Record host, QEMU and hardware results separately. Do not treat the panic screen

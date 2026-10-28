@@ -62,6 +62,8 @@ def main():
         data = json.loads(manifest.read_text())
         assert data['output']['sha256'] == EXPECTED_IMAGE_SHA256
         assert data['payload']['sha256'] == EXPECTED_PAYLOAD_SHA256
+        assert data['payload']['expected_diagnostic'] == 'any'
+        assert data['payload_contract']['pass'] is True
         assert data['component_gate']['pass'] is True
         assert data['only_ramdisk_differs'] is True
         print('PASS valid package reproduces v2 byte-for-byte')
@@ -86,6 +88,31 @@ def main():
         assert result.returncode != 0
         assert not bad.exists()
         print('PASS wrong payload hash refused')
+
+        bad = tmp / 'wrong-diagnostic.img'
+        result = run(base_args(bad, tmp / 'wrong-diagnostic.json')
+                     + ['--expect-diagnostic', 'host-init'])
+        assert result.returncode != 0
+        assert 'payload/ADT contract' in result.stderr, result.stderr
+        assert not bad.exists()
+        print('PASS wrong expected diagnostic refused by payload contract')
+
+        failed_payload = (REPO / 'out/gta4l/ram-root-sdhci-host-init-evidence/'
+                          'payload.img')
+        if failed_payload.is_file():
+            bad = tmp / 'failed-payload.img'
+            result = run([
+                '--baseline', BASELINE,
+                '--payload', failed_payload,
+                '--payload-sha256', sha(failed_payload),
+                '--expect-diagnostic', 'host-init',
+                '--output', bad,
+                '--manifest', tmp / 'failed-payload.json',
+            ])
+            assert result.returncode != 0
+            assert 'payload/ADT contract' in result.stderr, result.stderr
+            assert not bad.exists()
+            print('PASS packed/raw payload rejected during packaging')
 
         short = tmp / 'short.bin'
         short.write_bytes(b'X' * 1024)

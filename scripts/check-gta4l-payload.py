@@ -26,6 +26,11 @@ ADDON_MEMBER = PAYLOAD_DIR + '/kernel.macho.gpuaddon'
 DIAGNOSTICS = ('gta4l-sdhci-host-init=1',
                'gta4l-sdhci-audit=1',
                'gta4l-sdhci-snapshot=1')
+DIAGNOSTIC_NAMES = {
+    'host-init': 'gta4l-sdhci-host-init=1',
+    'audit': 'gta4l-sdhci-audit=1',
+    'snapshot': 'gta4l-sdhci-snapshot=1',
+}
 
 
 def run_tool(*args):
@@ -130,9 +135,10 @@ def xnu_args(path):
     raise ValueError('unixnu.toml has no xnu entry')
 
 
-def check(image):
+def check(image, expected='any'):
     image = Path(image)
-    result = {'payload': str(image), 'checks': {}}
+    result = {'payload': str(image), 'expected_diagnostic': expected,
+              'checks': {}}
 
     def require(name, condition):
         result['checks'][name] = bool(condition)
@@ -173,8 +179,9 @@ def check(image):
             args = xnu_args(toml_path)
             found = [item for item in DIAGNOSTICS if item in args]
             require('exactly_one_diagnostic_argument', len(found) == 1)
-            require('host_init_diagnostic_selected',
-                    found == ['gta4l-sdhci-host-init=1'])
+            if expected != 'any':
+                require(f'{expected}_diagnostic_selected',
+                        found == [DIAGNOSTIC_NAMES[expected]])
             require('unixnu_toml_has_xnu_args', bool(args))
         result['pass'] = True
     except (ValueError, OSError) as error:
@@ -186,6 +193,10 @@ def check(image):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--payload')
+    parser.add_argument('--expect-diagnostic',
+                        choices=('any', 'host-init', 'audit', 'snapshot'),
+                        default='any',
+                        help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
@@ -196,17 +207,17 @@ def main():
         if not bad.is_file() or not fixed.is_file():
             print('SKIP: retained failed/corrected payloads are not present')
             return 0
-        bad_result = check(bad)
+        bad_result = check(bad, 'host-init')
         assert not bad_result['pass'], 'failed payload unexpectedly passed'
         assert bad_result['failed_check'] == 'packed_ramdisk_layout', bad_result
-        fixed_result = check(fixed)
+        fixed_result = check(fixed, 'host-init')
         assert fixed_result['pass'], fixed_result
         print('PASS: packed/raw ADT mismatch rejected; corrected payload passes')
         return 0
 
     if not args.payload:
         parser.error('--payload is required unless --self-test is used')
-    result = check(args.payload)
+    result = check(args.payload, args.expect_diagnostic)
     if args.json:
         print(json.dumps(result, indent=2))
     else:
