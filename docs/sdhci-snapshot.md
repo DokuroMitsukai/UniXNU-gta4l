@@ -1,9 +1,27 @@
 # gta4l observation-only SDHCI snapshot
 
-Status: corrected v5 diagnostic image, host-built; not yet run on the tablet
-and not hardware-qualified. The earlier `0x50` variant reached the intended
-panic, but that offset is the legacy separate-MCI layout and produced an
-invalid version value.
+Status: corrected v5 diagnostic image, host-built and run once on the tablet.
+The v5 core version read is valid. The earlier `0x50` variant reached the
+intended panic, but that offset is the legacy separate-MCI layout and produced
+an invalid version value.
+
+## Hardware result
+
+The owner manually rebooted the tablet with
+`boot-ram-root-sdhci-v5.img` (SHA-256
+`ce4d76e8024a220890e7f32e2992a7beb094087910b070fc615c6fe1ee86dcde`). The
+probe reached its intended panic and reported:
+
+```text
+GTA4L-SDHCI SNAP OK v=10000072 sv=7202 c=742dc8b2 c1=0000808f
+ps=01f800f0 clk=0003 pwr=00 hc=00 hc2=0000 is=00000000 ie=00000000
+```
+
+`v=10000072` decodes as major version 1, minor `0x72`. The capture therefore
+confirms the v5 vendor version offset and the gate, mapping, read and panic
+paths on the tablet. It does not confirm card protocol state or storage
+access. The next diagnostic is the separate read-only handoff audit described
+in `sdhci-handoff-audit.md`; it is host-built and not yet run.
 
 ## Activation
 
@@ -82,13 +100,15 @@ The tablet's live FDT and recovery inventory establish the 4 KiB host window at
 - Build recipe: `scripts/build-gta4l-sdhci-snapshot.py`
 - Kernel hook: `patches/xnu/gta4l-sdhci-snapshot.patch`
 - Link input: `CONFIG_XNU_EXTRA_LD_ARCHIVES` in `configs/gta4l_defconfig`
+- Separate read-only handoff audit: `docs/sdhci-handoff-audit.md`
 
-The build recipe compiles against the exact `bsd_init.o` compile record and
-writes `build/gta4l-sdhci-snapshot/libGta4lSdhciSnapshot.a`. On a clean tree,
-where that record does not exist yet, it links a no-op bootstrap archive so the
-first kernel can be produced; the next kernel build links the real probe. The
-board-only patch calls `gta4l_sdhci_snapshot_run()` after the PMGR hook. The
-function is one-shot and returns when disabled.
+The build recipe compiles both probes against the exact `bsd_init.o` compile
+record and writes `build/gta4l-sdhci-snapshot/libGta4lSdhciSnapshot.a`. On a
+clean tree, where that record does not exist yet, it links a no-op bootstrap
+archive defining both symbols so the first kernel can be produced; the next
+kernel build links the real probes. The board-only patches call the handoff
+audit and then the snapshot probe after the PMGR hook. Both functions are
+one-shot and return when their boot argument is absent.
 
 ## Report and limits
 
@@ -104,7 +124,9 @@ capabilities, `ps` present state, `clk` clock control, `pwr` power control,
 interrupt enable. The panic is deliberately separate from the RAM-root `PASS`
 message and does not depend on persistent storage.
 
-A fixed number of reads is not a guarantee against a bus hang. The controller
-clock, power domain and interconnect prerequisites have not been proven under
-XNU. This diagnostic only observes the handoff state; it does not establish
-card protocol state, initialize eMMC, or qualify a storage path.
+A fixed number of reads is not a guarantee against a bus hang. The v5
+snapshot is hardware-observed, but the controller clock, power domain,
+interconnect and PMIC prerequisites have not been proven under XNU. This
+diagnostic only observes the handoff state; it does not establish card
+protocol state, initialize eMMC, or qualify a storage path. The next step is
+the read-only handoff audit, not a write-capable host-init sequence.
