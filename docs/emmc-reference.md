@@ -99,4 +99,6 @@ writes. The first opt-in probe and its register allowlist are documented in
 core version (`v=10000072`). The next step is the separate read-only handoff
 audit in `docs/sdhci-handoff-audit.md`; it observes the GCC and v5 vendor
 state at the audit point in `bsd_init` without writing or acknowledging power
-requests.
+requests. Its first boot image was withdrawn after a packaging failure; the
+corrected image preserves the working v5 boot header, firmware, boot DTB and
+boot kernel section, but has not been flashed.

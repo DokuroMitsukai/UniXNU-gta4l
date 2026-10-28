@@ -16,11 +16,6 @@
     model = "Samsung Galaxy Tab A7 10.4 (2020)";
     compatible = "samsung,gta4l", "qcom,sm6115";
 
-    /* Boot-image patching adds /chosen/framebuffer@... here. The ADT
-     * generator builds its own /chosen node and ignores this one. */
-    chosen {
-    };
-
     memory@40000000 {
         device_type = "memory";
         // Single ADT range; see the file header for the three live banks.
