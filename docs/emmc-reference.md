@@ -94,4 +94,5 @@ questions and failure stages only; no code is copied or translated.
 The first hardware implementation must be observation-only: map verified
 registers, read only safe status/version fields, report them through the
 working RAM-root diagnostic, and perform no command submission or storage
-writes.
+writes. The first opt-in probe and its register allowlist are documented in
+`docs/sdhci-snapshot.md`.

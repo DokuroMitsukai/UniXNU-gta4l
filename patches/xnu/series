@@ -4,3 +4,6 @@
 
 # Board opt-in PMGR bridge hook; paired with CONFIG_XNU_SHENG_PMGR and build-platform-power.py.
 sheng-platform-power.patch
+
+# Board-only observation probe hook; the probe returns unless the matching boot argument is present.
+gta4l-sdhci-snapshot.patch

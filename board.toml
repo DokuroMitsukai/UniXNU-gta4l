@@ -31,6 +31,7 @@ archives = [
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
   "build-platform-power.py",
+  "build-gta4l-sdhci-snapshot.py",
 ]
 
 [device_tree]
