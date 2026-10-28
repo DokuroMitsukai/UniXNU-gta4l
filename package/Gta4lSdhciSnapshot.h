@@ -3,10 +3,11 @@
 // gta4l observation-only SDHCI snapshot.
 //
 // This header is the single source of the MMIO allowlist used by the probe and
-// by scripts/test-gta4l-sdhci-snapshot.py. Offsets and widths are the standard
-// SDHCI register definitions; the vendor core-version register is from the
-// sdhci-msm layout. See docs/sdhci-snapshot.md for sources and side-effect
-// classification.
+// by scripts/test-gta4l-sdhci-snapshot.py. Standard offsets and widths come
+// from the SDHCI register definitions; the vendor core-version register uses
+// the v5 sdhci-msm layout. The legacy separate-MCI version offset (0x50) is
+// deliberately not used. See docs/sdhci-snapshot.md for sources and
+// side-effect classification.
 
 #ifndef GTA4L_SDHCI_SNAPSHOT_H
 #define GTA4L_SDHCI_SNAPSHOT_H
@@ -23,7 +24,7 @@
 #define GTA4L_SDHCI_REG_HOST_CONTROL2   0x3Eu
 #define GTA4L_SDHCI_REG_CAPABILITIES    0x40u
 #define GTA4L_SDHCI_REG_CAPABILITIES_1  0x44u
-#define GTA4L_SDHCI_REG_MCI_VERSION     0x50u
+#define GTA4L_SDHCI_REG_MCI_VERSION     0x318u
 #define GTA4L_SDHCI_REG_HOST_VERSION    0xFEu
 
 #define GTA4L_SDHCI_WIDTH_PRESENT_STATE  32u
