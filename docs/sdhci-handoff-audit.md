@@ -255,6 +255,10 @@ the recorded register layout.
 - Gate self-test: `scripts/test-gta4l-boot-image.py`
 - Host-local init source: `package/Gta4lSdhciHostInit.c` and `.h`
 - Host-local init static test: `scripts/test-gta4l-sdhci-host-init.py`
+- Host-local init simulated-register test:
+  `scripts/test-gta4l-sdhci-host-init-sim.py`
+- Raw diagnostic payload builder:
+  `scripts/build-gta4l-diagnostic-payload.py`
 - Payload/ADT contract check: `scripts/check-gta4l-payload.py`
 - Link input: `CONFIG_XNU_EXTRA_LD_ARCHIVES` in `configs/gta4l_defconfig`
 
@@ -267,10 +271,17 @@ ramdisk/payload hash. The withdrawn v1 image fails this gate; v2 passes it.
 
 The diagnostic packager copies the pinned v5 header page, kernel section and
 padding byte-for-byte, replaces only the ramdisk, recomputes the Android
-boot-image ID, runs the gate, and publishes an output plus manifest. It does not
-read or modify `board.toml`, so no temporary configuration substitution is
-needed. Rebuilding v2 from the v5 baseline and audit payload is byte-identical:
+boot-image ID, runs the payload/ADT contract and the image gate, and publishes
+an output plus manifest. It does not read or modify `board.toml`, so no
+temporary configuration substitution is needed. Rebuilding v2 from the v5
+baseline and audit payload is byte-identical:
 `a34519c66820eb5f1f4c4790be5e10233ffd4c8a4ece2df4768e7dca151c8546`.
+
+The raw diagnostic payload builder makes the former temporary board explicit:
+it copies the device tree to a work directory, sets `payload.size_mib` and
+forces `payload.adt.packed_data_ramdisk = false`, runs the normal payload step,
+and checks the result before writing its manifest. The tracked `board.toml`
+keeps its normal 192 MiB packed configuration.
 
 An independent ABL/LinuxLoader-oriented check with `bootimg_tool.py`, provided
 by **dmaccess**, was used as a second opinion and is recorded in

@@ -1,11 +1,11 @@
 # gta4l bounded host-local SDHCI initialization
 
 Status: the first host-init image was flashed but failed at the UniXNU picker
-with `Compromised Data`; BOOT was rolled back. The payload/ADT mismatch is
-understood and corrected v2 is now flashed and verified by image-byte readback
-plus the payload contract check. It has not been booted; the owner performs the
-manual reboot. The completed read-only audit is the baseline; see
-`sdhci-handoff-audit.md`.
+with `Compromised Data`; BOOT was rolled back. Corrected v2 then booted and
+completed the host-local stages. The owner's report shows the standard reset
+self-cleared, the internal clock enabled and stable, and bus power, card clock
+and vendor power state unchanged. The power stage remains blocked. The
+completed read-only audit is the baseline; see `sdhci-handoff-audit.md`.
 
 ## Purpose
 
@@ -58,6 +58,19 @@ and test an XNU RPM/SPMI/regulator path or prove a retained-rail contract.
 
 `SDHCI_POWER_CONTROL == 0` is not evidence that L24/L11 are off or on. It only
 reports the controller's own bus-power bit.
+
+## Shared placement
+
+The bounded host-init probe stays in `UniXNU-gta4l` because its preconditions,
+write set and report are board handoff policy for this tablet. Reusable SM6115
+controller register definitions and operations belong in
+`UniXNU-sm6115-common` only when a second consumer needs the same contract; do
+not move the board policy there prematurely.
+
+A future RPM-SMD/SPMI/regulator path is different: it is an SoC-wide resource
+contract, not a gta4l SDHCI detail. Implement and test it in the shared SM6115
+component, then let the board select it through the DTS supplies. The SDHCI
+probe must not grow a private regulator driver.
 
 ## Proposed stages
 
@@ -175,6 +188,12 @@ Completed on the host:
 4. `scripts/test-gta4l-sdhci-host-init.py --self-test` passes. It checks the
    read/write allowlist, exact write set, conflict check, bounded waits, helper
    stores, forbidden paths and four negative mutations.
+   `scripts/test-gta4l-sdhci-host-init-sim.py` compiles the production source
+   against a fake MMIO window and exercises the actual stage order for
+   conflicting arguments, bus power already on, reset timeout, unstable clock
+   and an unexpected vendor power request. The vendor-request case confirms the
+   probe reports `pst=80000000` without writing `CORE_PWRCTL_STATUS` or
+   `CORE_PWRCTL_MASK`.
 5. Host disassembly shows MMIO stores only at controller offsets `0x34`,
    `0x38`, `0x2F` and `0x2C`; all other stores are stack or the one-shot flag.
 6. The kernel relink succeeded and `bsd_init` calls preflight, audit, snapshot
@@ -185,12 +204,22 @@ Completed on the host:
    `N4KROOT` fixture reports `RamdiskPacked = FALSE`. DarwinBoot therefore
    returned `EFI_COMPROMISED_DATA` at the UniXNU picker.
 8. The corrected payload sets `packed_data_ramdisk = false`; its ADT reserves
-   `RAMDisk`. `scripts/check-gta4l-payload.py` now checks the placeholder
-   against the actual ramdisk layout and rejects the failed payload.
+   `RAMDisk`. `scripts/check-gta4l-payload.py` checks the placeholder against
+   the actual ramdisk layout and rejects the failed payload.
+   `scripts/package-gta4l-diagnostic.py` now runs that contract check on every
+   payload before publishing an image, and
+   `scripts/build-gta4l-diagnostic-payload.py` builds the raw diagnostic
+   payload from a temporary board with `size_mib = 80` and
+   `packed_data_ramdisk = false` without modifying the tracked `board.toml`.
 9. Corrected v2 is packaged against the v5 baseline and passes all 18
    component-gate checks plus the payload contract check. The independent
    dmaccess check passes the header, FDT and Qualcomm-ID checks; its known
    FV/LZMA false positives are ignored.
+10. Corrected v2 booted on the tablet and completed the host-local probe. The
+    report shows `reset=00`, `clk=0003`, `pwr=00`, `ie=00000000`,
+    `se=00000000`, and unchanged vendor values. The card clock bit remains
+    clear. Full transcription and limits:
+    `out/gta4l/ram-root-sdhci-host-init-evidence/host-init-success.txt`.
 
 Build evidence:
 
@@ -214,14 +243,38 @@ Build evidence:
   `d4aee57a9d1874d23dc010b7de43384ace6ab29241f5ee18cb10f0a561bab133`.
 - Only `_PE_parse_boot_argn`, `_ml_io_map` and `_panic` are undefined in the
   host-init object.
+- Hardware result: `host-init-success.txt`; photograph
+  `host-init-success-photo.jpg` SHA-256
+  `672ecf61d0cb3e5675c5f511e88f3250a3f507afaf0acad84ee3153d97acc967`.
 - Evidence:
   `out/gta4l/ram-root-sdhci-host-init-evidence/`.
 
-Remaining: the owner manually reboots and captures the complete
-`GTA4L-SDHCI HOST INIT` report. On any failure restore the fresh pre-flash BOOT
-image and stop. The agent has issued no reboot.
+Remaining: the host-local milestone is complete. The next milestone is a
+separate power-only probe, and only after the RPM-SMD/SPMI/regulator control
+contract is established. The card clock and bus power remain off; no card
+command, DMA or storage write is permitted. The agent has issued no reboot.
 
-Failed v1 flash/rollback record:
+## Next power milestone
+
+Before any power write, trace the actual RPM-SMD regulator interface and the
+existing component options for PM6125 L24/L11. Establish:
+
+- which agent owns the rails after firmware handoff;
+- how XNU requests enable/voltage and receives completion;
+- shared-consumer and retention requirements;
+- whether VDDCX or interconnect votes are required.
+
+Do not treat `pwr=00`, DT `always-on` properties or power-request
+acknowledgements as proof of rail state. If no supported control or
+retained-state contract is available, stop at this successful host-local
+milestone.
+
+A separate power-only probe may then explicitly allowlist power operations,
+bound every wait, report failures, and acknowledge a vendor request only after
+the corresponding action succeeds. It must keep the card clock disabled and
+issue no command or transfer. Card identification remains a later milestone.
+
+## Failed v1 flash/rollback record
 
 - Pre-flash backup SHA-256
   `55d80d52a7246acec8277a8aeb40e38b2b2aac1eadef1e5d439579d86a7cd701`.

@@ -97,10 +97,17 @@ def main():
     parser.add_argument('--expected-firmware-sha256',
                         default=DEFAULT_FIRMWARE_SHA256)
     parser.add_argument('--payload-sha256', required=True)
+    parser.add_argument('--expect-diagnostic',
+                        choices=('any', 'host-init', 'audit', 'snapshot'),
+                        default='any',
+                        help='require this board diagnostic argument in the payload')
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--component-gate',
                         default=str(Path(__file__).with_name(
                             'check-gta4l-boot-image.py')))
+    parser.add_argument('--payload-contract',
+                        default=str(Path(__file__).with_name(
+                            'check-gta4l-payload.py')))
     args = parser.parse_args()
 
     baseline_path = Path(args.baseline)
@@ -161,6 +168,20 @@ def main():
         raise SystemExit(
             f'{payload_path}: payload is {len(payload)} bytes; the pinned ramdisk '
             f'is {header["ramdisk_size"]} bytes')
+
+    contract = subprocess.run(
+        [sys.executable, args.payload_contract,
+         '--payload', str(payload_path),
+         '--expect-diagnostic', args.expect_diagnostic,
+         '--json'],
+        capture_output=True, text=True)
+    if contract.returncode != 0:
+        if contract.stdout:
+            print(contract.stdout, file=sys.stderr)
+        if contract.stderr:
+            print(contract.stderr, file=sys.stderr)
+        raise SystemExit('payload/ADT contract failed; output not published')
+    contract_result = json.loads(contract.stdout)
 
     output = bytearray(baseline)
     output[ramdisk_start:ramdisk_end] = payload
@@ -225,6 +246,12 @@ def main():
             'path': str(payload_path),
             'bytes': len(payload),
             'sha256': payload_sha256,
+            'expected_diagnostic': args.expect_diagnostic,
+        },
+        'payload_contract': {
+            'script': args.payload_contract,
+            'pass': contract_result['pass'],
+            'checks': contract_result['checks'],
         },
         'output': {
             'path': str(output_path),
