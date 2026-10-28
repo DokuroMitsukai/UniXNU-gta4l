@@ -1,10 +1,9 @@
 # gta4l read-only SDHCI handoff audit
 
-Status: v1 withdrawn after a BOOT-only packaging failure. The tablet entered
-download mode before UEFI/XNU and produced no audit data. BOOT has been restored
-from the pre-flash partition. A corrected v2 image is built and
-component-verified but not flashed; it remains blocked on a manual reboot test
-of the restored BOOT partition. Do not flash v1.
+Status: v1 was withdrawn after a BOOT-only packaging failure; the pre-flash
+BOOT partition was restored, the owner confirmed the restored v5 image works,
+and the corrected v2 image is now flashed and read back byte-for-byte. v2 has
+not yet been booted. It remains read-only and does not access the card.
 
 ## Activation
 
@@ -160,9 +159,9 @@ changes to the audit.
 - Ramdisk / audit payload `31b78bec7529706407f682e64dbc9c4c990e86009025174fd3f791606b29ea31`.
 - Component report: `out/gta4l/ram-root-sdhci-audit-evidence/v2-verification.json`.
 
-v2 is **not flash-ready yet**. The restored BOOT partition must first be
-manually rebooted and confirmed to reach the v5 snapshot again. v1 must not be
-reused.
+v2 is flashed and read back byte-for-byte. The owner confirmed the restored v5
+BOOT partition works before this flash. v2 has **not** been booted; the agent
+issued no reboot.
 
 ## Packaging failure and rollback
 

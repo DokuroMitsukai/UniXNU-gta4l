@@ -101,4 +101,4 @@ audit in `docs/sdhci-handoff-audit.md`; it observes the GCC and v5 vendor
 state at the audit point in `bsd_init` without writing or acknowledging power
 requests. Its first boot image was withdrawn after a packaging failure; the
 corrected image preserves the working v5 boot header, firmware, boot DTB and
-boot kernel section, but has not been flashed.
+boot kernel section, and has been flashed and read back but not yet booted.

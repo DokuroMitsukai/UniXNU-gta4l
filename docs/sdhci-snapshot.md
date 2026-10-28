@@ -21,8 +21,9 @@ ps=01f800f0 clk=0003 pwr=00 hc=00 hc2=0000 is=00000000 ie=00000000
 confirms the v5 vendor version offset and the gate, mapping, read and panic
 paths on the tablet. It does not confirm card protocol state or storage
 access. The v5 snapshot evidence remains the working baseline. The first audit
-boot image was withdrawn after a BOOT-only packaging failure; BOOT has been
-restored. A corrected audit image is component-verified but not flashed.
+boot image was withdrawn after a BOOT-only packaging failure; BOOT was restored
+and confirmed, and the corrected audit image is now flashed and read back but
+not yet booted.
 
 ## Activation
 
