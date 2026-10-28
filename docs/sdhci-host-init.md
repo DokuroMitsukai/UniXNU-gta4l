@@ -2,8 +2,9 @@
 
 Status: probe implemented, static-tested, relinked into the kernel, packaged into
 an 80 MiB diagnostic payload and gated against the hardware-tested v5 baseline.
-It has not been flashed or run on hardware. The completed read-only audit is the
-baseline; see `sdhci-handoff-audit.md`.
+The image is flashed to BOOT and verified by full image-byte readback; it has
+not been booted. The owner performs the manual reboot. The completed read-only
+audit is the baseline; see `sdhci-handoff-audit.md`.
 
 ## Purpose
 
@@ -204,6 +205,18 @@ Build evidence:
 - Evidence:
   `out/gta4l/ram-root-sdhci-host-init-evidence/`.
 
-Remaining: owner approval for a BOOT-only flash, a fresh full BOOT backup,
-readback verification, manual reboot and a captured report. On any failure
-restore the known-good BOOT image and stop.
+Remaining: the owner manually reboots and captures the complete
+`GTA4L-SDHCI HOST INIT` report. On any failure restore
+`boot-before-host-init-flash.img` and stop. The agent has issued no reboot.
+
+Flash record:
+
+- Pre-flash backup SHA-256
+  `55d80d52a7246acec8277a8aeb40e38b2b2aac1eadef1e5d439579d86a7cd701`.
+- Full partition readback SHA-256
+  `73b7a586ee2498277dc77adc7b81714afa0662d36c8dfc48b8c0a2ec456e01b6`.
+- Image-byte readback matches the host image
+  `86c96ee8565d2639eb3d56c150f1573e8bea1da3d966f7b10c41f79c02b7485f` and
+  passes all 18 component-gate checks.
+- `flash-report.json` and `readback-gate-report.json` are in the evidence
+  directory.
