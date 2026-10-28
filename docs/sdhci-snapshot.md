@@ -1,6 +1,9 @@
 # gta4l observation-only SDHCI snapshot
 
-Status: host-built diagnostic image; not yet run on the tablet and not hardware-qualified.
+Status: corrected v5 diagnostic image, host-built; not yet run on the tablet
+and not hardware-qualified. The earlier `0x50` variant reached the intended
+panic, but that offset is the legacy separate-MCI layout and produced an
+invalid version value.
 
 ## Activation
 
@@ -33,7 +36,7 @@ The offsets and widths below are also defined in
 | `0x3E` | 16 | Host Control 2 | read-only | UHS/timing and version-4 fields |
 | `0x40` | 32 | Capabilities | read-only | base clock, voltage, bus-width and DMA capabilities |
 | `0x44` | 32 | Capabilities 1 | read-only | version-4 and 64-bit fields |
-| `0x50` | 32 | MCI Version | read-only | Qualcomm vendor core version |
+| `0x318` | 32 | MCI Version | read-only | Qualcomm v5 vendor core version |
 | `0xFE` | 16 | Host Version | read-only | standard SDHCI version |
 
 The probe reads exactly these eleven values. It does not read the data/FIFO
@@ -64,8 +67,10 @@ reference tree:
 The Linux board DTS credits V6lhost (2026); the SoC DTSI credits Iskren
 Chernev (2021). The files carry `GPL-2.0+ OR BSD-3-Clause` SPDX identifiers.
 This probe is an independent implementation: no Linux source is copied or
-translated. The vendor register `0x50` is used only as a read-only version
-observation; no vendor initialization sequence is imported.
+translated. The v5 vendor register `0x318` is used only as a read-only version
+observation; no vendor initialization sequence is imported. The legacy
+separate-MCI version offset `0x50` is not used and is explicitly rejected by
+the static test.
 
 The tablet's live FDT and recovery inventory establish the 4 KiB host window at
 `0x04744000` and the eight-bit bus. See `emmc-reference.md`.
@@ -93,7 +98,7 @@ A completed capture ends with a panic identified as:
 GTA4L-SDHCI SNAP OK v=... sv=... c=... c1=... ps=... clk=... pwr=... hc=... hc2=... is=... ie=...
 ```
 
-`v` is the vendor MCI version, `sv` the standard host version, `c`/`c1` the
+`v` is the v5 vendor MCI core version, `sv` the standard host version, `c`/`c1` the
 capabilities, `ps` present state, `clk` clock control, `pwr` power control,
 `hc`/`hc2` host controls, `is` the combined interrupt status, and `ie` the
 interrupt enable. The panic is deliberately separate from the RAM-root `PASS`

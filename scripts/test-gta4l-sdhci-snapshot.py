@@ -22,7 +22,7 @@ EXPECTED = {
     'HOST_CONTROL2': (0x3E, 16),
     'CAPABILITIES': (0x40, 32),
     'CAPABILITIES_1': (0x44, 32),
-    'MCI_VERSION': (0x50, 32),
+    'MCI_VERSION': (0x318, 32),
     'HOST_VERSION': (0xFE, 16),
 }
 
@@ -53,6 +53,8 @@ def validate(header_text, source_text):
     for name, (offset, width) in EXPECTED.items():
         assert macro(f'REG_{name}') == offset, name
         assert macro(f'WIDTH_{name}') == width, name
+    assert not re.search(r'^#define\s+GTA4L_SDHCI_REG_\w+\s+0x50u?\s*$',
+                         header_text, re.M), 'legacy MCI offset 0x50'
 
     code = strip_comments(source_text)
     calls = re.findall(

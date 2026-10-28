@@ -77,6 +77,7 @@ gta4l_sdhci_snapshot_run(void)
 
 	/* Read-only snapshot: every access below is an allowlisted load. */
 	host_version = gta4l_sdhci_read16(base, GTA4L_SDHCI_REG_HOST_VERSION);
+	/* v5 core MCI version; the legacy separate-MCI offset 0x50 is not used. */
 	mci_version = gta4l_sdhci_read32(base, GTA4L_SDHCI_REG_MCI_VERSION);
 	capabilities = gta4l_sdhci_read32(base, GTA4L_SDHCI_REG_CAPABILITIES);
 	capabilities_1 = gta4l_sdhci_read32(base, GTA4L_SDHCI_REG_CAPABILITIES_1);
