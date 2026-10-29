@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-29T20:06:09Z`, after the final edits to the
+Hashes were taken at `2026-10-29T20:15:33Z`, after the final edits to the
 files below. This document is untracked and its own hash is not listed. Hashes
 describe a dirty working tree and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -109,7 +109,7 @@ bytes of the previously booted image `[S]`.
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `b92407ad807c2b45f90031d2e85327a5d83f222c0e3019aa6168b15e68b52edc` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `de267e06b3959209d6a8d307dd3e378dc0a1979211fc0777a5141157ec7dc78f` |
-| Porting record | `porting.toml` | `219cd575a0b1c9f89bed55cf28d1bd3d0639dc4afe2d7e9112de9bc9639e8eb6` |
+| Porting record | `porting.toml` | `3f1e8f0eb6c87cb3b1088e58c9b5f6edc8c4cfb73569ba23daae3a4609475d1f` |
 
 ## 3. Pinned Linux source cache
 
