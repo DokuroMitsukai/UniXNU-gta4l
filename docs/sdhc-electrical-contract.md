@@ -153,5 +153,5 @@ document does not close them `[S]`.
 | `docs/sdhci-handoff-audit.md` | Read-only GCC/vendor handoff observations |
 | `docs/emmc-reference.md` | eMMC, controller and GPT inventory |
 | `docs/sdhc-decision-memo.md` | NO-GO decision, `E*`/`S*` dispositions and approval gates |
-| `docs/stock-firmware-analysis-audit.md` | Audited dmaccess stock-firmware analysis; leads, corrections and limits |
+| `docs/stock-firmware-analysis-audit.md` | Audited https://github.com/NoNameBuilder stock-firmware analysis; leads, corrections and limits |
 | `docs/evidence-baseline.md` | Current-tree revision, hashes and cache provenance |

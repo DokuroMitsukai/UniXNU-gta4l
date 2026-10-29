@@ -284,7 +284,7 @@ and checks the result before writing its manifest. The tracked `board.toml`
 keeps its normal 192 MiB packed configuration.
 
 An independent ABL/LinuxLoader-oriented check with `bootimg_tool.py`, provided
-by **dmaccess**, was used as a second opinion and is recorded in
+by **https://github.com/NoNameBuilder**, was used as a second opinion and is recorded in
 `out/gta4l/ram-root-sdhci-audit-evidence/independent-bootimg-verification.txt`.
 It confirms the v2 header, appended FDT and Qualcomm ID properties; it rejects
 the v1 DTB as expected. The script is not vendored because the supplied copy has

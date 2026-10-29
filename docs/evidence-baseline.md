@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-29T20:37:09Z`, after the final edits to the
+Hashes were taken at `2026-10-29T20:44:45Z`, after the final edits to the
 files below. This document is untracked and its own hash is not listed. Hashes
 describe a dirty working tree and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -100,16 +100,16 @@ bytes of the previously booted image `[S]`.
 | Simulator test | `scripts/test-gta4l-sdhci-host-init-sim.py` | `fe696332841d247b58d81d2a2c1cd32cf59474eccaa5de64c1ab2a059d3de9b9` |
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
-| Host-init policy document | `docs/sdhci-host-init.md` | `5167ec1d39ec448b0bb33aaf0f9bae646fe06bdad1213dc081994a929496c3f1` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `08bb034a2fb5278b9013a6848d23c46dcf9e317a9a71a9fb9a13bf87412c0d67` |
-| Electrical contract | `docs/sdhc-electrical-contract.md` | `b8cb39a2705714d623d6c21f5f68acfc8342d55c6b0abf0e09bebdd5cfb1a694` |
-| Retention evidence | `docs/power-retention-evidence.md` | `6f9a415f1c2fae15654d5f7b83e9570b46a9e5ab80be524fbda900b63aa57146` |
+| Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `d004cf3a8d732787cd9120bc1ffda97117f4ac1c9bb2edf9a6be94b20a4d1f34` |
+| Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
+| Retention evidence | `docs/power-retention-evidence.md` | `748c9fedcf4508232395d1583a0b4778ef9f89756a0ea9dcb280bb06b0ab0212` |
 | RPM interface | `docs/rpm-power-interface.md` | `f97593218f120c634ca91963ee02147dc96b59cc4d214b6a4673e790ae96d971` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `387fe773855caa893991d41622f456c70dc643ebf4ef5215afac71c0e266b87c` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `b92407ad807c2b45f90031d2e85327a5d83f222c0e3019aa6168b15e68b52edc` |
-| Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `de267e06b3959209d6a8d307dd3e378dc0a1979211fc0777a5141157ec7dc78f` |
-| Porting record | `porting.toml` | `ae5b01b402ceb8d29f6673c1c846a6e499044195f2a20c0c052724f7741ffdbf` |
+| Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
+| Porting record | `porting.toml` | `721381d6cfea8bfc18e0804c5fbdca4c32ace4ea25d1755dcc2f1470bfd6c3b9` |
 
 ## 3. Pinned Linux source cache
 
@@ -170,7 +170,7 @@ manifest digest `[S]/[U]`.
 | RPM image | `../../device-dump/private/gta4l-dump/partitions/rpm.img` | `272bebd3ddd7ef223d6e95e9b4cd30385a3df0eb4fa7beae6b622f457b4937c6` | Private device dump; static analysis only `[S]` |
 | XBL image | `../../device-dump/private/gta4l-dump/partitions/xbl.img` | `a09c7b62e639a0565c30b7a3b61e2d68f2a07bfe9c3199d38f9af17bdf9e073e` | Private device dump; ELF64 AArch64 `ET_EXEC`, 17 program headers, no sections; 15 `LOAD` segments including `0x5fc00000`; policy not analyzed `[S]/[U]` |
 | XBL config image | `../../device-dump/private/gta4l-dump/partitions/xbl_config.img` | `6dbaad63204b761e7d8fb4dba7c861d97b25dc5094aabc0a9fe45f19fb20d99e` | Private device dump; embeds `/pmic_settings.bin` at `0x3054`, size `0x7240`, SHA-256 `410e45ac...f4e97597`; static analysis only `[S]` |
-| Supplied stock-firmware analysis | dmaccess archive; not vendored | `6d750114c4465e894a043ce190ea3a776d25a3bf862d5b50df3d95d73f2368e9` | 214/214 manifest-listed files match; supplied XBL bytes and DT overlays differ from the captured state; audit in `stock-firmware-analysis-audit.md` `[S]/[U]` |
+| Supplied stock-firmware analysis | archive from https://github.com/NoNameBuilder; not vendored | `6d750114c4465e894a043ce190ea3a776d25a3bf862d5b50df3d95d73f2368e9` | 214/214 manifest-listed files match; supplied XBL bytes and DT overlays differ from the captured state; audit in `stock-firmware-analysis-audit.md` `[S]/[U]` |
 | Live FDT blob | `../../device-dump/private/gta4l-dump/live-fdt.dtb` | `da1cb76fcf9031de8ee2f1152456994220d3d01a2a2b73b211b684e92a0b6ebc` | Captured vendor FDT `[S]` |
 | Decompiled live DTS | `../../device-dump/private/gta4l-dump/live.dts` | `81c1865589df632ae76b77edd44eb9326b317f8abef471465504618636a9b629` | Text used for DT citations; not the booted blob `[S]` |
 
@@ -192,7 +192,7 @@ contents are not duplicated in this repository `[S]`.
 | Previously booted controller-local image | Recorded v2 image hash and its controller-local result | Not reproduced by this tree and not a power result `[S]` |
 | Captured vendor DT | `live-fdt.dtb`/`live.dts` board description | Not proof of the XNU-time rail, pad or regulator state `[S]` |
 | Static firmware analysis | RPM LDOA resource tables, XBL boot PMIC settings and Mu-Silicium exit traces | Not runtime behavior; the RPM consumer/policy, PBS semantics, indirect effects and untraced callbacks remain `[U]` |
-| Supplied third-party analysis | dmaccess stock-firmware archive, manifest-checked and audited | Not authenticated, not the captured XBL or live FDT, and not a measurement `[S]/[U]` |
+| Supplied third-party analysis | stock-firmware archive from https://github.com/NoNameBuilder, manifest-checked and audited | Not authenticated, not the captured XBL or live FDT, and not a measurement `[S]/[U]` |
 | Physical measurements | None | No voltage, current, transient, pad or retention measurement exists `[U]` |
 
 ## 6. Reproduction
