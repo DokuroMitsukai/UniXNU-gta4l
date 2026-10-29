@@ -84,7 +84,7 @@ blocker `[S]`.
 | `E4` | Ramp, settling, inrush, overshoot/undershoot and brownout requirements | SPMI `SOFT_START` register and regulator-core `soft_start` hook exist; no board values | Hooks `[S]`; behaviour and limits `[U]` | Required slew, inrush, overshoot/undershoot and brownout limits; measured behaviour |
 | `E5` | Electrical supply, pad, reset and clock ordering, including minimum delays | Linux power-IRQ software order `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; controller reset and internal-clock stages are separate | Software order `[S]`; electrical order and delays `[U]` | Required electrical order and minimum delays; whether the no-ack scope leaves a safe pending request |
 | `E6` | Restrictions on driving CMD/DAT/CLK/reset while a supply is absent; pad leakage | Vendor `vccq2-pwr-collapse-sup` and `qcom,vdd-io-lpm-sup`; no pad leakage data | Properties `[S]`; requirement `[U]` | Which pins may be driven unpowered and whether the card or SoC can back-power a rail |
-| `E7` | L24/L11 and pad state across handoff, suspend, shutdown and reboot | Mainline sends no L11/L24 vote; UEFI exit path is not passive; `pwr=00` is controller-local; a bounded RPM/XBL trace finds LDOA tables for both rails but no traced L11/L24 voltage/mode/enable write or runtime policy `[S]/[U]` | No vote and exit trace `[S]`; firmware tables identified `[S]`; retention `[U]` | Actual rail state across each transition; runtime RPM consumer/policy for the LDOA tables; PBS instruction semantics; indirect UEFI effects |
+| `E7` | L24/L11 and pad state across handoff, suspend, shutdown and reboot | Mainline sends no L11/L24 vote; UEFI exit path is not passive; `pwr=00` is controller-local; a bounded RPM/XBL trace finds LDOA tables for both rails but no static RPM table or policy path that selects either rail, and no traced L11/L24 voltage/mode/enable write; runtime policy `[S]/[U]` | No vote and exit trace `[S]`; firmware tables identified `[S]`; static selection absent `[S]`; retention `[U]` | Actual rail state across each transition; runtime RPM request path for the LDOA resources; PBS instruction semantics; indirect UEFI effects |
 | `E8` | Relevant PM6125/controller interrupt and status semantics; consequence of clearing or masking; documented acknowledge-or-not decision | SDHCI power-status semantics `[S]`; arbiter `+0x28` interpretation `[S]/[C]`; PM6125 `QPNPINT` applicability `[U]` | SDHCI `[S]`; PM6125 applicability and decision `[U]` | Whether PM6125 uses the `0x14`/`0x16` `QPNPINT` layout, its USID/subtype, and safe pending-request behaviour |
 | `E9` | Qualified rail-recovery procedure and acceptance criteria | BOOT-partition backup/rollback and payload gates | Software rollback `[S]`; rail recovery `[U]` | Safe-stop, discharge/power-cycle procedure, verification measurement and independent review |
 | `S1` | Bus-power implementation, explicit access policy, bounded waits, trace oracle and negative tests | Host-local diagnostic policy and tests; no bus-power artifact in this tree | Tree-bounded `[S]`; candidate design `[U]` | Approved design and tests for the bus-power candidate |
@@ -116,9 +116,10 @@ does not establish electrical recovery. No blocker above is resolved, and no
 disposition improves because its wording changed `[S]`.
 
 The bounded trace in `power-retention-evidence.md` §7 narrows `E7` by
-identifying the RPM LDOA tables for both rails and finding no direct L11/L24
-voltage, mode or enable write in the traced paths. It does not establish a
-retention result, so `E7` stays blocking `[S]/[U]`.
+identifying the RPM LDOA tables for both rails, finding no static table or
+policy path that selects either rail, and finding no direct L11/L24 voltage,
+mode or enable write in the traced paths. It does not establish a retention
+result, so `E7` stays blocking `[S]/[U]`.
 
 ## 5. Decision record
 

@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-29T22:24:29Z`, after the final edits to the
+Hashes were taken at `2026-10-29T22:34:28Z`, after the final edits to the
 files below. This document is untracked and its own hash is not listed. Hashes
 describe a dirty working tree and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -101,11 +101,11 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `d004cf3a8d732787cd9120bc1ffda97117f4ac1c9bb2edf9a6be94b20a4d1f34` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `1d99c47bff26edfc4b029097c91eb168b7b62f55f1e1929c565ea6e14c1cd177` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
-| Retention evidence | `docs/power-retention-evidence.md` | `748c9fedcf4508232395d1583a0b4778ef9f89756a0ea9dcb280bb06b0ab0212` |
-| RPM interface | `docs/rpm-power-interface.md` | `f97593218f120c634ca91963ee02147dc96b59cc4d214b6a4673e790ae96d971` |
-| PM6125 register map | `docs/pm6125-register-map.md` | `387fe773855caa893991d41622f456c70dc643ebf4ef5215afac71c0e266b87c` |
+| Retention evidence | `docs/power-retention-evidence.md` | `461897f65448fd1611aada3ae8ecd1d04d813785d64d38705ba312eb7260a096` |
+| RPM interface | `docs/rpm-power-interface.md` | `ec6cb2660b0f062ac7a39f1ef803927de4bf1b782405117a829b171a36aa62a3` |
+| PM6125 register map | `docs/pm6125-register-map.md` | `569555fb3b41e37b9c680f8e140b011619e9d417bec6374d354da85853168a50` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
