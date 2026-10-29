@@ -1,22 +1,42 @@
+schema_version = 2
+
 [board]
 name = "gta4l"
 soc = "SM6115"
+soc_source = "sm6115"
+os_profile = "ipados-17.7.11-21H461"
 description = "Samsung Galaxy Tab A7 10.4 (2020)"
 kit = "gta4l"
 
-[ipsw]
-url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
-product = "iPad7,1"
-version = "17.7.11"
-build = "21H461"
-device_class = "j120ap"
-chip_id = 0x8011
-board_id = 12
-fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
+[components]
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot"]
 
-[ipsw.sha256]
-"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
-"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
+[kernel]
+defconfig = "gta4l_defconfig"
+config_fragments = ["arch:configs/common.config", "soc:configs/sm6115.config", "os:configs/ipados.config"]
+patch_series = ["arch:patches/xnu/series", "soc:patches/xnu/series", "os:patches/xnu/series", "device:patches/xnu/series"]
+# Full ordered plan: setting this array replaces the architecture profile's
+# list, so keep every entry and append the board-specific bridge.
+# The opt-in original-PMGR bridge is adapted with credit from
+# xVanTuring/UniXNU-tb128fu a9c3863. It publishes the original ApplePMGRNub;
+# it does not implement clocks, sleep or reset. The first build links a no-op
+# stub, then the next build audits the prelinked kernel and links the bridge.
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "component:ArmDTPlatform",
+  "component:ArmCpu",
+  "component:SoftwareAES",
+  "build-software-aes-bindings.py",
+  "build-mockfs-fixture.py",
+  "build-libpthread-kernel.py",
+  "build-platform-power.py",
+  "build-gta4l-sdhci-snapshot.py",
+]
+
+[device_tree]
+source = "device:dts/gta4l.dts"
+include_dirs = ["soc:dts"]
 
 [userdata]
 first_lba = 0xe74000
@@ -27,55 +47,28 @@ windows = [
     { name = "SystemOS", component = "Cryptex1,SystemOS" },
 ]
 
-[kernel]
-defconfig = "gta4l_defconfig"
-archives = [
-  "build-corecrypto-14.py",
-  "build-corecrypto-14.py --namespace",
-  "build-arm-driver.py ArmDTPlatform",
-  "build-arm-driver.py ArmCpu",
-  "build-arm-driver.py NativeAES",
-  "audit-storage-interface.py",
-]
-
-[kernel.prelink]
-tool = "kits/NativePrelink/emit_prelink.py"
-kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
-kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
-slide = "-0x1000000"
-early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
-roots = [
-  "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
-  "com.apple.driver.AppleARMPlatform",
-  "com.apple.driver.AppleARMWatchdogTimer",
-  "com.apple.driver.AppleEffaceableStorage",
-  "com.apple.driver.AppleMobileFileIntegrity",
-  "com.apple.driver.ApplePMGR",
-  "com.apple.driver.IODARTFamily",
-  "com.apple.filesystems.apfs",
-  "com.apple.iokit.IOCryptoAcceleratorFamily",
-  "com.apple.iokit.IOGPUFamily",
-  "com.apple.iokit.IOReportFamily",
-  "com.apple.kec.pthread",
-  "com.apple.kec.Libm",
-  "com.apple.kec.corecrypto",
-  "com.apple.kext.AppleMatch",
-  "com.apple.kext.CoreTrust",
-  "com.apple.security.AppleImage4",
-  "com.apple.security.sandbox",
-  "com.apple.iokit.IOHIDFamily",
-]
-
 [firmware]
 config = "gta4l"
 dsc = "Platforms/Samsung/gta4lPkg/gta4l.dsc"
-fd = "/root/UniXNU/UniXNU-gta4l/SILICIUM_UEFI.fd"
+fd = "Build/gta4lPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
 preflight = ["scripts/check-gta4l.py"]
 submodules = [
     "Common/Mu",
     "Common/Mu_OEM_Sample",
     "Silicium-ACPI",
     "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl",
+]
+packages = [
+    "{uefi}",
+    "{uefi}/Silicon/Qualcomm",
+    "{uefi}/Silicon/Silicium",
+    "{uefi}/Platforms/Samsung",
+    "{uefi}/Common/Mu",
+    "{uefi}/Common/Mu_OEM_Sample",
+    "{uefi}/Silicium-ACPI",
+    "{tree}/package",
+    "{tree}/drivers/DarwinBoot",
+    "{edk2}",
 ]
 
 [firmware.defines]
@@ -94,23 +87,25 @@ pagesize = 4096
 
 [[bootimg.dtb_node]]
 path = "/chosen/framebuffer@5c000000"
-reg = [0x0, 0x5c000000, 0x0, 0x00927c00]
-width = 1200
-height = 2000
-stride = 4800
-format = "a8r8g8b8"
+props = [
+    { name = "reg", type = "x", value = ["0x0", "0x5c000000", "0x0", "0x00927c00"] },
+    { name = "width", type = "i", value = 1200 },
+    { name = "height", type = "i", value = 2000 },
+    { name = "stride", type = "i", value = 4800 },
+    { name = "format", type = "s", value = "a8r8g8b8" },
+]
 
 [[bootimg.dtb_node]]
 path = "/soc/spi@4a80000/himax_ts@0"
-status = "disabled"
+props = [{ name = "status", type = "s", value = "disabled" }]
 
 [[bootimg.dtb_node]]
 path = "/soc/spi@4a80000/novatek@0"
-status = "disabled"
+props = [{ name = "status", type = "s", value = "disabled" }]
 
 [[bootimg.dtb_node]]
 path = "/soc/spi@4a80000/focaltech@0"
-status = "disabled"
+props = [{ name = "status", type = "s", value = "disabled" }]
 
 [payload]
 volume = "GTA4LESP"
@@ -125,8 +120,6 @@ kernel_args = [
     "debug=0x14e",
     "keepsym=1",
     "-v",
-    "amfi_get_out_of_my_way=1",
-    "cs_enforcement_disable=1",
     "fb-base=0x5c000000",
     "fb-width=1200",
     "fb-height=2000",
@@ -135,11 +128,14 @@ kernel_args = [
 ]
 
 [payload.adt]
-tool = "scripts/make-gta4l-adt.py"
 chip_id = "444"
-owned_memory_size = "0xC0000000"
+# The live 3 GiB map has no single 3 GiB free run. After the live reserved
+# regions and the Mu-Silicium DDR reservations, the largest contiguous free
+# run is 0x80000000..0x100000000. DarwinBoot offsets the allocation by the
+# kernel's 0x7c000 base offset, so the usable request is 2046 MiB, not the
+# full 2048 MiB. See docs/memory-map.md. The ADT's dram-size above remains
+# the full 0x40000000..0x100000000 physical span, not this owned window.
+owned_memory_size = "0x7fe00000"
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
-cpu_regs = "0x0,0x1,0x2,0x3,0x100,0x101,0x102,0x103"
 packed_data_ramdisk = true
-ipad_identity = true
 unique_chip_id = "required"
