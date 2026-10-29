@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-29T20:44:45Z`, after the final edits to the
+Hashes were taken at `2026-10-29T22:24:29Z`, after the final edits to the
 files below. This document is untracked and its own hash is not listed. Hashes
 describe a dirty working tree and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -107,7 +107,7 @@ bytes of the previously booted image `[S]`.
 | RPM interface | `docs/rpm-power-interface.md` | `f97593218f120c634ca91963ee02147dc96b59cc4d214b6a4673e790ae96d971` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `387fe773855caa893991d41622f456c70dc643ebf4ef5215afac71c0e266b87c` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
-| Firmware handoff | `docs/firmware-handoff.md` | `b92407ad807c2b45f90031d2e85327a5d83f222c0e3019aa6168b15e68b52edc` |
+| Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
 | Porting record | `porting.toml` | `721381d6cfea8bfc18e0804c5fbdca4c32ace4ea25d1755dcc2f1470bfd6c3b9` |
 
