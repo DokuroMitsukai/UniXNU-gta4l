@@ -309,3 +309,9 @@ The next probe's design is in `sdhci-host-init.md`. The live FDT resolves the
 supplies to RPM-SMD PM6125 L24/L11, but this tree has no XNU RPM/SPMI/regulator
 path, so the first host-init milestone keeps bus power and the card clock off
 and reports the power stage as blocked.
+
+The pinned mainline gta4l port differs from the live FDT: it enables `sdhc_1`
+without `vmmc-supply` or `vqmmc-supply`, leaves L24/L11 unreferenced, uses RPM
+GLINK over `sram@45f0000` rather than the live legacy SMD node, and exposes
+only cached regulator state. It therefore relies on retained firmware rails and
+provides no hardware readback. See `rpm-power-interface.md`.

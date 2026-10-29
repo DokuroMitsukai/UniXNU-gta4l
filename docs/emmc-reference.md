@@ -68,6 +68,19 @@ and adds questions we must verify before using them:
 These are reference findings, not imported code or approved XNU settings. Any
 later source reuse requires a separate licensing and integration decision.
 
+The pinned port enables `sdhc_1` without `vmmc-supply` or `vqmmc-supply`. It
+defines `pm6125_l24a` and `pm6125_l11a`, but neither phandle is used anywhere
+in the board DTS; the only `sdhc_2` supplies are L22 and L5 for the removable
+SD card. The port's RPM path is GLINK over `sram@45f0000`, not the live FDT's
+legacy `qcom,rpm-smd` node, and its regulator driver reports only cached
+software state. The port therefore relies on the eMMC/L11/L24 rail enable and
+voltage state left by firmware; it does not give XNU a regulator readback. The
+SDHCI `core_vendor_spec` pad-switch bits are not inherited: the probe's `0xa9c`
+write clears them and `caps == 0` prevents re-enable. See
+`rpm-power-interface.md` and, for the pinned `drivers/mmc/host/sdhci-msm.c`
+line ranges at commit `cf5f763f0ef8a5b4d8bb4163833cba1160c51894`,
+`linux-regulator-lifecycle.md`.
+
 ## guamp reference
 
 Repository:
@@ -90,6 +103,21 @@ questions and failure stages only; no code is copied or translated.
    sufficient for conservative reads?
 4. How does XNU map the controller MMIO and publish a read-only block device?
 5. Which sector is stable and non-sensitive enough for the first read check?
+
+The first question is answered for the controller and pads by
+`firmware-handoff.md`: the Mu-Silicium SDCC DXE `ExitBootServices` handler
+configures the SDC1/SDC2 TLMM pads, enables SDHCI bus power, runs the v5
+reset/power handshake and writes vendor registers; the reset clears the standard
+power and clock registers and the handler does not re-enable bus power. It has
+no PMIC, SPMI, LDO
+or RPM-request operation. The PMIC exit handler does issue SPMI writes, but only
+at register bytes `0x14`, `0x16` and `0xd1`, which cannot directly reach the LDO
+control registers `0x40`/`0x41`/`0x45`/`0x46`/`0x48`/`0x4c`/`0x61`; `0x14`/`0x16` are the PMIC interrupt latch-clear
+and enable-clear registers on peripherals that implement that layout, and the
+`+0x28` entry is the SPMI-arbiter interrupt status/clear path, not a regulator
+access. The UEFI platform config has no LDO entries. This
+is consistent with, but does not establish, a retained-rail hypothesis; it does
+not measure the rails or establish the card state. See `pmic-audit.md`.
 
 The first hardware implementation must be observation-only: map verified
 registers, read only safe status/version fields, report them through the
