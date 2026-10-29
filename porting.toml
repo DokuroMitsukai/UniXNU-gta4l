@@ -10,7 +10,7 @@ summary = "Samsung Galaxy Tab A7 10.4 (2020) Format 2 migration; PMGR-linked hos
 id = "configuration"
 status = "planned"
 components = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot"]
-paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore"]
+paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore", "local.toml.example", "gemini-code-*.py"]
 inputs = ["Format 2 architecture, SM6115 SoC, iPadOS 17.7.11 21H461 and device profiles; board.toml and configs/gta4l_defconfig; the shared SM6115 DTSI."]
 configuration = ["board.toml schema_version=2, soc_source=sm6115 and os_profile=ipados-17.7.11-21H461; CONFIG_XNU_NATIVE_PAN=n; CONFIG_XNU_ARMCPU=y and CONFIG_XNU_NATIVE_ARCH_TIMER=y; output out/gta4l/ipados-17.7.11-21H461/gta4l."]
 procedure = ["./unixnu defconfig gta4l_defconfig -D ../UniXNU-gta4l; ./unixnu fetch -D ../UniXNU-gta4l; ./unixnu status --json -D ../UniXNU-gta4l; ./unixnu build kernel -D ../UniXNU-gta4l."]
@@ -66,7 +66,7 @@ evidence = []
 id = "storage"
 status = "planned"
 components = []
-paths = ["drivers/ShengUfs", "scripts/*ufs*", "scripts/*storage*", "scripts/*userdata*", "scripts/*root*"]
+paths = ["drivers/ShengUfs", "scripts/*ufs*", "scripts/*storage*", "scripts/*userdata*", "scripts/*root*", "scripts/*gpt*"]
 inputs = ["Identify the storage and root hardware, resources and existing component interfaces for this board. Reference-only inputs: limonabisi/linux-gta4l gta4l-7.2 at cf5f763f0ef8a5b4d8bb4163833cba1160c51894 (board DTS credits V6lhost; SoC DTSI credits Iskren Chernev) and itsChris122/UniXNU-guamp at 6be83ac10b4eee84d504266bb8d12ef64a083acc. No reference code is imported."]
 configuration = ["Record the board.toml fields, DTS properties and defconfig values used for storage and root."]
 procedure = ["Read the live FDT, primary/backup GPT and recovery sysfs read-only; validate GPT CRCs and array equality with scripts/verify-gpt.py; resolve controller resources from the stock FDT before implementation."]
@@ -164,7 +164,7 @@ evidence = [{ kind = "source", reference = "docs/rpm-power-interface.md", result
 id = "packaging"
 status = "planned"
 components = []
-paths = ["scripts/*payload*", "scripts/*image*", "scripts/*flash*", "scripts/package-*", "scripts/*boot-image*", "patches/**", "package/Kit.toml"]
+paths = ["scripts/*payload*", "scripts/*image*", "scripts/*flash*", "scripts/package-*", "scripts/*boot-image*", "scripts/*adt*", "patches/**", "package/Kit.toml"]
 inputs = ["Format 2 kernel step, archive builders, prelink, payload and boot image; 192 MiB payload size; iPad7,1 17.7.11 21H461 kernelcache."]
 configuration = ["board.toml payload size_mib=192, loader=firmware, panic_screen=true, dram_size=0xC0000000; CONFIG_XNU_BUILD_ARCHIVES=y; output out/gta4l/ipados-17.7.11-21H461/gta4l."]
 procedure = ["./unixnu build kernel -D ../UniXNU-gta4l; ./unixnu build package; ./unixnu build firmware; ./unixnu build payload; ./unixnu bootimg.", "For a raw RAM-root diagnostic payload, use scripts/build-gta4l-diagnostic-payload.py --diagnostic host-init with the data ramdisk, owner trust cache and unique chip ID. It copies the device tree, sets payload size and packed_data_ramdisk=false, runs the payload step, and checks the ADT contract without modifying the tracked board.toml.", "For a diagnostic image, use scripts/package-gta4l-diagnostic.py with the pinned v5 baseline and the payload; it preserves the header, firmware, boot DTB and boot kernel section, recomputes the boot-image ID, requires the payload/ADT contract, and runs scripts/check-gta4l-boot-image.py. Run scripts/test-gta4l-boot-image.py, scripts/test-gta4l-diagnostic-package.py and scripts/test-gta4l-sdhci-host-init-sim.py before flashing."]
@@ -178,7 +178,7 @@ evidence = [{ kind = "source", reference = "docs/build-revisions.md", result = "
 id = "diagnostics"
 status = "planned"
 components = []
-paths = ["scripts/check-*", "scripts/probe-*", "scripts/audit-*", "scripts/read-*", "scripts/prepare-*", "scripts/data/**", "package/tests/**", "package/*Tests*", "package/*Diagnostic*", "package/*Probe*", "package/Boot*", "package/linux-log/**", "unixnu.lock"]
+paths = ["scripts/check-*", "scripts/probe-*", "scripts/audit-*", "scripts/read-*", "scripts/prepare-*", "scripts/*qemu*", "scripts/test-*diagnostic*", "scripts/data/**", "package/tests/**", "package/*Tests*", "package/*Diagnostic*", "package/*Probe*", "package/Boot*", "package/linux-log/**", "unixnu.lock"]
 inputs = ["Build logs for the fresh Format 2 tree; the shared prepare-xnu-source.py fetch path; the TB128FU reference revisions."]
 configuration = ["UNIXNU_XNU_TAG=xnu-10063.141.1 and the pinned source revision; GITHUB_TOKEN can be supplied to prepare-xnu-source.py but is not required."]
 procedure = ["Run the kernel build with a log; on a fetch failure, preserve the log and retry with the retry-safe prepare-xnu-source.py; compare failures across clean output trees."]
