@@ -132,7 +132,22 @@ def validate(header_text, source_text):
                  'GCC_SDCC1_BCR', 'GCC_SDCC1_APPS_CFG'):
         assert name not in write_observed, f'forbidden write {name}'
 
-    assert code.count('*(volatile') == 6, 'unexpected direct MMIO store'
+    # Count every dereference-cast and every volatile token. A typedef, a
+    # reordered qualifier, or whitespace between `*` and `(` must not hide an
+    # extra MMIO access: the production source has exactly six dereference-cast
+    # helpers, each using volatile, and two __asm__ volatile instructions.
+    assert 'typedef' not in code, 'typedef hides an MMIO access'
+    volatile_tokens = re.findall(r'\bvolatile\b', code)
+    assert len(volatile_tokens) == 8, (
+        f'unexpected volatile token count: {len(volatile_tokens)}')
+    dereference_casts = re.findall(r'\*\s*\(', code)
+    assert len(dereference_casts) == 6, (
+        f'unexpected dereference-cast count: {len(dereference_casts)}')
+    assert not re.search(r'\w+\s*\[[^\]]*\]\s*=', code), (
+        'pointer-index store hides an MMIO access')
+    assert not re.search(
+        r'\(\s*(?:u?int(?:8|16|32|64)_t|char|short|long|unsigned)\s*\*\s*\)',
+        code), 'non-volatile pointer cast hides an MMIO access'
     assert 'clock_write = (uint16_t)((clock_after_reset &' in code
     assert '~GTA4L_SDHCI_HOST_INIT_CLOCK_CARD_EN' in code
     assert 'GTA4L_SDHCI_HOST_INIT_CLOCK_INT_EN' in code
@@ -159,7 +174,8 @@ def validate(header_text, source_text):
                   'sdhci_send_command', 'sdhci_prepare_dma'):
         assert token not in code.lower(), f'forbidden path: {token}'
 
-    assert 'GTA4L-SDHCI HOST INIT OK' in source_text
+    assert 'GTA4L-SDHCI HOST INIT REPORT' in source_text
+    assert 'vendor state reported, not enforced' in source_text
     assert 'GTA4L-SDHCI HOST INIT REFUSED' in source_text
     assert 'GTA4L-SDHCI HOST INIT FAILED' in source_text
     assert 'stage blocked' in source_text
@@ -190,6 +206,64 @@ def main():
             pass
         else:
             raise AssertionError('self-test did not reject a direct MMIO store')
+
+        # Qualifier order is not a loophole: `uint32_t volatile` is the same
+        # type as `volatile uint32_t` and must also be rejected.
+        bad = source_text.replace(
+            needle,
+            needle + '\n\t*(uint32_t volatile *)(sdhci + 0x29) = 0;',
+            1)
+        try:
+            validate(header_text, bad)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(
+                'self-test did not reject a reordered-qualifier MMIO store')
+
+        # A typedef must not be able to hide a direct MMIO store either, even
+        # when the typedef itself omits the volatile qualifier.
+        bad = source_text.replace(
+            needle,
+            needle + '\n\ttypedef uint32_t audit_mmio_t;\n'
+            '\t*(audit_mmio_t *)(sdhci + 0x29) = 0;',
+            1)
+        try:
+            validate(header_text, bad)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(
+                'self-test did not reject a typedef-hidden MMIO store')
+
+        # Whitespace between the dereference operator and the cast must not
+        # hide a direct MMIO store either.
+        bad = source_text.replace(
+            needle,
+            needle + '\n\t* (uint32_t *)(sdhci + 0x29) = 0;',
+            1)
+        try:
+            validate(header_text, bad)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(
+                'self-test did not reject a whitespace-split MMIO store')
+
+        # A pointer-index store must not slip past the cast and volatile
+        # counts either; this is a source guardrail, not a proof of absence.
+        bad = source_text.replace(
+            needle,
+            needle + '\n\tuint32_t *audit_ptr = (uint32_t *)(sdhci + 0x29);'
+            '\n\taudit_ptr[0] = 0;',
+            1)
+        try:
+            validate(header_text, bad)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(
+                'self-test did not reject a pointer-index MMIO store')
 
         bad = source_text.replace(
             'GTA4L_SDHCI_HOST_INIT_REG_SOFTWARE_RESET,\n'
