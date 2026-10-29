@@ -297,11 +297,22 @@ counted SKIPDATA entries as instructions and tested memory operands against the
 wrong type constant, so its count is superseded `[S]`. The boot address-split
 code at `0xc248144`/`0xc248148` is
 `and w22, w21, #0xff` / `ubfx w19, w21, #8, #8`, consistent with the
-peripheral/register encoding `[S]`. The RSBP1 PBS-image byte sequences at
-`0x4200`/`0x4204` and `0x4980`/`0x4984` were found, but their execution
-semantics are unresolved `[U]`; they are not evidence of a voltage or enable
-write. The dmaccess package contains no `xbl_config` or `pmic_settings` member
-`[S]`.
+peripheral/register encoding `[S]`. Two `RSBP` images at `0x4040` (`0x1000`
+bytes) and `0x5840` (`0x800` bytes) follow the record stream `[S]`. Type-2
+download records at `0x1a0` and `0x3d0` (type field `+8` = 2; word counts
+`0x400`/`0x200`, exactly the two images' sizes) call the downloader at
+`0xc26379c`, which writes each 4-byte word to SPMI register `0x7048`; the
+companion verifier reads back `0x704c`, compares every word, and logs mismatches
+as word number/read value/slave id (strings at `0xc22e5fc`/`0xc22e65e`) `[S]`.
+Both images are therefore downloaded in full to PMIC PBS RAM and executed by the
+PMIC PBS engine, not by the AP `[S]`. The words at `0x4200`/`0x4204` and
+`0x4980`/`0x4984` lie inside the first image and encode L24 (`0x57`) and L11
+(`0x4a`) accesses to register `0x61` (`STEP_CTRL`); a scan of both images for
+the same encoding finds no L11/L24 access to the voltage-range (`0x40`),
+voltage-set (`0x41`), mode (`0x45`) or enable (`0x46`) registers, so they are
+not evidence of a voltage or enable write `[S]`. The PBS instruction semantics
+of the `STEP_CTRL` accesses remain `[U]`. The dmaccess package contains no
+`xbl_config` or `pmic_settings` member `[S]`.
 
 ### 7.5 Reproduction and limits
 
@@ -336,8 +347,9 @@ The XBL scan covered the eight non-blob file-backed `PT_LOAD` segments
 `0x45e35000`, `0x45ec3000`), excluding the `0x5fc00000` data blob. It decoded
 AArch64 with `detail=True` and `skipdata=True`, examined immediate operands and
 memory displacements for the L11/L24 register windows, and scanned every
-aligned 4-byte literal in those segments. It did not follow indirect calls,
-runtime-loaded code or PBS/RSBP execution `[U]`.
+aligned 4-byte literal in those segments. It did not follow indirect calls or
+runtime-loaded code, and it does not decode PBS instruction semantics; the PBS
+transport is established in §7.4, the instruction semantics remain `[U]`.
 
 ```sh
 python3 - <<'PY'
@@ -381,12 +393,14 @@ the result hashes to `410e45ac...f4e97597`.
 ### 7.6 What this establishes
 
 The defensible statement is: *no direct write to the L11/L24 voltage, mode or
-enable registers was found in the traced RPM paths or the scanned XBL paths, and
-the RPM image contains LDOA resource tables that include both rails.* This
-narrows `E7` ("the exit path is not passive") but does not establish retention:
-the runtime RPM consumer/policy for the tables, the PBS semantics, the effect of
-the runtime loader, and the actual rail state across handoff, suspend, shutdown
-and reboot remain unresolved `[U]`. A name match, an uninterpreted table or an
+enable registers was found in the traced RPM paths or the scanned XBL paths, the
+RPM image contains LDOA resource tables that include both rails, and both XBL
+RSBP images are downloaded in full to PMIC PBS RAM where they touch only L11/L24
+`STEP_CTRL`.* This narrows `E7` ("the exit path is not passive") but does not
+establish retention: the runtime RPM consumer/policy for the tables, the PBS
+instruction semantics and their effect, the effect of the runtime loader, and
+the actual rail state across handoff, suspend, shutdown and reboot remain
+unresolved `[U]`. A name match, an uninterpreted table or an
 absent reference is not a retention result `[S]`.
 
 ## 8. Step 4 contract cross-reference
