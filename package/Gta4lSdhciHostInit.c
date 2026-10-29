@@ -463,8 +463,8 @@ gta4l_sdhci_host_init_run(void)
 	dll_final = gta4l_sdhci_host_init_read32(sdhci,
 	    GTA4L_SDHCI_HOST_INIT_REG_CORE_DLL_STATUS);
 
-	panic("GTA4L-SDHCI HOST INIT OK: host-local stages complete; power "
-	    "stage blocked\n"
+	panic("GTA4L-SDHCI HOST INIT REPORT: host-local stages complete; power "
+	    "stage blocked; vendor state reported, not enforced\n"
 	    "GTA4L-SDHCI HOST INIT BEFORE ps=%08x clk=%04x pwr=%02x "
 	    "ie=%08x se=%08x\n"
 	    "GTA4L-SDHCI HOST INIT VENDOR g=%08x pst=%08x pm=%08x vs=%08x "
