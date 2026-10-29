@@ -159,6 +159,8 @@ bytes `[S]`.
 
 - 24 `ldoa` key records at VA `0x4696994`–`0x4696a54`, 8 bytes each (`ldoa` plus
   id), in id order 1–24. L11 is at `0x46969e4` and L24 at `0x4696a4c` `[S]`.
+  The L11 record has exactly one stored pointer in the whole image
+  (`0x46966a8`, the selector slot); L24 has none `[S]`.
 - A 24-entry voltage table at VA `0x4696a54`, 12 bytes per entry, aligned with
   the key records `[C]`. L11's entry (`0x4696acc`) carries 1704–1952 mV and
   L24's (`0x4696b68`) carries 2704–3600 mV, matching the board DTS ranges above
@@ -166,18 +168,26 @@ bytes `[S]`.
 - A NULL-terminated selector array at VA `0x469667c` whose 16 stored words,
   under the link-base-relative interpretation `[C]`, select ids 6, 8, 1, 2, 3,
   4, 7, 17, 18, 9, 10, 11, 12, 13, 14 and 16: L11 is present, L24 is absent
-  `[S]`. What the array selects at run time is unresolved `[U]`.
+  `[S]`. The array's only stored pointer is the unreferenced three-entry table
+  at `0x46966fc`–`0x4696714`; no linked path found by the whole-image scan
+  selects it `[S]`. Computed addressing, runtime relocation or aliasing remains
+  `[U]`.
 - A generic key/value handler at `0x4615da4` that consumes `uv` (32-bit
   microvolts), `swen` (a software-enable bit in its state object), `bobm`,
   `pcv1`–`pcv3`; it has no selector conversion and no PMIC command ID `[S]`.
   The class/ID path at `0x4615d08` could address any `ldoa` id, including 11 or
-  24, if a runtime descriptor existed; none was found `[U]`.
+  24, if a runtime descriptor existed. The generic setter at `0x4617b48`
+  accepts ids below the registered count (`0x19` = 25) and modes up to 4, so
+  ids 11 and 24 pass its bounds `[S]`; no static table or policy path selects
+  either rail, and whether a runtime request exists is `[U]`.
 
-No traced code path reads the voltage table or selector array, and no traced
-path writes an L11/L24 voltage, mode or enable register `[U]`. The tables are
-therefore evidence that the firmware carries LDOA resource definitions for both
-rails, not evidence that it enables, votes or retains them. They do not add a
-readback path to the mainline port `[S]`.
+No linked code path found by the scan reads the voltage table or selector
+array `[S]`, and no traced path writes an L11/L24 voltage, mode or enable
+register `[U]`. The only reachable path that can program either rail is the
+generic setter, driven by a runtime request whose existence is not established
+`[U]`. The tables are therefore evidence that the firmware carries LDOA
+resource definitions for both rails, not evidence that it enables, votes or
+retains them. They do not add a readback path to the mainline port `[S]`.
 
 ## What the mainline port can and cannot report
 

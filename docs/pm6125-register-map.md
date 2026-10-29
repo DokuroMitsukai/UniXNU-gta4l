@@ -123,8 +123,9 @@ registers are `0x88`, `0x60`, `0x39`, `0x3a` and `0xe6` — none is `0x40`,
 `0x41`, `0x45` or `0x46` `[S]`. The boot settings therefore write other L11/L24
 registers but do not directly program the voltage, mode or enable registers in
 this table; the PBS/RSBP execution semantics are unresolved `[U]`. The captured
-`rpm.img` also carries LDOA resource tables for both rails, but no traced path
-reads them or writes these registers `[U]` (see `power-retention-evidence.md`
+`rpm.img` also carries LDOA resource tables for both rails, but no linked static
+path reads them or writes these registers `[S]`; a runtime request, computed
+address or relocation remains `[U]` (see `power-retention-evidence.md`
 §7).
 
 ## Slave identity is not yet established
