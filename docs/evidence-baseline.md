@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-29T18:56:33Z`, after the final edits to the
+Hashes were taken at `2026-10-29T20:06:09Z`, after the final edits to the
 files below. This document is untracked and its own hash is not listed. Hashes
 describe a dirty working tree and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -101,9 +101,9 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `5167ec1d39ec448b0bb33aaf0f9bae646fe06bdad1213dc081994a929496c3f1` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `e34b7147b6096f9f5196be0061c6ea5c9d6dab203862515c5649624579fb90f5` |
-| Electrical contract | `docs/sdhc-electrical-contract.md` | `96bed2cd822f709b65ae26af144e5ac4d52fd70fc51c37b61af05867af42d7cb` |
-| Retention evidence | `docs/power-retention-evidence.md` | `0d32626ce8af727bc82475c2f4ccd02562ba3ab73381984656c30c30f8f62c0d` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `08bb034a2fb5278b9013a6848d23c46dcf9e317a9a71a9fb9a13bf87412c0d67` |
+| Electrical contract | `docs/sdhc-electrical-contract.md` | `b8cb39a2705714d623d6c21f5f68acfc8342d55c6b0abf0e09bebdd5cfb1a694` |
+| Retention evidence | `docs/power-retention-evidence.md` | `6f9a415f1c2fae15654d5f7b83e9570b46a9e5ab80be524fbda900b63aa57146` |
 | RPM interface | `docs/rpm-power-interface.md` | `f97593218f120c634ca91963ee02147dc96b59cc4d214b6a4673e790ae96d971` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `387fe773855caa893991d41622f456c70dc643ebf4ef5215afac71c0e266b87c` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
