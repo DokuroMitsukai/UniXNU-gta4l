@@ -265,7 +265,7 @@ Completed on the host:
    `packed_data_ramdisk = false` without modifying the tracked `board.toml`.
 9. Corrected v2 is packaged against the v5 baseline and passes all 18
    component-gate checks plus the payload contract check. The independent
-   dmaccess check passes the header, FDT and Qualcomm-ID checks; its known
+   https://github.com/NoNameBuilder check passes the header, FDT and Qualcomm-ID checks; its known
    FV/LZMA false positives are ignored.
 10. Corrected v2 booted on the tablet and completed the host-local probe. The
     report shows `reset=00`, `clk=0003`, `pwr=00`, `ie=00000000`,

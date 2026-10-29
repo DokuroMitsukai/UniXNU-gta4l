@@ -4,7 +4,7 @@ Status: host-only audit of an externally supplied static analysis. It adds no
 measurement and closes no SDHC power, electrical or retention requirement; the
 decision remains **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-The analysis archive and its findings are credited to **dmaccess**. This
+The analysis archive and its findings are credited to **https://github.com/NoNameBuilder**. This
 document records what this repository verified, what it corrected, and what it
 did not adopt. It does not reproduce the supplied text or binaries.
 
@@ -12,7 +12,7 @@ did not adopt. It does not reproduce the supplied text or binaries.
 
 | Item | Value |
 | --- | --- |
-| Supplied by | dmaccess |
+| Supplied by | https://github.com/NoNameBuilder |
 | URL | `https://temp.sh/FNeBq/SM-T505-firmware-analysis.zip` (temporary link) |
 | Archive SHA-256 | `6d750114c4465e894a043ce190ea3a776d25a3bf862d5b50df3d95d73f2368e9` |
 | Size | 256,395,350 bytes; 227 entries; 464,205,248 bytes uncompressed |

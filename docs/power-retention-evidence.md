@@ -311,7 +311,7 @@ PMIC PBS engine, not by the AP `[S]`. The words at `0x4200`/`0x4204` and
 the same encoding finds no L11/L24 access to the voltage-range (`0x40`),
 voltage-set (`0x41`), mode (`0x45`) or enable (`0x46`) registers, so they are
 not evidence of a voltage or enable write `[S]`. The PBS instruction semantics
-of the `STEP_CTRL` accesses remain `[U]`. The dmaccess package contains no
+of the `STEP_CTRL` accesses remain `[U]`. The https://github.com/NoNameBuilder package contains no
 `xbl_config` or `pmic_settings` member `[S]`.
 
 ### 7.5 Reproduction and limits
