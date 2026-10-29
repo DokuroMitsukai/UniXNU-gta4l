@@ -10,7 +10,7 @@ summary = "Samsung Galaxy Tab A7 10.4 (2020) Format 2 migration; PMGR-linked hos
 id = "configuration"
 status = "planned"
 components = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot"]
-paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore", "local.toml.example", "gemini-code-*.py"]
+paths = ["board.toml", "feeds.toml", "configs/**", ".gitmodules", ".github/**", ".gitignore", "local.toml.example"]
 inputs = ["Format 2 architecture, SM6115 SoC, iPadOS 17.7.11 21H461 and device profiles; board.toml and configs/gta4l_defconfig; the shared SM6115 DTSI."]
 configuration = ["board.toml schema_version=2, soc_source=sm6115 and os_profile=ipados-17.7.11-21H461; CONFIG_XNU_NATIVE_PAN=n; CONFIG_XNU_ARMCPU=y and CONFIG_XNU_NATIVE_ARCH_TIMER=y; output out/gta4l/ipados-17.7.11-21H461/gta4l."]
 procedure = ["./unixnu defconfig gta4l_defconfig -D ../UniXNU-gta4l; ./unixnu fetch -D ../UniXNU-gta4l; ./unixnu status --json -D ../UniXNU-gta4l; ./unixnu build kernel -D ../UniXNU-gta4l."]
