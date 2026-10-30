@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T20:03:45Z`, after the final edits to the
+Hashes were taken at `2026-10-30T21:06:39Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them. The snapshot is intended to be committed without
@@ -18,8 +18,8 @@ update the table.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD at the hash snapshot | `88aa6895942412cf70715709efc185c2fa7f162a` (thirteenth correction commit) |
-| Parent of the thirteenth correction commit | `34761fc6265d44e12d0f85a83bef14c454a720ca` |
+| HEAD at the hash snapshot | `95ff0a1293194b2108f4041068c77f18e708c1fd` (checker-fix follow-up commit) |
+| Parent of the fourteenth evidence batch | `95ff0a1293194b2108f4041068c77f18e708c1fd` (same commit) |
 | Correction commit paths | 8: 7 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`docs/sdhc-decision-update-2026-10-30.md`) |
 | First follow-up commit paths | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`scripts/test-gta4l-sdccdxe-decode.py`) |
 | Second follow-up commit paths | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-power-pad-dependency-report.md`, `scripts/test-gta4l-sdccdxe-decode.py`) |
@@ -35,13 +35,14 @@ update the table.
 | Eleventh correction paths | 5 modified (`docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `docs/spmi-0x28-analysis.md`, `porting.toml`, `scripts/test-gta4l-spmidxe-descriptor-base.py`) |
 | Twelfth evidence-batch paths (committed as `34761fc`) | 5: 4 modified (`docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `docs/stock-firmware-analysis-audit.md`, `porting.toml`) and 1 added (`docs/vendor-sdhc-power-sequence.md`) |
 | Thirteenth correction paths (committed as `88aa689`) | 10 modified (`.circleci/config.yml`, `.github/workflows/build-xnu-kernel-gta4l.yaml`, `.github/workflows/workflowtest.yaml`, `.github/workflows/workingworkflow.yaml`, `docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `docs/stock-firmware-analysis-audit.md`, `docs/vendor-sdhc-power-sequence.md`, `porting.toml`, `scripts/test-gta4l-spmidxe-descriptor-base.py`) |
-| Checker-fix follow-up paths at this snapshot | 2 modified (`docs/evidence-baseline.md`, `scripts/test-gta4l-spmidxe-descriptor-base.py`) |
-| Dirty entries at the hash snapshot | 2, exactly the checker-fix follow-up paths above |
-| Staging and commits | None at the snapshot; this checker-fix follow-up lands as one commit on top of `88aa689` |
+| Checker-fix follow-up paths (committed as `95ff0a1`) | 2 modified (`docs/evidence-baseline.md`, `scripts/test-gta4l-spmidxe-descriptor-base.py`) |
+| Fourteenth evidence-batch paths at this snapshot | 5 modified (`docs/emmc-reference.md`, `docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `docs/vendor-sdhc-power-sequence.md`, `porting.toml`) |
+| Dirty entries at the hash snapshot | 5, exactly the fourteenth evidence-batch paths above |
+| Staging and commits | None at the snapshot; this fourteenth batch lands as one commit on top of `95ff0a1` |
 
-The hash table describes the checker-fix working tree: the thirteenth
-correction commit `88aa689` plus the then-uncommitted checker-fix edits listed
-above. The eleventh
+The hash table describes the fourteenth evidence-batch working tree: the
+checker-fix commit `95ff0a1` plus the then-uncommitted official-source,
+board-manual and eMMC-candidate records listed above. The eleventh
 correction commit `4c447b9` contains exactly the five paths in its row. The
 tenth correction commit `07a36e6`
 contains exactly the six paths in its row. The ninth correction commit
@@ -114,6 +115,17 @@ The checker-fix follow-up adds single and paired boundary-crossing store/load
 controls to the scanner test, states the site-level set comparison used for the
 six result sets, and records why the hash table now has 36 rows; it changes no
 gate disposition.
+
+The fourteenth evidence batch records the official Samsung CXG1/CWI2 kernel
+source comparison: both releases carry Linux 4.19.157 and the same relevant
+power/regulator files; the source corroborates the vendor trace but omits the
+LineageOS card-detect early-fail/cleanup blocks, and the exact CXB1 source
+remains unavailable. It also records that the inspected SM-T505 family service
+manual is not a verified T505N board record (PM4250 versus the captured PM6125; board
+photo 85943_1_04 versus the title 85943_1_21), and that KMDX60018M-B425
+(32 GB eMMC 5.1 + 24 Gb LPDDR4X, 254FBGA) is the leading eMMC candidate while
+the exact installed part and electrical limits remain unresolved. No gate
+disposition changed.
 
 The second batch derived the status/clear/reset loop bounds from the pinned
 MOVZ instructions, added last-read and delayed-completion boundary cases and
@@ -221,7 +233,7 @@ bytes of the previously booted image `[S]`.
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
 | Decision memo | `docs/sdhc-decision-memo.md` | `d8e1bcc115fbec3eb26ddeee5ab651a514e87e0d3d76c10f8e0a49aca6fc753e` |
-| Evidence-gap checklist | `docs/sdhc-evidence-gap-checklist.md` | `3721ec9da699df62460b48b20f386eee246e73ef4b4f59d203c109136d892d1b` |
+| Evidence-gap checklist | `docs/sdhc-evidence-gap-checklist.md` | `4299b4f7e03e56ed5927642edf231b214172d9e6fe6ea653ef9ae7b100067c17` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `88cd9d6a4ac15ea5e9d738f947db0127d4b929a0c24a3713873e927c29907593` |
 | Retention evidence | `docs/power-retention-evidence.md` | `eb91725bd6a63acded9e63ca0673670f36b43a3253da15d8ec17cb67f0387e07` |
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
@@ -237,11 +249,11 @@ bytes of the previously booted image `[S]`.
 | SdccDxe decode test | `scripts/test-gta4l-sdccdxe-decode.py` | `a346959cc424c46be49dccc4c6e6392f776a5297d938f72796e1b34bc2bffd78` |
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
-| Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `1ec24219bcea7424e2acaa83a068bc7a685acf0bccd39f8a84ebe70640e7039e` |
+| Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
 | Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
-| eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
+| eMMC reference | `docs/emmc-reference.md` | `0d605ec482d5b77ae428dead608543cb157e331d90ec0a68a31457dcf0ec44e9` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `8fe643912442204bb1107329a3c230aaf871cb5f290b5236d673146db421d90c` |
+| Porting record | `porting.toml` | `3cb76711d3c03417cad0d426d2ef3b83d4ebaec73f36a3fa32337a5ae9dc998f` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `2d8f060327c4d557ff588e90200676b3dfdaf213c60dec0d24c0300f28eb3fd3` |
@@ -328,6 +340,8 @@ manifest digest `[S]/[U]`.
 | XBL image | `../../device-dump/private/gta4l-dump/partitions/xbl.img` | `a09c7b62e639a0565c30b7a3b61e2d68f2a07bfe9c3199d38f9af17bdf9e073e` | Private device dump; ELF64 AArch64 `ET_EXEC`, 17 program headers, no sections; 15 `LOAD` segments including `0x5fc00000`; policy not analyzed `[S]/[U]` |
 | XBL config image | `../../device-dump/private/gta4l-dump/partitions/xbl_config.img` | `6dbaad63204b761e7d8fb4dba7c861d97b25dc5094aabc0a9fe45f19fb20d99e` | Private device dump; embeds `/pmic_settings.bin` at `0x3054`, size `0x7240`, SHA-256 `410e45ac...f4e97597`; static analysis only `[S]` |
 | Supplied stock-firmware analysis | archive from https://github.com/NoNameBuilder; not vendored | `6d750114c4465e894a043ce190ea3a776d25a3bf862d5b50df3d95d73f2368e9` | 214/214 manifest-listed files match; supplied XBL bytes and DT overlays differ from the captured state; audit in `stock-firmware-analysis-audit.md` `[S]/[U]` |
+| Samsung CXG1 source archive | owner-supplied `sos/` archive; not vendored | `84e8f9934987834da6867d37243bb18fe6fab623019e3d7a4e10fa603f069f8e` | Kernel 4.19.157, `gta4l_mea_jt_defconfig`; official vendor source; not the shipped binary `[S]/[U]` |
+| Samsung CWI2 source archive | owner-supplied `sos/` archive; not vendored | `b00cbe4827b62af8ea888b89b000e31368b644e5ec0c07ba6b65a164718081fb` | Comparison release; relevant files byte-identical to CXG1 `[S]` |
 | Live FDT blob | `../../device-dump/private/gta4l-dump/live-fdt.dtb` | `da1cb76fcf9031de8ee2f1152456994220d3d01a2a2b73b211b684e92a0b6ebc` | Captured vendor FDT `[S]` |
 | Decompiled live DTS | `../../device-dump/private/gta4l-dump/live.dts` | `81c1865589df632ae76b77edd44eb9326b317f8abef471465504618636a9b629` | Text used for DT citations; not the booted blob `[S]` |
 
@@ -353,6 +367,7 @@ pin or discard those edits `[S]`.
 | Category | What it is | What it is not |
 | --- | --- | --- |
 | Current host-tested source | Probe, harness, simulator, oracle, counts and policy documents at the hashes above | Not a hardware, electrical or retention result `[S]` |
+| Official vendor kernel source | Samsung CXG1/CWI2 source archives, pinned by ZIP/tarball hash | Not the shipped binary, not a board schematic; the archive contains no vendor DTS `[S]/[U]` |
 | Previously booted controller-local image | Recorded v2 image hash and its controller-local result | Not reproduced by this tree and not a power result `[S]` |
 | Captured vendor DT | `live-fdt.dtb`/`live.dts` board description | Not proof of the XNU-time rail, pad or regulator state `[S]` |
 | Static firmware analysis | RPM LDOA resource tables, XBL boot PMIC settings and Mu-Silicium exit traces | Not runtime behavior; the RPM consumer/policy, PBS semantics, indirect effects and untraced callbacks remain `[U]` |
@@ -448,6 +463,7 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | `scripts/test-gta4l-sdccdxe-decode.py` (static PE/model check, separate from the diagnostic tests) | PASS: pinned SdccDxe SHA-256, handshake and pad instruction words, MOVZ-derived loop bounds, last-read and delayed-completion boundary cases, wrong-bound negative controls, captured-status selection, three non-aborting timeout paths, TLMM arithmetic, SDC1 pad decode and SDC2 CLK-pull field positions |
 | `scripts/test-gta4l-spmidxe-descriptor-base.py` (static PE/scan check, separate from the diagnostic tests) | PASS: pinned SPMIDxe SHA-256, `0x38b0` read/override words, `0x38c8` caller and `.data` layout, one `0x8878` read, no write intersecting `[0x8878,0x8880)`, resolved caller stores at `0x38bc`/`0x38f4`, 150 unresolved non-stack loads and 36 unresolved non-stack stores, explicit revisited-state/step/unsupported/call-depth/indirect-branch truncations, 64-bit ADD/SUB and effective-address wrapping with the demonstrated overflow regression, paired access/writeback and single/paired address-space-boundary controls, a boundary-crossing load that invalidates its derived store, ADR-to-XZR, and pointer-chain, overlap, partial-store, pre/post-index, call-clobber, XZR/SP, XZR-root, branch-separation, callee-conditional, revisit, stale-pointer, cross-call, truncation and decoder controls; all six result sets are unchanged from the audited `4c447b9` baseline in a site-level set comparison with zero added and zero removed records in accesses, stores, calls, boundaries, unresolved and clobbers |
 | Workflow token scoping (offline harness) | PASS: all 5 extracted patch strings attach the dummy token only to HTTPS GitHub hosts and strip it on cross-host redirects; no real token was used |
+| Official Samsung source comparison | PASS: CXG1/CWI2 ZIP and tarball hashes recorded; kernel 4.19.157; six relevant driver files byte-identical; no vendor DTS |
 | Hash-table self-check in §6 | `rows=36 mismatches=0` |
 | `porting.toml` parse with `tomllib` | 13 areas |
 | `git diff --check` | Clean |
@@ -467,3 +483,5 @@ device `[S]`.
   byte-identical to the booted drivers `[S]`.
 - No physical measurement exists; the measurement-dependent parts of `E1`–`E9`
   remain `[U]`.
+- The official vendor source is CXG1/CWI2, not the captured CXB1; source/binary
+  correspondence and the LineageOS-only card-detect blocks remain `[U]`.
