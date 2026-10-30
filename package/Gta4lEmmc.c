@@ -519,18 +519,28 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host, uint32_t io_request)
 		ack = 0;
 		if ((status & GTA4L_EMMC_PWRCTL_BUS_ON) != 0) {
 			/* Linux treats BUS_ON as an implicit IO-high
-			 * transition and acknowledges both completions. */
+			 * transition and acknowledges both completions. An
+			 * IO-low request in the same status overrides the
+			 * implied high level, in Linux handler order. */
 			ack |= GTA4L_EMMC_PWRCTL_ACK_BUS |
 			    GTA4L_EMMC_PWRCTL_ACK_IO;
 			bus_on_seen = 1;
-			if (io_request == GTA4L_EMMC_PWRCTL_IO_HIGH) {
+			if ((io_request == GTA4L_EMMC_PWRCTL_IO_HIGH) &&
+			    ((status & GTA4L_EMMC_PWRCTL_IO_LOW) == 0)) {
 				io_done = 1;
 			}
 		}
 		if ((status & (GTA4L_EMMC_PWRCTL_IO_HIGH |
 		    GTA4L_EMMC_PWRCTL_IO_LOW)) != 0) {
 			ack |= GTA4L_EMMC_PWRCTL_ACK_IO;
-			io_done = 1;
+			/* Only the level requested by HOST_CONTROL2
+			 * completes the transition. A wrong-level request is
+			 * still acknowledged, but the loop keeps waiting for
+			 * the requested level instead of accepting it. */
+			if ((io_request != 0) &&
+			    ((status & io_request) != 0)) {
+				io_done = 1;
+			}
 		}
 		gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_CORE_PWRCTL_CTL, ack);

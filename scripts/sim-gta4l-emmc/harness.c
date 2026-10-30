@@ -89,6 +89,8 @@ struct sim {
 	int power_io_only;
 	int power_delayed_bus;
 	int power_io_delayed;
+	int power_wrong_io;
+	int power_io_wrong_then_correct;
 	int power_churn;
 	int bus_acked;
 	int bus_delayed_emitted;
@@ -237,7 +239,8 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 					sim->bus_delayed_emitted = 1;
 				}
 			}
-			if ((sim->power_io_delayed != 0) &&
+			if (((sim->power_io_delayed != 0) ||
+			    (sim->power_io_wrong_then_correct != 0)) &&
 			    (sim->bus_acked != 0) &&
 			    (sim->io_delayed_emitted == 0)) {
 				sim->io_poll_count++;
@@ -683,11 +686,21 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 		sim->sdhci[offset + 1u] = (uint8_t)(value >> 8);
 		/* The controller raises an IO request only when the 1.8 V
 		 * signalling bit changes, matching the Linux
-		 * sdhci_msm_check_power_status() contract. */
+		 * sdhci_msm_check_power_status() contract. The wrong-io
+		 * scenarios deliberately raise the opposite level. */
 		if ((sim->power_io_delayed == 0) &&
 		    ((value & SIM_CTRL_VDD_180) !=
 		    (previous & SIM_CTRL_VDD_180))) {
-			if ((value & SIM_CTRL_VDD_180) != 0) {
+			if ((sim->power_wrong_io != 0) ||
+			    (sim->power_io_wrong_then_correct != 0)) {
+				if ((value & SIM_CTRL_VDD_180) != 0) {
+					sim->pwr_status |=
+					    GTA4L_EMMC_PWRCTL_IO_HIGH;
+				} else {
+					sim->pwr_status |=
+					    GTA4L_EMMC_PWRCTL_IO_LOW;
+				}
+			} else if ((value & SIM_CTRL_VDD_180) != 0) {
 				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_LOW;
 			} else {
 				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_HIGH;
@@ -920,6 +933,10 @@ main(int argc, char **argv)
 		sim.power_delayed_bus = 1;
 	} else if (scenario_is(scenario, "power-bus-then-io")) {
 		sim.power_io_delayed = 1;
+	} else if (scenario_is(scenario, "power-wrong-io")) {
+		sim.power_wrong_io = 1;
+	} else if (scenario_is(scenario, "power-wrong-io-then-correct")) {
+		sim.power_io_wrong_then_correct = 1;
 	} else if (scenario_is(scenario, "power-churn")) {
 		sim.power_churn = 1;
 	} else if (scenario_is(scenario, "data-sector-4k")) {
@@ -980,6 +997,7 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "read-last-block") ||
 	    scenario_is(scenario, "power-delayed-bus") ||
 	    scenario_is(scenario, "power-bus-then-io") ||
+	    scenario_is(scenario, "power-wrong-io-then-correct") ||
 	    scenario_is(scenario, "pad-switch-off") ||
 	    scenario_is(scenario, "signaling-3v3")) {
 		check(result == GTA4L_EMMC_OK, "initialization failed");
@@ -1109,6 +1127,21 @@ main(int argc, char **argv)
 			check(sim.io_poll_count >= 5u,
 			    "late IO request did not arrive after the quiet window");
 		}
+	} else if (scenario_is(scenario, "power-wrong-io-then-correct")) {
+		check(sim.bus_acked == 1,
+		    "bus power-on completion was not acknowledged");
+		check(sim.io_delayed_emitted == 1,
+		    "correct-level IO request was never handled");
+		check(sim.pwr_status == 0,
+		    "a power/IO request was left pending");
+		check(sim.card_clock_enabled == 1, "card clock not enabled");
+		check(sim.power_ack == GTA4L_EMMC_PWRCTL_ACK_IO,
+		    "last ack was not the correct-level IO acknowledgement");
+	} else if (scenario_is(scenario, "power-wrong-io")) {
+		check(result == GTA4L_EMMC_ERR_POWER,
+		    "wrong-level IO request was accepted");
+		check(sim.card_clock_enabled == 0,
+		    "card clock enabled after a wrong-level IO request");
 	} else if (scenario_is(scenario, "power-churn")) {
 		check(result == GTA4L_EMMC_ERR_POWER,
 		    "churned power loop did not fail");
