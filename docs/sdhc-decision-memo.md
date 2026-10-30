@@ -210,3 +210,13 @@ No device action is authorized by this memo `[S]`. Keep SDHCI bus power and the
 card clock off, do not acknowledge `CORE_PWRCTL_STATUS`, do not access PMIC/SPMI
 or send RPM votes, and do not scan candidate slaves `[S]`. The working RAM-root
 path stays unchanged `[S]`.
+
+## 8. Addendum 2026-10-30: consolidated power/pad report
+
+`docs/sdhc-power-pad-dependency-report.md` consolidates the remaining VCC/VCCQ,
+SDC1 pad, firmware-handoff, power-request/ack and sequencing/recovery
+dependencies. It records the booted `SdccDxe` controller-local handshake: the
+handler sets the bus-power bit, resets the controller, and acknowledges
+`IO_LOW` or `BUS_OFF | IO_LOW` after bounded polling, with no PMIC/LDO/RPM
+action. That is not a bus-power-on regulator sequence and does not close `E5`
+or `E8`. No `E*` or `S*` gate is closed; the decision remains **NO-GO** `[S]`.

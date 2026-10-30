@@ -21,6 +21,7 @@ stated), **[U]** unknown.
 | `device-dump/private/gta4l-dump/live.dts` | Captured vendor DT `[S]` |
 | `src/Mu-Silicium/Binaries/gta4l/...` (`SdccDxe.efi`, `uefiplat.cfg`) | Handoff exit path `[S]` |
 | `package/Gta4lSdhciHostInit.*`, `docs/sdhci-handoff-audit.md`, `docs/sdhci-host-init.md` | Current XNU state `[S]` |
+| `docs/sdhc-power-pad-dependency-report.md` | Consolidated power/pad dependencies and the next measurement-only step `[S]` |
 
 ## Summary table
 

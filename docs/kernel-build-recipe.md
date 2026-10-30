@@ -43,7 +43,7 @@ and the content-derived `LC_UUID` differ `[S]`.
 | Item | Value |
 | --- | --- |
 | Host | AlmaLinux 9.8, x86_64, Linux 5.14; Python 3.11.13 |
-| Device repository | `src/UniXNU-gta4l`, branch `bringup/sdhc-evidence`, HEAD `3c3d586dd1feb1d63ade4452800a4ccc7cbcee31` at the replay, with the replay edits uncommitted; the replay used a temporary historical HostInit source snapshot (§5), while the active tree carries the committed `bf2e7d4` source |
+| Device repository | `src/UniXNU-gta4l`, branch `bringup/sdhc-evidence`, HEAD `3c3d586dd1feb1d63ade4452800a4ccc7cbcee31` at the replay, with the replay edits uncommitted; the replay used the historical HostInit source as an uncommitted working-tree revert (§5), while the active tree now carries the committed `bf2e7d4` source |
 | UniXNU | `src/UniXNU`, HEAD `6ee4ada8a82f5bd2d9032b4d7cf033e878e0551f`; the tree's copies of the kernel scripts match this checkout |
 | XNU source | `src/UniXNU/out/feeds/xnu-b7545ced`, commit `d8b80295118ef25ac3a784134bcf95cd8e88109f`, clean |
 | Patch list | `OUT/xnu-patches.list`, 59 patches, SHA-256 `12b5e9e20ffd7462edebe46f6c7ea73d4a758a177519dac1e5c863d0fc94996d` |
