@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T06:36:23Z`, after the final edits to the
+Hashes were taken at `2026-10-30T06:40:16Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,17 +16,17 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `86631248aaefcf9535ee371c80522a4d6b812b77` |
-| Dirty entries at the hash snapshot | 4 modified (`docs/power-retention-evidence.md`, `scripts/analyze-gta4l-rpm-ldoa.py`, `scripts/test-gta4l-rpm-ldoa-analysis.py` and this baseline) |
+| HEAD | `3a9c1e2de400706b96256d60f940ecd0097bd66e` |
+| Dirty entries at the hash snapshot | 2 modified (`scripts/test-gta4l-rpm-ldoa-analysis.py` and this baseline) |
 | Staging and commits | None at the snapshot; the snapshot lands as one documentation and tooling commit |
 
 The current snapshot is the evidence branch after the RPM LDOA attribution,
-NativeEmmc credit and attribution-reconciliation commits, with the analyzer
-hardening (exact group-table entries, nonzero and unique boundary-entry checks,
-and literal-load destination and registration-setup checks) in the working
-tree. The hash table below describes that working tree, not the original
-evidence-closure tree. The original provenance is retained separately because
-the path lists and dirty inventory are historical observations.
+NativeEmmc credit, attribution-reconciliation, initial-hardening and
+registration-check commits, with the independent self-test inventory and the
+provenance correction in the working tree. The hash table below describes that
+working tree, not the original evidence-closure tree. The original provenance
+is retained separately because the path lists and dirty inventory are
+historical observations.
 
 ### Historical provenance
 
@@ -121,7 +121,7 @@ bytes of the previously booted image `[S]`.
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `501672b50a86319b7bd095a92b674c162ccc485963e510a708649aa985486c22` |
 | RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `d967e640ca8f6f7eb0607d0a51aea9b541b21901ed4bf5a0a3e9be090f2fa4a8` |
-| RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `2ed51876229ee9524d115ede43cdd4ee177cd65325c83c5d4a5be0c26348b69c` |
+| RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `f801d099753e69162126edb8898ca98248f82b2e5186e86abd724fb95b658b85` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
