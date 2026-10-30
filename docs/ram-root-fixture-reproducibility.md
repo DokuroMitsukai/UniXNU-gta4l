@@ -41,36 +41,67 @@ vendored.
 CDHash `b1a0da729f7704a9cd2dada7a05ebe8229b6f2d4`, the 9 verified pages and
 the root/trust-cache hashes.
 
-## 3. Host and tools
+The build uses the builder defaults `--identifier org.blu-sharky.ram-root-report`
+and `--test-size 12288`; only `--diagnostic fs-timer` is passed explicitly.
+
+## 3. Host, tools and pinned inputs
 
 | Item | Value |
 | --- | --- |
 | Host | AlmaLinux 9, x86_64, glibc |
 | Python | 3.11.13 (`python3.11 -B`) |
-| Compiler | system clang 21.1.8, `llvm-config` 21.1.8 |
-| Linker and Mach-O tools | cctools-port `1030.6.3-ld64-956.6` (ld64-956.6, `vtool`, `nm`, `lipo`, `libtool`) |
+| Compiler | `/usr/bin/clang-21`, clang 21.1.8; `llvm-config` 21.1.8 |
+| Linker and Mach-O tools | cctools-port tag `1030.6.3-ld64-956.6`, commit `904de2a71d4da6a9b30d2efaf912a10ddc7d9ddb`; ld64-956.6, `vtool`, `nm`, `lipo`, `libtool` |
+| libdispatch | `swift-6.4.0-RELEASE`, commit `024805abec6daa9cdda569fd736b9c7686dfd735` |
 | Signer | `rcodesign` 0.29.0, `x86_64-unknown-linux-musl` |
 | `rcodesign` release tarball | SHA-256 `dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002` |
 | `xcrun` | `scripts/linux/xcrun` shim |
 
-`scripts/linux/setup-toolchain.py` pins the cctools tag
-(`CCTOOLS_PORT_REF`) and is the authoritative source. Its full run also builds
-a patched LLVM, `mig`, `iig` and `lzfse` for the kernel; the fixture does not
-use those and needs only a clang plus cctools' `ld`, `vtool` and `nm`. The
-Linux `linux_env()` used by the builder requires every toolchain path to
-exist, so the unused tools are symlinked to `/usr/bin/true`.
+The shared UniXNU checkout used for the reproduction is commit
+`6ee4ada8a82f5bd2d9032b4d7cf033e878e0551f` (detached HEAD, clean tree). The
+device repository's `docs/build-revisions.md` retains a separate development
+integration pin; the hashes below identify the exact source bytes used here.
+
+| Input | SHA-256 |
+| --- | --- |
+| `scripts/build-ram-root-report-fixture.py` | `3dd4fa08576a20021569b0e1afc66e264f422827e33a25fe36d5e85cbd1c3c64` |
+| `scripts/qemu-entry/native-user.S` | `1e29e9405c670a7a65a222cf48a590497b10ba7f106b202909c2b99e179fe76f` |
+| `scripts/unixnu/kernel.py` | `b9b6e572f3ff9d7f62d7c10db9913b8993287ea41dbbb50011d13ee17f0f3271` |
+| `scripts/linux/setup-toolchain.py` | `9334e7994a64a0a5f59b40b8f36e08fd9eac08684c7ae8bce8d4afedd279c963` |
+| `scripts/linux/xcrun` | `8da8a494abd47a6d484c217ac074c1759792732f048ffce3f65c114c5d641576` |
+
+`scripts/linux/setup-toolchain.py` pins the cctools and libdispatch tags
+(`CCTOOLS_PORT_REF`, `LIBDISPATCH_REF`) and is the authoritative source. Its
+full run also builds a patched LLVM, `mig`, `iig` and `lzfse` for the kernel;
+the fixture does not use those and needs only a clang plus cctools' `ld`,
+`vtool` and `nm`. The Linux `linux_env()` used by the builder requires every
+toolchain path to exist, so the unused tools are symlinked to `/usr/bin/true`.
+That stub toolchain is **fixture-only**; it is not a kernel toolchain.
 
 ## 4. Recipe
 
-Run from `src/UniXNU`. First confirm the host dependencies:
+The recipe uses an empty prefix so it does not reuse a prepared toolchain.
+Run the blocks below in one shell; the variables persist and every failure
+aborts:
 
 ```sh
-python3.11 scripts/linux/setup-toolchain.py /tmp/opencode/toolchain-linux \
+set -eu
+SRC=/path/to/taba7unixnu/src/UniXNU
+PREFIX=/tmp/opencode/repro-fresh/toolchain-linux
+WORK=/tmp/opencode/repro-fresh/cctools-work
+cd "$SRC"
+sha256sum scripts/build-ram-root-report-fixture.py \
+  scripts/qemu-entry/native-user.S scripts/unixnu/kernel.py \
+  scripts/linux/setup-toolchain.py scripts/linux/xcrun
+python3.11 scripts/linux/setup-toolchain.py "$PREFIX" \
   --package-manager none --check
 ```
 
-Build the pinned cctools tools. The helper imports the supported installer
-and calls only its `cctools()` step:
+The `sha256sum` output must match the input table in §3.
+
+Build the pinned cctools tools. Save this helper as
+`/tmp/opencode/repro-fresh/build-cctools.py`; it imports the supported
+installer and calls only its `cctools()` step:
 
 ```python
 #!/usr/bin/env python3
@@ -78,8 +109,8 @@ import importlib.util
 from pathlib import Path
 
 SRC = Path('/path/to/taba7unixnu/src/UniXNU')
-PREFIX = Path('/tmp/opencode/toolchain-linux')
-WORK = Path('/tmp/opencode/cctools-work')
+PREFIX = Path('/tmp/opencode/repro-fresh/toolchain-linux')
+WORK = Path('/tmp/opencode/repro-fresh/cctools-work')
 
 spec = importlib.util.spec_from_file_location(
     'setup_toolchain', SRC / 'scripts/linux/setup-toolchain.py')
@@ -93,35 +124,46 @@ mod.cctools(clt, include, WORK, 8, mod.host_tools())
 ```
 
 ```sh
-python3.11 /tmp/opencode/build-cctools.py
-/tmp/opencode/toolchain-linux/CommandLineTools/usr/bin/ld -v
+python3.11 /tmp/opencode/repro-fresh/build-cctools.py
+"$PREFIX/CommandLineTools/usr/bin/ld" -v
+git -C "$WORK/cctools-port" rev-parse HEAD
+git -C "$WORK/swift-corelibs-libdispatch" rev-parse HEAD
 ```
 
-The second command reports `PROJECT:ld64-956.6`. Download and verify
-`rcodesign` 0.29.0:
+The linker reports `PROJECT:ld64-956.6`; the two commits must match §3.
+
+Download and verify `rcodesign` 0.29.0 in a subshell so the working
+directory does not change:
 
 ```sh
-mkdir -p /tmp/opencode/rcodesign-linux && cd /tmp/opencode/rcodesign-linux
-curl -fsSL -o rcodesign.tar.gz \
-  https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz
-curl -fsSL -o rcodesign.tar.gz.sha256 \
-  https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz.sha256
-printf '%s  rcodesign.tar.gz\n' "$(cat rcodesign.tar.gz.sha256)" | sha256sum -c -
-tar -xzf rcodesign.tar.gz
-chmod +x apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign
+mkdir -p /tmp/opencode/repro-fresh/rcodesign-linux
+(
+  cd /tmp/opencode/repro-fresh/rcodesign-linux
+  curl -fsSL -o rcodesign.tar.gz \
+    https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz
+  curl -fsSL -o rcodesign.tar.gz.sha256 \
+    https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz.sha256
+  printf '%s  rcodesign.tar.gz\n' "$(cat rcodesign.tar.gz.sha256)" | sha256sum -c -
+  tar -xzf rcodesign.tar.gz
+  chmod +x apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign
+)
 ```
 
 The release `.sha256` asset is a bare digest, so the filename is supplied to
-`sha256sum -c`. Create the shim toolchain:
+`sha256sum -c`. Create the shim toolchain. The `clang` symlink goes in
+`CommandLineTools/usr/bin` because `xcrun` resolves tools from
+`XNU_TOOLCHAIN_BIN`; the `llvm/bin/clang` entry only satisfies the
+`linux_env()` existence check.
 
 ```sh
-TC=/tmp/opencode/fixture-toolchain
+TC=/tmp/opencode/repro-fresh/fixture-toolchain
 mkdir -p "$TC/llvm/bin" "$TC/CommandLineTools/usr/bin" \
   "$TC/CommandLineTools/usr/libexec" "$TC/XcodeDefault.xctoolchain/usr/bin" "$TC/bin"
-ln -sf "$(command -v clang)" "$TC/llvm/bin/clang"
-ln -sf /tmp/opencode/toolchain-linux/CommandLineTools/usr/bin/ld "$TC/CommandLineTools/usr/bin/ld"
-ln -sf /tmp/opencode/toolchain-linux/CommandLineTools/usr/bin/vtool "$TC/CommandLineTools/usr/bin/vtool"
-ln -sf /tmp/opencode/toolchain-linux/CommandLineTools/usr/bin/nm "$TC/CommandLineTools/usr/bin/nm"
+ln -sf /usr/bin/clang-21 "$TC/llvm/bin/clang"
+ln -sf /usr/bin/clang-21 "$TC/CommandLineTools/usr/bin/clang"
+ln -sf "$PREFIX/CommandLineTools/usr/bin/ld" "$TC/CommandLineTools/usr/bin/ld"
+ln -sf "$PREFIX/CommandLineTools/usr/bin/vtool" "$TC/CommandLineTools/usr/bin/vtool"
+ln -sf "$PREFIX/CommandLineTools/usr/bin/nm" "$TC/CommandLineTools/usr/bin/nm"
 ln -sf /usr/bin/true "$TC/CommandLineTools/usr/bin/xnu-host-cc"
 ln -sf /usr/bin/true "$TC/CommandLineTools/usr/libexec/migcom"
 ln -sf /usr/bin/true "$TC/XcodeDefault.xctoolchain/usr/bin/iig"
@@ -130,30 +172,45 @@ cp scripts/linux/xcrun "$TC/bin/xcrun"
 chmod +x "$TC/bin/xcrun"
 ```
 
-Build the fixture against the gta4l output tree:
+Confirm that `xcrun` resolves the pinned compiler, not a `PATH` fallback:
+
+```sh
+PATH="$TC/CommandLineTools/usr/bin:$TC/bin:$PATH" \
+XNU_TOOLCHAIN_BIN="$TC/CommandLineTools/usr/bin $TC/XcodeDefault.xctoolchain/usr/bin" \
+xcrun --find clang
+PATH="$TC/CommandLineTools/usr/bin:$TC/bin:$PATH" \
+XNU_TOOLCHAIN_BIN="$TC/CommandLineTools/usr/bin $TC/XcodeDefault.xctoolchain/usr/bin" \
+xcrun clang --version | head -1
+```
+
+The first command must print `$TC/CommandLineTools/usr/bin/clang`; the second
+must report clang 21.1.8. Build the fixture against the gta4l output tree;
+the defaults supply the identifier and the 12,288-byte test file:
 
 ```sh
 python3.11 -B scripts/build-ram-root-report-fixture.py \
-  --output /tmp/opencode/fixture-fs-timer-linux \
-  --tree out/gta4l/ipados-17.7.11-21H461/gta4l/tree \
+  --output /tmp/opencode/repro-fresh/fixture-out \
+  --tree "$SRC/out/gta4l/ipados-17.7.11-21H461/gta4l/tree" \
   --toolchain "$TC" \
-  --rcodesign /tmp/opencode/rcodesign-linux/apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign \
+  --rcodesign /tmp/opencode/repro-fresh/rcodesign-linux/apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign \
   --diagnostic fs-timer
 ```
 
-Compare every output:
+Compare every output with `set -e` still active:
 
 ```sh
-cd /path/to/taba7unixnu
-NEW=/tmp/opencode/fixture-fs-timer-linux
-HIST=out/gta4l/ram-root-fs-timer-evidence
-cmp "$NEW/user.o" out/gta4l/ram-root-sdhci-v5-evidence/user.o
-cmp "$NEW/launchd-static.macho" out/gta4l/ram-root-sdhci-v5-evidence/launchd-static.macho
+NEW=/tmp/opencode/repro-fresh/fixture-out
+ROOT=/path/to/taba7unixnu
+HIST="$ROOT/out/gta4l/ram-root-fs-timer-evidence"
+cmp "$NEW/user.o" "$ROOT/out/gta4l/ram-root-sdhci-v5-evidence/user.o"
+cmp "$NEW/launchd-static.macho" "$ROOT/out/gta4l/ram-root-sdhci-v5-evidence/launchd-static.macho"
 for f in launchd.macho trustcache.bundle trustcache.json root.img addresses.json fixture.json; do
-  cmp "$NEW/$f" "$HIST/$f" || exit 1
+  cmp "$NEW/$f" "$HIST/$f"
 done
 sha256sum "$NEW"/*
 ```
+
+Any `cmp` mismatch returns nonzero and stops the recipe.
 
 The builder prints benign warnings for the unknown Apple-only
 `-Wno-unused-but-set-global` option, the missing
@@ -183,6 +240,19 @@ reproduction path.
   bytes. The exact versions above are part of the reproduction.
 - cctools-port and `rcodesign` are third-party builds pinned by tag and release
   digest; the cctools source is fetched from GitHub at that tag.
+- The stub toolchain is fixture-only. It is not a kernel toolchain; do not use
+  it for `./unixnu build kernel`, which needs the real `mig`, `iig`, `lzfse`,
+  `xnu-host-cc` and the patched LLVM.
+- The source pins describe the shared checkout at the recorded revision. A
+  different revision may change the builder or fixture source and therefore
+  the bytes.
 - `/tmp/opencode/` artifacts are volatile and are not vendored. Rebuild them
   with this recipe before relying on the comparison.
 - The recipe is host-only: it does not build, flash, boot or access a device.
+
+## 7. Replay record
+
+The corrected recipe was replayed from an empty prefix on 2026-10-30. The
+preflight resolved `$TC/CommandLineTools/usr/bin/clang` (clang 21.1.8), the
+cctools and libdispatch commits matched §3, and all eight outputs matched. A
+deliberately corrupted copy failed the comparison block with a nonzero status.
