@@ -18,7 +18,7 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 40 scenarios and 16 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 45 scenarios and 19 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -80,14 +80,23 @@ interrupts and higher-speed modes.
    exhausting the retries is a failure. `BUS_ON` is acknowledged with both
    `BUS_SUCCESS` and `IO_SUCCESS`, matching Linux, which treats bus-on as an
    implicit IO-high transition. IO-low/high is acknowledged with `IO_SUCCESS`.
-5. Track completion explicitly: success requires an observed `BUS_ON` and,
-   when the `HOST_CONTROL2` write changed `VDD_180`, an observed IO request at
-   the requested level (IO-low for 1.8 V, IO-high for 3.3 V). A wrong-level IO
-   request is acknowledged but does not satisfy the transition; the loop keeps
-   waiting. A zero status read no longer counts as IO completion on its own,
-   and an IO request that arrives late is handled before the card clock starts.
-   An IO-only request is `GTA4L_EMMC_ERR_POWER`, not a completed bus power-on.
-   A request that remains set after the acknowledgement is also a failure.
+5. Track the latest acknowledged IO level, not a one-way "seen" flag. Within a
+   status word apply the Linux handler order: `BUS_ON` implies IO-high, an
+   IO-low request overrides it, and an IO-high request overrides IO-low.
+   Success requires the latest level to equal the level requested by the
+   `HOST_CONTROL2` `VDD_180` write (IO-low for 1.8 V, IO-high for 3.3 V). A
+   later opposite level, a later standalone `BUS_ON` or contradictory bits
+   therefore invalidate an earlier completion and the loop keeps waiting.
+   If the `VDD_180` bit did not change, no IO request is due, but success still
+   accepts only an unobserved (zero) level or the desired level; a wrong level
+   raised later is not excused by the unchanged bit. The acknowledgement
+   reports completion and does not clear the request latches: only
+   `CORE_PWRCTL_CLEAR` does, so a request raised between clear and ack is still
+   observed. Wrong-level requests are acknowledged but do not complete the
+   transition. A zero status read alone is not completion; a late request is
+   handled before the card clock starts. An IO-only request is
+   `GTA4L_EMMC_ERR_POWER`, not a completed bus power-on. A request that remains
+   set after the acknowledgement is also a failure.
 6. If the loop reaches its iteration limit without a quiet read after both
    completions, return `GTA4L_EMMC_ERR_POWER`; exhaustion is never a success.
    The ack is a controller-local software ack, not a measurement of the rail.
@@ -169,8 +178,11 @@ It covers:
 - an IO-only power request, a delayed bus request, a bus-then-IO sequence whose
   late IO request arrives after the old quiet window, a wrong-level IO request
   that never becomes correct, a wrong-level request followed by the correct
-  level, and a churn case where requests never stop so the loop must fail on
-  exhaustion;
+  level, a correct level followed by a later wrong level, a later standalone
+  `BUS_ON` after a completed IO-low transition, a status word with both IO
+  levels, an unchanged `VDD_180` followed by a standalone `BUS_ON`, a
+  wrong-level request injected on the ack write, and a churn case where
+  requests never stop so the loop must fail on exhaustion;
 - a bus-only request (no `VDD_180` change) whose acknowledgement must still be
   `BUS_SUCCESS | IO_SUCCESS`, matching Linux;
 - a 4 KiB `DATA_SECTOR_SIZE` card;
@@ -183,8 +195,9 @@ It covers:
   disabled polling status, the raw long-response layout, a missing bus-on
   requirement, a bus-only acknowledgement that omits `IO_SUCCESS`, a missing
   IO-completion requirement, a wrong-level IO request accepted as completion,
-  a power loop that treats exhaustion as success and a missing 4 KiB sector
-  check.
+  a first-level-wins sticky level, opposite IO bits accepted as completion, an
+  unchanged-bit level shortcut, a power loop that treats exhaustion as success
+  and a missing 4 KiB sector check.
 
 The test also checks the source policy: only the injected ops are used, the core
 contains no DMA, CQE, ICE, tuning or card-write command, the poll loops use the
@@ -246,7 +259,7 @@ python3.11 -B scripts/build-gta4l-diagnostic-payload.py \
 python3.11 -B scripts/package-gta4l-diagnostic.py \
   --baseline ../../out/gta4l/boot/boot-ram-root-sdhci-v5.img \
   --payload ../../out/gta4l/ram-root-emmc-probe-evidence/payload.img \
-  --payload-sha256 e3c49c4bdcfb34523c37bdab26f1810c26f343650aa651dcbd98d42cd868e77a \
+  --payload-sha256 2953e90220f1e2d9341fc154f3f2eb6523ab2539be68404a3beffa8ee4702633 \
   --expect-diagnostic emmc-probe-2 \
   --output ../../out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img \
   --manifest ../../out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.json
@@ -254,9 +267,9 @@ python3.11 -B scripts/package-gta4l-diagnostic.py \
 
 | Artifact | Bytes | SHA-256 |
 | --- | --- | --- |
-| `kernel.macho` | 51,081,216 | `43bb89f235955dde708801353399d51ae71f95ba1054c2abe8bb92fa2d9a08a7` |
-| `payload.img` (80 MiB, stage 2) | 83,886,080 | `e3c49c4bdcfb34523c37bdab26f1810c26f343650aa651dcbd98d42cd868e77a` |
-| `boot-ram-root-emmc-probe-stage2.img` | 85,688,320 | `278651bdde382949aedae9b508789f8ef393279d77b2a54bac20d9387d7919a6` |
+| `kernel.macho` | 51,081,216 | `1a4710892e49fa96c053de8f33f1b4b5d89a36fc3d688febd6fa0f7e4a89003a` |
+| `payload.img` (80 MiB, stage 2) | 83,886,080 | `2953e90220f1e2d9341fc154f3f2eb6523ab2539be68404a3beffa8ee4702633` |
+| `boot-ram-root-emmc-probe-stage2.img` | 85,688,320 | `4f2252df6bbd5d9c7f05ef97c0041da9acdc47212debf31a10334aefa45a12e5` |
 
 The payload contract is 7/7 and the boot-image gate is 18/18. The payload's
 kernel arguments include `gta4l-emmc-probe=2`. The image has not been flashed;

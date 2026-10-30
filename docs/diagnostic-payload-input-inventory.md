@@ -241,8 +241,8 @@ The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2` and
 2026-10-31 is
 `out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img`
 (85,688,320 bytes, SHA-256
-`278651bdde382949aedae9b508789f8ef393279d77b2a54bac20d9387d7919a6`). Its payload
-is SHA-256 `e3c49c4bdcfb34523c37bdab26f1810c26f343650aa651dcbd98d42cd868e77a`;
+`4f2252df6bbd5d9c7f05ef97c0041da9acdc47212debf31a10334aefa45a12e5`). Its payload
+is SHA-256 `2953e90220f1e2d9341fc154f3f2eb6523ab2539be68404a3beffa8ee4702633`;
 the payload contract is 7/7 and the boot-image gate is 18/18. It is a host-built
 artifact with `hardware_tested=false` and has not been flashed.
 

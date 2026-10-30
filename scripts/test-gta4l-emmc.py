@@ -50,6 +50,11 @@ SCENARIOS = [
     'power-bus-then-io',
     'power-wrong-io',
     'power-wrong-io-then-correct',
+    'power-late-bus-only',
+    'power-io-then-wrong',
+    'power-opposite-io',
+    'power-unchanged-1v8-bus-only',
+    'power-wrong-io-on-ack',
     'power-churn',
     'data-sector-4k',
     'cmd-timeout',
@@ -145,15 +150,23 @@ def check_source() -> None:
     assert 'gta4l_emmc_read_long_response' in core, \
         'SDHCI long-response normalization missing'
     assert 'bus_on_seen' in core, 'bus-on completion tracking missing'
-    assert 'io_done' in core, 'IO-completion tracking missing'
+    assert 'io_level' in core, 'latest IO-level tracking missing'
     assert 'io_request' in core, \
         'HOST_CONTROL2 IO-transition tracking missing'
     assert 'settled' in core, 'quiet-window completion tracking missing'
+    assert 'io_desired' in core, 'desired IO level tracking missing'
+    assert ('(io_request == 0) && (io_level == 0)') in core, \
+        'unchanged VDD_180 must still reject an observed wrong level'
     assert ('GTA4L_EMMC_PWRCTL_ACK_BUS |\n\t\t\t    '
             'GTA4L_EMMC_PWRCTL_ACK_IO;') in core, \
         'BUS_ON must acknowledge both BUS and IO completion'
-    assert '(status & io_request) != 0' in core, \
-        'IO completion must match the requested level'
+    assert '(io_level == io_desired)' in core, \
+        'IO completion must compare the latest level with the desired level'
+    io_low = core.index('io_level = GTA4L_EMMC_PWRCTL_IO_LOW;')
+    io_high = core.index('io_level = GTA4L_EMMC_PWRCTL_IO_HIGH;',
+                         io_low)
+    assert io_low < io_high, \
+        'IO_HIGH must follow IO_LOW in the Linux handler order'
     assert 'data_sector_size_4k != 0' in core, \
         '4 KiB data-sector rejection missing'
     assert 'host->pad_pwr_switch' in core, 'explicit pad policy missing'
@@ -192,7 +205,9 @@ def check_source() -> None:
                   'power_delayed_bus', 'power_io_delayed', 'data_sector_4k',
                   'power_churn', 'io_delayed_emitted', 'io_poll_count',
                   'last_clear', 'power_wrong_io',
-                  'power_io_wrong_then_correct'):
+                  'power_io_wrong_then_correct', 'power_late_bus_only',
+                  'power_io_then_wrong', 'power_opposite_io',
+                  'power_io_on_ack', 'ack_io_injected'):
         assert token in harness, f'harness missing {token}'
     assert 'previous & SIM_CTRL_VDD_180' in harness, \
         'simulator does not model the VDD_180 transition'
@@ -320,11 +335,14 @@ def main() -> int:
              'offset = GTA4L_EMMC_REG_RESPONSE + index * 4u;',
              'Gta4lEmmc.c', (), 'success'),
             ('no-bus-on-required',
-             '\t\t\tif ((bus_on_seen != 0) && (io_done != 0)) {\n'
+             '\t\t\tif ((bus_on_seen != 0) &&\n'
+             '\t\t\t    ((io_level == io_desired) ||\n'
+             '\t\t\t    ((io_request == 0) && (io_level == 0)))) {\n'
              '\t\t\t\tsettled = 1;\n'
              '\t\t\t\tbreak;\n'
              '\t\t\t}\n',
-             '\t\t\tif (io_done != 0) {\n'
+             '\t\t\tif ((io_level == io_desired) ||\n'
+             '\t\t\t    ((io_request == 0) && (io_level == 0))) {\n'
              '\t\t\t\tsettled = 1;\n'
              '\t\t\t\tbreak;\n'
              '\t\t\t}\n'
@@ -336,7 +354,9 @@ def main() -> int:
              '\t\t\tack |= GTA4L_EMMC_PWRCTL_ACK_BUS;\n',
              'Gta4lEmmc.c', (), 'signaling-3v3'),
             ('no-io-completion',
-             '\t\t\tif ((bus_on_seen != 0) && (io_done != 0)) {\n'
+             '\t\t\tif ((bus_on_seen != 0) &&\n'
+             '\t\t\t    ((io_level == io_desired) ||\n'
+             '\t\t\t    ((io_request == 0) && (io_level == 0)))) {\n'
              '\t\t\t\tsettled = 1;\n'
              '\t\t\t\tbreak;\n'
              '\t\t\t}\n',
@@ -344,24 +364,61 @@ def main() -> int:
              '\t\t\t\tsettled = 1;\n'
              '\t\t\t\tbreak;\n'
              '\t\t\t}\n'
-             '\t\t\t(void)io_done;\n',
+             '\t\t\t(void)io_request;\n',
              'Gta4lEmmc.c', (), 'power-bus-then-io'),
             ('wrong-io-accepted',
-             '\t\t\tif ((io_request != 0) &&\n'
-             '\t\t\t    ((status & io_request) != 0)) {\n'
-             '\t\t\t\tio_done = 1;\n'
+             '\t\t\tif ((bus_on_seen != 0) &&\n'
+             '\t\t\t    ((io_level == io_desired) ||\n'
+             '\t\t\t    ((io_request == 0) && (io_level == 0)))) {\n'
+             '\t\t\t\tsettled = 1;\n'
+             '\t\t\t\tbreak;\n'
              '\t\t\t}\n',
-             '\t\t\tio_done = 1;\n',
+             '\t\t\tif ((bus_on_seen != 0) && (io_level != 0)) {\n'
+             '\t\t\t\tsettled = 1;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n'
+             '\t\t\t(void)io_request;\n',
              'Gta4lEmmc.c', (), 'power-wrong-io'),
+            ('unchanged-level-ignored',
+             '\t\t\tif ((bus_on_seen != 0) &&\n'
+             '\t\t\t    ((io_level == io_desired) ||\n'
+             '\t\t\t    ((io_request == 0) && (io_level == 0)))) {\n'
+             '\t\t\t\tsettled = 1;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n',
+             '\t\t\tif ((bus_on_seen != 0) &&\n'
+             '\t\t\t    ((io_request == 0) ||\n'
+             '\t\t\t    (io_level == io_desired))) {\n'
+             '\t\t\t\tsettled = 1;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n',
+             'Gta4lEmmc.c', (), 'power-unchanged-1v8-bus-only'),
+            ('first-level-wins',
+             '\t\tif ((status & GTA4L_EMMC_PWRCTL_IO_HIGH) != 0) {\n'
+             '\t\t\tack |= GTA4L_EMMC_PWRCTL_ACK_IO;\n'
+             '\t\t\tio_level = GTA4L_EMMC_PWRCTL_IO_HIGH;\n'
+             '\t\t}\n',
+             '\t\tif ((status & GTA4L_EMMC_PWRCTL_IO_HIGH) != 0) {\n'
+             '\t\t\tack |= GTA4L_EMMC_PWRCTL_ACK_IO;\n'
+             '\t\t\tif (io_level == 0) {\n'
+             '\t\t\t\tio_level = GTA4L_EMMC_PWRCTL_IO_HIGH;\n'
+             '\t\t\t}\n'
+             '\t\t}\n',
+             'Gta4lEmmc.c', (), 'power-io-then-wrong'),
+            ('opposite-bits-accepted',
+             '\t\tif ((status & GTA4L_EMMC_PWRCTL_IO_HIGH) != 0) {\n',
+             '\t\tif (((status & GTA4L_EMMC_PWRCTL_IO_HIGH) != 0) &&\n'
+             '\t\t    ((status & GTA4L_EMMC_PWRCTL_IO_LOW) == 0)) {\n',
+             'Gta4lEmmc.c', (), 'power-opposite-io'),
             ('exhaustion-success',
              '\tif (settled == 0) {\n'
              '\t\t/* The loop must end on a quiet window with both completions\n'
              '\t\t * observed; exhaustion is a power failure. */\n'
-             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_request, io_done);\n'
+             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_desired, io_level);\n'
              '\t\treturn GTA4L_EMMC_ERR_POWER;\n'
              '\t}\n',
              '\tif (settled == 0) {\n'
-             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_request, io_done);\n'
+             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_desired, io_level);\n'
              '\t}\n',
              'Gta4lEmmc.c', (), 'power-churn'),
             ('no-4k-reject',

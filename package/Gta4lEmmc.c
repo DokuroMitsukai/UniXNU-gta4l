@@ -450,7 +450,8 @@ gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
 }
 
 static int
-gta4l_emmc_power_on(struct gta4l_emmc_host *host, uint32_t io_request)
+gta4l_emmc_power_on(struct gta4l_emmc_host *host, uint32_t io_request,
+    uint32_t io_desired)
 {
 	uint32_t status;
 	uint32_t clear;
@@ -459,15 +460,13 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host, uint32_t io_request)
 	uint32_t index;
 	uint32_t attempt;
 	int bus_on_seen = 0;
-	int io_done;
+	uint32_t io_level = 0;
 	int settled = 0;
 	int cleared;
 
 	/* The HOST_CONTROL2 write requested this IO level. A zero value means
 	 * the signalling bit did not change, so the controller raises no IO
 	 * request and the level is already the requested one. */
-	io_done = (io_request == 0) ? 1 : 0;
-
 	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_POWER_CONTROL,
 	    GTA4L_EMMC_POWER_BUS_POWER | GTA4L_EMMC_POWER_3V3);
@@ -488,7 +487,14 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host, uint32_t io_request)
 			return GTA4L_EMMC_ERR_POWER;
 		}
 		if (status == 0) {
-			if ((bus_on_seen != 0) && (io_done != 0)) {
+			/* A requested transition must reach the desired level.
+			 * When the VDD_180 bit did not change, no request is
+			 * due, but an observed wrong level still blocks
+			 * success; only an untouched (zero) level or the
+			 * desired level is acceptable. */
+			if ((bus_on_seen != 0) &&
+			    ((io_level == io_desired) ||
+			    ((io_request == 0) && (io_level == 0)))) {
 				settled = 1;
 				break;
 			}
@@ -517,30 +523,26 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host, uint32_t io_request)
 		}
 
 		ack = 0;
+		/* Apply the Linux handler order: BUS_ON implies IO-high, an
+		 * IO-low request overrides it, and an IO-high request overrides
+		 * IO-low. The latest acknowledged level replaces the previous
+		 * one, so a later opposite or standalone bus request
+		 * invalidates an earlier completion. */
 		if ((status & GTA4L_EMMC_PWRCTL_BUS_ON) != 0) {
 			/* Linux treats BUS_ON as an implicit IO-high
-			 * transition and acknowledges both completions. An
-			 * IO-low request in the same status overrides the
-			 * implied high level, in Linux handler order. */
+			 * transition and acknowledges both completions. */
 			ack |= GTA4L_EMMC_PWRCTL_ACK_BUS |
 			    GTA4L_EMMC_PWRCTL_ACK_IO;
 			bus_on_seen = 1;
-			if ((io_request == GTA4L_EMMC_PWRCTL_IO_HIGH) &&
-			    ((status & GTA4L_EMMC_PWRCTL_IO_LOW) == 0)) {
-				io_done = 1;
-			}
+			io_level = GTA4L_EMMC_PWRCTL_IO_HIGH;
 		}
-		if ((status & (GTA4L_EMMC_PWRCTL_IO_HIGH |
-		    GTA4L_EMMC_PWRCTL_IO_LOW)) != 0) {
+		if ((status & GTA4L_EMMC_PWRCTL_IO_LOW) != 0) {
 			ack |= GTA4L_EMMC_PWRCTL_ACK_IO;
-			/* Only the level requested by HOST_CONTROL2
-			 * completes the transition. A wrong-level request is
-			 * still acknowledged, but the loop keeps waiting for
-			 * the requested level instead of accepting it. */
-			if ((io_request != 0) &&
-			    ((status & io_request) != 0)) {
-				io_done = 1;
-			}
+			io_level = GTA4L_EMMC_PWRCTL_IO_LOW;
+		}
+		if ((status & GTA4L_EMMC_PWRCTL_IO_HIGH) != 0) {
+			ack |= GTA4L_EMMC_PWRCTL_ACK_IO;
+			io_level = GTA4L_EMMC_PWRCTL_IO_HIGH;
 		}
 		gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_CORE_PWRCTL_CTL, ack);
@@ -557,7 +559,7 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host, uint32_t io_request)
 	if (settled == 0) {
 		/* The loop must end on a quiet window with both completions
 		 * observed; exhaustion is a power failure. */
-		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_request, io_done);
+		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_desired, io_level);
 		return GTA4L_EMMC_ERR_POWER;
 	}
 	return GTA4L_EMMC_OK;
@@ -596,6 +598,7 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 {
 	uint32_t version;
 	uint32_t vendor;
+	uint32_t io_desired;
 	uint32_t io_request;
 	uint16_t control2;
 	int result;
@@ -651,11 +654,12 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 	 * quiet status window. */
 	control2 = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_HOST_CONTROL2);
+	io_desired = (host->fixed_1v8 != 0) ?
+	    GTA4L_EMMC_PWRCTL_IO_LOW : GTA4L_EMMC_PWRCTL_IO_HIGH;
 	io_request = 0;
 	if (((control2 & GTA4L_EMMC_HOST_CONTROL2_VDD_180) != 0) !=
 	    (host->fixed_1v8 != 0)) {
-		io_request = (host->fixed_1v8 != 0) ?
-		    GTA4L_EMMC_PWRCTL_IO_LOW : GTA4L_EMMC_PWRCTL_IO_HIGH;
+		io_request = io_desired;
 	}
 	control2 &= ~(GTA4L_EMMC_HOST_CONTROL2_UHS_MASK |
 	    GTA4L_EMMC_HOST_CONTROL2_TUNING);
@@ -690,7 +694,7 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
-	result = gta4l_emmc_power_on(host, io_request);
+	result = gta4l_emmc_power_on(host, io_request, io_desired);
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
