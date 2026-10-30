@@ -23,8 +23,12 @@ partition layout, payload policy and packaging.
   with `sheng-pmgr=2` and no AMFI bypass reaches `_bsd_init`,
   `_sheng_pmgr_run` and `_IOKitBSDInit`, then stalls at `_ml_get_timebase`
   before `_vfs_mountroot`. This is host evidence, not a tablet boot.
-- The firmware builds with `ENABLE_SECUREBOOT=1`. No boot image or payload has
-  been produced from this kernel yet.
+- The firmware builds with `ENABLE_SECUREBOOT=1`. The PMGR-linked kernel was
+  packaged into the RAM-root fs/timer diagnostic image
+  (`c12e601e…`, 85,688,320 bytes), flashed and passed on the tablet as a
+  bounded fixture; this is not a normal-userspace boot. The fixture artifacts
+  reproduce byte-for-byte on Linux; see
+  [docs/ram-root-fixture-reproducibility.md](docs/ram-root-fixture-reproducibility.md).
 - Display, input, storage, power, GPU and network drivers remain unimplemented
   or unvalidated.
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port

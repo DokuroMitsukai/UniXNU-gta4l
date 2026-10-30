@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T06:48:14Z`, after the final edits to the
+Hashes were taken at `2026-10-30T07:34:09Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,17 +16,17 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `1b073315a3cc7d5f87fbe07bccd5ba1261d5295b` |
-| Dirty entries at the hash snapshot | 3 modified (`docs/power-retention-evidence.md`, `scripts/test-gta4l-rpm-ldoa-analysis.py` and this baseline) |
+| HEAD | `1ef3792e0a396b9d46d1ce4c9854c37ad9770a45` |
+| Dirty entries at the hash snapshot | 4 modified (`README.md`, `docs/build-revisions.md`, `porting.toml` and this baseline) and 1 untracked (`docs/ram-root-fixture-reproducibility.md`) |
 | Staging and commits | None at the snapshot; the snapshot lands as one documentation and tooling commit |
 
 The current snapshot is the evidence branch after the RPM LDOA attribution,
-NativeEmmc credit, attribution-reconciliation, initial-hardening and
-registration-check commits, with the independent self-test inventory,
-exhaustive per-site negative controls and the provenance correction in the
-working tree. The hash table below describes that working tree, not the
-original evidence-closure tree. The original provenance is retained separately
-because the path lists and dirty inventory are historical observations.
+NativeEmmc credit, attribution-reconciliation, hardening, registration-check
+and exhaustive-code-site commits, with the Linux fixture-reproduction record
+and the stale-status reconciliation in the working tree. The hash table below
+describes that working tree, not the original evidence-closure tree. The
+original provenance is retained separately because the path lists and dirty
+inventory are historical observations.
 
 ### Historical provenance
 
@@ -125,10 +125,11 @@ bytes of the previously booted image `[S]`.
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
-| Repository README | `README.md` | `3b873529003e533565586e48f31619b1b89c85419b28b96494b803633ccf2375` |
+| Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `0cd77f3577916d4d7c97441313b967029c73cfd238dc7ad083fd72ed352a6412` |
+| Porting record | `porting.toml` | `9771164882e042b33875483655c386b85b418e954a17fc838ce507cb0448a128` |
+| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `a1a9f71fb2948dc6ef992b94a2e5e580c8a290ced230577107faf1fcea2fc9ac` |
 
 ## 3. Pinned Linux source cache
 
@@ -231,7 +232,9 @@ sha256sum package/Gta4lSdhciHostInit.c package/Gta4lSdhciHostInit.h \
   docs/sdhc-electrical-contract.md docs/power-retention-evidence.md \
   docs/rpm-power-interface.md docs/pm6125-register-map.md \
   docs/sdhc-dependency-trace.md docs/firmware-handoff.md \
-  docs/stock-firmware-analysis-audit.md porting.toml \
+  docs/stock-firmware-analysis-audit.md README.md \
+  docs/emmc-reference.md docs/native-emmc-reference-audit.md \
+  docs/ram-root-fixture-reproducibility.md porting.toml \
   scripts/analyze-gta4l-rpm-ldoa.py scripts/test-gta4l-rpm-ldoa-analysis.py
 ( cd /tmp/opencode/linux-verify && sha256sum * | sort -k2 | sha256sum )
 python3.11 -B scripts/test-gta4l-sdhci-host-init.py
@@ -247,6 +250,26 @@ The analyzer command needs the private `rpm.img`; it refuses a different image
 hash unless `--expect-sha256` is given explicitly. `--code` checks the
 documented Thumb call sites, literals, destination registers, registration
 setup and class registration. The self-test uses only a synthetic image `[S]`.
+
+The `fs-timer` fixture reproduction is recorded in
+`docs/ram-root-fixture-reproducibility.md`; it rebuilds the signed fixture,
+trust cache and root image byte-for-byte with the pinned cctools-port and
+`rcodesign` versions. The hash table above can be checked mechanically:
+
+```sh
+python3.11 - <<'PY'
+import hashlib, pathlib, re
+text = pathlib.Path('docs/evidence-baseline.md').read_text()
+rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
+bad = [(path, hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest(), want)
+       for path, want in rows
+       if hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest() != want]
+print(f'rows={len(rows)} mismatches={len(bad)}')
+for path, got, want in bad:
+    print(f'{path}: {got} != {want}')
+raise SystemExit(1 if bad else 0)
+PY
+```
 
 The host checks are read-only and do not build, flash, boot, power or access a
 device `[S]`.

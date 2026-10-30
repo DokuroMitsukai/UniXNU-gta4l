@@ -82,7 +82,7 @@ Run from `src/UniXNU` unless noted.
 | `python3 src/Mu-Silicium/Resources/Scripts/test_bootshim.py` | PASS |
 | `python3 scripts/check-gta4l.py` (device repo) | PASS |
 | `python3 scripts/qemu-smoke.py --help` (device repo) | PASS |
-| `./unixnu status --json -D ../UniXNU-gta4l` | PASS; base `4561854`, Format 2 output path, device branch `bringup/tab-a7-qemu-fixture` |
+| `./unixnu status --json -D ../UniXNU-gta4l` | PASS; `schema_version` 2, Format 2 output path and the configured arch/SoC/OS/device layers |
 | `python3 scripts/porting-record.py check --device ../UniXNU-gta4l` | PASS; 13 structured areas |
 | `dtc -I dts -O dtb -i ../UniXNU-sm6115-common/dts ...` | PASS |
 | `python3 scripts/make-adt.py --dtb ... --os-profile ... --board ../UniXNU-gta4l/board.toml ...` | PASS; 13,552-byte ADT with `/options`, NVRAM, crypto hash and AMFI platform code |
