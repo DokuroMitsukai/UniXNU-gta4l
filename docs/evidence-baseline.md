@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T09:23:41Z`, after the final edits to the
+Hashes were taken at `2026-10-30T09:32:34Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,15 +16,15 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `79275a50357e24c47eec3f9fc4fe8475cd6c81d2` |
-| Dirty entries at the hash snapshot | 1 modified (`docs/evidence-baseline.md`) and 1 untracked (`docs/diagnostic-payload-input-inventory.md`) |
+| HEAD | `5a25c00f23e761ed44ee6a6b624131c4d23f88df` |
+| Dirty entries at the hash snapshot | 3 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/evidence-baseline.md` and `docs/sdhc-decision-memo.md`) |
 | Staging and commits | None at the snapshot; the snapshot lands as one documentation commit |
 
 The current snapshot is the evidence branch after the Linux
-fixture-reproduction, stale-status reconciliation, recipe-correction and
-input-pin commits, with the diagnostic payload and boot-image input inventory
-in the working tree. The hash table below describes that working tree, not the
-original evidence-closure tree. The original provenance is retained separately
+fixture-reproduction, stale-status reconciliation, recipe-correction,
+input-pin and input-inventory commits, with the packaging replay and
+evidence-wording corrections in the working tree. The hash table below
+describes that working tree, not the original evidence-closure tree. The original provenance is retained separately
 because the path lists and dirty inventory are historical observations.
 
 ### Historical provenance
@@ -114,7 +114,7 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `f0dc6bb3e83bb41b55cd1eeae222065b71d988581a725001b2d48ae7b6309c1e` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `6dc5e9683ab832c2e32be77b03e61e779a7946e49b6d39417fd4bd15b033bd18` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
 | Retention evidence | `docs/power-retention-evidence.md` | `eb91725bd6a63acded9e63ca0673670f36b43a3253da15d8ec17cb67f0387e07` |
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
@@ -130,7 +130,7 @@ bytes of the previously booted image `[S]`.
 | Porting record | `porting.toml` | `9771164882e042b33875483655c386b85b418e954a17fc838ce507cb0448a128` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `ac75f2af3ff1a133222daae80a86f417d6310e115b3730d9e2ed482b9199d7b4` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `41031b0fa0752dd877666f122440d18a44b86982b47214dd2a81bf908a06cf7f` |
 
 ## 3. Pinned Linux source cache
 
@@ -198,9 +198,10 @@ manifest digest `[S]/[U]`.
 The local `SILICIUM_UEFI.fd` is **not** the booted image. It packages the same
 three driver PEs, but its outer and inner firmware volumes differ and its
 `DxeCore` is `f37f7d2b...` rather than the booted `f4aefa94...`
-(`firmware-handoff.md`). The booted artifact is absent from this checkout; its
-hash is a recorded provenance value, not a reproduction. Do not present the
-current tree or the local firmware volume as the previously booted image `[S]`.
+(`firmware-handoff.md`). The booted artifact is present locally in the
+gitignored output tree, not tracked by git; its hash is a recorded provenance
+value, not a reproduction. Do not present the current tree or the local
+firmware volume as the previously booted image `[S]`.
 
 Private firmware and device dumps are referenced by path and hash only; their
 contents are not duplicated in this repository `[S]`.
@@ -289,8 +290,8 @@ device `[S]`.
 - The pinned Linux cache has no `.git`; its revision is documented provenance,
   not a verifiable git checkout `[U]`.
 - The booted image is not tracked; the copy in the gitignored output tree
-  matches the recorded hash `[S]`, but its firmware and kernel inputs are not
-  reproducible from the current checkout `[U]`.
+  matches the recorded hash `[S]`, but reproduction of its firmware and kernel
+  inputs from the current checkout is not established `[U]`.
 - The local firmware volume is a different build; only the three driver PEs are
   byte-identical to the booted drivers `[S]`.
 - No physical measurement exists; the measurement-dependent parts of `E1`–`E9`

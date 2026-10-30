@@ -5,9 +5,10 @@ power or storage operation was performed. The SDHC decision remains
 **NO-GO** (`sdhc-decision-memo.md`).
 
 This document records the inputs, hashes, availability and host gates for the
-diagnostic payload and boot-image flow. It does **not** claim that the XNU
-kernel, the payload image or the boot image is reproducible from the RAM-root
-fixture replay. That replay reproduces the eight fixture outputs only
+diagnostic payload and boot-image flow. The packaging step has been replayed
+byte-for-byte for the audit and host-init images. This does **not** claim that
+the XNU kernel, the payload image or the boot image is reproducible from the
+RAM-root fixture replay. That replay reproduces the eight fixture outputs only
 (`ram-root-fixture-reproducibility.md`).
 
 Tags: `[S]` source- or artifact-established, `[C]` conditional inference,
@@ -176,7 +177,55 @@ python3.11 -B scripts/test-gta4l-ram-root-fixture-recipe.py          # pass
 The current Mu-Silicium FD also validates as 86 PE modules, but only 41 of its
 86 module hashes match the tested image `[S]`.
 
-## 7. Missing and unreproducible inputs
+### Packaging replay
+
+On 2026-10-30 the audit and host-init images were repackaged from the pinned
+v5 baseline and the existing payloads into a fresh `mktemp` directory under
+`/tmp/opencode/`. Both outputs are byte-identical to the historical images:
+
+| Replay | Output SHA-256 | Comparison | Boot gate | Payload gate |
+| --- | --- | --- | --- | --- |
+| Audit v2 | `a34519c66820eb5f1f4c4790be5e10233ffd4c8a4ece2df4768e7dca151c8546` | `cmp` identical | 18/18 | 7/7 |
+| Host-init v2 | `d4aee57a9d1874d23dc010b7de43384ace6ab29241f5ee18cb10f0a561bab133` | `cmp` identical | 18/18 | 7/7 |
+
+Commands, run from the device repository:
+
+```sh
+REPLAY=$(mktemp -d /tmp/opencode/package-replay.XXXXXX)
+python3.11 -B scripts/package-gta4l-diagnostic.py \
+  --baseline ../../out/gta4l/boot/boot-ram-root-sdhci-v5.img \
+  --payload ../../out/gta4l/ram-root-sdhci-audit-evidence/payload.img \
+  --payload-sha256 31b78bec7529706407f682e64dbc9c4c990e86009025174fd3f791606b29ea31 \
+  --expect-diagnostic audit \
+  --output "$REPLAY/boot-ram-root-sdhci-audit-v2.img" \
+  --manifest "$REPLAY/audit-v2.json"
+python3.11 -B scripts/package-gta4l-diagnostic.py \
+  --baseline ../../out/gta4l/boot/boot-ram-root-sdhci-v5.img \
+  --payload ../../out/gta4l/ram-root-sdhci-host-init-evidence/payload-v2.img \
+  --payload-sha256 0afaae8d66251d61c74d80427289da5e79551e52652e5236adaac55c6c8ac8b1 \
+  --expect-diagnostic host-init \
+  --output "$REPLAY/boot-ram-root-sdhci-host-init-v2.img" \
+  --manifest "$REPLAY/host-init-v2.json"
+cmp "$REPLAY/boot-ram-root-sdhci-audit-v2.img" \
+  ../../out/gta4l/ram-root-sdhci-audit-evidence/boot-ram-root-sdhci-audit-v2.img
+cmp "$REPLAY/boot-ram-root-sdhci-host-init-v2.img" \
+  ../../out/gta4l/ram-root-sdhci-host-init-evidence/boot-ram-root-sdhci-host-init-v2.img
+```
+
+The packager runs the payload contract and component gate before publishing
+each output; the explicit gate runs above repeat those checks with the expected
+payload hash. Replay inputs:
+
+| Script | SHA-256 |
+| --- | --- |
+| `scripts/package-gta4l-diagnostic.py` | `2f7c998bad01980e9298a60b28ac8a5b3dadcbd0051fd4289c00ff7d20e0afa8` |
+| `scripts/check-gta4l-boot-image.py` | `879ee0ede5ddbebe4e24915c8720fa40a7b1e253642f6fd2a4d4dff937586bf4` |
+| `scripts/check-gta4l-payload.py` | `3c5a5723ea1cc85946dbd48bb916b2aa2e2fcb9ca584dc49caee598a6bd62930` |
+
+This establishes the packaging step only. The inputs are existing artifacts;
+the replay does not reproduce the payload, kernel or firmware.
+
+## 7. Missing, embedded and not-yet-reproduced inputs
 
 **Missing as standalone files, recoverable from a present artifact:**
 
@@ -184,15 +233,18 @@ The current Mu-Silicium FD also validates as 86 PE modules, but only 41 of its
 - Packaged payload kernels for v5 (`810fd341...`), FS timer/report
   (`20f3facc...`), and host-init (`72eae6f0...`, also present as a file).
 - Embedded payload ADTs for all five images (extract from each payload image).
+  Sidecars exist for v5 (`adt/adt`), audit (`kernel.macho.adt`), host-init
+  (`payload-v2.adt`) and report (`adt/adt`); the FS-timer sidecar is stale
+  (see below).
 
 **Missing and not recoverable from present artifacts:**
 
 - v5 prelinked kernel `10a2b5b9...`.
 - Host-init raw kernel `ba52b650...` (only its packaged form is present).
-- A standalone FD and a build record tying the tested firmware to a source
-  revision.
+- A standalone FD file and a build record tying the tested firmware to a
+  source revision. The FD bytes themselves are recoverable from the v5 image.
 
-**Present but not reproducible from the current checkout:**
+**Present but reproduction not established from the current checkout:**
 
 - The tested firmware FD. The current Mu-Silicium build (`b2b5bdce...`) has the
   same module count but 45 of 86 PE hashes differ. `docs/firmware-handoff.md`
@@ -201,10 +253,10 @@ The current Mu-Silicium FD also validates as 86 PE modules, but only 41 of its
 - The kernel artifacts. The current build kernel `452026b2...` differs from
   the audit kernel `6e81598c...`; no host-only rebuild has been compared with
   either the v5 or host-init kernel `[U]`.
-- The payload image and boot image. The packager can reproduce the packaging
-  step byte-for-byte from the same baseline and payload, but the baseline
-  embeds the unreproducible firmware, and the payload embeds an unreproduced
-  kernel `[U]`.
+- The payload image and boot image. The packager reproduces the packaging step
+  byte-for-byte from the same baseline and payload (see the replay above), but
+  the baseline embeds firmware whose reproduction is not established, and the
+  payload embeds a kernel whose reproduction is not established `[U]`.
 
 **Recorded inconsistency:**
 
@@ -216,10 +268,8 @@ The current Mu-Silicium FD also validates as 86 PE modules, but only 41 of its
 
 **Wording to read precisely:**
 
-- `sdhc-decision-memo.md` calls the booted host-init image "absent from this
-  checkout". The image is present in the gitignored `out/` tree at the recorded
-  hash; it is not tracked by git. "Absent" there means not committed, not
-  missing from the workspace `[S]`.
+- The booted host-init image is present locally in the gitignored `out/` tree
+  at the recorded hash; it is not tracked by git `[S]`.
 
 ## 8. Reproduction boundary
 
@@ -239,17 +289,30 @@ The replay does not produce:
 
 Reproducing the boot image therefore requires three separate steps: rebuild
 the kernel from the pinned XNU source and patches, rebuild the firmware from
-the pinned Mu-Silicium revision, then rebuild and repackage the payload. Only
-the fixture data inputs have a current, pinned host recipe; the kernel,
-firmware and payload build steps do not.
+the pinned Mu-Silicium revision, then rebuild and repackage the payload. The
+packaging step is replayable from the existing baseline and payloads, and the
+fixture data inputs have a pinned recipe. Kernel and firmware reproduction are
+not established.
+
+### Kernel build bootstrap caveat
+
+`scripts/build-gta4l-sdhci-snapshot.py` compiles the SDHCI probe archive using
+the `bsd_init.o` compile record. On a clean tree that record does not exist
+yet: the script writes `FirstPassStub.c` with no-op probe symbols, links
+`libGta4lSdhciSnapshot.a`, records `"runtime_qualified": false` in
+`build-report.json` and exits (`scripts/build-gta4l-sdhci-snapshot.py:48-51`).
+The kernel built in that pass contains no-op probes; only the next kernel
+build links the real probes. Any kernel compared against a historical image
+must record whether it came from the bootstrap pass or from a later pass with
+a compile record `[S]`.
 
 ## 9. Next host-only step
 
-1. Rebuild the kernel from the pinned XNU commit and the patch set recorded in
-   the current build tree's `xnu-inputs.json`; first confirm that record
-   matches the patches used for the audit and v5 builds. Compare the result
-   with the audit kernel `6e81598c...` and the packaged v5/host-init kernels,
-   and record the compiler and linker versions.
+1. Establish the kernel build provenance: capture the exact source, patch,
+   compiler, linker, SDK and archive inputs, and account for the bootstrap-stub
+   sequence in `scripts/build-gta4l-sdhci-snapshot.py`. Compare equivalent
+   build stages with the audit kernel `6e81598c...` and the packaged
+   v5/host-init kernels, and record every mismatch.
 2. Rebuild Mu-Silicium at `e14626a...` and compare all 86 PE module hashes with
    the tested image `42f900a3...`/`3bb7847a...`. Identify the source or
    toolchain delta before treating the firmware as reproducible.
