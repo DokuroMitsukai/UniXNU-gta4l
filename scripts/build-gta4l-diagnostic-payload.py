@@ -67,6 +67,9 @@ def main():
     parser.add_argument('--trust-cache', type=Path)
     parser.add_argument('--owner-trust-cache', action='store_true',
                         help='use --owner-trust-cache instead of --trust-cache')
+    parser.add_argument('--kernel', type=Path,
+                        help='prelinked kernel Mach-O to package (default: the '
+                             'UniXNU build-tree kernel)')
     parser.add_argument('--unique-chip-id')
     parser.add_argument('--diagnostic', choices=tuple(DIAGNOSTICS))
     parser.add_argument('--kernel-arg', action='append', default=[],
@@ -112,6 +115,8 @@ def main():
         raise SystemExit(f'{args.data_ramdisk}: data ramdisk not found')
     if not args.trust_cache.is_file():
         raise SystemExit(f'{args.trust_cache}: trust cache not found')
+    if args.kernel is not None and not args.kernel.is_file():
+        raise SystemExit(f'{args.kernel}: kernel not found')
     if output.exists() and not args.force:
         raise SystemExit(f'{output}: output exists; pass --force to replace')
     if manifest_path.exists() and not args.force:
@@ -138,17 +143,18 @@ def main():
         temp_hash = sha(temp_device / 'board.toml')
 
         command = [
-            str(unixnu / 'unixnu'), 'build', 'payload',
+            sys.executable, str(unixnu / 'unixnu'), 'build', 'payload',
             '-D', str(temp_device),
             '--uefi', str(uefi),
+            *(['--kernel', str(args.kernel.resolve())] if args.kernel else []),
             '--unique-chip-id', args.unique_chip_id,
             '--data-ramdisk', str(args.data_ramdisk.resolve()),
             '--owner-trust-cache' if args.owner_trust_cache else '--trust-cache',
             str(args.trust_cache.resolve()),
-            '--kernel-arg', DIAGNOSTICS[args.diagnostic],
         ]
         for value in args.kernel_arg:
             command.extend(['--kernel-arg', value])
+        command.extend(['--kernel-arg', DIAGNOSTICS[args.diagnostic]])
         print('+ ' + ' '.join(command), flush=True)
         subprocess.run(command, cwd=unixnu, check=True)
 
@@ -180,6 +186,10 @@ def main():
             'device': str(device),
             'unixnu': str(unixnu),
             'uefi': str(uefi),
+            'kernel': ({
+                'path': str(args.kernel.resolve()),
+                'sha256': sha(args.kernel),
+            } if args.kernel else None),
             'os_profile': os_profile,
             'source_board_sha256': board_hash,
             'diagnostic_board_sha256': temp_hash,

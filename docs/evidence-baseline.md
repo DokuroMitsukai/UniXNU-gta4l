@@ -5,10 +5,12 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T09:32:34Z`, after the final edits to the
+Hashes were taken at `2026-10-30T14:41:00Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
-in §6 before reusing them.
+in §6 before reusing them. The snapshot is intended to be committed without
+further content changes; if the committed content differs, re-run §6 and
+update the table.
 
 ## 1. Repository state
 
@@ -16,14 +18,15 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `5a25c00f23e761ed44ee6a6b624131c4d23f88df` |
-| Dirty entries at the hash snapshot | 3 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/evidence-baseline.md` and `docs/sdhc-decision-memo.md`) |
-| Staging and commits | None at the snapshot; the snapshot lands as one documentation commit |
+| HEAD | `3c3d586dd1feb1d63ade4452800a4ccc7cbcee31` |
+| Dirty entries at the hash snapshot | 11 changed: 6 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/evidence-baseline.md`, `docs/firmware-build-recipe.md`, `docs/kernel-build-recipe.md`, `porting.toml`, `scripts/build-gta4l-diagnostic-payload.py`) and 5 untracked (`docs/payload-build-recipe.md`, `scripts/normalize-gta4l-adt-seed.py`, `scripts/pin-gta4l-xnu-mtimes.py`, `scripts/test-gta4l-diagnostic-payload.py`, `scripts/test-gta4l-xnu-mtimes.py`) |
+| Staging and commits | None at the snapshot; the snapshot lands as one commit covering the documentation and host-only tooling |
 
 The current snapshot is the evidence branch after the Linux
 fixture-reproduction, stale-status reconciliation, recipe-correction,
-input-pin and input-inventory commits, with the packaging replay and
-evidence-wording corrections in the working tree. The hash table below
+input-pin and input-inventory commits, with the payload replay, packaging
+replay, kernel compile/link replay and evidence-wording corrections in the
+working tree. The hash table below
 describes that working tree, not the original evidence-closure tree. The original provenance is retained separately
 because the path lists and dirty inventory are historical observations.
 
@@ -106,7 +109,7 @@ bytes of the previously booted image `[S]`.
 
 | Artifact | Path | SHA-256 |
 | --- | --- | --- |
-| Production probe | `package/Gta4lSdhciHostInit.c` | `3f8f45316cff8b3ad19266f901dba69475d7dd0816ce9b6040f2bee37eaebafb` |
+| Host-init probe source | `package/Gta4lSdhciHostInit.c` | `3f8f45316cff8b3ad19266f901dba69475d7dd0816ce9b6040f2bee37eaebafb` |
 | Probe header | `package/Gta4lSdhciHostInit.h` | `a91f76e6c0405315e6df3bca79d067ae798f688dac7b80f665d70f569482f0d5` |
 | Simulator harness | `scripts/sim-gta4l-sdhci-host-init/harness.c` | `dd8c92092a6c7a609a81f6f202f5aa4470fdf6375cebd50ec49a828041066cdc` |
 | Static host test | `scripts/test-gta4l-sdhci-host-init.py` | `6dd2c1d8ca64527c70b8410797a0361341d6b593b127b8a71a44f624f9580f6f` |
@@ -127,10 +130,19 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `9771164882e042b33875483655c386b85b418e954a17fc838ce507cb0448a128` |
+| Porting record | `porting.toml` | `09e674f88bc0aab9d12ba7c77fe3d02bb0d9027a09e33b330790a02e5296b6c7` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `41031b0fa0752dd877666f122440d18a44b86982b47214dd2a81bf908a06cf7f` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `2d8f060327c4d557ff588e90200676b3dfdaf213c60dec0d24c0300f28eb3fd3` |
+| Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
+| ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
+| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `f293bee964bdd3bebbf40e4c8099a426780679065f3d65abceb9999255480558` |
+
+The active tree carries the committed `bf2e7d4` source (`3f8f4531...`, the
+qualified `HOST INIT REPORT` wording). The historical `bc228be7...` source
+(`HOST INIT OK` wording) was used only for the isolated kernel replay and the
+reproduced-kernel evidence packets; see `kernel-build-recipe.md` §5 and
+`out/gta4l/ram-root-sdhci-repro-kernel-host-init-evidence/README.md`.
 
 ## 3. Pinned Linux source cache
 
@@ -265,7 +277,7 @@ python3.11 - <<'PY'
 import hashlib, pathlib, re
 text = pathlib.Path('docs/evidence-baseline.md').read_text()
 rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-expected = 25
+expected = 28
 paths = [path for path, _ in rows]
 assert len(rows) == expected, f'expected {expected} rows, found {len(rows)}'
 assert len(set(paths)) == len(paths), 'duplicate paths in the table'
