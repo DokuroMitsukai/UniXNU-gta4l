@@ -1119,6 +1119,20 @@ def check_scanner_controls(data):
           'paired store crossing the address-space boundary was not masked')
 
     result = run_direct(data_bytes, [
+        encode_str_unsigned(31, 8, 0), ret], values={8: MASK64 - 4})
+    check((0x1000, 8, MASK64 - 4) in result.stores,
+          'single store crossing the address-space boundary was not recorded')
+    check(slot_mask(MASK64 - 4, 8, len(data_bytes)) == 0,
+          'boundary-crossing store incorrectly invalidated .data')
+
+    result = run_direct(data_bytes, [
+        encode_ldr_unsigned(9, 8, 0),
+        encode_str_unsigned(31, 9, 0),
+        ret], values={8: MASK64 - 4})
+    check((0x1004, 'store', 8) in result.unresolved,
+          'boundary-crossing load did not invalidate the derived store')
+
+    result = run_direct(data_bytes, [
         encode_adrp(0x1000, 0x8000, 8),
         encode_str_unscaled(8, 31, -8, 1),
         ret])
