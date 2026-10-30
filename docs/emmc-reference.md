@@ -92,7 +92,40 @@ Pinned commit:
 Its `drivers/NativeEmmc` describes polled PIO and read-only storage, but the
 same source also contains persistent `kpan` logging, writable windows, panic
 flush hooks, and optional automatic resets. It is useful for identifying
-questions and failure stages only; no code is copied or translated.
+questions and failure stages only; no code is copied or translated. The
+separately audited `Dracen-W/NativeEmmc` revision below is the primary
+NativeEmmc reference.
+
+## NativeEmmc reference (Redmi Note 9)
+
+Repository:
+`https://github.com/Dracen-W/NativeEmmc`
+
+Maintainer: [Dracen](https://github.com/Dracen-W)
+
+Pinned commit:
+`4980f1070b0c822dedb9eb350df710a57df28590` (2026-10-25)
+
+Catalog entry:
+`https://unixnu.com/drivers/community-native-emmc`
+
+The source declares `BSD-2-Clause-Patent`; its `LICENSE` file contains the
+ordinary BSD-2-Clause text. The discrepancy is a reuse blocker, and no code is
+imported here.
+
+This driver targets the MediaTek MT6768 MSDC controller for the Redmi Note 9
+(merlinx), not the Qualcomm SDHCI v5 controller used by gta4l. Its register
+map, command encoding, FIFO path and hardcoded userdata LBA are not
+transferable. It is useful as a design reference for a future XNU read-only
+block device: staged boot-argument enablement, `IOBlockStorageDevice`
+publication, write rejection, a global controller lock, fail-closed manifest
+parsing and exact-one-match `IOMedia` lookup. It assumes the firmware left the
+controller and card initialized, which the gta4l handoff does not satisfy.
+
+The static audit in [native-emmc-reference-audit.md](native-emmc-reference-audit.md)
+records the reusable patterns, the MediaTek-specific parts, the
+completion/error-path gaps and the host-only test plan. It adds no hardware
+result and does not change any gta4l blocker.
 
 ## Open questions before implementation
 
