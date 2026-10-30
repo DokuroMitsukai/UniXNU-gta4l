@@ -18,7 +18,7 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 37 scenarios and 12 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 38 scenarios and 15 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -66,24 +66,32 @@ interrupts and higher-speed modes.
 
 ### Power and pads
 
-1. Write `POWER_CONTROL = bus power | 3.3 V`.
-2. Poll `CORE_PWRCTL_STATUS` for up to 500 ms. Bus power and IO voltage are
-   independent controller requests: the earlier `HOST_CONTROL2` write can raise
-   an IO request before, together with, or after the bus request.
-3. Handle each observed request separately. `BUS_OFF` is a failure. Each
+1. Program `HOST_CONTROL2` with the fixed-1.8 V signalling bit and record the
+   requested IO transition. The controller raises an IO request only when the
+   `VDD_180` bit changes, so an unchanged bit means no IO request is due and the
+   level is already correct. This is the same condition Linux uses in
+   `sdhci_msm_check_power_status()`.
+2. Write `POWER_CONTROL = bus power | 3.3 V`.
+3. Poll `CORE_PWRCTL_STATUS` for up to 500 ms. Bus power and IO voltage are
+   independent controller requests: the `HOST_CONTROL2` write can raise an IO
+   request before, together with, or after the bus request.
+4. Handle each observed request separately. `BUS_OFF` is a failure. Each
    observed set of bits is cleared with the documented 10-attempt retry;
-   exhausting the retries is a failure. `BUS_ON` is acknowledged with
-   `BUS_SUCCESS` and IO-low/high with `IO_SUCCESS`.
-4. Report success only after `BUS_ON` has been observed and acknowledged. An
-   IO-voltage request alone is `GTA4L_EMMC_ERR_POWER`, not a completed bus
-   power-on. A request that remains set after the acknowledgement is also a
-   failure. The ack is a controller-local software ack, not a measurement of the
-   rail.
-5. After bus-on, require two consecutive quiet status reads before enabling the
-   card clock so a separate, slightly delayed IO request is handled.
-6. Write the UEFI-derived active SDC1 pad value `0x9FE4` to the SDC1 QDSD
+   exhausting the retries is a failure. `BUS_ON` is acknowledged with both
+   `BUS_SUCCESS` and `IO_SUCCESS`, matching Linux, which treats bus-on as an
+   implicit IO-high transition. IO-low/high is acknowledged with `IO_SUCCESS`.
+5. Track completion explicitly: success requires an observed `BUS_ON` and,
+   when the `HOST_CONTROL2` write changed `VDD_180`, an observed IO request.
+   A zero status read no longer counts as IO completion on its own, and an IO
+   request that arrives late is handled before the card clock starts. An
+   IO-only request is `GTA4L_EMMC_ERR_POWER`, not a completed bus power-on. A
+   request that remains set after the acknowledgement is also a failure.
+6. If the loop reaches its iteration limit without a quiet read after both
+   completions, return `GTA4L_EMMC_ERR_POWER`; exhaustion is never a success.
+   The ack is a controller-local software ack, not a measurement of the rail.
+7. Write the UEFI-derived active SDC1 pad value `0x9FE4` to the SDC1 QDSD
    register at TLMM `0x00575000`.
-7. Wait 5 ms for power and pads to settle, then enable the card clock. This is
+8. Wait 5 ms for power and pads to settle, then enable the card clock. This is
    the Linux 3.3 V regulator settle bound applied to the retained rail; the core
    also keeps a 1 ms post-enable delay.
 
@@ -156,7 +164,11 @@ It covers:
 - card-not-ready, bad CID, bad CSD and CMD3 R1 errors;
 - reset timeout, clock timeout, RCG busy, power-off, no power request and a
   stuck power-status clear;
-- an IO-only power request, a delayed bus request and a bus-then-IO sequence;
+- an IO-only power request, a delayed bus request, a bus-then-IO sequence whose
+  late IO request arrives after the old quiet window, and a churn case where
+  requests never stop so the loop must fail on exhaustion;
+- a bus-only request (no `VDD_180` change) whose acknowledgement must still be
+  `BUS_SUCCESS | IO_SUCCESS`, matching Linux;
 - a 4 KiB `DATA_SECTOR_SIZE` card;
 - small-card and non-user-partition rejection;
 - 1.8 V and 3.3 V signalling, plus the explicit pad-switch-on and pad-switch-off
@@ -165,7 +177,9 @@ It covers:
 - mutation controls for the 400 kHz CFG, M and pad values, the command data bit,
   the pad-switch and 1.8 V bits, the settle time, an unaligned reset read, a
   disabled polling status, the raw long-response layout, a missing bus-on
-  requirement and a missing 4 KiB sector check.
+  requirement, a bus-only acknowledgement that omits `IO_SUCCESS`, a missing
+  IO-completion requirement, a power loop that treats exhaustion as success and
+  a missing 4 KiB sector check.
 
 The test also checks the source policy: only the injected ops are used, the core
 contains no DMA, CQE, ICE, tuning or card-write command, the poll loops use the
@@ -227,7 +241,7 @@ python3.11 -B scripts/build-gta4l-diagnostic-payload.py \
 python3.11 -B scripts/package-gta4l-diagnostic.py \
   --baseline ../../out/gta4l/boot/boot-ram-root-sdhci-v5.img \
   --payload ../../out/gta4l/ram-root-emmc-probe-evidence/payload.img \
-  --payload-sha256 baad6342c950d847912ede0ed06f3e14ecc012e022101049f37f8f4a69dd7b39 \
+  --payload-sha256 487de61085f75ce40598fdf1308913b8da5bed581b787f95a331b9340f2d3ffc \
   --expect-diagnostic emmc-probe-2 \
   --output ../../out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img \
   --manifest ../../out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.json
@@ -235,9 +249,9 @@ python3.11 -B scripts/package-gta4l-diagnostic.py \
 
 | Artifact | Bytes | SHA-256 |
 | --- | --- | --- |
-| `kernel.macho` | 51,081,216 | `152bde801bc7f97f470e46713314e9daa62cb3b8a59f46a0f48ce183e0529957` |
-| `payload.img` (80 MiB, stage 2) | 83,886,080 | `baad6342c950d847912ede0ed06f3e14ecc012e022101049f37f8f4a69dd7b39` |
-| `boot-ram-root-emmc-probe-stage2.img` | 85,688,320 | `c7011274991b8afd83d5965392941c78d800dbe7b3b8715b939e7f27cf678e05` |
+| `kernel.macho` | 51,081,216 | `c4a1fa571a25b19ba8fffa68003cbffad16711a4968c50c6bb14af91136a8754` |
+| `payload.img` (80 MiB, stage 2) | 83,886,080 | `487de61085f75ce40598fdf1308913b8da5bed581b787f95a331b9340f2d3ffc` |
+| `boot-ram-root-emmc-probe-stage2.img` | 85,688,320 | `539a289519663b3a2a8c8d8efa45ca3c866f596cb09d3ce223108d1003344079` |
 
 The payload contract is 7/7 and the boot-image gate is 18/18. The payload's
 kernel arguments include `gta4l-emmc-probe=2`. The image has not been flashed;
@@ -278,8 +292,10 @@ storage or filesystem result.
   `[S]/[U]`.
 - The power acknowledgement is a controller-local software ack; `BUS_SUCCESS`
   does not prove the rail voltage. The core now requires an observed `BUS_ON`
-  completion and handles separate IO requests, but a request that arrives after
-  the final quiet window still has no interrupt path `[U]`.
+  completion and completion of the IO transition requested through
+  `HOST_CONTROL2`, and it fails if the power loop is exhausted. A *new* power
+  request raised after both completions and after the card clock starts still
+  has no interrupt path `[U]`.
 - No DMA, SMMU programming, CQE, ICE, tuning, high-speed mode, multi-block read
   or write path exists `[U]`.
 - No block-device publication, mount, root switch or persistent Data path

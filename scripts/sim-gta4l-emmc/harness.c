@@ -46,6 +46,9 @@ struct sim {
 	uint32_t pwr_status;
 	uint32_t power_ack;
 	uint32_t pwr_poll_count;
+	uint32_t io_poll_count;
+	uint32_t last_clear;
+	uint32_t churn_count;
 	uint32_t buffer_data[GTA4L_EMMC_BLOCK_BYTES / 4u];
 	uint32_t buffer_index;
 	uint32_t last_cmd;
@@ -86,6 +89,7 @@ struct sim {
 	int power_io_only;
 	int power_delayed_bus;
 	int power_io_delayed;
+	int power_churn;
 	int bus_acked;
 	int bus_delayed_emitted;
 	int io_delayed_emitted;
@@ -236,8 +240,27 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			if ((sim->power_io_delayed != 0) &&
 			    (sim->bus_acked != 0) &&
 			    (sim->io_delayed_emitted == 0)) {
-				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_HIGH;
-				sim->io_delayed_emitted = 1;
+				sim->io_poll_count++;
+				if (sim->io_poll_count >= 5u) {
+					sim->pwr_status |=
+					    GTA4L_EMMC_PWRCTL_IO_LOW;
+					sim->io_delayed_emitted = 1;
+				}
+			}
+			if ((sim->power_churn != 0) &&
+			    (sim->bus_acked != 0) &&
+			    ((sim->pwr_status &
+			    (GTA4L_EMMC_PWRCTL_IO_LOW |
+			    GTA4L_EMMC_PWRCTL_IO_HIGH)) == 0)) {
+				/* Raise the opposite of the last cleared bit
+				 * so the core's post-ack read-back stays
+				 * clean and the loop can only end by
+				 * exhaustion, not by a quiet window. */
+				sim->pwr_status |= (sim->last_clear &
+				    GTA4L_EMMC_PWRCTL_IO_LOW) ?
+				    GTA4L_EMMC_PWRCTL_IO_HIGH :
+				    GTA4L_EMMC_PWRCTL_IO_LOW;
+				sim->churn_count++;
 			}
 			return sim->pwr_status;
 		}
@@ -653,9 +676,17 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 		return;
 	}
 	if (offset == GTA4L_EMMC_REG_HOST_CONTROL2) {
+		uint16_t previous = (uint16_t)(sim->sdhci[offset] |
+		    ((uint16_t)sim->sdhci[offset + 1u] << 8));
+
 		sim->sdhci[offset] = (uint8_t)(value & 0xFFu);
 		sim->sdhci[offset + 1u] = (uint8_t)(value >> 8);
-		if (sim->power_io_delayed == 0) {
+		/* The controller raises an IO request only when the 1.8 V
+		 * signalling bit changes, matching the Linux
+		 * sdhci_msm_check_power_status() contract. */
+		if ((sim->power_io_delayed == 0) &&
+		    ((value & SIM_CTRL_VDD_180) !=
+		    (previous & SIM_CTRL_VDD_180))) {
 			if ((value & SIM_CTRL_VDD_180) != 0) {
 				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_LOW;
 			} else {
@@ -679,6 +710,7 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 			return;
 		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR) {
+			sim->last_clear = value;
 			if (sim->power_stuck == 0) {
 				sim->pwr_status &= ~value;
 			}
@@ -888,6 +920,8 @@ main(int argc, char **argv)
 		sim.power_delayed_bus = 1;
 	} else if (scenario_is(scenario, "power-bus-then-io")) {
 		sim.power_io_delayed = 1;
+	} else if (scenario_is(scenario, "power-churn")) {
+		sim.power_churn = 1;
 	} else if (scenario_is(scenario, "data-sector-4k")) {
 		sim.data_sector_4k = 1;
 		sim_fill_ext_csd(&sim);
@@ -1044,6 +1078,14 @@ main(int argc, char **argv)
 		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
 		    (SIM_PAD_PWR_SWITCH_EN | SIM_PAD_PWR_SWITCH)) == 0,
 		    "pad power switch is set for 3.3 V signalling");
+		/* With no VDD_180 transition the controller raises only
+		 * BUS_ON; Linux still acknowledges BUS_SUCCESS and
+		 * IO_SUCCESS for that implicit IO-high completion. */
+		check(sim.power_ack == (GTA4L_EMMC_PWRCTL_ACK_BUS |
+		    GTA4L_EMMC_PWRCTL_ACK_IO),
+		    "bus-only power request was not acknowledged as BUS+IO");
+		check(sim.pwr_status == 0,
+		    "a power/IO request was left pending");
 	} else if (scenario_is(scenario, "pad-switch-off")) {
 		check((sim_read16(&sim, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_HOST_CONTROL2) & SIM_CTRL_VDD_180) != 0,
@@ -1059,6 +1101,19 @@ main(int argc, char **argv)
 		check(sim.pwr_status == 0,
 		    "a power/IO request was left pending");
 		check(sim.card_clock_enabled == 1, "card clock not enabled");
+		if (scenario_is(scenario, "power-bus-then-io")) {
+			/* The IO request arrives after the old two-read
+			 * quiet window; the core must still handle it. */
+			check(sim.io_delayed_emitted == 1,
+			    "late IO request was never handled");
+			check(sim.io_poll_count >= 5u,
+			    "late IO request did not arrive after the quiet window");
+		}
+	} else if (scenario_is(scenario, "power-churn")) {
+		check(result == GTA4L_EMMC_ERR_POWER,
+		    "churned power loop did not fail");
+		check(sim.churn_count > 100u,
+		    "churn did not keep requests pending");
 	} else if (scenario_is(scenario, "read-arg")) {
 		result = gta4l_emmc_read_block(&host, 0x100000000ULL, block0);
 		check(result == GTA4L_EMMC_ERR_ARG, "overflow block was accepted");
@@ -1137,7 +1192,8 @@ main(int argc, char **argv)
 			expected = scenario_is(scenario, "power-off") ||
 			    scenario_is(scenario, "power-no-request") ||
 			    scenario_is(scenario, "power-stuck") ||
-			    scenario_is(scenario, "power-io-only");
+			    scenario_is(scenario, "power-io-only") ||
+			    scenario_is(scenario, "power-churn");
 			break;
 		case GTA4L_EMMC_ERR_CMD_TIMEOUT:
 			expected = scenario_is(scenario, "cmd-timeout");

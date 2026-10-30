@@ -450,7 +450,7 @@ gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
 }
 
 static int
-gta4l_emmc_power_on(struct gta4l_emmc_host *host)
+gta4l_emmc_power_on(struct gta4l_emmc_host *host, uint32_t io_request)
 {
 	uint32_t status;
 	uint32_t clear;
@@ -459,8 +459,14 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host)
 	uint32_t index;
 	uint32_t attempt;
 	int bus_on_seen = 0;
+	int io_done;
+	int settled = 0;
 	int cleared;
-	int idle = 0;
+
+	/* The HOST_CONTROL2 write requested this IO level. A zero value means
+	 * the signalling bit did not change, so the controller raises no IO
+	 * request and the level is already the requested one. */
+	io_done = (io_request == 0) ? 1 : 0;
 
 	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_POWER_CONTROL,
@@ -469,8 +475,10 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host)
 
 	/* Bus power and IO voltage are independent controller requests. The
 	 * HOST_CONTROL2 write above can raise an IO request before, with or
-	 * after the bus request, so handle each observed request separately
-	 * and only report success after BUS_ON has actually completed. */
+	 * after the bus request, so handle each observed request separately.
+	 * Success requires an observed BUS_ON completion and completion of the
+	 * IO transition requested through HOST_CONTROL2; two empty status
+	 * reads are not treated as proof that the IO transition finished. */
 	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_POWER_TIMEOUT_US);
 	for (index = 0; index < iterations; index++) {
 		status = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
@@ -480,19 +488,13 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host)
 			return GTA4L_EMMC_ERR_POWER;
 		}
 		if (status == 0) {
-			/* After bus-on, require a short quiet window so a
-			 * separate, slightly delayed IO request is handled
-			 * before the card clock starts. */
-			if (bus_on_seen != 0) {
-				idle++;
-				if (idle >= 2) {
-					break;
-				}
+			if ((bus_on_seen != 0) && (io_done != 0)) {
+				settled = 1;
+				break;
 			}
 			gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 			continue;
 		}
-		idle = 0;
 
 		/* Clear only the request bits observed in this pass, retrying
 		 * the documented lost-pulse case. */
@@ -516,12 +518,19 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host)
 
 		ack = 0;
 		if ((status & GTA4L_EMMC_PWRCTL_BUS_ON) != 0) {
-			ack |= GTA4L_EMMC_PWRCTL_ACK_BUS;
+			/* Linux treats BUS_ON as an implicit IO-high
+			 * transition and acknowledges both completions. */
+			ack |= GTA4L_EMMC_PWRCTL_ACK_BUS |
+			    GTA4L_EMMC_PWRCTL_ACK_IO;
 			bus_on_seen = 1;
+			if (io_request == GTA4L_EMMC_PWRCTL_IO_HIGH) {
+				io_done = 1;
+			}
 		}
 		if ((status & (GTA4L_EMMC_PWRCTL_IO_HIGH |
 		    GTA4L_EMMC_PWRCTL_IO_LOW)) != 0) {
 			ack |= GTA4L_EMMC_PWRCTL_ACK_IO;
+			io_done = 1;
 		}
 		gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_CORE_PWRCTL_CTL, ack);
@@ -535,9 +544,10 @@ gta4l_emmc_power_on(struct gta4l_emmc_host *host)
 		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 	}
 
-	if (bus_on_seen == 0) {
-		/* An IO-voltage request alone is not a completed bus power-on. */
-		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, 0, 0);
+	if (settled == 0) {
+		/* The loop must end on a quiet window with both completions
+		 * observed; exhaustion is a power failure. */
+		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_request, io_done);
 		return GTA4L_EMMC_ERR_POWER;
 	}
 	return GTA4L_EMMC_OK;
@@ -576,6 +586,7 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 {
 	uint32_t version;
 	uint32_t vendor;
+	uint32_t io_request;
 	uint16_t control2;
 	int result;
 
@@ -624,9 +635,18 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 
 	/* Legacy timing: clear the UHS mode and execute field, preserve the
 	 * rest. The board's VCCQ rail is fixed at 1.8 V, so select 1.8 V
-	 * signalling. */
+	 * signalling. The controller raises an IO request only when the
+	 * VDD_180 bit changes; record that requested transition so the power
+	 * loop can wait for its completion instead of inferring it from a
+	 * quiet status window. */
 	control2 = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_HOST_CONTROL2);
+	io_request = 0;
+	if (((control2 & GTA4L_EMMC_HOST_CONTROL2_VDD_180) != 0) !=
+	    (host->fixed_1v8 != 0)) {
+		io_request = (host->fixed_1v8 != 0) ?
+		    GTA4L_EMMC_PWRCTL_IO_LOW : GTA4L_EMMC_PWRCTL_IO_HIGH;
+	}
 	control2 &= ~(GTA4L_EMMC_HOST_CONTROL2_UHS_MASK |
 	    GTA4L_EMMC_HOST_CONTROL2_TUNING);
 	if (host->fixed_1v8 != 0) {
@@ -660,7 +680,7 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
-	result = gta4l_emmc_power_on(host);
+	result = gta4l_emmc_power_on(host, io_request);
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}

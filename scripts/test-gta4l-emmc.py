@@ -48,6 +48,7 @@ SCENARIOS = [
     'power-io-only',
     'power-delayed-bus',
     'power-bus-then-io',
+    'power-churn',
     'data-sector-4k',
     'cmd-timeout',
     'cmd-crc',
@@ -142,6 +143,13 @@ def check_source() -> None:
     assert 'gta4l_emmc_read_long_response' in core, \
         'SDHCI long-response normalization missing'
     assert 'bus_on_seen' in core, 'bus-on completion tracking missing'
+    assert 'io_done' in core, 'IO-completion tracking missing'
+    assert 'io_request' in core, \
+        'HOST_CONTROL2 IO-transition tracking missing'
+    assert 'settled' in core, 'quiet-window completion tracking missing'
+    assert ('GTA4L_EMMC_PWRCTL_ACK_BUS |\n\t\t\t    '
+            'GTA4L_EMMC_PWRCTL_ACK_IO;') in core, \
+        'BUS_ON must acknowledge both BUS and IO completion'
     assert 'data_sector_size_4k != 0' in core, \
         '4 KiB data-sector rejection missing'
     assert 'host->pad_pwr_switch' in core, 'explicit pad policy missing'
@@ -177,8 +185,12 @@ def check_source() -> None:
                   'sim->buffer_data', 'sim_command_ok', 'access_violation',
                   'command_error', 'SIM_CMD_DATA', 'SIM_PAD_PWR_SWITCH',
                   'SIM_POWER_SETTLE_US', 'power_io_only',
-                  'power_delayed_bus', 'power_io_delayed', 'data_sector_4k'):
+                  'power_delayed_bus', 'power_io_delayed', 'data_sector_4k',
+                  'power_churn', 'io_delayed_emitted', 'io_poll_count',
+                  'last_clear'):
         assert token in harness, f'harness missing {token}'
+    assert 'previous & SIM_CTRL_VDD_180' in harness, \
+        'simulator does not model the VDD_180 transition'
     assert 'GTA4L_EMMC_REG_BUFFER_DATA_PORT' in harness
 
 
@@ -303,14 +315,43 @@ def main() -> int:
              'offset = GTA4L_EMMC_REG_RESPONSE + index * 4u;',
              'Gta4lEmmc.c', (), 'success'),
             ('no-bus-on-required',
-             '\tif (bus_on_seen == 0) {\n'
-             '\t\t/* An IO-voltage request alone is not a completed bus '
-             'power-on. */\n'
-             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, 0, 0);\n'
+             '\t\t\tif ((bus_on_seen != 0) && (io_done != 0)) {\n'
+             '\t\t\t\tsettled = 1;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n',
+             '\t\t\tif (io_done != 0) {\n'
+             '\t\t\t\tsettled = 1;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n'
+             '\t\t\t(void)bus_on_seen;\n',
+             'Gta4lEmmc.c', (), 'power-io-only'),
+            ('bus-ack-no-io',
+             '\t\t\tack |= GTA4L_EMMC_PWRCTL_ACK_BUS |\n'
+             '\t\t\t    GTA4L_EMMC_PWRCTL_ACK_IO;\n',
+             '\t\t\tack |= GTA4L_EMMC_PWRCTL_ACK_BUS;\n',
+             'Gta4lEmmc.c', (), 'signaling-3v3'),
+            ('no-io-completion',
+             '\t\t\tif ((bus_on_seen != 0) && (io_done != 0)) {\n'
+             '\t\t\t\tsettled = 1;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n',
+             '\t\t\tif (bus_on_seen != 0) {\n'
+             '\t\t\t\tsettled = 1;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n'
+             '\t\t\t(void)io_done;\n',
+             'Gta4lEmmc.c', (), 'power-bus-then-io'),
+            ('exhaustion-success',
+             '\tif (settled == 0) {\n'
+             '\t\t/* The loop must end on a quiet window with both completions\n'
+             '\t\t * observed; exhaustion is a power failure. */\n'
+             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_request, io_done);\n'
              '\t\treturn GTA4L_EMMC_ERR_POWER;\n'
              '\t}\n',
-             '\t/* bus-on requirement removed by mutation */\n',
-             'Gta4lEmmc.c', (), 'power-io-only'),
+             '\tif (settled == 0) {\n'
+             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, io_request, io_done);\n'
+             '\t}\n',
+             'Gta4lEmmc.c', (), 'power-churn'),
             ('no-4k-reject',
              '\tif (host->data_sector_size_4k != 0) {\n'
              '\t\t/* The read path is fixed at 512-byte sectors. */\n'
