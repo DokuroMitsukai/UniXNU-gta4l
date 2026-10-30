@@ -152,9 +152,10 @@ arbitrary write. The pinned SDC2 group at `0x73000` defines only CLK, CMD and
 DATA fields (pull starts at bits 14, 11 and 9; drive at bits 6, 3 and 0); it has
 no RCLK entry. In those SDC2 fields, `0x1fe4` decodes to CLK drive 16 mA with no
 pull, CMD drive 10 mA with pull-up, and DATA drive 10 mA with pull-up. The raw
-bits 15-16 are zero, but they are not a defined SDC2 RCLK field. The data-drive
-field is 10 mA while the captured `sdc2_data_on` state is 16 mA; SDC2 is the
-removable-card controller and is outside this eMMC candidate `[S]`.
+bits 15-16 are zero; bit 15 is the upper CLK-pull bit and bit 16 is outside the
+pinned SDC2 fields. The data-drive field is 10 mA while the captured
+`sdc2_data_on` state is 16 mA; SDC2 is the removable-card controller and is
+outside this eMMC candidate `[S]`.
 This closes the write-to-pad mapping part of `E2`. It does not establish the pad
 supply voltage, the actual pad levels at handoff, the pull-up source, or the
 unpowered-drive/back-power limits `[U]`. The `uefiplat.cfg`
