@@ -50,6 +50,14 @@ and resolves the caller stores at `0x38bc`/`0x38f4` to `0x8140`/`0x8868`.
 Internal indirect/computed/aliased stores and runtime/external writers remain
 open. No gate disposition changed `[S]`.
 
+Revision 8 (2026-10-30): corrects revision 7's branch handling after a
+self-audit. The scan keeps conditional-branch paths independent, propagates the
+union of path invalidations at function return, and no longer seeds an XZR
+destination from an `ADR`/`ADRP`. It still finds one read at `0x38b4` and no
+write intersecting `[0x8878,0x8880)`, and resolves the caller stores at
+`0x38bc`/`0x38f4` to `0x8140`/`0x8868`; 150 unresolved non-stack loads and 36
+unresolved non-stack stores remain. No gate disposition changed `[S]`.
+
 ## 1. Purpose and canonical links
 
 This checklist links every canonical gate to its current evidence, missing
