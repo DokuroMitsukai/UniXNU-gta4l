@@ -15,21 +15,29 @@ The booted `SdccDxe.efi` (`4084bbc7...`) exit handler at `0x81a8`:
 - sets the SDHCI bus-power bit in `POWER_CONTROL` (`0x29`) without selecting a
   voltage;
 - writes `SOFTWARE_RESET = 1` (`0x2f`);
-- polls `CORE_PWRCTL_STATUS` (`0x240`) for at most 10,001 reads and 10,001
-  one-unit delays;
-- writes the observed status to `CORE_PWRCTL_CLEAR` (`0x248`) and polls it to
+- when the argument is `1` and bus power was already set, polls
+  `CORE_PWRCTL_STATUS` (`0x240`) for at most 10,001 reads and 10,001 one-unit
+  delays;
+- writes the captured status to `CORE_PWRCTL_CLEAR` (`0x248`) and polls it to
   zero for at most 10,001 reads and 10,001 delays;
 - writes `CORE_PWRCTL_CTL` (`0x24c`) with `IO_SUCCESS` (`4`) when
-  `status & 0x3 == 0`, or `BUS_SUCCESS` (`1`) otherwise;
+  `captured_status & 0x3 == 0`, or `BUS_SUCCESS` (`1`) otherwise;
 - waits for the reset bit to self-clear (at most 10,000 reads, no delay);
-- writes vendor registers `0x21c`/`0x220` and clears bit 18 of `0x20c`.
+- writes vendor registers `0x21c`/`0x220` for each processed drive and clears
+  bit 18 of `0x20c` only for the separately selected `w19` drive.
 
 `CORE_PWRCTL_CTL` carries result bits (`BUS_SUCCESS`/`BUS_FAIL`/`IO_SUCCESS`/
 `IO_FAIL`), not the `BUS_OFF`/`BUS_ON`/`IO_LOW`/`IO_HIGH` request bits, which
-live in `CORE_PWRCTL_STATUS`. The handler reports success for the class it saw
-without performing the corresponding regulator or pad action. This proves a
-controller-local reset and result-only status write, not a bus-power-on
-regulator sequence `[S]`.
+live in `CORE_PWRCTL_STATUS`. The selection uses the status captured by the
+first poll, not the final clear-poll value: zero and IO-only status both select
+`IO_SUCCESS`, while bus-only and mixed bus/IO status select `BUS_SUCCESS` only.
+All three polls are bounded and non-aborting: no status still produces
+`IO_SUCCESS`, an unclear status still produces the selected success bit, and a
+reset that never self-clears still returns to the caller. The handler reports a
+branch outcome, not proven completion, and performs no regulator action. Its
+only pad write is the earlier unconditional `0x3f04(drive)` call, not a
+status-dependent action. This proves a controller-local reset and result-only
+status write, not a bus-power-on regulator sequence `[S]`.
 
 It does not prove that L24/L11 are on, that the SDC1 pads are at the required
 voltage, or that a result-only write is electrically safe `[U]`.

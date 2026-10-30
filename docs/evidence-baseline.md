@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T15:10:00Z`, after the final edits to the
+Hashes were taken at `2026-10-30T15:30:00Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them. The snapshot is intended to be committed without
@@ -18,25 +18,21 @@ update the table.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `3c3d586dd1feb1d63ade4452800a4ccc7cbcee31` |
-| Dirty entries at the hash snapshot | 6 changed: 5 modified (`docs/evidence-baseline.md`, `docs/kernel-build-recipe.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `porting.toml`) and 1 untracked (`docs/sdhc-power-pad-dependency-report.md`) |
-| Staging and commits | None at the snapshot; the snapshot lands as one commit covering the documentation and host-only tooling |
+| HEAD at the hash snapshot | `a958e26940dec46ceb23c38542cb64b6395af9a6` (correction commit) |
+| Parent of the correction commit | `1e3072f8ee39a6bbee05204a95fd94604bd6f7ac` |
+| Correction commit paths | 8: 7 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`docs/sdhc-decision-update-2026-10-30.md`) |
+| Dirty entries at the hash snapshot | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 untracked (`scripts/test-gta4l-sdccdxe-decode.py`) |
+| Staging and commits | None at the snapshot; this follow-up snapshot lands as one commit on top of `a958e26` |
 
-The dirty-entry row is the pre-commit snapshot, not the post-commit tree. The
-report batch contained exactly those six paths: five modified
-(`docs/evidence-baseline.md`, `docs/kernel-build-recipe.md`,
-`docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`,
-`porting.toml`) and one added (`docs/sdhc-power-pad-dependency-report.md`).
+The hash table describes the follow-up working tree: the correction commit
+`a958e26` plus the then-uncommitted documentation and test edits listed above.
+The correction commit itself contains exactly the eight paths in the table and
+is not the earlier report batch. The follow-up batch adds the host-only
+`scripts/test-gta4l-sdccdxe-decode.py` regression test and tightens the
+timeout/result wording in the report, decision update and firmware handoff.
+
 The earlier documentation batch contained the eleven paths listed in the
-previous snapshot: six modified and five added.
-
-The current snapshot is the evidence branch after the Linux
-fixture-reproduction, stale-status reconciliation, recipe-correction,
-input-pin and input-inventory commits, with the payload replay, packaging
-replay, kernel compile/link replay and evidence-wording corrections in the
-working tree. The hash table below
-describes that working tree, not the original evidence-closure tree. The original provenance is retained separately
-because the path lists and dirty inventory are historical observations.
+original evidence-closure provenance below: six modified and five added.
 
 ### Historical provenance
 
@@ -69,6 +65,14 @@ and this task is not independently recorded. The task-touched paths are:
 The later bounded RPM/XBL trace updated `power-retention-evidence.md`,
 `rpm-power-interface.md`, `sdhc-decision-memo.md`, `sdhc-electrical-contract.md`,
 `stock-firmware-analysis-audit.md`, `pm6125-register-map.md` and `porting.toml`.
+
+A later report batch was recorded with HEAD
+`3c3d586dd1feb1d63ade4452800a4ccc7cbcee31` and six dirty paths: five modified
+(`docs/evidence-baseline.md`, `docs/kernel-build-recipe.md`,
+`docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`,
+`porting.toml`) and one added (`docs/sdhc-power-pad-dependency-report.md`).
+That inventory is a historical pre-commit observation for that batch, not the
+current snapshot.
 
 ### New paths in this task
 
@@ -133,14 +137,15 @@ bytes of the previously booted image `[S]`.
 | RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `d967e640ca8f6f7eb0607d0a51aea9b541b21901ed4bf5a0a3e9be090f2fa4a8` |
 | RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `c670e2788044bd8b5054b19452dde8080ee9dc93d794ffe8abf3e2890e202afc` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `7399f421fd11db96fcea80e9c3f5bafc178e2d99099391e293188eb0dd8045b9` |
-| Power/pad dependency report | `docs/sdhc-power-pad-dependency-report.md` | `ac6d6bdd4141f4ea191d91194899fc6217d7b15bbaaed49ce98a55f5efc95143` |
-| Decision update 2026-10-30 | `docs/sdhc-decision-update-2026-10-30.md` | `ace78f94d526166478b732dc035a13dcaca346d56e2d94b0fc8a8c45c3fc24fe` |
-| Firmware handoff | `docs/firmware-handoff.md` | `8e6adcbe4a1540573a724a412ad2fe6c2414879017e6422226628bc98b2e2128` |
+| Power/pad dependency report | `docs/sdhc-power-pad-dependency-report.md` | `b34f1d68f2ae3f6e007bbbadfff603c3c0edcb846355b35b92b039b87050ca51` |
+| Decision update 2026-10-30 | `docs/sdhc-decision-update-2026-10-30.md` | `09cfa0d63131124374804ce5bb2b0bffa04de0a6d2ac0f70cd6e6174f1b81cb7` |
+| Firmware handoff | `docs/firmware-handoff.md` | `3007de28ad245ae3a268f42fe4ffa9fda289e55473135b6e8a89207ee751cf19` |
+| SdccDxe decode test | `scripts/test-gta4l-sdccdxe-decode.py` | `21cd1df77c3216db17f62e109fc4f87dd6c26a02887c195d4b74df1c5743b6c8` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
 | Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `a7a7a1e644c6d927061692c57ccee0c0e19bf7008948b6711a362ec6b61ad420` |
+| Porting record | `porting.toml` | `14b6206e166b40932f603ef2e39ab83493071dcda95b2b18993f0eb2649d1ca5` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `2d8f060327c4d557ff588e90200676b3dfdaf213c60dec0d24c0300f28eb3fd3` |
@@ -157,8 +162,9 @@ reproduced-kernel evidence packets; see `kernel-build-recipe.md` §5 and
 The HostInit source correction was a working-tree restoration to the existing
 HEAD blob `3f8f4531...`; it created no content diff and is therefore absent
 from both commits. The regression it removed was an uncommitted local revert to
-`bc228be7...`. In this snapshot, `porting.toml` changed only the diagnostics finding that
-summarizes the power/pad report; it is not a build-input change.
+`bc228be7...`. In this snapshot, `porting.toml` changed only the diagnostics
+finding that summarizes the power/pad report and names the new decode
+regression test; it is not a build-input change.
 
 ## 3. Pinned Linux source cache
 
@@ -267,6 +273,7 @@ sha256sum package/Gta4lSdhciHostInit.c package/Gta4lSdhciHostInit.h \
   scripts/test-gta4l-sdhci-host-init-sim.py \
   scripts/oracle-gta4l-sdhci-host-init.py \
   scripts/test-gta4l-sdhci-evidence-counts.py \
+  scripts/test-gta4l-sdccdxe-decode.py \
   docs/sdhci-host-init.md docs/sdhc-decision-memo.md \
   docs/sdhc-electrical-contract.md docs/power-retention-evidence.md \
   docs/rpm-power-interface.md docs/pm6125-register-map.md \
@@ -283,6 +290,7 @@ python3.11 -B scripts/test-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-host-init-sim.py
 python3.11 -B scripts/oracle-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-evidence-counts.py
+python3.11 -B scripts/test-gta4l-sdccdxe-decode.py
 python3.11 -B scripts/test-gta4l-ram-root-fixture-recipe.py
 python3.11 -B scripts/test-gta4l-rpm-ldoa-analysis.py
 python3.11 -B scripts/analyze-gta4l-rpm-ldoa.py \
@@ -294,6 +302,11 @@ hash unless `--expect-sha256` is given explicitly. `--code` checks the
 documented Thumb call sites, literals, destination registers, registration
 setup and class registration. The self-test uses only a synthetic image `[S]`.
 
+`scripts/test-gta4l-sdccdxe-decode.py` reads the sibling Mu-Silicium
+`SdccDxe.efi` when present and otherwise extracts the same pinned PE from the
+committed `SILICIUM_UEFI.fd`. It is a static instruction/model check and does
+not execute firmware `[S]`.
+
 The `fs-timer` fixture reproduction is recorded in
 `docs/ram-root-fixture-reproducibility.md`; it rebuilds the signed fixture,
 trust cache and root image byte-for-byte with the pinned cctools-port and
@@ -304,7 +317,7 @@ python3.11 - <<'PY'
 import hashlib, pathlib, re
 text = pathlib.Path('docs/evidence-baseline.md').read_text()
 rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-expected = 30
+expected = 31
 paths = [path for path, _ in rows]
 assert len(rows) == expected, f'expected {expected} rows, found {len(rows)}'
 assert len(set(paths)) == len(paths), 'duplicate paths in the table'
@@ -328,7 +341,8 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | Check | Result |
 | --- | --- |
 | `scripts/test-gta4l-diagnostic-payload.py`, `test-gta4l-diagnostic-package.py`, `test-gta4l-boot-image.py`, `test-gta4l-sdhci-handoff-audit.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-xnu-mtimes.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py`, `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `check-gta4l.py` | All exited 0 |
-| Hash-table self-check in §6 | `rows=30 mismatches=0` |
+| `scripts/test-gta4l-sdccdxe-decode.py` (static PE/model check, separate from the diagnostic tests) | PASS: pinned SdccDxe SHA-256, handshake and pad instruction words, captured-status selection, three non-aborting timeout paths, loop bounds, TLMM arithmetic and pad decode |
+| Hash-table self-check in §6 | `rows=31 mismatches=0` |
 | `porting.toml` parse with `tomllib` | 13 areas |
 | `git diff --check` | Clean |
 

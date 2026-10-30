@@ -52,7 +52,7 @@ limits `[S]/[U]`.
 | VCCQ, PM6125 L11 | Vendor `sdhc_1` requests 1.8 V (range 1.704–1.952 V, 325 mA); shared with `ufshc`; declared 1.8 V IO domain; RPM-owned; no L11 vote | Pad domain is 1.8 V if L11 is enabled and the pads use that supply | Actual rail and pad domain; pull-up source; unpowered-drive limits; absolute maxima; load | `E1`, `E2`, `E3`, `E4`, `E7` |
 | SDC1 pads | Pinned `sm6115.dtsi` TLMM tiles `west=0x500000`, `south=0x900000`; pinned `pinctrl-sm6115.c` places the SDC1 QDSD group at `0x75000` and SDC2 at `0x73000`; UEFI writes `0x9fe4` to `0x575000` and `0x1fe4` to `0x973000`; `0x9fe4` decodes to the vendor `sdc1_*_on` drive/pull fields; no XNU TLMM code | The SDC1 pad supply is 1.8 V if L11 is enabled and the pads use it; the decoded state is the vendor active configuration, not a measured level | Actual pad voltage and state, pull-up source, unpowered-drive and back-power limits | `E2`, `E6` |
 | Firmware handoff | `SdccDxe` sets the bus-power bit, resets the controller, clears/acknowledges the resulting power status, and does not re-enable bus power; the later XNU audit reports `pwr=00`; `PmicDxeLa` writes only `0x14`/`0x16`/`0xd1` and the `+0x28` arbiter path; no direct LDO write found | Rails remain as XBL/RPM left them if no indirect PMIC effect occurs | Runtime `+0x28` bitmap, indirect PMIC effects, actual rail state and retention across transitions | `E5`, `E7`, `E8` |
-| Power request/ack | Linux order is `POWER_CONTROL` → power IRQ → `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; UEFI writes the `IO_SUCCESS` result bit when neither bus request bit is set, or the `BUS_SUCCESS` result bit when either is, without a rail or pad action; XNU maps no power IRQ and acknowledges nothing | A bare XNU `POWER_CONTROL` write may leave a pending request | PM6125 fault semantics; whether no-ack or result-without-rail-action is safe; the documented acknowledge-or-not decision | `E5`, `E8`, `S1` |
+| Power request/ack | Linux order is `POWER_CONTROL` → power IRQ → `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; UEFI writes the `IO_SUCCESS` result bit when the captured status has neither bus request bit set (including zero), or the `BUS_SUCCESS` result bit when either is, without a status-dependent rail or pad action; XNU maps no power IRQ and acknowledges nothing | A bare XNU `POWER_CONTROL` write may leave a pending request | PM6125 fault semantics; whether no-ack or result-without-rail-action is safe; the documented acknowledge-or-not decision | `E5`, `E8`, `S1` |
 | Sequencing, delays, recovery | Linux software order; UEFI reset/power order with bounded status/clear polls (up to 10,001 reads each) and a 10,000-read reset self-clear poll; BOOT-partition backup/rollback | None beyond the software order | Electrical order and minimum delays; rail safe-stop, discharge/power-cycle and re-init; acceptance criteria; independent review | `E5`, `E9`, `S3` |
 | CX, clocks, fabric, SMMU (post-power) | The Linux probe requests CX SVS_PLUS and both ICC paths attempt votes; GCC branches enabled and block reset self-cleared; internal clock stable; PIO does not use the SDHC DMA master; `sdhc_1` DT has SMMU stream `0xc0` | Retained CX/fabric state may suffice for PIO if it was left high | Physical CX voltage, ICC/fabric state, SMMU stream state, card-clock source rate | Beyond the bus-power candidate; gates card commands/DMA |
 
@@ -69,25 +69,46 @@ registers and the handler does not re-enable bus power `[S]`:
    value, and writes the byte back. The handler calls it with `1`, so it sets the
    bus-power bit and preserves the existing voltage-select field. It does not
    select a voltage `[S]`.
-2. `0x6458` reads `POWER_CONTROL`, writes `SOFTWARE_RESET = 1` (`0x2f`), and,
-   only if the bus-power bit was set before the reset, polls
-   `CORE_PWRCTL_STATUS` (`0x240`). The loop is a do-while shape: it performs at
-   most 10,001 status reads and 10,001 one-unit delay calls, and exits early on
-   a nonzero status `[S]`.
-3. It writes the observed status to `CORE_PWRCTL_CLEAR` (`0x248`), then polls
-   until the status reads zero. That loop also performs at most 10,001 reads and
-   10,001 delay calls. It then writes `CORE_PWRCTL_CTL` (`0x24c`) with `4` when
-   `status & 0x3 == 0`, or `1` otherwise. Under the pinned Linux definitions,
-   `CORE_PWRCTL_CTL` carries result bits, not request bits: bit 0 is
-   `BUS_SUCCESS`, bit 1 `BUS_FAIL`, bit 2 `IO_SUCCESS`, bit 3 `IO_FAIL`. The
-   request names `BUS_OFF`/`BUS_ON`/`IO_LOW`/`IO_HIGH` (bits 0-3) belong to
-   `CORE_PWRCTL_STATUS`. The handler therefore writes `IO_SUCCESS` when neither
-   bus request bit was observed, or `BUS_SUCCESS` when either was; it writes no
-   failure bit and does not perform the corresponding rail or pad action
-   `[S]`.
-4. It waits for the software-reset bit to self-clear, then writes the vendor
-   registers at `0x21c`/`0x220` and clears bit 18 of `0x20c` for the selected
-   drive `[S]`.
+2. `0x6458` receives the drive in `w0` and the reset value in `w1`; the caller
+   passes `1`. It reads `POWER_CONTROL`, writes that value to
+   `SOFTWARE_RESET` (`0x2f`), and enters the status/clear/result path only when
+   `w1 == 1` and the bus-power bit was set in the captured `POWER_CONTROL`
+   byte. If either condition is false, it skips directly to the reset poll and
+   writes no `CORE_PWRCTL_CTL` value `[S]`.
+3. The status poll is a do-while shape: at most 10,001
+   `CORE_PWRCTL_STATUS` (`0x240`) reads and 10,001 one-unit delay calls, with
+   early exit on a nonzero value. On exhaustion it forces the captured status
+   to zero and continues. It writes the captured value to `CORE_PWRCTL_CLEAR`
+   (`0x248`) and polls `0x240` to zero for at most 10,001 reads and 10,001
+   delays; on exhaustion it continues with the captured value unchanged. It
+   then writes `CORE_PWRCTL_CTL` (`0x24c`) with `4` when the captured status
+   satisfies `captured_status & 0x3 == 0`, or `1` otherwise. The selection
+   therefore uses the initially captured status, not the final clear-poll value:
+   zero status selects `IO_SUCCESS`; an IO-only status (bits 2-3) also selects
+   `IO_SUCCESS`; bus-only (bits 0-1) and mixed bus/IO status select
+   `BUS_SUCCESS` only. Under the pinned Linux definitions, `CORE_PWRCTL_CTL`
+   carries result bits, not request bits: bit 0 is `BUS_SUCCESS`, bit 1
+   `BUS_FAIL`, bit 2 `IO_SUCCESS`, bit 3 `IO_FAIL`. The request names
+   `BUS_OFF`/`BUS_ON`/`IO_LOW`/`IO_HIGH` (bits 0-3) belong to
+   `CORE_PWRCTL_STATUS`. The handler writes no failure bit and performs no
+   action that depends on the status `[S]`.
+4. It waits for `(0x2f & w1)` to become zero, reading at most 10,000 times with
+   no delay. On exhaustion it returns normally; the caller then writes vendor
+   registers `0x21c`/`0x220` for each processed drive and clears bit 18 of
+   `0x20c` only when the drive equals the separately selected `w19` drive
+   (`0x6d28` is gated by `cmp w19, w20`) `[S]`.
+
+The three bounded loops do not abort the sequence. If no status arrives, the
+handler still writes zero to `CORE_PWRCTL_CLEAR` and `IO_SUCCESS`; if the
+status never clears, it still writes the result selected from the captured
+value; if the reset bit never self-clears, it still returns and the caller
+proceeds to the vendor writes. A success-bit write therefore records the branch
+the handler took, not that the controller completed the handshake `[S]`.
+
+The pad write is separate from this handshake. `0x3f04(drive)` is called
+earlier for each processed drive and writes `0x9fe4`/`0x1fe4` unconditionally;
+it is not a response to the power status. No rail write exists in the handler,
+and no pad write is conditioned on the status `[S]`.
 
 The handler has no PMIC, SPMI, LDO or RPM request. `PmicDxeLa` separately clears
 PMIC interrupt latches/enables and touches the SPMI-arbiter `+0x28` path; those
@@ -123,8 +144,9 @@ not on a PMIC or GCC page `[S]`.
 | RCLK pull | 15-16 | `1` → pull-down | `sdc1_rclk_on`: pull-down |
 
 The SDC1 value is therefore the vendor active pad configuration, not an
-arbitrary write. The SDC2 value `0x1fe4` matches the same pattern except that
-its data-drive field is 10 mA while the captured `sdc2_data_on` state is 16 mA;
+arbitrary write. The SDC2 value `0x1fe4` uses the same data/CMD/CLK drive and
+pull fields, but its RCLK bits (15-16) are zero rather than pull-down, and its
+data-drive field is 10 mA while the captured `sdc2_data_on` state is 16 mA;
 SDC2 is the removable-card controller and is outside this eMMC candidate `[S]`.
 This closes the write-to-pad mapping part of `E2`. It does not establish the pad
 supply voltage, the actual pad levels at handoff, the pull-up source, or the
