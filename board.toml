@@ -32,6 +32,7 @@ archives = [
   "build-libpthread-kernel.py",
   "build-platform-power.py",
   "build-gta4l-sdhci-snapshot.py",
+  "build-gta4l-emmc-probe.py",
 ]
 
 [device_tree]

@@ -1,0 +1,25 @@
+diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
+--- a/bsd/kern/bsd_init.c
++++ b/bsd/kern/bsd_init.c
+@@ -697,6 +697,10 @@
+ 	extern void gta4l_sdhci_host_init_preflight(void);
+ 	gta4l_sdhci_host_init_preflight();
+ 
++	/* Reject a conflicting eMMC diagnostic before it maps hardware. */
++	extern void gta4l_emmc_probe_preflight(void);
++	gta4l_emmc_probe_preflight();
++
+ 	/* Board-only, boot-argument-gated handoff audit; returns when disabled. */
+ 	extern void gta4l_sdhci_handoff_audit_run(void);
+ 	gta4l_sdhci_handoff_audit_run();
+@@ -709,6 +713,10 @@
+ 	extern void gta4l_sdhci_host_init_run(void);
+ 	gta4l_sdhci_host_init_run();
+ 
++	/* Board-only, boot-argument-gated eMMC diagnostic; returns when disabled. */
++	extern void gta4l_emmc_probe_run(void);
++	gta4l_emmc_probe_run();
++
+ 	/*
+ 	 * Initialize the calendar.
+ 	 */

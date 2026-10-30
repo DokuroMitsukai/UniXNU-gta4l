@@ -10,3 +10,6 @@ gta4l-sdhci-snapshot.patch
 
 # Board-only handoff audit and host-local init hooks; both return unless the matching boot argument is present.
 gta4l-sdhci-handoff-audit.patch
+
+# Board-only eMMC diagnostic hook; returns unless gta4l-emmc-probe=1 is present.
+gta4l-emmc-probe.patch
