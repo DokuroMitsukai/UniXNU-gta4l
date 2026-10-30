@@ -241,3 +241,24 @@ its established evidence, missing input, acquisition route, responsible role,
 closure criterion and dependencies. It is a host-only inventory: it adds no
 measurement, closes no gate and does not change any disposition. The decision
 remains **NO-GO** `[S]`.
+
+## 11. Porting-approach reassessment 2026-10-31
+
+`docs/porting-approach-reassessment-2026-10-31.md` records the owner-directed
+reassessment. Its scope statement is now canonical:
+
+- **Software porting may proceed** using the mainline Linux, vendor/LineageOS
+  and captured-firmware stack as the reference. Electrical characterization is
+  not a prerequisite for writing, porting or host-testing software `[S]`.
+- **The `NO-GO` above applies only to the on-device
+  `sdhc-bus-power-activation` operation.** It is not a finding that the
+  controller cannot be ported, and it does not make Linux an invalid reference
+  `[S]`.
+- Any device action still requires the owner's separate written approval for
+  the exact procedure and a verified EFS/CPEFS backup, per `AGENTS.md` `[S]`.
+- No `E*` or `S*` gate is marked closed. The evidence gaps remain open for the
+  activation operation; they no longer block software work `[S]`.
+
+This addendum does not authorize bus-power activation, card-clock activation,
+card commands, DMA, PMIC/SPMI access, RPM votes or storage access. It changes
+the scope of the existing decision, not the evidence tags `[S]`.
