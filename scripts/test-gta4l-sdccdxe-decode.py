@@ -432,8 +432,14 @@ def check_pad_decode():
         'cmd_pull': 3,
         'clk_pull': 0,
     }, '0x1fe4 does not decode to the documented SDC2 fields')
+    check(decode_sdc2_pad(0x4000)['clk_pull'] == 1,
+          'SDC2 CLK-pull bit 14 is not the field LSB')
+    check(decode_sdc2_pad(0x8000)['clk_pull'] == 2,
+          'SDC2 CLK-pull bit 15 is not the field MSB')
+    check(decode_sdc2_pad(0x2000)['clk_pull'] == 0,
+          'SDC2 bit 13 is not excluded from the CLK-pull field')
     check((0x1fe4 >> 15) & 0x3 == 0,
-          '0x1fe4 sets raw bits 15-16, which the SDC2 group does not define')
+          '0x1fe4 sets raw bits 15-16 (CLK-pull MSB or undefined bit 16)')
     check(0xfffbffff & (1 << 18) == 0 and
           (0xfffbffff | (1 << 18)) == 0xffffffff,
           'the vendor 0x20c mask does not clear only bit 18')
