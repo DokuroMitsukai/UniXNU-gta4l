@@ -43,8 +43,9 @@ Revision 7 (2026-10-30): strengthens revision 6's scan after a second audit.
 The scan now distinguishes XZR from SP, invalidates `.data` pointer slots
 written earlier in the path or by modeled calls, stops and reports any
 instruction outside its register-only whitelist, and reports unresolved loads
-and stores and every step/budget/call-depth/indirect-branch truncation. It
-still finds one read at `0x38b4` and no write intersecting `[0x8878,0x8880)`,
+and stores and every revisited-state/step/budget/call-depth/indirect-branch
+truncation. Revisited states conservatively invalidate every `.data` pointer
+slot. It still finds one read at `0x38b4` and no write intersecting `[0x8878,0x8880)`,
 and resolves the caller stores at `0x38bc`/`0x38f4` to `0x8140`/`0x8868`.
 Internal indirect/computed/aliased stores and runtime/external writers remain
 open. No gate disposition changed `[S]`.
@@ -337,8 +338,8 @@ vendor DT, or by the prior controller-local result `[S]`.
   the caller stores at `0x38bc`/`0x38f4` to `0x8140`/`0x8868`, stops at
   instructions outside its register-only whitelist, invalidates overwritten
   `.data` pointer slots, and conservatively invalidates all such slots after
-  indirect or truncated calls, so the descriptor-base override is zero in the
-  image's initial state `[S]`.
+  indirect or truncated calls and on revisited states, so the descriptor-base
+  override is zero in the image's initial state `[S]`.
 - **Missing documentation or measurement:** PM6125 fault semantics, USID/subtype
   and `QPNPINT` applicability; SPMI-arbiter clear-register read/write semantics
   (what bits 31:8 read as and whether writing them back is safe); runtime
@@ -595,7 +596,7 @@ limits with page or section references `[S]`.
 | `D8` | `E3`, `E4` | PM6125 parent-rail capability and combined-load accounting for `vdd_l9_l11` and `vdd_l23_l24` | Parent input current capability, shared L9/L23 loads and combined loading against L11/L24 demand | PM6125 datasheet (`D1`) plus board population/topology (`D3`) and measurement (`D6`); custodian: device owner; analysis: build agent `[U]` | Document revisions, rail-limit pages, load inventory and measurement provenance | Parent-rail current limits, L9/L23 consumer loads, combined-load margin and load-step limits with page/section | Declared `sdhc_1`/`ufshc` currents are not regulator capability; other L9/L23 loads are not enumerated `[U]` |
 | `D9` | `E1`, `E3`, `E8` | Non-scanning PM6125 USID/subtype identity evidence | Installed PMIC identity and subtype needed for register and rail applicability | Vendor documentation, package marking or a non-scanning boot log; custodian: device owner; analysis: build agent. A live PMIC scan remains blocked `[U]` | Source type, capture method, firmware revision, raw record and hash | USID/subtype value and mapping to the applicable datasheet revision with page/section | Rail numbering is established but identity is not; a scan is not authorized `[U]` |
 | `D10` | `E8` | Runtime SPMI-arbiter APID/owner-bitmap evidence for the `+0x28` clear path | Which master owns or may clear the pending interrupt and what the owner bitmap reads at runtime | SoC arbiter documentation or a separately approved runtime transport trace; custodian: device owner; collection requires separate approval `[U]` | Trace procedure, firmware and image hashes, APID bitmap values, timestamps, calibration | Owner/APID bits, access permissions and read side effects with page/section or trace evidence | Only bounded static inference exists; runtime collection is not authorized `[U]` |
-| `D11` | `E8` | Descriptor-base override write analysis for indirect and computed stores | Whether anything populates global `0x8878` at run time and can therefore change the arbiter descriptor base | Host-only binary/data-flow analysis of the pinned drivers plus `D4` arbiter documentation; the bounded scan is reproducible, stops at instructions outside its register-only whitelist, invalidates overwritten `.data` pointer slots, and leaves internal indirect/computed and runtime/external stores open `[S]/[U]` | Firmware hashes, tool revision, analysis scope and unresolved indirect targets | Enumerated stores to `0x8878` and aliases, computed addresses, reachability and worst-case descriptor-base value with evidence | The bounded scan finds one read at `0x38b4` and no write intersecting `[0x8878,0x8880)`; it resolves the caller stores at `0x38bc`/`0x38f4` to `0x8140`/`0x8868`, stops at instructions outside its register-only whitelist, invalidates overwritten `.data` pointer slots, and reports 150 unresolved non-stack loads and 36 unresolved non-stack stores, so it is not a proof of absence and the analysis is not a datasheet `[U]` |
+| `D11` | `E8` | Descriptor-base override write analysis for indirect and computed stores | Whether anything populates global `0x8878` at run time and can therefore change the arbiter descriptor base | Host-only binary/data-flow analysis of the pinned drivers plus `D4` arbiter documentation; the bounded scan is reproducible, stops at instructions outside its register-only whitelist, invalidates overwritten `.data` pointer slots and all such slots on revisited states, and leaves internal indirect/computed and runtime/external stores open `[S]/[U]` | Firmware hashes, tool revision, analysis scope and unresolved indirect targets | Enumerated stores to `0x8878` and aliases, computed addresses, reachability and worst-case descriptor-base value with evidence | The bounded scan finds one read at `0x38b4` and no write intersecting `[0x8878,0x8880)`; it resolves the caller stores at `0x38bc`/`0x38f4` to `0x8140`/`0x8868`, stops at instructions outside its register-only whitelist, invalidates overwritten `.data` pointer slots and all such slots on revisited states, and reports 150 unresolved non-stack loads and 36 unresolved non-stack stores, so it is not a proof of absence and the analysis is not a datasheet `[U]` |
 
 Register rules:
 
