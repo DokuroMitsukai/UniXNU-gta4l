@@ -115,7 +115,9 @@ python3.11 scripts/linux/setup-toolchain.py "$REPLAY/toolchain-linux" \
   --package-manager none --check
 ```
 
-The source check stops before any build when a pinned input differs.
+The source check stops before any build when a pinned input differs. The
+dependency commit checks below run after the cctools build; the compiler,
+signer and fixture checks run before the fixture build.
 
 Build the pinned cctools tools. Save this helper as
 `$REPLAY/build-cctools.py`; it takes the replay root and the shared checkout as
@@ -203,13 +205,14 @@ Confirm that `xcrun` resolves the pinned compiler and version:
   export PATH="$TC/CommandLineTools/usr/bin:$TC/bin:$PATH"
   export XNU_TOOLCHAIN_BIN="$TC/CommandLineTools/usr/bin $TC/XcodeDefault.xctoolchain/usr/bin"
   test "$(xcrun --find clang)" = "$TC/CommandLineTools/usr/bin/clang"
-  xcrun clang --version | head -1 | grep -F 'clang version 21.1.8'
+  xcrun clang --version | head -1 | grep -Eq '^clang version 21\.1\.8( |$)'
 )
 ```
 
-The path check rejects a `PATH` fallback; the version check rejects a
-different compiler. Build the fixture against the gta4l output tree; the
-defaults supply the identifier and the 12,288-byte test file:
+The path check rejects a `PATH` fallback; the version check matches the exact
+version token and rejects a different or failed compiler. Build the fixture
+against the gta4l output tree; the defaults supply the identifier and the
+12,288-byte test file:
 
 ```sh
 python3.11 -B scripts/build-ram-root-report-fixture.py \
@@ -287,3 +290,5 @@ The enforcement paths were also exercised with the recipe's own blocks: a
 wrong source hash, a missing or duplicated input row, a wrong compiler version,
 a `PATH` fallback, a different dependency commit, a non-empty replay directory
 and empty, missing or duplicated baseline inventories all failed closed.
+`scripts/test-gta4l-ram-root-fixture-recipe.py` repeats those checks on the
+host without network access or a toolchain build.
