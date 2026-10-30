@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T08:27:44Z`, after the final edits to the
+Hashes were taken at `2026-10-30T08:37:41Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,16 +16,16 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `602faee60fc2048d1b148f91f0d637566d9d767c` |
+| HEAD | `fce403bf520d5b75bb48d9c926d4e7143ba8fc0c` |
 | Dirty entries at the hash snapshot | 2 modified (`docs/evidence-baseline.md` and `docs/ram-root-fixture-reproducibility.md`) |
 | Staging and commits | None at the snapshot; the snapshot lands as one documentation and tooling commit |
 
 The current snapshot is the evidence branch after the Linux
-fixture-reproduction and stale-status reconciliation commit, with the recipe
-correction and input pins in the working tree. The hash table below describes
-that working tree, not the original evidence-closure tree. The original
-provenance is retained separately because the path lists and dirty inventory
-are historical observations.
+fixture-reproduction, stale-status reconciliation, recipe-correction and
+input-pin commits, with the mechanical enforcement of those pins in the
+working tree. The hash table below describes that working tree, not the
+original evidence-closure tree. The original provenance is retained separately
+because the path lists and dirty inventory are historical observations.
 
 ### Historical provenance
 
@@ -128,7 +128,7 @@ bytes of the previously booted image `[S]`.
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
 | Porting record | `porting.toml` | `9771164882e042b33875483655c386b85b418e954a17fc838ce507cb0448a128` |
-| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `ae258e3d4de55e412340208b90ee16b8abc0f98ca5c6fed0506ea5769904a829` |
+| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `7bcb3c58a5ce8804f28835052191f684163d62f2634e2947dd4b60f47dd80e6e` |
 
 ## 3. Pinned Linux source cache
 

@@ -80,37 +80,57 @@ That stub toolchain is **fixture-only**; it is not a kernel toolchain.
 
 ## 4. Recipe
 
-The recipe uses an empty prefix so it does not reuse a prepared toolchain.
-Run the blocks below in one shell; the variables persist and every failure
-aborts:
+The recipe creates a new empty replay directory and never reuses or deletes an
+existing one. Run the blocks below in one shell; the variables persist and
+every failure aborts:
 
 ```sh
 set -eu
 SRC=/path/to/taba7unixnu/src/UniXNU
-PREFIX=/tmp/opencode/repro-fresh/toolchain-linux
-WORK=/tmp/opencode/repro-fresh/cctools-work
+DOC="$SRC/../UniXNU-gta4l/docs/ram-root-fixture-reproducibility.md"
+REPLAY=$(mktemp -d /tmp/opencode/repro-fresh.XXXXXX)
+test -z "$(ls -A "$REPLAY")"
 cd "$SRC"
-sha256sum scripts/build-ram-root-report-fixture.py \
-  scripts/qemu-entry/native-user.S scripts/unixnu/kernel.py \
-  scripts/linux/setup-toolchain.py scripts/linux/xcrun
-python3.11 scripts/linux/setup-toolchain.py "$PREFIX" \
+python3.11 - "$DOC" "$SRC" <<'PY'
+import hashlib, pathlib, re, sys
+doc = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+rows = re.findall(r'^\| `(scripts/[^`]+)` \| `([0-9a-f]{64})` \|$', doc.read_text(), re.M)
+if len(rows) != 5:
+    raise SystemExit(f'expected 5 pinned inputs, found {len(rows)}')
+if len({path for path, _ in rows}) != len(rows):
+    raise SystemExit('duplicate pinned input paths')
+bad = []
+for path, want in rows:
+    got = hashlib.sha256((root / path).read_bytes()).hexdigest()
+    if got != want:
+        bad.append((path, got, want))
+if bad:
+    for path, got, want in bad:
+        print(f'{path}: {got} != {want}')
+    raise SystemExit('source inputs do not match the pins')
+print(f'source inputs: {len(rows)} match')
+PY
+python3.11 scripts/linux/setup-toolchain.py "$REPLAY/toolchain-linux" \
   --package-manager none --check
 ```
 
-The `sha256sum` output must match the input table in §3.
+The source check stops before any build when a pinned input differs.
 
 Build the pinned cctools tools. Save this helper as
-`/tmp/opencode/repro-fresh/build-cctools.py`; it imports the supported
-installer and calls only its `cctools()` step:
+`$REPLAY/build-cctools.py`; it takes the replay root and the shared checkout as
+arguments:
 
 ```python
 #!/usr/bin/env python3
 import importlib.util
+import sys
 from pathlib import Path
 
-SRC = Path('/path/to/taba7unixnu/src/UniXNU')
-PREFIX = Path('/tmp/opencode/repro-fresh/toolchain-linux')
-WORK = Path('/tmp/opencode/repro-fresh/cctools-work')
+REPLAY = Path(sys.argv[1])
+SRC = Path(sys.argv[2])
+PREFIX = REPLAY / 'toolchain-linux'
+WORK = REPLAY / 'cctools-work'
 
 spec = importlib.util.spec_from_file_location(
     'setup_toolchain', SRC / 'scripts/linux/setup-toolchain.py')
@@ -124,46 +144,50 @@ mod.cctools(clt, include, WORK, 8, mod.host_tools())
 ```
 
 ```sh
-python3.11 /tmp/opencode/repro-fresh/build-cctools.py
-"$PREFIX/CommandLineTools/usr/bin/ld" -v
-git -C "$WORK/cctools-port" rev-parse HEAD
-git -C "$WORK/swift-corelibs-libdispatch" rev-parse HEAD
+python3.11 "$REPLAY/build-cctools.py" "$REPLAY" "$SRC"
+"$REPLAY/toolchain-linux/CommandLineTools/usr/bin/ld" -v
+test "$(git -C "$REPLAY/cctools-work/cctools-port" rev-parse HEAD)" = \
+  904de2a71d4da6a9b30d2efaf912a10ddc7d9ddb
+test "$(git -C "$REPLAY/cctools-work/swift-corelibs-libdispatch" rev-parse HEAD)" = \
+  024805abec6daa9cdda569fd736b9c7686dfd735
 ```
 
-The linker reports `PROJECT:ld64-956.6`; the two commits must match §3.
+The linker reports `PROJECT:ld64-956.6`; the two commit checks stop the
+recipe if the tags resolve elsewhere.
 
-Download and verify `rcodesign` 0.29.0 in a subshell so the working
-directory does not change:
+Download and verify `rcodesign` 0.29.0 in a subshell so the working directory
+does not change:
 
 ```sh
-mkdir -p /tmp/opencode/repro-fresh/rcodesign-linux
+mkdir -p "$REPLAY/rcodesign-linux"
 (
-  cd /tmp/opencode/repro-fresh/rcodesign-linux
+  cd "$REPLAY/rcodesign-linux"
   curl -fsSL -o rcodesign.tar.gz \
     https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz
   curl -fsSL -o rcodesign.tar.gz.sha256 \
     https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F0.29.0/apple-codesign-0.29.0-x86_64-unknown-linux-musl.tar.gz.sha256
   printf '%s  rcodesign.tar.gz\n' "$(cat rcodesign.tar.gz.sha256)" | sha256sum -c -
+  printf '%s  rcodesign.tar.gz\n' dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002 | sha256sum -c -
   tar -xzf rcodesign.tar.gz
   chmod +x apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign
 )
 ```
 
-The release `.sha256` asset is a bare digest, so the filename is supplied to
-`sha256sum -c`. Create the shim toolchain. The `clang` symlink goes in
-`CommandLineTools/usr/bin` because `xcrun` resolves tools from
-`XNU_TOOLCHAIN_BIN`; the `llvm/bin/clang` entry only satisfies the
-`linux_env()` existence check.
+The first check uses the release asset; the second enforces the pinned digest
+from §3, so a changed release asset also stops the recipe. Create the shim
+toolchain. The `clang` symlink goes in `CommandLineTools/usr/bin` because
+`xcrun` resolves tools from `XNU_TOOLCHAIN_BIN`; the `llvm/bin/clang` entry
+only satisfies the `linux_env()` existence check.
 
 ```sh
-TC=/tmp/opencode/repro-fresh/fixture-toolchain
+TC="$REPLAY/fixture-toolchain"
 mkdir -p "$TC/llvm/bin" "$TC/CommandLineTools/usr/bin" \
   "$TC/CommandLineTools/usr/libexec" "$TC/XcodeDefault.xctoolchain/usr/bin" "$TC/bin"
 ln -sf /usr/bin/clang-21 "$TC/llvm/bin/clang"
 ln -sf /usr/bin/clang-21 "$TC/CommandLineTools/usr/bin/clang"
-ln -sf "$PREFIX/CommandLineTools/usr/bin/ld" "$TC/CommandLineTools/usr/bin/ld"
-ln -sf "$PREFIX/CommandLineTools/usr/bin/vtool" "$TC/CommandLineTools/usr/bin/vtool"
-ln -sf "$PREFIX/CommandLineTools/usr/bin/nm" "$TC/CommandLineTools/usr/bin/nm"
+ln -sf "$REPLAY/toolchain-linux/CommandLineTools/usr/bin/ld" "$TC/CommandLineTools/usr/bin/ld"
+ln -sf "$REPLAY/toolchain-linux/CommandLineTools/usr/bin/vtool" "$TC/CommandLineTools/usr/bin/vtool"
+ln -sf "$REPLAY/toolchain-linux/CommandLineTools/usr/bin/nm" "$TC/CommandLineTools/usr/bin/nm"
 ln -sf /usr/bin/true "$TC/CommandLineTools/usr/bin/xnu-host-cc"
 ln -sf /usr/bin/true "$TC/CommandLineTools/usr/libexec/migcom"
 ln -sf /usr/bin/true "$TC/XcodeDefault.xctoolchain/usr/bin/iig"
@@ -172,35 +196,35 @@ cp scripts/linux/xcrun "$TC/bin/xcrun"
 chmod +x "$TC/bin/xcrun"
 ```
 
-Confirm that `xcrun` resolves the pinned compiler, not a `PATH` fallback:
+Confirm that `xcrun` resolves the pinned compiler and version:
 
 ```sh
-PATH="$TC/CommandLineTools/usr/bin:$TC/bin:$PATH" \
-XNU_TOOLCHAIN_BIN="$TC/CommandLineTools/usr/bin $TC/XcodeDefault.xctoolchain/usr/bin" \
-xcrun --find clang
-PATH="$TC/CommandLineTools/usr/bin:$TC/bin:$PATH" \
-XNU_TOOLCHAIN_BIN="$TC/CommandLineTools/usr/bin $TC/XcodeDefault.xctoolchain/usr/bin" \
-xcrun clang --version | head -1
+(
+  export PATH="$TC/CommandLineTools/usr/bin:$TC/bin:$PATH"
+  export XNU_TOOLCHAIN_BIN="$TC/CommandLineTools/usr/bin $TC/XcodeDefault.xctoolchain/usr/bin"
+  test "$(xcrun --find clang)" = "$TC/CommandLineTools/usr/bin/clang"
+  xcrun clang --version | head -1 | grep -F 'clang version 21.1.8'
+)
 ```
 
-The first command must print `$TC/CommandLineTools/usr/bin/clang`; the second
-must report clang 21.1.8. Build the fixture against the gta4l output tree;
-the defaults supply the identifier and the 12,288-byte test file:
+The path check rejects a `PATH` fallback; the version check rejects a
+different compiler. Build the fixture against the gta4l output tree; the
+defaults supply the identifier and the 12,288-byte test file:
 
 ```sh
 python3.11 -B scripts/build-ram-root-report-fixture.py \
-  --output /tmp/opencode/repro-fresh/fixture-out \
+  --output "$REPLAY/fixture-out" \
   --tree "$SRC/out/gta4l/ipados-17.7.11-21H461/gta4l/tree" \
   --toolchain "$TC" \
-  --rcodesign /tmp/opencode/repro-fresh/rcodesign-linux/apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign \
+  --rcodesign "$REPLAY/rcodesign-linux/apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign" \
   --diagnostic fs-timer
 ```
 
 Compare every output with `set -e` still active:
 
 ```sh
-NEW=/tmp/opencode/repro-fresh/fixture-out
 ROOT=/path/to/taba7unixnu
+NEW="$REPLAY/fixture-out"
 HIST="$ROOT/out/gta4l/ram-root-fs-timer-evidence"
 cmp "$NEW/user.o" "$ROOT/out/gta4l/ram-root-sdhci-v5-evidence/user.o"
 cmp "$NEW/launchd-static.macho" "$ROOT/out/gta4l/ram-root-sdhci-v5-evidence/launchd-static.macho"
@@ -210,7 +234,7 @@ done
 sha256sum "$NEW"/*
 ```
 
-Any `cmp` mismatch returns nonzero and stops the recipe.
+Any missing file or `cmp` mismatch returns nonzero and stops the recipe.
 
 The builder prints benign warnings for the unknown Apple-only
 `-Wno-unused-but-set-global` option, the missing
@@ -252,7 +276,14 @@ reproduction path.
 
 ## 7. Replay record
 
-The corrected recipe was replayed from an empty prefix on 2026-10-30. The
-preflight resolved `$TC/CommandLineTools/usr/bin/clang` (clang 21.1.8), the
-cctools and libdispatch commits matched §3, and all eight outputs matched. A
-deliberately corrupted copy failed the comparison block with a nonzero status.
+The corrected recipe was replayed on 2026-10-30 in a fresh `mktemp` replay
+directory. The five source pins matched, the cctools and libdispatch commits
+matched §3, the release tarball matched both its published and pinned digests,
+`xcrun` resolved the shim clang at version 21.1.8, and all eight outputs were
+byte-identical to the recorded artifacts. The comparison block stopped with a
+nonzero status when `user.o` was corrupted.
+
+The enforcement paths were also exercised with the recipe's own blocks: a
+wrong source hash, a missing or duplicated input row, a wrong compiler version,
+a `PATH` fallback, a different dependency commit, a non-empty replay directory
+and empty, missing or duplicated baseline inventories all failed closed.
