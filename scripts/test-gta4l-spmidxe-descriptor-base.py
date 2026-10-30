@@ -12,8 +12,13 @@ The scan models direct ADRP/ADR page references, ADD/SUB immediate arithmetic,
 general-purpose loads and stores with immediate or pre/post-index addressing,
 pointer values loaded from the initial .data image, caller-saved clobbers at
 calls, direct conditional/unconditional branches, and bounded direct BL
-recursion into .text. It stops at indirect branches, unsupported instructions
-and budget limits, and reports unresolved memory operations.
+recursion into .text. It models a conservative whitelist of register-only
+instructions; any other instruction stops the path and is reported. Stores
+invalidate the .data pointer slots they overlap, and modeled calls propagate
+that invalidation to the caller; indirect or truncated calls conservatively
+invalidate every .data pointer slot. The scan reports unresolved non-stack
+loads and stores separately, and reports every revisited-state, step, budget,
+call-depth, indirect-branch and unsupported-instruction truncation.
 
 The scan is a static, image-local check. It does not execute firmware, touch a
 device, or prove that no runtime agent, corrupted pointer, DMA engine,
@@ -114,6 +119,12 @@ def section(data, name):
         if item['name'] == name:
             return item
     raise AssertionError(f'firmware has no {name!r} section')
+
+
+def firmware_data(data):
+    data_section = section(data, b'.data')
+    return data[data_section['raw']:
+                data_section['raw'] + data_section['raw_size']]
 
 
 def pe_offset(data, rva):
@@ -358,10 +369,45 @@ def decode_mov_immediate(word):
     return None
 
 
-def data_pointer(data_section_bytes, address):
-    if DATA_VMA <= address <= DATA_VMA + len(data_section_bytes) - 8:
+def decode_register_only(word):
+    if word == 0xd503201f:
+        return -1
+    if (word & 0x1f800000) == 0x12800000:
+        return word & 0x1f
+    if (word & 0x1f000000) == 0x0a000000:
+        return word & 0x1f
+    if (word & 0x1f800000) == 0x12000000:
+        return word & 0x1f
+    if (word & 0x1f000000) == 0x11000000:
+        return word & 0x1f
+    if (word & 0x1f000000) == 0x0b000000:
+        return word & 0x1f
+    if (word & 0x1f000000) == 0x1b000000:
+        return word & 0x1f
+    if (word & 0x1f800000) == 0x13000000:
+        return word & 0x1f
+    if (word & 0x1f800000) == 0x13800000:
+        return word & 0x1f
+    return None
+
+
+def slot_mask(address, size, data_len):
+    start = max(address, DATA_VMA)
+    end = min(address + size, DATA_VMA + data_len)
+    if start >= end:
+        return 0
+    first = (start - DATA_VMA) // 8
+    last = (end - 1 - DATA_VMA) // 8
+    return ((1 << (last - first + 1)) - 1) << first
+
+
+def data_pointer(data_bytes, address, invalid_mask):
+    data_len = len(data_bytes)
+    if DATA_VMA <= address <= DATA_VMA + data_len - 8:
+        if invalid_mask & slot_mask(address, 8, data_len):
+            return None
         value = struct.unpack_from(
-            '<Q', data_section_bytes, address - DATA_VMA)[0]
+            '<Q', data_bytes, address - DATA_VMA)[0]
         if value:
             return value
     return None
@@ -423,43 +469,56 @@ def text_word(text, pc):
     return struct.unpack_from('<I', text, pc - TEXT_VMA)[0]
 
 
-def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
-              steps, budget, visited):
-    if steps <= 0 or budget < 0:
-        result.add_boundary(pc, 'budget')
-        return
-    key = (pc, tuple(sorted(values.items())))
+def scan_path(result, text, data_bytes, pc, values, invalid, depth,
+              call_stack, steps, budget, visited, all_invalid):
+    key = (pc, tuple(sorted(values.items())), invalid, depth)
     if key in visited:
-        return
-    visited.add(key)
+        result.add_boundary(pc, 'visited')
+        return all_invalid
+    visited[key] = True
+    return _scan_path(result, text, data_bytes, pc, values, invalid,
+                      depth, call_stack, steps, budget, visited,
+                      all_invalid)
+
+
+def _scan_path(result, text, data_bytes, pc, values, invalid, depth,
+               call_stack, steps, budget, visited, all_invalid):
     while steps > 0:
         if not (TEXT_VMA <= pc < TEXT_VMA + len(text)):
-            return
+            result.add_boundary(pc, 'outside text')
+            return all_invalid
         word = text_word(text, pc)
         if is_ret(word):
-            return
+            return invalid
         if is_unconditional_branch(word):
             target = branch_target(word, pc)
-            if (target is not None and
-                    TEXT_VMA <= target < TEXT_VMA + len(text) and
-                    budget > 0):
-                scan_path(result, text, data_bytes, target, dict(values),
-                          depth, call_stack, steps - 1, budget - 1, visited)
-            return
+            if target is None or not (TEXT_VMA <= target < TEXT_VMA + len(text)):
+                result.add_boundary(pc, 'branch')
+                return all_invalid
+            if budget <= 0:
+                result.add_boundary(pc, 'budget')
+                return all_invalid
+            return scan_path(result, text, data_bytes, target, dict(values),
+                             invalid, depth, call_stack, steps - 1,
+                             budget - 1, visited, all_invalid)
         if is_bl(word):
             target = branch_target(word, pc)
             args = {register: values[register]
                     for register in range(8) if register in values}
             result.add_call(pc, target, args)
-            if (target is not None and
-                    TEXT_VMA <= target < TEXT_VMA + len(text) and
-                    depth < MAX_CALL_DEPTH and target not in call_stack and
-                    budget > 0):
-                scan_path(result, text, data_bytes, target, dict(args),
-                          depth + 1, call_stack | {target}, MAX_STEPS,
-                          budget - 1, visited)
-            else:
+            callee_invalid = all_invalid
+            if target is None or not (TEXT_VMA <= target < TEXT_VMA + len(text)):
                 result.add_boundary(pc, 'call')
+            elif budget <= 0:
+                result.add_boundary(pc, 'budget')
+            elif depth >= MAX_CALL_DEPTH or target in call_stack:
+                result.add_boundary(pc, 'call-depth')
+            else:
+                callee_invalid = scan_path(
+                    result, text, data_bytes, target, dict(args), invalid,
+                    depth + 1, call_stack | {target}, MAX_STEPS,
+                    budget - 1, visited, all_invalid)
+            invalid |= callee_invalid
             for register in CALLER_SAVED:
                 values.pop(register, None)
             pc += 4
@@ -468,7 +527,8 @@ def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
         if is_blr(word) or is_br(word):
             result.add_boundary(pc, 'indirect branch')
             if is_br(word):
-                return
+                return all_invalid
+            invalid = all_invalid
             for register in CALLER_SAVED:
                 values.pop(register, None)
             pc += 4
@@ -476,11 +536,17 @@ def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
             continue
         if is_conditional_branch(word):
             target = branch_target(word, pc)
-            if (target is not None and
-                    TEXT_VMA <= target < TEXT_VMA + len(text) and
-                    budget > 0):
-                scan_path(result, text, data_bytes, target, dict(values),
-                          depth, call_stack, steps - 1, budget - 1, visited)
+            if target is None or not (TEXT_VMA <= target < TEXT_VMA + len(text)):
+                result.add_boundary(pc, 'branch')
+                invalid = all_invalid
+            elif budget <= 0:
+                result.add_boundary(pc, 'budget')
+                invalid = all_invalid
+            else:
+                invalid |= scan_path(
+                    result, text, data_bytes, target, dict(values), invalid,
+                    depth, call_stack, steps - 1, budget - 1, visited,
+                    all_invalid)
             pc += 4
             steps -= 1
             continue
@@ -488,7 +554,8 @@ def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
         adr = decode_adr(word, pc)
         if adrp or adr:
             target, register = adrp if adrp else adr
-            values[register] = target
+            if register != 31:
+                values[register] = target
             pc += 4
             steps -= 1
             continue
@@ -496,10 +563,15 @@ def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
         if mem:
             kind, size, store, base, rt, immediate, index = mem
             if base not in values:
-                if store and base not in STACK_BASES:
-                    result.add_unresolved(pc, kind, size)
-                elif not store:
-                    values.pop(rt, None)
+                if store:
+                    if base not in STACK_BASES:
+                        result.add_unresolved(pc, kind, size)
+                        invalid = all_invalid
+                else:
+                    if base not in STACK_BASES:
+                        result.add_unresolved(pc, kind, size)
+                    if rt != 31:
+                        values.pop(rt, None)
                 pc += 4
                 steps -= 1
                 continue
@@ -513,14 +585,16 @@ def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
             result.add_access(pc, kind, size, address)
             if store:
                 result.add_store(pc, size, address)
+                invalid |= slot_mask(address, size, len(data_bytes))
             else:
-                pointer = (data_pointer(data_bytes, address)
+                pointer = (data_pointer(data_bytes, address, invalid)
                            if size == 8 else None)
-                if pointer is not None:
-                    values[rt] = pointer
-                else:
-                    values.pop(rt, None)
-            if index in (1, 3):
+                if rt != 31:
+                    if pointer is not None:
+                        values[rt] = pointer
+                    else:
+                        values.pop(rt, None)
+            if index in (1, 3) and base != 31:
                 values[base] = new_base
             pc += 4
             steps -= 1
@@ -529,11 +603,17 @@ def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
         if pair:
             kind, size, base, rt, rt2, immediate, index = pair
             if base not in values:
-                if kind == 'store' and base not in STACK_BASES:
-                    result.add_unresolved(pc, kind, size)
-                elif kind != 'store':
-                    values.pop(rt, None)
-                    values.pop(rt2, None)
+                if kind == 'store':
+                    if base not in STACK_BASES:
+                        result.add_unresolved(pc, kind, size)
+                        invalid = all_invalid
+                else:
+                    if base not in STACK_BASES:
+                        result.add_unresolved(pc, kind, size)
+                    if rt != 31:
+                        values.pop(rt, None)
+                    if rt2 != 31:
+                        values.pop(rt2, None)
                 pc += 4
                 steps -= 1
                 continue
@@ -549,15 +629,19 @@ def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
             if kind == 'store':
                 result.add_store(pc, size, address)
                 result.add_store(pc, size, address + size)
+                invalid |= slot_mask(address, 2 * size, len(data_bytes))
             else:
                 for offset, register in ((0, rt), (size, rt2)):
-                    pointer = (data_pointer(data_bytes, address + offset)
+                    if register == 31:
+                        continue
+                    pointer = (data_pointer(data_bytes, address + offset,
+                                            invalid)
                                if size == 8 else None)
                     if pointer is not None:
                         values[register] = pointer
                     else:
                         values.pop(register, None)
-            if index in (1, 3):
+            if index in (1, 3) and base != 31:
                 values[base] = new_base
             pc += 4
             steps -= 1
@@ -565,30 +649,39 @@ def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
         addsub = decode_addsub(word)
         if addsub:
             operation, base, destination, immediate = addsub
-            if base in values:
-                values[destination] = values[base] + (
-                    immediate if operation == 'add' else -immediate)
-            else:
-                values.pop(destination, None)
+            if destination != 31:
+                if base in values:
+                    values[destination] = values[base] + (
+                        immediate if operation == 'add' else -immediate)
+                else:
+                    values.pop(destination, None)
             pc += 4
             steps -= 1
             continue
         mov = decode_mov(word)
         if mov:
             source, destination = mov
-            if source in values:
-                values[destination] = values[source]
-            else:
-                values.pop(destination, None)
+            if destination != 31:
+                if source != 31 and source in values:
+                    values[destination] = values[source]
+                else:
+                    values.pop(destination, None)
             pc += 4
             steps -= 1
             continue
-        destination = word & 0x1f
-        if destination in values:
-            values.pop(destination, None)
-            result.add_clobber(pc, destination)
-        pc += 4
-        steps -= 1
+        register_only = decode_register_only(word)
+        if register_only is not None:
+            if register_only >= 0 and register_only != 31:
+                if register_only in values:
+                    values.pop(register_only, None)
+                    result.add_clobber(pc, register_only)
+            pc += 4
+            steps -= 1
+            continue
+        result.add_boundary(pc, 'unsupported')
+        return all_invalid
+    result.add_boundary(pc, 'steps')
+    return all_invalid
 
 
 def scan_references(data):
@@ -598,6 +691,7 @@ def scan_references(data):
     data_section = section(data, b'.data')
     data_bytes = data[data_section['raw']:
                       data_section['raw'] + data_section['raw_size']]
+    all_invalid = (1 << (len(data_bytes) // 8)) - 1
     result = ScanResult()
     for offset in range(0, len(text), 4):
         pc = TEXT_VMA + offset
@@ -608,7 +702,7 @@ def scan_references(data):
             continue
         target, register = adrp if adrp else adr
         scan_path(result, text, data_bytes, pc, {register: target}, 0,
-                  frozenset(), MAX_STEPS, MAX_BUDGET, set())
+                  0, frozenset(), MAX_STEPS, MAX_BUDGET, {}, all_invalid)
     return result
 
 
@@ -665,6 +759,16 @@ def check_scan(data):
               args.get(1) == EVENT_HANDLE
               for pc, target, args in result.calls),
           '0x2710 call argument is not the event handle')
+    check(any(item[1] == 'load' for item in result.unresolved),
+          'scan did not report an unresolved load')
+    check(any(item[1] == 'store' for item in result.unresolved),
+          'scan did not report an unresolved store')
+    check(any(reason == 'unsupported' for _, reason in result.boundaries),
+          'scan did not report an unsupported instruction')
+    check(any(reason == 'steps' for _, reason in result.boundaries),
+          'scan did not report step exhaustion')
+    check(any(reason == 'visited' for _, reason in result.boundaries),
+          'scan did not report a revisited state')
     return result
 
 
@@ -715,6 +819,16 @@ def encode_bl(pc, target):
     return 0x94000000 | ((delta >> 2) & 0x03ffffff)
 
 
+def encode_b_cond(pc, target, condition):
+    delta = target - pc
+    check(delta % 4 == 0, 'B.cond target is not word aligned')
+    return 0x54000000 | (((delta >> 2) & 0x7ffff) << 5) | condition
+
+
+def encode_blr(register):
+    return 0xd63f0000 | (register << 5)
+
+
 def check_decoders():
     check(decode_adrp(encode_adrp(0x1100, 0x8000, 8), 0x1100) == (0x8000, 8),
           'ADRP decode failed')
@@ -743,6 +857,16 @@ def run_sequence(data, words, start=0x1100):
         struct.pack_into('<I', mutated, pe_offset(mutated, start + 4 * index),
                          word)
     return scan_references(bytes(mutated)), start, start + 4 * len(words)
+
+
+def run_direct(data_bytes, words, values=None, steps=MAX_STEPS,
+               budget=MAX_BUDGET, invalid=0):
+    text = struct.pack(f'<{len(words)}I', *words)
+    result = ScanResult()
+    all_invalid = (1 << (len(data_bytes) // 8)) - 1
+    scan_path(result, text, data_bytes, TEXT_VMA, dict(values or {}), invalid,
+              0, frozenset(), steps, budget, {}, all_invalid)
+    return result
 
 
 def sequence_stores(result, start, end):
@@ -819,6 +943,123 @@ def check_scanner_controls(data):
     check(not any(item[2] == OVERRIDE for item in stores),
           'caller-saved register survived a call clobber')
 
+    data_bytes = firmware_data(data)
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 8),
+        encode_ldr_unsigned(31, 8, 0x198),
+        encode_mov(9, 31),
+        encode_str_unsigned(0, 9, 0),
+        ret])
+    check(not sequence_stores(result, 0x1000, 0x1010),
+          'load into XZR was tracked as a pointer value')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 8),
+        encode_str_unscaled(8, 31, -8, 1),
+        ret])
+    check(not sequence_stores(result, 0x1000, 0x100c),
+          'stack store was reported as a resolved memory store')
+    check(not [item for item in result.unresolved if item[0] == 0x1004],
+          'stack store was reported as unresolved')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 8),
+        encode_str_unsigned(0, 8, 0x198),
+        encode_ldr_unsigned(9, 8, 0x198),
+        encode_str_unsigned(0, 9, 0),
+        ret])
+    check((0x1004, 8, 0x8198) in result.stores,
+          'pointer-slot store was not resolved')
+    check(not [item for item in result.stores if item[0] == 0x100c],
+          'load used pointer bytes overwritten earlier in the path')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 8),
+        encode_ldr_unsigned(9, 0, 0),
+        ret])
+    check((0x1004, 'load', 8) in result.unresolved,
+          'unresolved load was not reported')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 8),
+        0xffffffff,
+        encode_add_imm(8, 8, 0x878),
+        encode_str_unsigned(0, 8, 0),
+        ret])
+    check((0x1004, 'unsupported') in result.boundaries,
+          'unsupported instruction did not stop the path')
+    check(not sequence_stores(result, 0x1000, 0x1010),
+          'path continued past an unsupported instruction')
+
+    result = run_direct(data_bytes,
+                        [encode_adrp(0x1000, 0x8000, 8)] +
+                        [0xd503201f] * (MAX_STEPS + 1))
+    check(any(reason == 'steps' for _, reason in result.boundaries),
+          'step exhaustion was not reported')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 8),
+        encode_b_cond(0x1004, 0x1008, 0),
+        ret], budget=0)
+    check((0x1004, 'budget') in result.boundaries,
+          'budget exhaustion was not reported')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 19),
+        encode_mov(0, 19),
+        encode_bl(0x1008, 0x1020),
+        encode_ldr_unsigned(9, 19, 0x198),
+        encode_str_unsigned(0, 9, 0),
+        ret,
+        0xd503201f,
+        0xd503201f,
+        encode_str_unsigned(1, 0, 0x198),
+        ret])
+    check((0x1020, 8, 0x8198) in result.stores,
+          'callee pointer-slot store was not resolved')
+    check(not [item for item in result.stores if item[0] == 0x1010],
+          'caller trusted a pointer slot overwritten by the callee')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 19),
+        encode_mov(0, 19),
+        encode_bl(0x1008, 0x1020),
+        encode_ldr_unsigned(9, 19, 0x198),
+        encode_str_unsigned(0, 9, 0),
+        ret,
+        0xd503201f,
+        0xd503201f,
+        0xd503201f,
+        0xffffffff,
+        ret])
+    check((0x1024, 'unsupported') in result.boundaries,
+          'truncated callee did not report the unsupported instruction')
+    check(not [item for item in result.stores if item[0] == 0x1010],
+          'caller trusted a pointer slot after a truncated call')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 19),
+        encode_blr(19),
+        encode_ldr_unsigned(9, 19, 0x198),
+        encode_str_unsigned(0, 9, 0),
+        ret])
+    check((0x1004, 'indirect branch') in result.boundaries,
+          'indirect call was not reported')
+    check(not [item for item in result.stores if item[0] == 0x100c],
+          'caller trusted a pointer slot after an indirect call')
+
+    result = run_direct(data_bytes, [
+        encode_adrp(0x1000, 0x8000, 19),
+        encode_str_unsigned(0, 1, 0),
+        encode_ldr_unsigned(9, 19, 0x198),
+        encode_str_unsigned(0, 9, 0),
+        ret])
+    check((0x1004, 'store', 8) in result.unresolved,
+          'unresolved store was not reported')
+    check(not [item for item in result.stores if item[0] == 0x100c],
+          'caller trusted a pointer slot after an unresolved store')
+
     mutated = bytearray(data)
     struct.pack_into('<I', mutated, pe_offset(mutated, 0x38b4), 0xf9043d08)
     result = scan_references(bytes(mutated))
@@ -890,10 +1131,13 @@ def main():
     result = check_scan(data)
     check_constant_absence(data)
     check_model()
+    unresolved_loads = sum(1 for item in result.unresolved if item[1] == 'load')
+    unresolved_stores = sum(1 for item in result.unresolved if item[1] == 'store')
     print(f'spmidxe descriptor base: sha256={actual} source={source} '
           f'accesses={len(result.accesses)} stores={len(result.stores)} '
           f'calls={len(result.calls)} boundaries={len(result.boundaries)} '
-          f'unresolved={len(result.unresolved)} '
+          f'unresolved_loads={unresolved_loads} '
+          f'unresolved_stores={unresolved_stores} '
           f'clobbers={len(result.clobbers)} PASS')
     return 0
 

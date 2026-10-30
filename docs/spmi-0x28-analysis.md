@@ -162,21 +162,28 @@ The `.data` layout around the globals is:
 decodes every `ADRP`/`ADR` site and follows direct page-relative arithmetic,
 general-purpose loads and stores with immediate or pre/post-index addressing,
 pointer values loaded from the initial `.data` image, direct conditional and
-unconditional branches, caller-saved clobbers at calls, and one level of direct
-`BL` into `.text`. It found 64 `adrp ..., 0x8000` sites and exactly one
-reference to `0x8878`: the 8-byte load at `0x38b4`. It found no store that
-intersects `[0x8878, 0x8880)`. The scan resolves the caller's descriptor-base
-store at `0x38bc` to `0x8140`, the cached-config store at `0x38f4` to `0x8868`,
-the event-handle stores at `0x210c`/`0x2188` to `0x8870`, and a disjoint store
-at `0x4168` to `0x9080`; the last is above the override but does not overlap it.
-It also found no 4- or 8-byte literal `0x8878`, no MOVZ/MOVK immediate building
-`0x8878`, and no `.reloc` entry targeting `0x8878`. The scan reports 151
-accesses, 26 resolved stores, 173 branch/call/budget boundaries and 96
-unresolved non-stack memory operations. It treats base registers 29/31 as
-stack/frame and does not model SIMD/FP accesses, register-offset addressing,
-indirect branches, calls beyond the modeled depth, or whether a decoded site is
-reachable code. Reproduce with
-`scripts/test-gta4l-spmidxe-descriptor-base.py`.
+unconditional branches, caller-saved clobbers at calls, and bounded direct
+`BL` recursion into `.text` (depth 2). It models a conservative whitelist of
+register-only instructions; any other instruction stops the path and is
+reported. Stores invalidate the `.data` pointer slots they overlap, modeled
+calls propagate that invalidation to the caller, and indirect or truncated
+calls conservatively invalidate every `.data` pointer slot; revisited states
+are reported and conservatively invalidate every `.data` pointer slot as
+well. The scan found 64
+`adrp ..., 0x8000` sites and exactly one reference to `0x8878`: the 8-byte
+load at `0x38b4`. It found no store that intersects `[0x8878, 0x8880)`. The
+scan resolves the caller's descriptor-base store at `0x38bc` to `0x8140`, the
+cached-config store at `0x38f4` to `0x8868`, the event-handle stores at
+`0x210c`/`0x2188` to `0x8870`, and a disjoint store at `0x4168` to `0x9080`;
+the last is above the override but does not overlap it. It also found no 4- or
+8-byte literal `0x8878`, no MOVZ/MOVK immediate building `0x8878`, and no
+`.reloc` entry targeting `0x8878`. The scan reports 114 accesses, 22 resolved
+stores, 317 calls, 469 boundaries (157 revisited-state, 113 step, 90
+unsupported, 81 call-depth, 28 indirect-branch), 150 unresolved non-stack loads
+and 36 unresolved non-stack stores. It treats base registers 29/31 as stack/frame and does not
+model SIMD/FP accesses, register-offset addressing, indirect branches, calls
+beyond the modeled depth, or whether a decoded site is reachable code.
+Reproduce with `scripts/test-gta4l-spmidxe-descriptor-base.py`.
 
 `[S]` Manual instruction inspection, separate from the automated scan, of the
 two bounded copy paths shows writes ending at most at `0x8824`: `0x2a78` copies
@@ -189,12 +196,15 @@ two bounded copy paths shows writes ending at most at `0x8824`: `0x2a78` copies
 `[C]` In the pinned image's initial state the override is zero, so `0x38b0`
 leaves the descriptor base at `0x01C00000`; the override path is armed only if
 `0x8878` becomes non-zero. `0x8878` is in writable `.data`, so this is a static
-image-local result, not immutability by construction. Internal
-indirect/computed/aliased stores, unmodeled instructions (including SIMD/FP and
-register-offset addressing), indirect calls and branches, runtime agents,
-corrupted pointers, DMA and different firmware revisions are not excluded. The
-descriptor-base question therefore narrows to "the bounded scan and manual
-copy-path inspection found no write to `[0x8878, 0x8880)`, but internal
+image-local result, not immutability by construction. The scan stops at
+instructions outside its register-only whitelist and reports them; it
+invalidates `.data` pointer slots written by modeled stores and calls and
+conservatively invalidates all `.data` pointer slots after indirect or
+truncated calls and on revisited states. Internal indirect/computed/aliased stores, runtime agents,
+corrupted pointers, DMA and different firmware revisions are still not
+excluded, and the scan does not establish reachability. The descriptor-base
+question therefore narrows to "the bounded scan and manual copy-path
+inspection found no write to `[0x8878, 0x8880)`, but internal
 indirect/computed and runtime/external writes remain unestablished" `[U]`.
 
 `[S]` `0x01C00000` is 64 KiB aligned, so the 256-byte-alignment condition for
