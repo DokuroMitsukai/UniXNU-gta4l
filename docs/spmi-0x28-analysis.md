@@ -169,7 +169,10 @@ reported. Stores invalidate the `.data` pointer slots they overlap, modeled
 calls propagate that invalidation to the caller, and indirect or truncated
 calls conservatively invalidate every `.data` pointer slot; revisited states
 are reported and conservatively invalidate every `.data` pointer slot as
-well. The scan found 64
+well. Conditional-branch paths are scanned independently, so a store on one
+path does not invalidate pointer values on its sibling; the union of path
+invalidations is propagated when the function returns. `ADR`/`ADRP` with an
+XZR destination do not seed a tracked register. The scan found 64
 `adrp ..., 0x8000` sites and exactly one reference to `0x8878`: the 8-byte
 load at `0x38b4`. It found no store that intersects `[0x8878, 0x8880)`. The
 scan resolves the caller's descriptor-base store at `0x38bc` to `0x8140`, the
@@ -178,7 +181,7 @@ cached-config store at `0x38f4` to `0x8868`, the event-handle stores at
 the last is above the override but does not overlap it. It also found no 4- or
 8-byte literal `0x8878`, no MOVZ/MOVK immediate building `0x8878`, and no
 `.reloc` entry targeting `0x8878`. The scan reports 114 accesses, 22 resolved
-stores, 317 calls, 469 boundaries (157 revisited-state, 113 step, 90
+stores, 317 calls, 460 boundaries (146 revisited-state, 115 step, 90
 unsupported, 81 call-depth, 28 indirect-branch), 150 unresolved non-stack loads
 and 36 unresolved non-stack stores. It treats base registers 29/31 as stack/frame and does not
 model SIMD/FP accesses, register-offset addressing, indirect branches, calls
@@ -198,9 +201,10 @@ leaves the descriptor base at `0x01C00000`; the override path is armed only if
 `0x8878` becomes non-zero. `0x8878` is in writable `.data`, so this is a static
 image-local result, not immutability by construction. The scan stops at
 instructions outside its register-only whitelist and reports them; it
-invalidates `.data` pointer slots written by modeled stores and calls and
-conservatively invalidates all `.data` pointer slots after indirect or
-truncated calls and on revisited states. Internal indirect/computed/aliased stores, runtime agents,
+invalidates `.data` pointer slots written by modeled stores and calls, keeps
+conditional-branch paths independent, and conservatively invalidates all
+`.data` pointer slots after indirect or truncated calls and on revisited
+states. Internal indirect/computed/aliased stores, runtime agents,
 corrupted pointers, DMA and different firmware revisions are still not
 excluded, and the scan does not establish reachability. The descriptor-base
 question therefore narrows to "the bounded scan and manual copy-path
