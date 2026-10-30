@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T15:30:00Z`, after the final edits to the
+Hashes were taken at `2026-10-30T15:40:00Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them. The snapshot is intended to be committed without
@@ -18,18 +18,24 @@ update the table.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD at the hash snapshot | `a958e26940dec46ceb23c38542cb64b6395af9a6` (correction commit) |
+| HEAD at the hash snapshot | `366f877c361780a084d0f33bd8beb74d3edf542f` (first follow-up commit) |
 | Parent of the correction commit | `1e3072f8ee39a6bbee05204a95fd94604bd6f7ac` |
 | Correction commit paths | 8: 7 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`docs/sdhc-decision-update-2026-10-30.md`) |
-| Dirty entries at the hash snapshot | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 untracked (`scripts/test-gta4l-sdccdxe-decode.py`) |
-| Staging and commits | None at the snapshot; this follow-up snapshot lands as one commit on top of `a958e26` |
+| First follow-up commit paths | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`scripts/test-gta4l-sdccdxe-decode.py`) |
+| Dirty entries at the hash snapshot | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-power-pad-dependency-report.md`, `scripts/test-gta4l-sdccdxe-decode.py`) |
+| Staging and commits | None at the snapshot; this second follow-up snapshot lands as one commit on top of `366f877` |
 
-The hash table describes the follow-up working tree: the correction commit
-`a958e26` plus the then-uncommitted documentation and test edits listed above.
-The correction commit itself contains exactly the eight paths in the table and
-is not the earlier report batch. The follow-up batch adds the host-only
-`scripts/test-gta4l-sdccdxe-decode.py` regression test and tightens the
-timeout/result wording in the report, decision update and firmware handoff.
+The hash table describes the second follow-up working tree: the first follow-up
+commit `366f877` plus the then-uncommitted report and test edits listed above.
+The first follow-up commit contains exactly the six paths in its row: five
+documentation/porting edits and the new host-only decode test. The correction
+commit `a958e26` contains exactly the eight paths in its row and is not the
+earlier report batch.
+
+This second batch derives the status/clear/reset loop bounds from the pinned
+MOVZ instructions, adds last-read and delayed-completion boundary cases and
+wrong-bound negative controls to the decode test, and corrects the
+reset-argument and SDC2 field wording in the report.
 
 The earlier documentation batch contained the eleven paths listed in the
 original evidence-closure provenance below: six modified and five added.
@@ -137,10 +143,10 @@ bytes of the previously booted image `[S]`.
 | RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `d967e640ca8f6f7eb0607d0a51aea9b541b21901ed4bf5a0a3e9be090f2fa4a8` |
 | RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `c670e2788044bd8b5054b19452dde8080ee9dc93d794ffe8abf3e2890e202afc` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `7399f421fd11db96fcea80e9c3f5bafc178e2d99099391e293188eb0dd8045b9` |
-| Power/pad dependency report | `docs/sdhc-power-pad-dependency-report.md` | `b34f1d68f2ae3f6e007bbbadfff603c3c0edcb846355b35b92b039b87050ca51` |
+| Power/pad dependency report | `docs/sdhc-power-pad-dependency-report.md` | `4d99426c43470eeaaac6e4b0a4b7cc4f4e4eaef1e7ae98b97fd48a7f74f8fab9` |
 | Decision update 2026-10-30 | `docs/sdhc-decision-update-2026-10-30.md` | `09cfa0d63131124374804ce5bb2b0bffa04de0a6d2ac0f70cd6e6174f1b81cb7` |
 | Firmware handoff | `docs/firmware-handoff.md` | `3007de28ad245ae3a268f42fe4ffa9fda289e55473135b6e8a89207ee751cf19` |
-| SdccDxe decode test | `scripts/test-gta4l-sdccdxe-decode.py` | `21cd1df77c3216db17f62e109fc4f87dd6c26a02887c195d4b74df1c5743b6c8` |
+| SdccDxe decode test | `scripts/test-gta4l-sdccdxe-decode.py` | `05cf01efd29c869a2c0eebabaa51b7180b919d2a301c54593ef25c1279281ef6` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
 | Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
@@ -304,8 +310,8 @@ setup and class registration. The self-test uses only a synthetic image `[S]`.
 
 `scripts/test-gta4l-sdccdxe-decode.py` reads the sibling Mu-Silicium
 `SdccDxe.efi` when present and otherwise extracts the same pinned PE from the
-committed `SILICIUM_UEFI.fd`. It is a static instruction/model check and does
-not execute firmware `[S]`.
+committed `SILICIUM_UEFI.fd`. It pins instruction bytes and models the loop
+behaviour; it does not execute firmware `[S]`.
 
 The `fs-timer` fixture reproduction is recorded in
 `docs/ram-root-fixture-reproducibility.md`; it rebuilds the signed fixture,
@@ -341,7 +347,7 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | Check | Result |
 | --- | --- |
 | `scripts/test-gta4l-diagnostic-payload.py`, `test-gta4l-diagnostic-package.py`, `test-gta4l-boot-image.py`, `test-gta4l-sdhci-handoff-audit.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-xnu-mtimes.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py`, `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `check-gta4l.py` | All exited 0 |
-| `scripts/test-gta4l-sdccdxe-decode.py` (static PE/model check, separate from the diagnostic tests) | PASS: pinned SdccDxe SHA-256, handshake and pad instruction words, captured-status selection, three non-aborting timeout paths, loop bounds, TLMM arithmetic and pad decode |
+| `scripts/test-gta4l-sdccdxe-decode.py` (static PE/model check, separate from the diagnostic tests) | PASS: pinned SdccDxe SHA-256, handshake and pad instruction words, MOVZ-derived loop bounds, last-read and delayed-completion boundary cases, wrong-bound negative controls, captured-status selection, three non-aborting timeout paths, TLMM arithmetic and pad decode |
 | Hash-table self-check in §6 | `rows=31 mismatches=0` |
 | `porting.toml` parse with `tomllib` | 13 areas |
 | `git diff --check` | Clean |

@@ -6,10 +6,12 @@ The booted SdccDxe PE is pinned by SHA-256. The test maps the documented virtual
 addresses to file offsets through the PE section table, checks the instruction
 words that implement the reset/status/clear/result sequence, and runs a small
 model of that sequence to check the documented selection and timeout behaviour.
-It also checks the TLMM address arithmetic and the SDC1 pad-field decode.
+It also checks the TLMM address arithmetic and the SDC1/SDC2 pad-field decode.
 
-This is a static/model check. It does not execute firmware, touch a device, or
-establish any electrical behaviour.
+Pinning instruction bytes and running a handwritten model does not execute the
+firmware; it only checks that the documented interpretation is consistent with
+the pinned bytes. This is a static/model check. It does not execute firmware,
+touch a device, or establish any electrical behaviour.
 """
 import importlib.util
 import struct
@@ -144,6 +146,12 @@ def check_tbz(data, rva, bit, target):
           f'0x{rva:x}: branch target 0x{actual_target:x} != 0x{target:x}')
 
 
+def decode_movz(word):
+    check((word & 0xffe00000) == 0x52800000,
+          f'0x{word:08x}: not a 32-bit MOVZ with shift 0')
+    return (word >> 5) & 0xffff
+
+
 def check_handshake_instructions(data):
     check_bl(data, 0x820c, 0x3f04)
     check_bl(data, 0x825c, 0x69ac)
@@ -159,21 +167,35 @@ def check_handshake_instructions(data):
     check_bcond(data, 0x648c, 1, 0x64fc)
     check_tbz(data, 0x6490, 0, 0x64fc)
     check_word(data, 0x6494, 0x5284e209, 'mov w9, #10000')
+    check_word(data, 0x6498, 0xf8757a88, 'ldr x8, [x20, x21, lsl #3]')
+    check_word(data, 0x649c, 0x2a0903f7, 'mov w23, w9')
     check_word(data, 0x64a0, 0xb9424116, 'ldr w22, [x8, #0x240]')
     check_cb(data, 0x64a4, 1, 0x64c0)
+    check_word(data, 0x64a8, 0x320003e0, 'orr w0, wzr, #1')
+    check_bl(data, 0x64ac, 0x10ecc)
+    check_word(data, 0x64b0, 0x510006e9, 'sub w9, w23, #1')
     check_cb(data, 0x64b4, 1, 0x6498)
+    check_word(data, 0x64b8, 0xf8757a88, 'ldr x8, [x20, x21, lsl #3]')
     check_word(data, 0x64bc, 0x2a1f03f6, 'mov w22, wzr')
     check_word(data, 0x64c0, 0x5284e20a, 'mov w10, #10000')
     check_word(data, 0x64c4, 0xb9024916, 'str w22, [x8, #0x248]')
+    check_word(data, 0x64c8, 0xf8757a89, 'ldr x9, [x20, x21, lsl #3]')
+    check_word(data, 0x64cc, 0x2a0a03f7, 'mov w23, w10')
     check_word(data, 0x64d0, 0xb942412b, 'ldr w11, [x9, #0x240]')
     check_cb(data, 0x64d4, 0, 0x64ec)
+    check_word(data, 0x64d8, 0x320003e0, 'orr w0, wzr, #1')
+    check_bl(data, 0x64dc, 0x10ecc)
+    check_word(data, 0x64e0, 0x510006ea, 'sub w10, w23, #1')
     check_cb(data, 0x64e4, 1, 0x64c8)
+    check_word(data, 0x64e8, 0xf8757a89, 'ldr x9, [x20, x21, lsl #3]')
     check_word(data, 0x64ec, 0x720006df, 'tst w22, #3')
     check_word(data, 0x64f0, 0x321e03ea, 'orr w10, wzr, #4')
     check_word(data, 0x64f4, 0x1a9f054c, 'csinc w12, w10, wzr, eq')
     check_word(data, 0x64f8, 0xb9024d2c, 'str w12, [x9, #0x24c]')
     check_word(data, 0x64fc, 0x5284e208, 'mov w8, #10000')
     check_cb(data, 0x6500, 0, 0x6518)
+    check_word(data, 0x6504, 0xf8757a8b, 'ldr x11, [x20, x21, lsl #3]')
+    check_word(data, 0x6508, 0x51000508, 'sub w8, w8, #1')
     check_word(data, 0x650c, 0x3940bd69, 'ldrb w9, [x11, #0x2f]')
     check_word(data, 0x6510, 0x0a13012d, 'and w13, w9, w19')
     check_cb(data, 0x6514, 1, 0x6500)
@@ -189,6 +211,36 @@ def check_pad_instructions(data):
     check_word(data, 0x3f40, 0x5283fc8a, 'mov w10, #0x1fe4')
     check_word(data, 0x3f48, 0xb900010a, 'str w10, [x8]')
     check_word(data, 0x6d38, 0x120d7908, 'and w8, w8, #0xfffbffff')
+
+
+def require_bound(label, actual, expected):
+    check(actual == expected, f'{label}: {actual} != {expected}')
+
+
+def check_loop_bounds(data):
+    status_move = decode_movz(word_at(data, 0x6494))
+    clear_move = decode_movz(word_at(data, 0x64c0))
+    reset_move = decode_movz(word_at(data, 0x64fc))
+    check(status_move == 10000,
+          f'status MOVZ immediate {status_move} != 10000')
+    check(clear_move == 10000,
+          f'clear MOVZ immediate {clear_move} != 10000')
+    check(reset_move == 10000,
+          f'reset MOVZ immediate {reset_move} != 10000')
+    require_bound('STATUS_LIMIT', STATUS_LIMIT, status_move + 1)
+    require_bound('CLEAR_LIMIT', CLEAR_LIMIT, clear_move + 1)
+    require_bound('RESET_LIMIT', RESET_LIMIT, reset_move)
+    for label, actual, expected in (
+            ('STATUS_LIMIT', 10000, STATUS_LIMIT),
+            ('CLEAR_LIMIT', 10000, CLEAR_LIMIT),
+            ('RESET_LIMIT', 10001, RESET_LIMIT)):
+        try:
+            require_bound(label, actual, expected)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(
+                f'{label}: wrong-bound negative control was accepted')
 
 
 def read(sequence, index):
@@ -235,9 +287,9 @@ def model_handshake(argument, power_control_before, statuses=(), clears=(),
 
 def check_handshake_model():
     result = model_handshake(1, 0b1, [], [0], [0])
-    check(result['status_reads'] == STATUS_LIMIT,
+    check(result['status_reads'] == 10001,
           'no-status poll did not perform 10,001 reads')
-    check(result['status_delays'] == STATUS_LIMIT,
+    check(result['status_delays'] == 10001,
           'no-status poll did not perform 10,001 delays')
     check(result['captured_status'] == 0,
           'no-status poll did not force the captured status to zero')
@@ -249,6 +301,34 @@ def check_handshake_model():
           'zero status did not select IO_SUCCESS')
     check(result['reset_reads'] == 1,
           'self-cleared reset did not exit the reset poll immediately')
+
+    result = model_handshake(1, 0b1, [0] * 10000 + [0x2], [0], [0])
+    check(result['status_reads'] == 10001 and
+          result['status_delays'] == 10000,
+          'last-read status did not exit after 10,000 delays')
+    check(result['captured_status'] == 0x2 and result['ctl_written'] == 1,
+          'last-read status was not captured as BUS_SUCCESS')
+
+    result = model_handshake(1, 0b1, [0, 0, 0x4], [0], [0])
+    check(result['status_reads'] == 3 and result['status_delays'] == 2,
+          'delayed status did not exit after its first nonzero read')
+
+    result = model_handshake(1, 0b1, [0x1], [1] * 10000 + [0], [0])
+    check(result['clear_reads'] == 10001 and
+          result['clear_delays'] == 10000,
+          'last-read clear did not exit after 10,000 delays')
+
+    result = model_handshake(1, 0b1, [0x1], [1, 1, 0], [0])
+    check(result['clear_reads'] == 3 and result['clear_delays'] == 2,
+          'delayed clear did not exit after its first zero read')
+
+    result = model_handshake(1, 0b1, [0x1], [0], [1] * 9999 + [0])
+    check(result['reset_reads'] == 10000,
+          'last-read reset did not exit at 10,000 reads')
+
+    result = model_handshake(1, 0b1, [0x1], [0], [1] * 5000 + [0])
+    check(result['reset_reads'] == 5001,
+          'delayed reset did not exit after its first zero read')
 
     for status, expected, label in (
             (0x1, 1, 'BUS_OFF'),
@@ -265,19 +345,19 @@ def check_handshake_model():
         check(result['ctl_written'] == expected,
               f'{label}: CTL 0x{result["ctl_written"]:x} != 0x{expected:x}')
 
-    result = model_handshake(1, 0b1, [0x1], [1] * CLEAR_LIMIT, [0])
-    check(result['clear_reads'] == CLEAR_LIMIT and
-          result['clear_delays'] == CLEAR_LIMIT,
+    result = model_handshake(1, 0b1, [0x1], [1] * 10001, [0])
+    check(result['clear_reads'] == 10001 and
+          result['clear_delays'] == 10001,
           'unclear status did not exhaust the clear poll')
     check(result['ctl_written'] == 1,
           'unclear status did not keep the captured BUS_SUCCESS result')
 
-    result = model_handshake(1, 0b1, [], [1] * CLEAR_LIMIT, [0])
+    result = model_handshake(1, 0b1, [], [1] * 10001, [0])
     check(result['captured_status'] == 0 and result['ctl_written'] == 4,
           'unclear status with a zero capture did not still write IO_SUCCESS')
 
-    result = model_handshake(1, 0b1, [0x1], [0], [1] * RESET_LIMIT)
-    check(result['reset_reads'] == RESET_LIMIT,
+    result = model_handshake(1, 0b1, [0x1], [0], [1] * 10000)
+    check(result['reset_reads'] == 10000,
           'stuck reset did not exhaust the 10,000-read poll')
     check(result['ctl_written'] == 1,
           'stuck reset changed the earlier CTL result')
@@ -304,7 +384,7 @@ def check_handshake_model():
           'cleared bus-power bit changed the reset poll')
 
 
-def decode_pad(value):
+def decode_sdc1_pad(value):
     return {
         'data_drive': value & 0x7,
         'cmd_drive': (value >> 3) & 0x7,
@@ -316,6 +396,17 @@ def decode_pad(value):
     }
 
 
+def decode_sdc2_pad(value):
+    return {
+        'data_drive': value & 0x7,
+        'cmd_drive': (value >> 3) & 0x7,
+        'clk_drive': (value >> 6) & 0x7,
+        'data_pull': (value >> 9) & 0x3,
+        'cmd_pull': (value >> 11) & 0x3,
+        'clk_pull': (value >> 14) & 0x3,
+    }
+
+
 def check_pad_decode():
     check(WEST_BASE + SDC1_CTL == 0x00575000,
           'west tile plus SDC1 group is not 0x00575000')
@@ -324,7 +415,7 @@ def check_pad_decode():
     check(0x00575000 + 0x3fe000 == 0x00973000,
           'the SDC2 address delta is not 0x3fe000')
 
-    check(decode_pad(0x9fe4) == {
+    check(decode_sdc1_pad(0x9fe4) == {
         'data_drive': 4,
         'cmd_drive': 4,
         'clk_drive': 7,
@@ -333,8 +424,16 @@ def check_pad_decode():
         'clk_pull': 0,
         'rclk_pull': 1,
     }, '0x9fe4 does not decode to the documented SDC1 fields')
-    check(decode_pad(0x1fe4)['rclk_pull'] == 0,
-          '0x1fe4 unexpectedly sets the SDC2 RCLK pull field')
+    check(decode_sdc2_pad(0x1fe4) == {
+        'data_drive': 4,
+        'cmd_drive': 4,
+        'clk_drive': 7,
+        'data_pull': 3,
+        'cmd_pull': 3,
+        'clk_pull': 0,
+    }, '0x1fe4 does not decode to the documented SDC2 fields')
+    check((0x1fe4 >> 15) & 0x3 == 0,
+          '0x1fe4 sets raw bits 15-16, which the SDC2 group does not define')
     check(0xfffbffff & (1 << 18) == 0 and
           (0xfffbffff | (1 << 18)) == 0xffffffff,
           'the vendor 0x20c mask does not clear only bit 18')
@@ -347,6 +446,7 @@ def main():
           f'{source}: SHA-256 {actual} != {EXPECTED_SHA256}')
     check_handshake_instructions(data)
     check_pad_instructions(data)
+    check_loop_bounds(data)
     check_handshake_model()
     check_pad_decode()
     print(f'sdccdxe decode: sha256={actual} source={source} PASS')
