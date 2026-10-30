@@ -6,10 +6,16 @@ power or storage operation was performed. The SDHC decision remains
 
 This document records the inputs, hashes, availability and host gates for the
 diagnostic payload and boot-image flow. The packaging step has been replayed
-byte-for-byte for the audit and host-init images. This does **not** claim that
-the XNU kernel, the payload image or the boot image is reproducible from the
-RAM-root fixture replay. That replay reproduces the eight fixture outputs only
-(`ram-root-fixture-reproducibility.md`).
+byte-for-byte for the audit and host-init images. The raw payload build has
+since been replayed on the historical host: with the FAT timestamp pinned and
+the diagnostic argument ordered as in the historical payload, it reproduces
+every payload byte except the 64-byte ADT random seed, and substituting that
+seed reproduces the historical payload and audit v2 image
+(`payload-build-recipe.md`). This does
+**not** claim that the XNU kernel or the boot image's firmware is reproducible
+from the RAM-root fixture replay. That replay reproduces the eight fixture
+outputs only (`ram-root-fixture-reproducibility.md`); the kernel compile and
+link are replayed separately in `kernel-build-recipe.md`.
 
 Tags: `[S]` source- or artifact-established, `[C]` conditional inference,
 `[U]` not established.
@@ -129,11 +135,18 @@ the image `[S]` (`scripts/build-gta4l-diagnostic-payload.py:100-199`).
 | Audit v2 | `172951570ac0ccbdd8fac87dc089001adc9971cd476122ec8f1a9f685e102e3a` | `6e81598cd143c73f47b8d160433d87d84ca035f599187c334241762d4055854a` | both present in `ram-root-sdhci-audit-evidence/` `[S]` |
 | Host-init v2 | `ba52b6500ec3d064d173fa06fba23cb42aa4850c0bddd0df9a4178666c084646` | `72eae6f0c0850ac421d0048cb6cc3697cf70db7df176b34b30703d26132bbc3f` | raw absent; packaged present as `payload-v2-kernel.macho` `[S]` |
 | FS timer / report | `dc8184da757b5323d2f4fb6c7ac1d588790b3d44d583c6d6fd24897cdbbcfe60` | `20f3facca74d0915b686cacba1da1a74cfe0ff3cf55f296ddaa67a6fd698de4e` | raw present in `pmgr-test2-evidence/` and `pmgr-test3-evidence/`; packaged embedded `[S]` |
-| Current build tree | `452026b2d8bbfaaa5b6ebc97ce235f396a8929b50d3957eff4c655eddd30ca86` | `ed19095452f1e2aa1b56edd1746cbbf25063dd01e6d34d97bc2982faa5718a89` | present-out; 192 MiB non-diagnostic payload, not the tested baseline `[S]` |
+| Current build tree | `452026b2d8bbfaaa5b6ebc97ce235f396a8929b50d3957eff4c655eddd30ca86` | `ed19095452f1e2aa1b56edd1746cbbf25063dd01e6d34d97bc2982faa5718a89` | prelink output present; mutable payload output now holds the host-init reproduced-kernel diagnostic `a256b6d7...`; the audit `0eadb4d4...` and host-init `a256b6d7...` images were both flashed and booted `[S]` |
 
-The current build tree also records a 192 MiB payload, a 203,132,928-byte boot
-image, firmware FD `b2b5bdce...`, and a different boot DTB. It is a later build,
-not a reproduction of the v5/audit/host-init evidence `[S]`.
+At the replay the current build tree also recorded a 192 MiB payload
+(`f1054a26...`), a 203,132,928-byte boot image (`08d2af9f...`), firmware FD
+`b2b5bdce...`, and a different boot DTB. The mutable `OUT/payload/` output now
+holds the 80 MiB host-init reproduced-kernel diagnostic payload `a256b6d7...`;
+the audit payload was `0eadb4d4...`; no copy of the historical 192 MiB payload
+was found in the output trees `[S]`. Both reproduced-kernel diagnostic images
+were flashed and booted on the tablet
+(`out/gta4l/ram-root-sdhci-repro-kernel-evidence/` and
+`out/gta4l/ram-root-sdhci-repro-kernel-host-init-evidence/`). The build tree is
+a later build, not a reproduction of the v5/audit/host-init evidence `[S]`.
 
 ## 6. Host gate results
 
@@ -223,7 +236,22 @@ payload hash. Replay inputs:
 | `scripts/check-gta4l-payload.py` | `3c5a5723ea1cc85946dbd48bb916b2aa2e2fcb9ca584dc49caee598a6bd62930` |
 
 This establishes the packaging step only. The inputs are existing artifacts;
-the replay does not reproduce the payload, kernel or firmware.
+the replay does not reproduce the kernel or firmware.
+
+The raw payload build itself was replayed on the historical host on 2026-10-30
+(`payload-build-recipe.md`). With the historical prelinked kernel, clang
+22.1.8, the audit board snapshot, the historical diagnostic-argument order and
+`SOURCE_DATE_EPOCH=1793180892`, the clean payload `1d15ea68...` differs from
+the historical `31b78bec...` in exactly the 64-byte ADT `random-seed`; the
+patched kernel, trust cache, data ramdisk, `unixnu.toml` and every other ADT
+property match. Substituting the historical seed yields a byte-identical
+payload, and packaging it against the v5 baseline
+reproduces the historical audit v2 image `a34519c6...` byte-for-byte. The clean
+payload packages to `037ba650...`, which differs from the historical v2 image
+in 84 bytes (the derived image ID and the seed); both gates pass. A second
+controlled clean build (`c697903b...`, clean boot `60ad9d05...`) passed both
+gates and normalized again to `31b78bec...` / `a34519c6...`. The kernel
+compile and link are replayed separately in `kernel-build-recipe.md`.
 
 ## 7. Missing, embedded and not-yet-reproduced inputs
 
@@ -250,13 +278,17 @@ the replay does not reproduce the payload, kernel or firmware.
   same module count but 45 of 86 PE hashes differ. `docs/firmware-handoff.md`
   already records this gap for `DxeCore` and `UniXNURamDiskDxe`; this inventory
   confirms it across the full module set `[S]`.
-- The kernel artifacts. The current build kernel `452026b2...` differs from
-  the audit kernel `6e81598c...`; no host-only rebuild has been compared with
-  either the v5 or host-init kernel `[U]`.
-- The payload image and boot image. The packager reproduces the packaging step
-  byte-for-byte from the same baseline and payload (see the replay above), but
-  the baseline embeds firmware whose reproduction is not established, and the
-  payload embeds a kernel whose reproduction is not established `[U]`.
+- The v5 and host-init kernel artifacts. The v5 prelinked kernel
+  `10a2b5b9...` and host-init raw kernel `ba52b650...` have not been rebuilt
+  from the current checkout `[U]`. The current build's prelinked kernel
+  `452026b2...` is the reproduced prelink output; the audit v2 prelinked kernel
+  `17295157...` is a different build and remains not replayed `[U]`.
+- The v5 and host-init payload images embed kernels whose reproduction is not
+  established; the audit v2 payload kernel `6e81598c...` is reproduced from the
+  historical prelink output with the historical clang 22.1.8
+  (`payload-build-recipe.md` §4.1), but the audit v2 prelinked kernel
+  `17295157...` itself remains not replayed `[U]`. The v5 and host-init
+  baselines also embed firmware whose reproduction is not established `[U]`.
 
 **Recorded inconsistency:**
 
@@ -291,9 +323,9 @@ Reproducing the boot image therefore requires three separate steps: rebuild
 the kernel from the pinned XNU source and patches, rebuild the firmware from
 the pinned Mu-Silicium revision, then rebuild and repackage the payload. The
 packaging step is replayable from the existing baseline and payloads, the
-fixture data inputs have a pinned recipe, and the kernel source/patch and
-prelink stages are replayed in `kernel-build-recipe.md`. A full kernel
-compile/link replay remains not established. Firmware build provenance and the
+fixture data inputs have a pinned recipe, and the kernel source/patch,
+compile, link and prelink stages are replayed in `kernel-build-recipe.md`.
+Firmware build provenance and the
 module replay are recorded in `firmware-build-recipe.md`: the tested outer FD
 `42f900a3...` is built from Mu-Silicium `e14626a...`, the `mu_basecore-8f10084c`
 feed at `cfb9372...`, UniXNU `4561854...`, `Binaries` `a1501e0c...` and Arch
@@ -315,25 +347,42 @@ a compile record `[S]`.
 
 1. Kernel build provenance is recorded in `kernel-build-recipe.md`: the
    source, patch, compiler, linker, archive and prelink inputs are pinned, and
-   the source/patch and prelink stages are replayed. A full compile/link replay
-   and the evidence-image kernels remain not established.
+   the source/patch, compile, link and prelink stages are replayed. The linked
+   kernel `3103e067575d94d878485de464ee0173b07ab2f02215d3abae6fb962c1c59064`
+   is reproduced byte-for-byte with the historical timestamps and
+   `RC_ProjectSourceVersion=10063.141.1`; the evidence-image kernels remain not
+   established.
 2. Firmware build provenance is recorded in `firmware-build-recipe.md`. A
    clean replay at the historical absolute path reproduces 153 of 156 `.efi`
    build outputs byte-for-byte; the three `PcdDxe` copies differ only in the
-   8-byte debug-directory GUID (random stack-cookie text and PCD flag order in
-   the generated `AutoGen` files). The inner FV differs in exactly those 8
-   bytes. A bit-exact outer FD is conditional on pinning that generated text;
-   the stock `build` driver has no supported pin. The earlier 45-of-86 PE
-   difference was the laptop's clang 21.1.8 build at a different path, not the
-   tested toolchain.
-3. With (2) recorded, rebuild the diagnostic payload against the v5 baseline,
-   run both gates with the expected payload hash, and compare the resulting
-   boot image. Do not flash; the SDHC decision remains NO-GO.
+   8-byte debug-directory GUID. Two generated-text differences (stack-cookie
+   value and PCD flag order) are the observed candidate inputs; this replay
+   did not isolate the GUID cause. The inner FV differs in exactly those 8
+   bytes. A bit-exact outer FD was not achieved; `--skip-autogen` failed in
+   this BaseTools feed, and other pinning approaches were not attempted. The
+   earlier 45-of-86 PE difference was the laptop's clang 21.1.8 build at a
+   different path, not the tested toolchain.
+3. The raw payload build is recorded in `payload-build-recipe.md`. On the
+   historical host with clang 22.1.8, the audit board snapshot, the pinned FAT
+   timestamp and the historical diagnostic-argument order, the kernel patch,
+   trust cache, data ramdisk, `unixnu.toml` and 106 of 107 ADT properties
+   match. The clean payload differs from the historical
+   `31b78bec...` only in the 64-byte ADT random seed; substituting the
+   historical seed yields a byte-identical payload, and packaging it against
+   the v5 baseline reproduces the historical audit v2 image `a34519c6...`
+   byte-for-byte. A clean bit-exact build needs a supported random-seed pin,
+   which the pinned UniXNU does not provide.
+4. Remaining host-only work: a supported ADT random-seed pin for a clean
+   bit-exact payload build, and a bit-exact Mu-Silicium outer FD
+   (`firmware-build-recipe.md`). Do not flash; the SDHC decision remains
+   NO-GO.
 
 ## 10. References
 
-- `docs/kernel-build-recipe.md` — kernel inputs and the source/patch and
-  prelink stage replays
+- `docs/kernel-build-recipe.md` — kernel inputs and the source/patch, compile,
+  link and prelink stage replays
+- `docs/payload-build-recipe.md` — raw payload inputs, the historical-host
+  replay and the seed-normalized comparison
 - `docs/ram-root-fixture-reproducibility.md` — fixture inputs, pins and replay
 - `docs/firmware-handoff.md` — tested firmware provenance and the current-build
   difference

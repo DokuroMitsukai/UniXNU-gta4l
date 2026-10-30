@@ -6,8 +6,9 @@ power or storage operation was performed. The SDHC decision remains **NO-GO**
 
 This document pins the inputs of the Mu-Silicium UEFI build that produced the
 historical `SILICIUM_UEFI.fd` carried by the gta4l SDHC images, and replays the
-build on the machine that produced it. The replay reproduces every module's
-code and data. The only delta is an 8-byte debug-directory GUID in `PcdDxe`.
+build on the machine that produced it. The replay reproduces the code and data
+of every packaged module. The only observed delta is an 8-byte debug-directory
+GUID in `PcdDxe`.
 
 Tags: `[S]` source- or artifact-established, `[C]` conditional inference,
 `[U]` not established.
@@ -19,9 +20,10 @@ Tags: `[S]` source- or artifact-established, `[C]` conditional inference,
 | Tested artifact identity | standalone FD and the booted image metadata | outer FV `42f900a3...`; the tested boot image's `boot.json` records the same `fd_sha256` `[S]` |
 | Source and toolchain | Mu-Silicium `e14626a`, Mu_Basecore feed `cfb9372`, UniXNU `4561854`, Arch clang 22.1.8 | the tested log records the same paths and defines; every checkout, feed and toolchain package is pinned `[S]` |
 | Module compile and link | clean build on the historical host at the historical absolute paths | 153 of 156 `.efi` build outputs hash-identical; the three `PcdDxe` copies differ only in the debug GUID `[S]` |
+| Module population | build tree and inner FV | 156 `.efi` path entries are three copies of 52 built modules; the inner FV packages 86 PE modules: 45 built, 41 prebuilt `Binaries`, and 7 built modules are not packaged `[S]` |
 | Inner FV | clean build | 8,339,456 bytes; exactly 8 bytes differ, at `0x2ed28`, the `PcdDxe` `RSDS` GUID; every FFS offset, size and other byte matches `[S]` |
-| Outer FD | clean build | `421af406...` vs tested `42f900a3...`; `FVMAIN_COMPACT` used `0x173158` (replay) vs `0x1733a0` (tested) `[C]` |
-| Bit-exact outer FD | stock `build` | not reproduced; the only delta is generated debug text, not source code `[C]` |
+| Outer FD | clean build | `421af406...` vs tested `42f900a3...`; `FVMAIN_COMPACT` used `0x173158` (replay) vs `0x1733a0` (tested) `[S]` |
+| Bit-exact outer FD | stock `build` | not reproduced in this replay; the observed inner-FV delta is in generated debug text, not source code `[C]` |
 
 The clean replay used an empty `Build/` directory in a user and mount
 namespace, so the historical build tree was not modified. The replay log and
@@ -90,8 +92,10 @@ build -p Platforms/Samsung/gta4lPkg/gta4l.dsc -a AARCH64 -b DEBUG -t CLANGPDB -n
 ```
 
 The `<user>` and `<volume>` components are personal path data and are elided
-from this document. The tested log records them, and the PE hashes only match
-when they are used verbatim.
+from this document. The tested log records them. The PE debug directory embeds
+the absolute path, so the historical path is part of the build input; this
+replay used it verbatim. A build elsewhere is expected to change the embedded
+path and therefore the PE hashes.
 
 `SOURCE_DATE_EPOCH` is the commit time of Mu-Silicium `e14626a`; `firmware.py`
 pins it so the same sources embed the same build time. `-n 12` is parallelism
@@ -138,9 +142,12 @@ Key module hashes, identical in the tested build and the replay:
 | `ArmTimerDxe.efi` | `64551071a51777b181f3e73adcd8d887df8841f68dbc75db3446997b82aa0cc3` |
 | `PcdDxe.efi` | tested `60404587970c0abaa69a31ec1ee5d5a4f0ac49aad62ca11ca1135a702ccdaf27`; replay `41045e212e8262e2a804f784a672d6f399d298fb07ea36be88fc9026a55975d8` |
 
-The 156 path entries include `DEBUG/` and `OUTPUT/` copies of the EDK II-built
-modules. The inner FV also contains the prebuilt `Binaries/gta4l` modules; the
-8-byte inner-FV comparison covers those as well.
+The 156 path entries are three copies (top-level, `DEBUG/`, `OUTPUT/`) of 52
+unique EDK II-built module files. They are not the 86 PE modules packaged in
+the inner FV: 45 of the 52 build outputs are packaged, and the other 41
+packaged PE modules are prebuilt `Binaries/gta4l` modules; the remaining seven
+build outputs are not packaged. The 8-byte inner-FV comparison covers all 86
+packaged modules, built and prebuilt.
 
 ## 5. The `PcdDxe` delta
 
@@ -165,25 +172,32 @@ starting at `0x27b68`):
 | tested | `fc 05 d3 b8 16 34 d4 50` |
 | replay | `d0 ea 73 0c ef c7 6b a5` |
 
-The delta comes from generated text, not source:
+Two differences in the generated `PcdDxe` text were observed between the tested
+build and the replay. They are candidate inputs to the GUID delta; this replay
+did not isolate which one changes the GUID, and it did not exclude other
+generated or debug inputs:
 
 - `PcdDxe`'s generated `AutoGen.h` embeds `STACK_COOKIE_VALUE`. EDK II writes a
   fresh 100-value pool to `StackCookieValues64.json` at each build and draws
   the module value from it. The tested value is `0x1F6060D040E44C5C`; the clean
-  replay's is `0x3CD517D51BC8365F`. Seeding the tested JSON does not survive:
-  the build rewrites the pool, and the next run draws a different value.
+  replay's is `0x3CD517D51BC8365F`. A seeded replay that copied the tested
+  `StackCookieValues64.json` into the scratch tree still drew a different
+  value: the build rewrote the pool. That does not show the value cannot be
+  pinned by another method.
 - `PcdDxe`'s generated `AutoGen.c` orders the commutative PCD flags as
   `PCD_TYPE_DATA | PCD_DATUM_TYPE_UINT8_BOOLEAN` in the tested build and the
   reverse in the replay. The compiled datum is identical; only the source text
   changes.
 
-The PDB GUID is a hash of the PDB content, including source-file checksums, so
-either generated-text difference changes it. The PE code and data do not
-change. A stock `build` has no supported way to pin the generated text:
-`--skip-autogen` fails in this BaseTools feed with
-`AttributeError: 'WorkSpaceInfo' object has no attribute 'Platform'`. A
-bit-exact outer FD therefore needs the generated `PcdDxe` text to be pinned
-outside the stock driver; that pin was not achieved here.
+The `RSDS` GUID is derived from the PDB contents, so generated-text differences
+are a plausible input to it. The PE code and data do not change. In this replay
+the stock `build` driver did not provide a working pin for the generated text:
+`--skip-autogen` failed in this BaseTools feed with
+`AttributeError: 'WorkSpaceInfo' object has no attribute 'Platform'`. Other
+pinning approaches were not attempted, so this does not establish that no
+supported pin exists. A bit-exact outer FD was not achieved; it would require
+controlling the generated `PcdDxe` text or the resulting PDB GUID outside the
+path used here.
 
 The two other build-directory inputs that could be order-dependent matched
 exactly: `PcdTokenNumber` and the `AutoGen` ID file have identical hashes in
@@ -197,19 +211,22 @@ the tested build and the replay, and every FFS offset and size in
   `e14626a`, the
   `mu_basecore-8f10084c` feed at `cfb9372`, UniXNU `4561854`, the `Binaries`
   `a1501e0c` submodule and Arch clang 22.1.8.
-- `[S]` Every module's code and data in the tested inner FV is reproduced:
-  153 of 156 `.efi` path entries are byte-identical, and the inner FV differs
-  in exactly 8 bytes in `PcdDxe`'s debug directory.
-- `[C]` A bit-exact outer FD is conditional on pinning the generated
-  `PcdDxe` `AutoGen.c`/`AutoGen.h` text (stack-cookie value and PCD flag
-  order). The stock driver does not provide that pin, so the tested FD is not
-  bit-exact reproducible as a black-box build.
-- `[S]` The earlier local rebuild at `b2b5bdce...` (45 of 86 PE hashes
-  differing) used the correct source tree but the laptop's clang 21.1.8 at a
-  different absolute path. The historical replay shows the source tree itself
-  is not the difference: the same sources at the historical path with clang
-  22.1.8 match. The local build was not re-run to separate the compiler from
-  the path.
+- `[S]` Every packaged module's code and data in the tested inner FV is
+  reproduced: 153 of 156 `.efi` build outputs are byte-identical, and the
+  inner FV differs in exactly 8 bytes in `PcdDxe`'s debug directory.
+- `[C]` A bit-exact outer FD was not reproduced. The observed inner-FV delta is
+  an 8-byte PDB GUID in `PcdDxe`, and the observed generated-text differences
+  are candidate inputs. Pinning that text, or otherwise controlling the GUID,
+  would be needed; this replay did not achieve it, and `--skip-autogen` failed
+  in this BaseTools feed.
+- `[S]` The earlier local rebuild at `b2b5bdce...` (45 of 86 packaged PE
+  hashes differing) used clang 21.1.8 at a different absolute path, not the
+  tested clang 22.1.8 at the historical path. The local tree's feed and
+  submodule state were not re-verified against the tested build, and the local
+  build was not re-run to separate the compiler, path and tree contributions.
+  The historical replay is the controlled comparison: with the pinned feed and
+  clang 22.1.8 at the historical path, all 86 packaged PE modules match in
+  code and data, and only `PcdDxe`'s 8-byte debug GUID differs.
 - `[S]` The booted evidence image carries this FD: `boot.json` records
   `fd_sha256` `42f900a3...`; the host-init v2 image's gzip kernel decompresses
   through the 192-byte BootShim to the outer FV `42f900a3...`
@@ -247,11 +264,13 @@ make -C src/UniXNU/out/feeds/mu_basecore-8f10084c/BaseTools/Source/C -j"$(nproc)
 ```
 
 To keep the historical `Build/` untouched, bind-mount a scratch directory over
-it (section 4). The module hashes only match at the historical absolute path
-(the `<user>/<volume>` path recorded in the tested log) because the PDB path is
-embedded in every PE. A build at another path produces identical code and data
-but different PE debug paths, so compare `objcopy --strip-debug` images or the
-section contents, not the raw PE hashes.
+it (section 4). The module hashes in this replay match at the historical
+absolute path (the `<user>/<volume>` path recorded in the tested log) because
+the PDB path is embedded in every PE. A build at another path is expected to
+produce identical code and data but different PE debug paths, so compare
+`objcopy --strip-debug` images or the section contents, not the raw PE hashes.
+The local build at another path also used a different compiler, so it did not
+isolate the path contribution.
 
 Verification after the build:
 
