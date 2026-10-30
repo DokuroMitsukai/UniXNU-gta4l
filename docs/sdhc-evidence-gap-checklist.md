@@ -31,6 +31,14 @@ Revision 5 (2026-10-30): records the pinned-image descriptor-base scan in
 `D11`/`E8`: one read and no direct or bounded page-relative store to `0x8878`;
 runtime/external writes remain open. No gate disposition changed `[S]`.
 
+Revision 6 (2026-10-30): corrects revision 5's scan scope after an audit found
+incomplete pointer propagation and address-range checks. The bounded scan now
+follows newly loaded `.data` pointers, pre/post-index addressing and one level
+of direct `BL`, detects overlapping writes, and resolves the caller stores at
+`0x38bc`/`0x38f4` to `0x8140`/`0x8868`. It finds no write intersecting
+`[0x8878,0x8880)`, but internal indirect/computed/aliased stores and
+runtime/external writers remain open. No gate disposition changed `[S]`.
+
 ## 1. Purpose and canonical links
 
 This checklist links every canonical gate to its current evidence, missing
@@ -315,20 +323,21 @@ vendor DT, or by the prior controller-local result `[S]`.
   to the SPMI-arbiter v5 `irq_status`/`irq_clear` pair under the recorded
   interpretation `[S]/[C]`. Whether PM6125 uses the `0x14`/`0x16` `QPNPINT`
   layout is unresolved `[U]`. A bounded static scan of the pinned `SPMIDxe`
-  image finds one read and no direct or bounded page-relative store to
-  `[0x8878]`, so the descriptor-base override is zero in the image's initial
-  state `[S]`.
+  image finds one read and no write intersecting `[0x8878,0x8880)`; it resolves
+  the caller stores at `0x38bc`/`0x38f4` to `0x8140`/`0x8868`, so the
+  descriptor-base override is zero in the image's initial state `[S]`.
 - **Missing documentation or measurement:** PM6125 fault semantics, USID/subtype
   and `QPNPINT` applicability; SPMI-arbiter clear-register read/write semantics
   (what bits 31:8 read as and whether writing them back is safe); runtime
-  APID/owner-status evidence for the `+0x28` path; runtime/external
-  descriptor-base override population (the pinned image has no writer in the
-  bounded static scan); safe pending-request behavior; a documented
+  APID/owner-status evidence for the `+0x28` path; internal
+  indirect/computed/aliased or runtime/external descriptor-base override
+  population (the bounded static scan finds no intersecting write but does not
+  cover every addressing mode); safe pending-request behavior; a documented
   acknowledge-or-not decision `[U]`.
 - **Acquisition route:** PM6125 register description/datasheet and non-scanning
   identity evidence; SoC SPMI-arbiter register documentation; runtime APID
-  bitmap or transport trace; a runtime writer/trace or stronger whole-program
-  alias analysis for the descriptor base (the bounded static write analysis is
+  bitmap or transport trace; a whole-program alias analysis or runtime
+  writer/trace for the descriptor base (the bounded static write analysis is
   recorded in `docs/spmi-0x28-analysis.md` and
   `scripts/test-gta4l-spmidxe-descriptor-base.py`); live PMIC access remains
   blocked (`sdhc-decision-memo.md` §4, `E8`) `[S]`.
@@ -345,8 +354,9 @@ vendor DT, or by the prior controller-local result `[S]`.
   not proof for PM6125 `[S]/[U]`. The UEFI handler's result-only write follows a
   controller reset and is not a response to a bus-on request, so it does not
   decide the candidate's acknowledge choice `[S]/[C]`. The descriptor-base
-  override is zero and no writer is found in the pinned image, but a
-  runtime/external writer remains possible `[S]/[U]`.
+  override is zero and the bounded scan finds no write intersecting it, but
+  internal indirect/computed and runtime/external writers remain possible
+  `[S]/[U]`.
 
 ### `E9` — Recovery
 
@@ -570,7 +580,7 @@ limits with page or section references `[S]`.
 | `D8` | `E3`, `E4` | PM6125 parent-rail capability and combined-load accounting for `vdd_l9_l11` and `vdd_l23_l24` | Parent input current capability, shared L9/L23 loads and combined loading against L11/L24 demand | PM6125 datasheet (`D1`) plus board population/topology (`D3`) and measurement (`D6`); custodian: device owner; analysis: build agent `[U]` | Document revisions, rail-limit pages, load inventory and measurement provenance | Parent-rail current limits, L9/L23 consumer loads, combined-load margin and load-step limits with page/section | Declared `sdhc_1`/`ufshc` currents are not regulator capability; other L9/L23 loads are not enumerated `[U]` |
 | `D9` | `E1`, `E3`, `E8` | Non-scanning PM6125 USID/subtype identity evidence | Installed PMIC identity and subtype needed for register and rail applicability | Vendor documentation, package marking or a non-scanning boot log; custodian: device owner; analysis: build agent. A live PMIC scan remains blocked `[U]` | Source type, capture method, firmware revision, raw record and hash | USID/subtype value and mapping to the applicable datasheet revision with page/section | Rail numbering is established but identity is not; a scan is not authorized `[U]` |
 | `D10` | `E8` | Runtime SPMI-arbiter APID/owner-bitmap evidence for the `+0x28` clear path | Which master owns or may clear the pending interrupt and what the owner bitmap reads at runtime | SoC arbiter documentation or a separately approved runtime transport trace; custodian: device owner; collection requires separate approval `[U]` | Trace procedure, firmware and image hashes, APID bitmap values, timestamps, calibration | Owner/APID bits, access permissions and read side effects with page/section or trace evidence | Only bounded static inference exists; runtime collection is not authorized `[U]` |
-| `D11` | `E8` | Descriptor-base override write analysis for indirect and computed stores | Whether anything populates global `0x8878` at run time and can therefore change the arbiter descriptor base | Host-only binary/data-flow analysis of the pinned drivers plus `D4` arbiter documentation; the pinned-image pass is complete and reproducible; runtime/external evidence is still required `[S]/[U]` | Firmware hashes, tool revision, analysis scope and unresolved indirect targets | Enumerated stores to `0x8878` and aliases, computed addresses, reachability and worst-case descriptor-base value with evidence | Pinned-image scan finds one read at `0x38b4` and no store, literal or relocation to `0x8878`; the global is writable, so a runtime/external writer remains unresolved and the analysis is not a datasheet `[U]` |
+| `D11` | `E8` | Descriptor-base override write analysis for indirect and computed stores | Whether anything populates global `0x8878` at run time and can therefore change the arbiter descriptor base | Host-only binary/data-flow analysis of the pinned drivers plus `D4` arbiter documentation; the bounded scan is reproducible but leaves internal indirect/computed and runtime/external stores open `[S]/[U]` | Firmware hashes, tool revision, analysis scope and unresolved indirect targets | Enumerated stores to `0x8878` and aliases, computed addresses, reachability and worst-case descriptor-base value with evidence | The bounded scan finds one read at `0x38b4` and no write intersecting `[0x8878,0x8880)`; it resolves the caller stores at `0x38bc`/`0x38f4` to `0x8140`/`0x8868` and reports 96 unresolved non-stack memory operations, so it is not a proof of absence and the analysis is not a datasheet `[U]` |
 
 Register rules:
 
