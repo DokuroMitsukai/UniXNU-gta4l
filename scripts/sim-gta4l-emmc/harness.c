@@ -91,6 +91,11 @@ struct sim {
 	int power_io_delayed;
 	int power_wrong_io;
 	int power_io_wrong_then_correct;
+	int power_late_bus_only;
+	int power_io_then_wrong;
+	int power_opposite_io;
+	int power_io_on_ack;
+	int ack_io_injected;
 	int power_churn;
 	int bus_acked;
 	int bus_delayed_emitted;
@@ -229,23 +234,32 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			return 0;
 		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) {
-			if ((sim->power_delayed_bus != 0) &&
+			if (((sim->power_delayed_bus != 0) ||
+			    (sim->power_late_bus_only != 0)) &&
 			    (sim->power_written != 0) &&
 			    (sim->bus_delayed_emitted == 0)) {
 				sim->pwr_poll_count++;
-				if (sim->pwr_poll_count >= 3u) {
+				if (sim->pwr_poll_count >= 5u) {
 					sim->pwr_status |=
 					    GTA4L_EMMC_PWRCTL_BUS_ON;
+					if (sim->power_delayed_bus != 0) {
+						sim->pwr_status |=
+						    GTA4L_EMMC_PWRCTL_IO_LOW;
+					}
 					sim->bus_delayed_emitted = 1;
 				}
 			}
 			if (((sim->power_io_delayed != 0) ||
-			    (sim->power_io_wrong_then_correct != 0)) &&
+			    (sim->power_io_wrong_then_correct != 0) ||
+			    (sim->power_io_then_wrong != 0)) &&
 			    (sim->bus_acked != 0) &&
 			    (sim->io_delayed_emitted == 0)) {
 				sim->io_poll_count++;
-				if (sim->io_poll_count >= 5u) {
+				if (sim->io_poll_count >=
+				    ((sim->power_io_then_wrong != 0) ? 1u : 5u)) {
 					sim->pwr_status |=
+					    (sim->power_io_then_wrong != 0) ?
+					    GTA4L_EMMC_PWRCTL_IO_HIGH :
 					    GTA4L_EMMC_PWRCTL_IO_LOW;
 					sim->io_delayed_emitted = 1;
 				}
@@ -321,7 +335,8 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 					sim->pwr_status |=
 					    GTA4L_EMMC_PWRCTL_BUS_OFF;
 				} else if ((sim->power_io_only == 0) &&
-				    (sim->power_delayed_bus == 0)) {
+				    (sim->power_delayed_bus == 0) &&
+				    (sim->power_late_bus_only == 0)) {
 					sim->pwr_status |=
 					    GTA4L_EMMC_PWRCTL_BUS_ON;
 				}
@@ -691,7 +706,10 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 		if ((sim->power_io_delayed == 0) &&
 		    ((value & SIM_CTRL_VDD_180) !=
 		    (previous & SIM_CTRL_VDD_180))) {
-			if ((sim->power_wrong_io != 0) ||
+			if (sim->power_opposite_io != 0) {
+				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_LOW |
+				    GTA4L_EMMC_PWRCTL_IO_HIGH;
+			} else if ((sim->power_wrong_io != 0) ||
 			    (sim->power_io_wrong_then_correct != 0)) {
 				if ((value & SIM_CTRL_VDD_180) != 0) {
 					sim->pwr_status |=
@@ -735,16 +753,15 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 			if ((value & GTA4L_EMMC_PWRCTL_ACK_BUS) != 0) {
 				sim->bus_acked = 1;
 			}
-			if (sim->power_stuck == 0) {
-				if ((value & GTA4L_EMMC_PWRCTL_ACK_BUS) != 0) {
-					sim->pwr_status &=
-					    ~GTA4L_EMMC_PWRCTL_BUS_ON;
-				}
-				if ((value & GTA4L_EMMC_PWRCTL_ACK_IO) != 0) {
-					sim->pwr_status &=
-					    ~(GTA4L_EMMC_PWRCTL_IO_LOW |
-					    GTA4L_EMMC_PWRCTL_IO_HIGH);
-				}
+			/* The acknowledgement reports completion; it does not
+			 * clear the request latches. Only CORE_PWRCTL_CLEAR
+			 * does that. Inject a request here to prove the ack
+			 * cannot erase an uncaptured request. */
+			if ((sim->power_io_on_ack != 0) &&
+			    (sim->ack_io_injected == 0) &&
+			    ((value & GTA4L_EMMC_PWRCTL_ACK_BUS) != 0)) {
+				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_HIGH;
+				sim->ack_io_injected = 1;
 			}
 			return;
 		}
@@ -937,6 +954,21 @@ main(int argc, char **argv)
 		sim.power_wrong_io = 1;
 	} else if (scenario_is(scenario, "power-wrong-io-then-correct")) {
 		sim.power_io_wrong_then_correct = 1;
+	} else if (scenario_is(scenario, "power-late-bus-only")) {
+		sim.power_late_bus_only = 1;
+	} else if (scenario_is(scenario, "power-io-then-wrong")) {
+		sim.power_io_then_wrong = 1;
+	} else if (scenario_is(scenario, "power-opposite-io")) {
+		sim.power_opposite_io = 1;
+	} else if (scenario_is(scenario, "power-unchanged-1v8-bus-only")) {
+		/* Model a controller that preserved VDD_180 across reset: the
+		 * write changes nothing, so no IO request is due, but a
+		 * standalone BUS_ON then implies the wrong level. */
+		sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL2] =
+		    (uint8_t)(SIM_CTRL_VDD_180 & 0xFFu);
+		sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL2 + 1u] = 0;
+	} else if (scenario_is(scenario, "power-wrong-io-on-ack")) {
+		sim.power_io_on_ack = 1;
 	} else if (scenario_is(scenario, "power-churn")) {
 		sim.power_churn = 1;
 	} else if (scenario_is(scenario, "data-sector-4k")) {
@@ -1142,6 +1174,33 @@ main(int argc, char **argv)
 		    "wrong-level IO request was accepted");
 		check(sim.card_clock_enabled == 0,
 		    "card clock enabled after a wrong-level IO request");
+	} else if (scenario_is(scenario, "power-late-bus-only") ||
+	    scenario_is(scenario, "power-io-then-wrong") ||
+	    scenario_is(scenario, "power-opposite-io")) {
+		check(result == GTA4L_EMMC_ERR_POWER,
+		    "a later or contradictory IO level was accepted");
+		check(sim.card_clock_enabled == 0,
+		    "card clock enabled after a later/contradictory IO level");
+		if (scenario_is(scenario, "power-late-bus-only")) {
+			check(sim.bus_delayed_emitted == 1,
+			    "late standalone bus request was never emitted");
+		}
+		if (scenario_is(scenario, "power-io-then-wrong")) {
+			check(sim.io_delayed_emitted == 1,
+			    "late wrong-level IO request was never emitted");
+		}
+	} else if (scenario_is(scenario, "power-unchanged-1v8-bus-only")) {
+		check(result == GTA4L_EMMC_ERR_POWER,
+		    "unchanged VDD_180 accepted a wrong IO level");
+		check(sim.card_clock_enabled == 0,
+		    "card clock enabled after an unchanged-bit wrong level");
+	} else if (scenario_is(scenario, "power-wrong-io-on-ack")) {
+		check(result == GTA4L_EMMC_ERR_POWER,
+		    "wrong-level IO request raised on ack was accepted");
+		check(sim.ack_io_injected == 1,
+		    "ack-time IO request was never injected");
+		check(sim.card_clock_enabled == 0,
+		    "card clock enabled after an ack-time wrong level");
 	} else if (scenario_is(scenario, "power-churn")) {
 		check(result == GTA4L_EMMC_ERR_POWER,
 		    "churned power loop did not fail");
