@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T16:27:37Z`, after the final edits to the
+Hashes were taken at `2026-10-30T18:09:39Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them. The snapshot is intended to be committed without
@@ -18,7 +18,7 @@ update the table.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD at the hash snapshot | `9699ded69df3f6a57b71073977b1fb49ceff6bc5` (sixth correction commit) |
+| HEAD at the hash snapshot | `4148a611cc61ab0ab055f76314af9ed527f6b8c8` (seventh correction commit) |
 | Parent of the correction commit | `1e3072f8ee39a6bbee05204a95fd94604bd6f7ac` |
 | Correction commit paths | 8: 7 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`docs/sdhc-decision-update-2026-10-30.md`) |
 | First follow-up commit paths | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`scripts/test-gta4l-sdccdxe-decode.py`) |
@@ -27,13 +27,16 @@ update the table.
 | Fourth follow-up paths | 4: 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-decision-memo.md`, `porting.toml`) and 1 added (`docs/sdhc-evidence-gap-checklist.md`) |
 | Fifth correction paths | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `porting.toml`) |
 | Sixth correction paths | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `porting.toml`) |
-| Seventh correction paths at this snapshot | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `porting.toml`) |
-| Dirty entries at the hash snapshot | 3 modified, exactly the seventh correction paths above |
-| Staging and commits | None at the snapshot; this seventh correction snapshot lands as one commit on top of `9699ded` |
+| Seventh correction paths | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `porting.toml`) |
+| Eighth correction paths at this snapshot | 6: 5 modified (`docs/evidence-baseline.md`, `docs/pmic-audit.md`, `docs/sdhc-evidence-gap-checklist.md`, `docs/spmi-0x28-analysis.md`, `porting.toml`) and 1 added (`scripts/test-gta4l-spmidxe-descriptor-base.py`) |
+| Dirty entries at the hash snapshot | 6, exactly the eighth correction paths above |
+| Staging and commits | None at the snapshot; this eighth correction snapshot lands as one commit on top of `4148a61` |
 
-The hash table describes the seventh correction working tree: the sixth
-correction commit `9699ded` plus the then-uncommitted checklist, porting and
-baseline edits listed above. The sixth correction commit `9699ded` contains
+The hash table describes the eighth correction working tree: the seventh
+correction commit `4148a61` plus the then-uncommitted descriptor-base analysis,
+checklist, audit, porting and baseline edits listed above. The seventh
+correction commit `4148a61` contains exactly the three paths in its row. The
+sixth correction commit `9699ded` contains
 exactly the three paths in its row. The fifth correction commit `339a7e2`
 contains exactly the three paths in its row. The fourth follow-up commit
 `769d1bc` contains
@@ -53,9 +56,11 @@ correction batch completed shared-consumer and parent-supply acquisition
 tracking, separated USID, runtime-APID and descriptor-base evidence, mapped
 acquisition items to gates and corrected the E1/E3/E5/E9 source citations. The
 seventh correction batch aligns `D11` with the `0x8878` descriptor-base override
-path and extends `D6` to the `E5`/`E6`/`E7` measurement and recovery records.
-None of these batches adds a measurement, device action or activation code, and
-none closes a gate.
+path and extends `D6` to the `E5`/`E6`/`E7` measurement and recovery records. The
+eighth correction batch records the pinned-image descriptor-base scan (one read,
+no store, literal or relocation to `0x8878`; runtime/external writer unresolved)
+and adds its reproducible host test. None of these batches adds a measurement,
+device action or activation code, and none closes a gate.
 
 The second batch derived the status/clear/reset loop bounds from the pinned
 MOVZ instructions, added last-read and delayed-completion boundary cases and
@@ -163,11 +168,13 @@ bytes of the previously booted image `[S]`.
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
 | Decision memo | `docs/sdhc-decision-memo.md` | `d8e1bcc115fbec3eb26ddeee5ab651a514e87e0d3d76c10f8e0a49aca6fc753e` |
-| Evidence-gap checklist | `docs/sdhc-evidence-gap-checklist.md` | `41aeca8f42e3372963c5a356dfcc0ce0a106f33b631790b5eacd8e50cd86b641` |
+| Evidence-gap checklist | `docs/sdhc-evidence-gap-checklist.md` | `11023a8f45d44af55903c43a048ca64509e6223f2b72277b4f19ae46a3762ed0` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `88cd9d6a4ac15ea5e9d738f947db0127d4b929a0c24a3713873e927c29907593` |
 | Retention evidence | `docs/power-retention-evidence.md` | `eb91725bd6a63acded9e63ca0673670f36b43a3253da15d8ec17cb67f0387e07` |
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `501672b50a86319b7bd095a92b674c162ccc485963e510a708649aa985486c22` |
+| PMIC audit | `docs/pmic-audit.md` | `d7d1cfcdbd9b0b5065c09fb751a755921bb98e016af6407c59a7d99db2c8b4b2` |
+| SPMI `+0x28` analysis | `docs/spmi-0x28-analysis.md` | `e4482e2c8d635be7f6446eb6be7e2ff6ac25e03b2cac28db794ad08e65c36739` |
 | RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `d967e640ca8f6f7eb0607d0a51aea9b541b21901ed4bf5a0a3e9be090f2fa4a8` |
 | RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `c670e2788044bd8b5054b19452dde8080ee9dc93d794ffe8abf3e2890e202afc` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `7399f421fd11db96fcea80e9c3f5bafc178e2d99099391e293188eb0dd8045b9` |
@@ -175,11 +182,12 @@ bytes of the previously booted image `[S]`.
 | Decision update 2026-10-30 | `docs/sdhc-decision-update-2026-10-30.md` | `09cfa0d63131124374804ce5bb2b0bffa04de0a6d2ac0f70cd6e6174f1b81cb7` |
 | Firmware handoff | `docs/firmware-handoff.md` | `3007de28ad245ae3a268f42fe4ffa9fda289e55473135b6e8a89207ee751cf19` |
 | SdccDxe decode test | `scripts/test-gta4l-sdccdxe-decode.py` | `a346959cc424c46be49dccc4c6e6392f776a5297d938f72796e1b34bc2bffd78` |
+| SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `5797ea39716305a0300390c43c230cf709c442b158d55f1bb4ad2cea5fd84e80` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
 | Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `cf3cc60d13fba8885104298b1b5be8e60fd177dc499a9f906a7bf9428a239ee5` |
+| Porting record | `porting.toml` | `c5a0a7cb5cc29cba9e1a12ae83ac921ba6c6f6633a223d3cc61e9f52e90b987c` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `2d8f060327c4d557ff588e90200676b3dfdaf213c60dec0d24c0300f28eb3fd3` |
@@ -318,14 +326,17 @@ sha256sum package/Gta4lSdhciHostInit.c package/Gta4lSdhciHostInit.h \
   docs/sdhc-power-pad-dependency-report.md \
   docs/sdhc-decision-update-2026-10-30.md \
   docs/ram-root-fixture-reproducibility.md porting.toml \
+  docs/pmic-audit.md docs/spmi-0x28-analysis.md \
   scripts/analyze-gta4l-rpm-ldoa.py scripts/test-gta4l-rpm-ldoa-analysis.py \
-  scripts/test-gta4l-ram-root-fixture-recipe.py
+  scripts/test-gta4l-ram-root-fixture-recipe.py \
+  scripts/test-gta4l-spmidxe-descriptor-base.py
 ( cd /tmp/opencode/linux-verify && sha256sum * | sort -k2 | sha256sum )
 python3.11 -B scripts/test-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-host-init-sim.py
 python3.11 -B scripts/oracle-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-evidence-counts.py
 python3.11 -B scripts/test-gta4l-sdccdxe-decode.py
+python3.11 -B scripts/test-gta4l-spmidxe-descriptor-base.py
 python3.11 -B scripts/test-gta4l-ram-root-fixture-recipe.py
 python3.11 -B scripts/test-gta4l-rpm-ldoa-analysis.py
 python3.11 -B scripts/analyze-gta4l-rpm-ldoa.py \
@@ -352,7 +363,7 @@ python3.11 - <<'PY'
 import hashlib, pathlib, re
 text = pathlib.Path('docs/evidence-baseline.md').read_text()
 rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-expected = 32
+expected = 35
 paths = [path for path, _ in rows]
 assert len(rows) == expected, f'expected {expected} rows, found {len(rows)}'
 assert len(set(paths)) == len(paths), 'duplicate paths in the table'
@@ -377,7 +388,8 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | --- | --- |
 | `scripts/test-gta4l-diagnostic-payload.py`, `test-gta4l-diagnostic-package.py`, `test-gta4l-boot-image.py`, `test-gta4l-sdhci-handoff-audit.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-xnu-mtimes.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py`, `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `check-gta4l.py` | All exited 0 |
 | `scripts/test-gta4l-sdccdxe-decode.py` (static PE/model check, separate from the diagnostic tests) | PASS: pinned SdccDxe SHA-256, handshake and pad instruction words, MOVZ-derived loop bounds, last-read and delayed-completion boundary cases, wrong-bound negative controls, captured-status selection, three non-aborting timeout paths, TLMM arithmetic, SDC1 pad decode and SDC2 CLK-pull field positions |
-| Hash-table self-check in §6 | `rows=32 mismatches=0` |
+| `scripts/test-gta4l-spmidxe-descriptor-base.py` (static PE/scan check, separate from the diagnostic tests) | PASS: pinned SPMIDxe SHA-256, `0x38b0` read/override words, `0x38c8` caller and `.data` layout, one `0x8878` read with no store/literal/relocation, synthetic-store negative control |
+| Hash-table self-check in §6 | `rows=35 mismatches=0` |
 | `porting.toml` parse with `tomllib` | 13 areas |
 | `git diff --check` | Clean |
 

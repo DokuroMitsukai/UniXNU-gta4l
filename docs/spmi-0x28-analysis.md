@@ -133,14 +133,55 @@ values, not immutable constants:
 | `0x811E + 0x00` | `0x0100` | APID-table entry count (256) |
 | `0x811E + 0x0C` | `0x0010` | bitmap-word count (16) |
 
-`[S]` `0x38c8` (called once from `0x266c`) copies `[0x8198]` (`0x8178`) into
-`[0x8868]` and calls `0x38b0(0x8140)`. (`0x8a80` is `[descriptor + 0x18]`, a
-different field; the call argument is `0x8140`.) `0x38b0` conditionally
-overwrites the descriptor base from the global `[0x8878]` when that global is
-non-zero. In this image `[0x8878]` is zero and no direct `.text` reference stores
-to `0x8878`, so the base is `0x01C00000` in the image's initial state. Whether
-any indirect or run-time path changes the base is not established; the value is
-not immutable by construction.
+`[S]` The descriptor-base override path is small and image-local. `0x38c8`
+(called once from `0x266c` via `0x26b0`) loads `[0x8198]` (`0x8178`) through
+`0x38dc`, loads `[config + 0x18]` (`0x8140`) through `0x38e0`, calls
+`0x38b0(0x8140)`, reloads `[0x8198]`, and stores it at `[0x8868]` (`0x38f4`).
+`0x38b0` is exactly:
+
+```text
+38b0  adrp x8, 0x8000
+38b4  ldr  x8, [x8, #0x878]   ; [0x8878]
+38b8  cbz  x8, 0x38c0
+38bc  str  x8, [x0]           ; descriptor base
+38c0  mov  w0, wzr
+38c4  ret
+```
+
+The `.data` layout around the globals is:
+
+| Location | Initial value | Role |
+| --- | --- | --- |
+| `0x8868` | `0` | cached config pointer, written by `0x38f4` |
+| `0x8870` | `0` | event handle; `0x20f0` stores one pointer here |
+| `0x8878` | `0` | descriptor-base override, read only by `0x38b4` |
+| `0x8880` | `0` | descriptor `+0x10` target buffer |
+| `0x8a80` | `0` | descriptor `+0x18` target buffer |
+
+`[S]` A host-only scan of the pinned image (SHA-256 `50be2e1a…`) decoded every
+`ADRP`/`ADR` and the bounded `ADD`/`SUB` immediate arithmetic in `.text`. It
+found 64 `adrp ..., 0x8000` sites and exactly one access to `0x8878`: the
+8-byte load at `0x38b4`. It found no store to `0x8878` through those direct or
+bounded page-relative forms, no 4- or 8-byte literal `0x8878`, no MOVZ/MOVK
+immediate building `0x8878`, and no `.reloc` entry targeting `0x8878`. The
+scanner also resolves stores through the initial `.data` pointers and found no
+store at or above `0x8878`; the resolved `.data` stores all end at `0x8500`.
+The only writer near the override is `0x20f0`, which receives `0x8870` from
+`0x2704`/`0x270c` and stores one pointer there (`0x210c`, `0x2188`), not at
+`0x8878`. The bounded copies into the state/log buffers reach at most `0x8824`
+(`0x2a78` copies `0x30` bytes to `0x86e8`–`0x87e8`; `0x3490` writes 12 bytes
+at `0x8718`–`0x8818`), and the APID-table writes reach at most `0x871e`.
+Reproduce with `scripts/test-gta4l-spmidxe-descriptor-base.py`.
+
+`[C]` In the pinned image's initial state the override is zero, so `0x38b0`
+leaves the descriptor base at `0x01C00000`; the override path is armed only if
+`0x8878` becomes non-zero. `0x8878` is in writable `.data`, so this is a static
+image-local result, not immutability by construction. An external runtime
+writer, a corrupted pointer, DMA or a different firmware revision is not
+excluded, and the scan does not cover arbitrary pointer arithmetic that does not
+derive from the modeled `.data` pointers. The descriptor-base question therefore
+narrows from "unresolved indirect writes" to "no writer found in the pinned
+image; runtime/external writes remain unestablished" `[U]`.
 
 `[S]` `0x01C00000` is 64 KiB aligned, so the 256-byte-alignment condition for
 the direct-address exclusion holds. It is the SPMI PMIC-arbiter register block:
@@ -252,7 +293,7 @@ the exclusion must not be extended to an unverified mapping.
 | --- | --- | --- |
 | Confirmed | Bytes or instructions in this image | descriptor offsets, `0x38` stride, the four-step clear sequence, 512/256 bounds |
 | Conditional | True only if the arbiter is v5 and the base holds | register names, IRQ status/clear meaning, owner/APID table roles |
-| Unresolved | Not decidable from the pinned set | runtime bitmap, `irq_clear` read-back value, `[0x8878]`, PM6125 layout |
+| Unresolved | Not decidable from the pinned set | runtime bitmap, `irq_clear` read-back value, external writer of `[0x8878]`, PM6125 layout |
 
 The register-name mapping in the table above is conditional on the v5
 interpretation; the addresses and instruction sequence are confirmed.
@@ -286,10 +327,11 @@ interpretation; the addresses and instruction sequence are confirmed.
   APIDs `0x2e20` actually processes at a given moment.
 - What hardware returns when `irq_clear(n)` is read, and therefore the effect of
   writing bits 31:8 of that read value back.
-- Whether anything populates `[0x8878]`; it is zero in the image and no direct
-  `.text` reference stores to it, but this is a static finding only.
-- Whether any indirect or run-time path changes the descriptor base or the
-  configuration after initialization.
+- Whether an external runtime writer populates `[0x8878]`; the pinned image has
+  one read and no direct or bounded page-relative store to it, but the global is
+  writable and the static scan is image-local.
+- Whether any run-time path outside the pinned image changes the descriptor base
+  or the configuration after initialization.
 - Whether the UEFI driver's arbiter block is exactly the Linux v5 revision
   (the offset/stride match is exact; the version register was not read).
 - Whether PM6125 has this peripheral layout, and any live rail voltage,
@@ -300,4 +342,4 @@ interpretation; the addresses and instruction sequence are confirmed.
 None of this changes the disposition in `pmic-audit.md`: live PMIC/SPMI access
 remains blocked. This analysis resolves the `0x0104`/`0x0108` pair, the
 `0x2ec8` bit, and the image's initial base; it does not establish the callback's
-complete effect set, because the indirect paths remain open.
+complete effect set, because runtime/external paths remain open.
