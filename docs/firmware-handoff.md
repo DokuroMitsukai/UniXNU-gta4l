@@ -102,8 +102,8 @@ The `0x81a8` handler walks the drive slots and processes the selected
 | --- | --- |
 | `0x3f04(drive)` | builds `0x00575000`; writes `0x9fe4` for controller 0, or adds `0x3fe000` and writes `0x1fe4` at `0x00973000` for controller 1; both are the SDC QDSD pad-group registers (`west+0x75000`, `south+0x73000`), not PMIC. `0x9fe4` matches the vendor `sdc1_*_on` drive/pull fields. The caller passes `w1=1`, but the callee does not use it. |
 | `0x69ac(drive, 1)` | sets bit 0 of the SDHCI Power Control byte at slot offset `0x29` (bus power enable) |
-| `0x6458(drive, 1)` | writes `1` to the SDHCI Software Reset byte at `0x2f`; because bus power is on, it reads `0x240`, writes the observed value to `0x248`, and writes `0x24c` with `IO_SUCCESS` (`4`) when `status & 0x3 == 0` or `BUS_SUCCESS` (`1`) otherwise; `0x24c` holds result bits, not the `0x240` request bits |
-| `0x6c20(drive)` | writes vendor registers `0x21c` and `0x220` |
+| `0x6458(drive, 1)` | writes `1` to the SDHCI Software Reset byte at `0x2f`; when bus power was already set, it reads `0x240`, writes the captured value to `0x248`, and writes `0x24c` with `IO_SUCCESS` (`4`) when `captured_status & 0x3 == 0` or `BUS_SUCCESS` (`1`) otherwise; `0x24c` holds result bits, not the `0x240` request bits |
+| `0x6c20(drive)` | writes vendor registers `0x21c` and `0x220` for each processed drive |
 | `0x6d28(drive)` | clears bit 18 of vendor register `0x20c`; only for the `w19` drive |
 
 The handler also calls clock helpers `0xfbec`, `0xf778`, `0x3f50`, `0xfa44`,
@@ -118,6 +118,12 @@ binary also does not contain the PMIC protocol GUID
 the GCC SDCC clocks (`gcc_sdcc1_ahb_clk`, `gcc_sdcc1_apps_clk`,
 `gcc_sdcc2_ahb_clk`, `gcc_sdcc2_apps_clk`) and RPMB. The PMIC binary contains
 the GUID once.
+
+`0x6458`'s polls are bounded and non-aborting. Status exhaustion forces the
+captured value to zero and still selects `IO_SUCCESS`; clear-poll exhaustion
+still writes the result selected from the captured status; reset-poll exhaustion
+still returns, after which `0x6c20` and (for the `w19` drive) `0x6d28` run. The
+`0x24c` write therefore records the branch taken, not proven completion.
 
 The reset clears the standard power and clock control registers, and the
 handler does not re-enable bus power after it. The firmware's final state at
