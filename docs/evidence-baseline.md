@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T09:10:17Z`, after the final edits to the
+Hashes were taken at `2026-10-30T09:23:41Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,14 +16,14 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `cf3bf9ad0592fcd7ed0752d346a77853d3abf2ba` |
-| Dirty entries at the hash snapshot | 2 modified (`docs/evidence-baseline.md` and `docs/ram-root-fixture-reproducibility.md`) and 1 untracked (`scripts/test-gta4l-ram-root-fixture-recipe.py`) |
-| Staging and commits | None at the snapshot; the snapshot lands as one documentation and tooling commit |
+| HEAD | `79275a50357e24c47eec3f9fc4fe8475cd6c81d2` |
+| Dirty entries at the hash snapshot | 1 modified (`docs/evidence-baseline.md`) and 1 untracked (`docs/diagnostic-payload-input-inventory.md`) |
+| Staging and commits | None at the snapshot; the snapshot lands as one documentation commit |
 
 The current snapshot is the evidence branch after the Linux
 fixture-reproduction, stale-status reconciliation, recipe-correction and
-input-pin commits, with the exact compiler check and its regression test in
-the working tree. The hash table below describes that working tree, not the
+input-pin commits, with the diagnostic payload and boot-image input inventory
+in the working tree. The hash table below describes that working tree, not the
 original evidence-closure tree. The original provenance is retained separately
 because the path lists and dirty inventory are historical observations.
 
@@ -130,6 +130,7 @@ bytes of the previously booted image `[S]`.
 | Porting record | `porting.toml` | `9771164882e042b33875483655c386b85b418e954a17fc838ce507cb0448a128` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `ac75f2af3ff1a133222daae80a86f417d6310e115b3730d9e2ed482b9199d7b4` |
 
 ## 3. Pinned Linux source cache
 
@@ -176,7 +177,7 @@ manifest digest `[S]/[U]`.
 
 | Artifact | Path or identity | SHA-256 | Status and relationship |
 | --- | --- | --- | --- |
-| Booted corrected v2 image | `out/gta4l/ram-root-sdhci-host-init-evidence/boot-ram-root-sdhci-host-init-v2.img` | `d4aee57a9d1874d23dc010b7de43384ace6ab29241f5ee18cb10f0a561bab133` | Recorded booted-image hash; artifact absent from this checkout (`out/` is gitignored) `[S]` |
+| Booted corrected v2 image | `out/gta4l/ram-root-sdhci-host-init-evidence/boot-ram-root-sdhci-host-init-v2.img` | `d4aee57a9d1874d23dc010b7de43384ace6ab29241f5ee18cb10f0a561bab133` | Present in the gitignored output tree; not tracked by git `[S]` |
 | Local firmware volume | `SILICIUM_UEFI.fd` | `3d5dbd6ff28093e38a16c02af813fe7d2624d8e9b83ff407045e467e86904f5a` | Present; gzip-wrapped `[S]` |
 | Local decompressed source | inner extraction of the above | `7c20a5b9165100a2f07edc58d2b348e576b372e368af0ebd6ecdeceac50ba10e` | 3,145,840 bytes; 112-byte prefix plus outer FV `[S]` |
 | Local outer FV | inner extraction of the above | `4a8ca2cddcd578391dfd846ae994dafc7590b68e1e7ebde8f86ceca0c904b676` | 3,145,728 bytes; differs from booted outer FV `42f900a3...` `[S]` |
@@ -263,7 +264,7 @@ python3.11 - <<'PY'
 import hashlib, pathlib, re
 text = pathlib.Path('docs/evidence-baseline.md').read_text()
 rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-expected = 24
+expected = 25
 paths = [path for path, _ in rows]
 assert len(rows) == expected, f'expected {expected} rows, found {len(rows)}'
 assert len(set(paths)) == len(paths), 'duplicate paths in the table'
@@ -287,7 +288,9 @@ device `[S]`.
 - The hashes are a snapshot of a dirty tree; any later edit invalidates them.
 - The pinned Linux cache has no `.git`; its revision is documented provenance,
   not a verifiable git checkout `[U]`.
-- The booted image artifact is absent; the recorded hash is not a reproduction.
+- The booted image is not tracked; the copy in the gitignored output tree
+  matches the recorded hash `[S]`, but its firmware and kernel inputs are not
+  reproducible from the current checkout `[U]`.
 - The local firmware volume is a different build; only the three driver PEs are
   byte-identical to the booted drivers `[S]`.
 - No physical measurement exists; the measurement-dependent parts of `E1`–`E9`
