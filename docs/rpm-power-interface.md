@@ -215,10 +215,13 @@ through `0x4616e10` for class byte `0xb` `[S]`. Whether either path is driven
 by a runtime L11/L24 request is not established `[U]`. The tables are therefore evidence that the
 firmware carries LDOA resource definitions for both rails, not evidence that it
 enables, votes or retains them. They do not add a readback path to the mainline
-port `[S]`. The stored-word counts and the documented Thumb callback/call sites
-are reproducible with `scripts/analyze-gta4l-rpm-ldoa.py --code`; computed
-addressing, runtime relocation, aliasing and whether a callback executes at
-runtime remain outside its scope `[U]`.
+port `[S]`. The stored-word counts, the table landmarks and the documented
+Thumb callback/call sites are reproducible with
+`scripts/analyze-gta4l-rpm-ldoa.py --code`; the wider function trace that
+established the parser/aggregator behaviour came from earlier scratch capstone
+analysis that is not vendored, and computed addressing, runtime relocation,
+aliasing and whether a callback executes at runtime remain outside the
+analyzer's scope `[U]`.
 
 ## What the mainline port can and cannot report
 

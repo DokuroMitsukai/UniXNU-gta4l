@@ -10,15 +10,21 @@ analyzer:
 - reports the linked class table as zero;
 - excludes a matching word in a PT_NULL segment from the reference scan;
 - recognizes a Thumb-tagged reference;
-- verifies the documented Thumb call sites and literals with `--code`;
+- verifies the documented Thumb call sites and literals with `--code`,
+  including literal-load destination registers, the builder type byte and the
+  callback argument setup and stack stores;
+- decodes independently specified Thumb BL and LDR-literal vectors;
 - rejects a wrong image hash, a changed name record, a wrong mapping, a changed
-  selector, a changed voltage row, a changed boundary terminator, an altered
-  callback literal, a class misattribution and an altered call edge;
+  selector, a changed voltage row, a changed boundary terminator or entry, an
+  altered callback literal, a class misattribution, an altered call edge, an
+  altered literal-load destination, an altered builder type, an altered
+  callback argument move and an altered callback stack store;
 - produces deterministic output.
 
 No private firmware is read or vendored.
 """
 import hashlib
+import runpy
 import struct
 import subprocess
 import sys
@@ -105,12 +111,20 @@ def put_bl(image, site, target):
 def build_code(image):
     put_code16(image, 0x4617468, 0x4770)
     put_code16(image, 0x461746a, 0x4770)
+    put_code16(image, 0x4617488, 0x9501)
     put_code16(image, 0x461748e, 0x2109)
     put_code16(image, 0x4617490, 0x220c)
+    put_code16(image, 0x4617492, 0x9600)
+    put_code16(image, 0x461749a, 0xe9cd)
+    put_code16(image, 0x461749c, 0x6500)
     put_code16(image, 0x461749e, 0x2119)
     put_code16(image, 0x46174a0, 0x2210)
+    put_code16(image, 0x46174a2, 0x4623)
+    put_code16(image, 0x46174a8, 0xe9cd)
+    put_code16(image, 0x46174aa, 0x6500)
     put_code16(image, 0x46174ac, 0x210f)
     put_code16(image, 0x46174ae, 0x220c)
+    put_code16(image, 0x46174b0, 0x4623)
     for site in (0x4617498, 0x46174a6, 0x46174b4):
         put_code16(image, site, 0x47b8)
     put_code16(image, 0x4617486, 0x4E0F)
@@ -126,7 +140,10 @@ def build_code(image):
     put_code_bytes(image, 0x46174d4, b'ldoa')
     put_code_bytes(image, 0x46174d8, b'clka')
     put_code16(image, 0x4698ad0, 0x4B0A)
+    put_code16(image, 0x4698ad4, 0x2210)
+    put_code16(image, 0x4698ad6, 0x9001)
     put_code16(image, 0x4698ad8, 0x4807)
+    put_code16(image, 0x4698ada, 0x9000)
     put_code32(image, 0x4698af8, 0x153b9)
     put_code32(image, 0x4698afc, 0x151f9)
     put_bl(image, 0x4615502, 0x4615906)
@@ -134,6 +151,13 @@ def build_code(image):
     put_bl(image, 0x4616e8a, 0x4615d08)
     put_bl(image, 0x4615d7c, 0x4617b48)
     put_bl(image, 0x4698ade, 0x460ae14)
+    put_code16(image, 0x4600100, 0x4810)
+    put_code16(image, 0x4600102, 0x4F04)
+    put_code16(image, 0x4600104, 0x4770)
+    put_code16(image, 0x4600200, 0xF000)
+    put_code16(image, 0x4600202, 0xF87E)
+    put_code16(image, 0x4600240, 0xF7FF)
+    put_code16(image, 0x4600242, 0xFF7E)
 
 
 def build_image():
@@ -182,6 +206,8 @@ def build_image():
 
     put32(image, va_offset(DESCRIPTOR), VOLTAGE_TABLE - BASE)
     put32(image, va_offset(DESCRIPTOR + 4), DESCRIPTOR_SECOND - BASE)
+    for index in range(82):
+        put32(image, va_offset(BOUNDARY_TABLE + 4 * index), 0x1000 + 4 * index)
     put32(image, va_offset(BOUNDARY_WORD), DESCRIPTOR - BASE)
     put32(image, va_offset(THUMB_REFERENCE),
           ((NAME_BASE + 10 * NAME_STRIDE) | 1) - BASE)
@@ -201,6 +227,19 @@ def expect_failure(image_path, needle, *extra):
     assert needle in result.stderr, result.stderr
 
 
+def check_decoders(image):
+    module = runpy.run_path(str(SCRIPT))
+    _, loads, _ = module['parse_segments'](image)
+    decode_bl = module['thumb_bl_target']
+    decode_ldr = module['thumb_ldr_literal_target']
+    assert decode_ldr(image, loads, 0x4600100) == 0x4600144
+    assert decode_ldr(image, loads, 0x4600102) == 0x4600114
+    assert decode_ldr(image, loads, 0x4600104) is None
+    assert decode_bl(image, loads, 0x4600200) == 0x4600300
+    assert decode_bl(image, loads, 0x4600240) == 0x4600140
+    assert decode_bl(image, loads, 0x4600104) is None
+
+
 def write_mutation(directory, image, name, offset, value, width=4):
     mutated = bytearray(image)
     if width == 4:
@@ -217,6 +256,7 @@ def write_mutation(directory, image, name, offset, value, width=4):
 def main():
     image = build_image()
     digest = hashlib.sha256(image).hexdigest()
+    check_decoders(image)
 
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / 'synthetic-rpm.img'
@@ -265,6 +305,12 @@ def main():
         assert 'code_class_literal: site=0x46174c4 value=0x17469 target=0x4617468' in code_output, code_output
         assert 'code_stub: site=0x4617468 instruction=bx_lr' in code_output, code_output
         assert 'code_builder_literal: site=0x4698af8 value=0x153b9 target=0x46153b8' in code_output, code_output
+        assert 'code_literal_load: site=0x461748c dest=r7 target=0x46174d0' in code_output, code_output
+        assert 'code_literal_load: site=0x4698ad0 dest=r3 target=0x4698afc' in code_output, code_output
+        assert 'code_setup: site=0x46174a2 label="ldoa callback argument mov r3,r4" value=0x4623' in code_output, code_output
+        assert 'code_setup: site=0x4698ad4 label="builder ldoa type 0x10" value=0x2210' in code_output, code_output
+        assert 'code_setup: site=0x4698ad6 label="builder class stack argument" value=0x9001' in code_output, code_output
+        assert 'code_setup: site=0x4698ada label="builder callback stack argument" value=0x9000' in code_output, code_output
         assert 'result: PASS' in code_output, code_output
 
         second = run(path, '--expect-sha256', digest)
@@ -301,6 +347,22 @@ def main():
             directory, image, 'boundary-rpm.img', va_offset(BOUNDARY_TABLE + 4 * 82), 1)
         expect_failure(boundary, 'anchor: FAIL', '--expect-sha256', boundary_digest)
 
+        zero_boundary, zero_boundary_digest = write_mutation(
+            directory, image, 'zero-boundary-rpm.img',
+            va_offset(BOUNDARY_TABLE + 4 * 5), 0)
+        expect_failure(zero_boundary, 'zero entry', '--expect-sha256', zero_boundary_digest)
+
+        duplicate_boundary, duplicate_boundary_digest = write_mutation(
+            directory, image, 'duplicate-boundary-rpm.img',
+            va_offset(BOUNDARY_TABLE + 4 * 6), 0x1000 + 4 * 5)
+        expect_failure(duplicate_boundary, 'not unique', '--expect-sha256',
+                       duplicate_boundary_digest)
+
+        group_duplicate, group_duplicate_digest = write_mutation(
+            directory, image, 'group-rpm.img', va_offset(GROUP_TABLE + 12), SELECTOR - BASE)
+        expect_failure(group_duplicate, 'group table entry 1', '--expect-sha256',
+                       group_duplicate_digest)
+
         callback, callback_digest = write_mutation(
             directory, image, 'callback-rpm.img', va_offset(0x4698af8), 0x153b8)
         expect_failure(callback, 'builder literal', '--expect-sha256', callback_digest, '--code')
@@ -313,13 +375,42 @@ def main():
             directory, image, 'edge-rpm.img', va_offset(0x4615502, 2), 0xF001, width=2)
         expect_failure(call_edge, 'expected 0x4615906', '--expect-sha256', edge_digest, '--code')
 
-    missing = Path(tempfile.gettempdir()) / 'gta4l-rpm-ldoa-missing.img'
-    if missing.exists():
-        missing.unlink()
-    expect_failure(missing, 'No such file or directory')
+        builder_type, builder_type_digest = write_mutation(
+            directory, image, 'builder-type-rpm.img', va_offset(0x4698ad4, 2), 0x220c, width=2)
+        expect_failure(builder_type, 'builder ldoa type 0x10', '--expect-sha256',
+                       builder_type_digest, '--code')
 
-    print('PASS: RPM LDOA analysis anchors, Thumb references, PT_NULL exclusion, '
-          'code attribution, hash gate, negative controls and determinism')
+        callback_dest, callback_dest_digest = write_mutation(
+            directory, image, 'callback-dest-rpm.img', va_offset(0x461748c, 2), 0x4810, width=2)
+        expect_failure(callback_dest, 'loads into r0, expected r7', '--expect-sha256',
+                       callback_dest_digest, '--code')
+
+        builder_dest, builder_dest_digest = write_mutation(
+            directory, image, 'builder-dest-rpm.img', va_offset(0x4698ad0, 2), 0x480a, width=2)
+        expect_failure(builder_dest, 'loads into r0, expected r3', '--expect-sha256',
+                       builder_dest_digest, '--code')
+
+        callback_move, callback_move_digest = write_mutation(
+            directory, image, 'callback-move-rpm.img', va_offset(0x46174a2, 2), 0x46c0, width=2)
+        expect_failure(callback_move, 'ldoa callback argument', '--expect-sha256',
+                       callback_move_digest, '--code')
+
+        callback_store, callback_store_digest = write_mutation(
+            directory, image, 'callback-store-rpm.img', va_offset(0x4698ada, 2), 0x46c0, width=2)
+        expect_failure(callback_store, 'builder callback stack argument', '--expect-sha256',
+                       callback_store_digest, '--code')
+
+        pair_store, pair_store_digest = write_mutation(
+            directory, image, 'pair-store-rpm.img', va_offset(0x46174a8, 2), 0x46c0, width=2)
+        expect_failure(pair_store, 'ldoa callback stack pair low', '--expect-sha256',
+                       pair_store_digest, '--code')
+
+        missing = Path(directory) / 'missing-rpm.img'
+        expect_failure(missing, 'No such file or directory')
+
+    print('PASS: RPM LDOA analysis anchors, table invariants, Thumb references, '
+          'PT_NULL exclusion, code attribution and decoder vectors, hash gate, '
+          'negative controls and determinism')
 
 
 if __name__ == '__main__':

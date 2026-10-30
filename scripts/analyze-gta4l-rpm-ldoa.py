@@ -14,8 +14,10 @@ computed addresses, `movw`/`movt` construction, runtime relocation, aliasing or
 dynamic objects.
 
 The optional `--code` checks decode only the documented Thumb sites and direct
-call instructions. They are mechanical instruction checks, not control-flow
-reachability or proof that a callback executes at runtime.
+call instructions, including literal-load destination registers, the builder
+type byte and the callback argument setup and stack stores. They are mechanical
+instruction checks, not control-flow reachability or proof that a callback
+executes at runtime.
 
 Usage:
     python3 scripts/analyze-gta4l-rpm-ldoa.py IMAGE
@@ -51,6 +53,11 @@ SELECTOR_IDS = (6, 8, 1, 2, 3, 4, 7, 17, 18, 9, 10, 11, 12, 13, 14, 16)
 GROUP_TABLE = 0x46966fc
 GROUP_TABLE_COUNT = 3
 GROUP_TABLE_STRIDE = 12
+GROUP_TABLE_EXPECTED = (
+    SELECTOR - BASE,
+    SELECTOR + 8 - BASE,
+    SELECTOR + 0x24 - BASE,
+)
 VOLTAGE_TABLE = 0x4696a54
 VOLTAGE_COUNT = 24
 VOLTAGE_STRIDE = 12
@@ -115,14 +122,27 @@ BUILDER_LITERALS = (
     (0x4698afc, 0x151f9, PARSER),
 )
 LITERAL_LOADS = (
-    (0x4617486, 0x46174c4),
-    (0x461748a, 0x46174cc),
-    (0x461748c, 0x46174d0),
-    (0x4617496, 0x46174c8),
-    (0x46174a4, 0x46174d4),
-    (0x46174b2, 0x46174d8),
-    (0x4698ad0, 0x4698afc),
-    (0x4698ad8, 0x4698af8),
+    (0x4617486, 6, 0x46174c4),
+    (0x461748a, 4, 0x46174cc),
+    (0x461748c, 7, 0x46174d0),
+    (0x4617496, 0, 0x46174c8),
+    (0x46174a4, 0, 0x46174d4),
+    (0x46174b2, 0, 0x46174d8),
+    (0x4698ad0, 3, 0x4698afc),
+    (0x4698ad8, 0, 0x4698af8),
+)
+CODE_SETUP = (
+    (0x4617488, 0x9501, 'smpa bridge stack argument r5'),
+    (0x4617492, 0x9600, 'smpa callback stack argument r6'),
+    (0x461749a, 0xe9cd, 'smpa callback stack pair low'),
+    (0x461749c, 0x6500, 'smpa callback stack pair high'),
+    (0x46174a2, 0x4623, 'ldoa callback argument mov r3,r4'),
+    (0x46174a8, 0xe9cd, 'ldoa callback stack pair low'),
+    (0x46174aa, 0x6500, 'ldoa callback stack pair high'),
+    (0x46174b0, 0x4623, 'clka callback argument mov r3,r4'),
+    (0x4698ad4, 0x2210, 'builder ldoa type 0x10'),
+    (0x4698ad6, 0x9001, 'builder class stack argument'),
+    (0x4698ada, 0x9000, 'builder callback stack argument'),
 )
 
 
@@ -304,14 +324,10 @@ def describe_anchor_failures(image, loads):
         failures.append(f'selector ids {ids} do not match {list(SELECTOR_IDS)}')
     if read_u32(image, loads, SELECTOR + 4 * SELECTOR_COUNT) != 0:
         failures.append('selector array is not NULL-terminated')
-    for index in range(GROUP_TABLE_COUNT):
+    for index, expected in enumerate(GROUP_TABLE_EXPECTED):
         value = read_u32(image, loads, GROUP_TABLE + GROUP_TABLE_STRIDE * index)
-        va = value + BASE
-        if value >= BASE or not SELECTOR <= va < SELECTOR + 4 * SELECTOR_COUNT \
-                or (va - SELECTOR) % 4:
-            failures.append(f'group table entry {index} does not point into the selector array')
-    if read_u32(image, loads, GROUP_TABLE) != SELECTOR - BASE:
-        failures.append('group table does not start at the selector array')
+        if value != expected:
+            failures.append(f'group table entry {index} is {value:#x}, expected {expected:#x}')
     for ident, expected in VOLTAGE_EXPECTED.items():
         va = VOLTAGE_TABLE + (ident - 1) * VOLTAGE_STRIDE
         actual = (read_u32(image, loads, va), read_u16(image, loads, va + 4),
@@ -324,8 +340,13 @@ def describe_anchor_failures(image, loads):
         failures.append('descriptor second word does not point at 0x4696b74')
     if read_u32(image, loads, BOUNDARY_TABLE + 4 * BOUNDARY_COUNT) != 0:
         failures.append('boundary table is not NULL-terminated')
-    for index in range(BOUNDARY_COUNT):
-        value = read_u32(image, loads, BOUNDARY_TABLE + 4 * index)
+    boundary_values = [read_u32(image, loads, BOUNDARY_TABLE + 4 * index)
+                       for index in range(BOUNDARY_COUNT)]
+    if any(value == 0 for value in boundary_values):
+        failures.append('boundary table contains a zero entry')
+    if len(set(boundary_values)) != BOUNDARY_COUNT:
+        failures.append('boundary table entries are not unique')
+    for index, value in enumerate(boundary_values):
         if value >= BASE:
             failures.append(f'boundary table entry {index} is not a runtime offset')
     boundary_offset = BOUNDARY_WORD - BOUNDARY_TABLE
@@ -371,11 +392,14 @@ def verify_code(image, loads):
             raise AnalysisError(f'{site:#x} calls {actual}, expected {target:#x}')
         print(f'code_edge: site={site:#x} target={target:#x} kind=bl')
 
-    def check_literal_load(site, target):
+    def check_literal_load(site, dest, target):
         resolved = thumb_ldr_literal_target(image, loads, site)
         if resolved != target:
             raise AnalysisError(f'{site:#x} loads {resolved}, expected {target:#x}')
-        print(f'code_literal_load: site={site:#x} target={target:#x}')
+        actual = (read_u16(image, loads, site) >> 8) & 0x7
+        if actual != dest:
+            raise AnalysisError(f'{site:#x} loads into r{actual}, expected r{dest}')
+        print(f'code_literal_load: site={site:#x} dest=r{dest} target={target:#x}')
 
     def check_u16(va, expected, label):
         actual = read_u16(image, loads, va)
@@ -387,8 +411,11 @@ def verify_code(image, loads):
                           GENERIC_SETTER, SMPA_BRIDGE, BUILDER):
             raise AnalysisError(f'unknown call-edge source {source:#x}')
         check_call(site, target)
-    for site, target in LITERAL_LOADS:
-        check_literal_load(site, target)
+    for site, dest, target in LITERAL_LOADS:
+        check_literal_load(site, dest, target)
+    for va, expected, label in CODE_SETUP:
+        check_u16(va, expected, label)
+        print(f'code_setup: site={va:#x} label="{label}" value={expected:#x}')
     for va, expected, label in CLASS_IMMEDIATES:
         check_u16(va, expected, label)
         print(f'code_class: site={va:#x} label="{label}" value={expected:#x}')
@@ -496,7 +523,7 @@ def main(argv):
     parser.add_argument('--expect-sha256', default=EXPECTED_SHA256,
                         help='required image SHA-256 (default: captured RPM)')
     parser.add_argument('--code', action='store_true',
-                        help='also verify the documented Thumb call sites and literals')
+                        help='also verify the documented Thumb sites, literals and setup')
     args = parser.parse_args(argv)
 
     try:
