@@ -290,9 +290,10 @@ The replay does not produce:
 Reproducing the boot image therefore requires three separate steps: rebuild
 the kernel from the pinned XNU source and patches, rebuild the firmware from
 the pinned Mu-Silicium revision, then rebuild and repackage the payload. The
-packaging step is replayable from the existing baseline and payloads, and the
-fixture data inputs have a pinned recipe. Kernel and firmware reproduction are
-not established.
+packaging step is replayable from the existing baseline and payloads, the
+fixture data inputs have a pinned recipe, and the kernel source/patch and
+prelink stages are replayed in `kernel-build-recipe.md`. A full kernel
+compile/link replay and firmware reproduction are not established.
 
 ### Kernel build bootstrap caveat
 
@@ -300,7 +301,7 @@ not established.
 the `bsd_init.o` compile record. On a clean tree that record does not exist
 yet: the script writes `FirstPassStub.c` with no-op probe symbols, links
 `libGta4lSdhciSnapshot.a`, records `"runtime_qualified": false` in
-`build-report.json` and exits (`scripts/build-gta4l-sdhci-snapshot.py:48-51`).
+`build-report.json` and exits (`scripts/build-gta4l-sdhci-snapshot.py:48-72`).
 The kernel built in that pass contains no-op probes; only the next kernel
 build links the real probes. Any kernel compared against a historical image
 must record whether it came from the bootstrap pass or from a later pass with
@@ -308,20 +309,21 @@ a compile record `[S]`.
 
 ## 9. Next host-only step
 
-1. Establish the kernel build provenance: capture the exact source, patch,
-   compiler, linker, SDK and archive inputs, and account for the bootstrap-stub
-   sequence in `scripts/build-gta4l-sdhci-snapshot.py`. Compare equivalent
-   build stages with the audit kernel `6e81598c...` and the packaged
-   v5/host-init kernels, and record every mismatch.
+1. Kernel build provenance is recorded in `kernel-build-recipe.md`: the
+   source, patch, compiler, linker, archive and prelink inputs are pinned, and
+   the source/patch and prelink stages are replayed. A full compile/link replay
+   and the evidence-image kernels remain not established.
 2. Rebuild Mu-Silicium at `e14626a...` and compare all 86 PE module hashes with
    the tested image `42f900a3...`/`3bb7847a...`. Identify the source or
    toolchain delta before treating the firmware as reproducible.
-3. Only after (1) and (2), rebuild the diagnostic payload against the v5
-   baseline, run both gates with the expected payload hash, and compare the
-   resulting boot image. Do not flash; the SDHC decision remains NO-GO.
+3. Only after (2), rebuild the diagnostic payload against the v5 baseline, run
+   both gates with the expected payload hash, and compare the resulting boot
+   image. Do not flash; the SDHC decision remains NO-GO.
 
 ## 10. References
 
+- `docs/kernel-build-recipe.md` — kernel inputs and the source/patch and
+  prelink stage replays
 - `docs/ram-root-fixture-reproducibility.md` — fixture inputs, pins and replay
 - `docs/firmware-handoff.md` — tested firmware provenance and the current-build
   difference
