@@ -19,7 +19,7 @@ differs, re-run §6 and update the table.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD at the hash snapshot | `4c1c7a1` (native eMMC implementation commit) |
+| HEAD at the hash snapshot | `904b8eb` (eMMC audit-fix commit) |
 | Parent of the fourteenth evidence batch | `95ff0a1293194b2108f4041068c77f18e708c1fd` (same commit) |
 | Correction commit paths | 8: 7 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`docs/sdhc-decision-update-2026-10-30.md`) |
 | First follow-up commit paths | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`scripts/test-gta4l-sdccdxe-decode.py`) |
@@ -41,8 +41,9 @@ differs, re-run §6 and update the table.
 | Fifteenth reassessment paths at this snapshot | 3: 2 modified (`docs/sdhc-decision-memo.md`, `porting.toml`) and 1 added (`docs/porting-approach-reassessment-2026-10-31.md`) |
 | Sixteenth implementation paths at this snapshot | 15: 6 modified (`README.md`, `board.toml`, `docs/evidence-baseline.md`, `docs/porting-approach-reassessment-2026-10-31.md`, `patches/xnu/series`, `porting.toml`) and 9 added (`docs/archlinux-gta4l-evidence.md`, `docs/emmc-driver.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `patches/xnu/gta4l-emmc-probe.patch`, `scripts/build-gta4l-emmc-probe.py`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py`) |
 | Seventeenth audit-fix paths at this snapshot | 8 modified (`docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py`) |
-| Dirty entries at the hash snapshot | 8, exactly the seventeenth audit-fix paths above |
-| Staging and commits | None at the snapshot; this seventeenth batch lands as one commit on top of `4c1c7a1` |
+| Eighteenth audit-fix paths at this snapshot | 13 modified (`configs/gta4l_defconfig`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/build-gta4l-diagnostic-payload.py`, `scripts/check-gta4l-payload.py`, `scripts/package-gta4l-diagnostic.py`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py`) |
+| Dirty entries at the hash snapshot | 13, exactly the eighteenth audit-fix paths above |
+| Staging and commits | None at the snapshot; this eighteenth batch lands as one commit on top of `904b8eb` |
 
 The hash table describes the fourteenth evidence-batch working tree: the
 checker-fix commit `95ff0a1` plus the then-uncommitted official-source,
@@ -160,6 +161,19 @@ status-enable gating and RCA/block bounds independently, and the host test has
 32 scenarios and 9 mutation controls. The probe adds stage 2 (host only) and
 stage 3 (identification only) and reads `CNTFRQ_EL0` for its delay loop. The
 probe is still not booted on the tablet and no electrical gate is closed.
+
+The eighteenth batch closes the second eMMC audit. Bus and IO power requests
+are now handled separately and success requires an observed `BUS_ON`
+completion; an IO-only request, a delayed bus request and a bus-then-IO
+sequence have simulator scenarios. The pad-supply policy is an explicit host
+flag, documented as a deliberate departure from the DT-derived Linux state.
+The probe aborts on a stalled generic counter instead of skipping settle.
+SDHCI long responses are normalized with the same word shift as Linux, and the
+response-type test now uses a two-bit mask so `RESP_SHORT_BUSY` is not parsed as
+R2. A 4 KiB `DATA_SECTOR_SIZE` is rejected before any sector read, and all poll
+loops use the documented 10 µs step. The host test now has 37 scenarios and 12
+mutation controls. The probe is still not booted on the tablet and no
+electrical gate is closed.
 
 The second batch derived the status/clear/reset loop bounds from the pinned
 MOVZ instructions, added last-read and delayed-completion boundary cases and
@@ -287,19 +301,19 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `0f124426c44734d5669d626d87b99c16f0653870860e8f40c0200aa51c083d9c` |
 | eMMC reference | `docs/emmc-reference.md` | `0d605ec482d5b77ae428dead608543cb157e331d90ec0a68a31457dcf0ec44e9` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `a753fc512a69e2343b84970ecc938c23948ff5cf90936bb8e07fe8f6ff1fb77a` |
+| Porting record | `porting.toml` | `700f710ad0ec38fc3961dadedae9691262c6fedd59cafaa9a79d41b798d9d1f0` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `264f61be334ad9989a5d56cd82b028c6313169d3d983078b775f20d5b2e8ee67` |
-| eMMC core header | `package/Gta4lEmmc.h` | `97cc918e77a54229e64ddf1649284f23dbff90a3c36da9d965d0b370ce15e09a` |
-| eMMC core source | `package/Gta4lEmmc.c` | `093e1e6e19e51f7242e5f1584128692bed08bfa0ed87d6b2932b7513b8685ff6` |
-| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `0cea388d124273a8105832f612da87c50ee1298760091caddcf17f2276c0daf7` |
-| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `724e8fc1cc691083e53e4672d5e02ea3423036e9295c0d725852a08bf4fd6a63` |
-| eMMC host test | `scripts/test-gta4l-emmc.py` | `d0c26bd0bb41f6a8f3c98a7c1c67c0a3faee2894921777d74bac36f562298f6c` |
+| eMMC driver record | `docs/emmc-driver.md` | `63771a6a5939eace7804b99da4657b226bc33440ed78c7a7907ef1e85720da09` |
+| eMMC core header | `package/Gta4lEmmc.h` | `09b58ad583aeca6a7adaec940412fdaab0e084936cefbaf6862fc7616105d1ff` |
+| eMMC core source | `package/Gta4lEmmc.c` | `1bafbf94117e41e75c306436c6968920e7aa02c522144839f1a29cb3e3b2b326` |
+| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `9593c75855a7349d4b33cd0d36486c515ec68388e775bd485577e5d7e66daaec` |
+| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `4d29854adf71f03e17bc53de18f3302a49c989915fc97a953bd9c386e8a40cee` |
+| eMMC host test | `scripts/test-gta4l-emmc.py` | `e842f600364044c3827bc702b4ed365ca939a83e126bc1e58072302ee4ae2c66` |
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `c0d742df56cbf69c499537e077be6b590ea1e89e33f656b21c3215561dae0157` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `2d8f060327c4d557ff588e90200676b3dfdaf213c60dec0d24c0300f28eb3fd3` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `35a3070a264470b9f444b6b4ba66ca6eed28b68b91ab4fccf9dd1b70057521a2` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
 | Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `f293bee964bdd3bebbf40e4c8099a426780679065f3d65abceb9999255480558` |
@@ -512,7 +526,10 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | Workflow token scoping (offline harness) | PASS: all 5 extracted patch strings attach the dummy token only to HTTPS GitHub hosts and strip it on cross-host redirects; no real token was used |
 | Official Samsung source comparison | PASS: CXG1/CWI2 ZIP and tarball hashes recorded; kernel 4.19.157; six relevant driver files byte-identical; no vendor DTS |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |
-| Native eMMC host test | PASS: 32 simulator scenarios and 9 mutation controls; the production core compiles with `-std=c11 -Wall -Wextra -Werror` and with the real `bsd_init.o` compile record |
+| Native eMMC host test | PASS: 37 simulator scenarios and 12 mutation controls; the production core compiles with `-std=c11 -Wall -Wextra -Werror` and with the real `bsd_init.o` compile record |
+| eMMC kernel link | PASS: `./unixnu build kernel -D ../UniXNU-gta4l` links the probe through `CONFIG_XNU_EXTRA_LD_ARCHIVES`; `kernel.macho` sha256 `152bde801bc7f97f470e46713314e9daa62cb3b8a59f46a0f48ce183e0529957` |
+| eMMC stage-2 payload | PASS: 80 MiB raw payload sha256 `baad6342c950d847912ede0ed06f3e14ecc012e022101049f37f8f4a69dd7b39`, kernel args include `gta4l-emmc-probe=2`, payload contract 7/7 |
+| eMMC stage-2 boot image | PASS: 85,688,320-byte image sha256 `c7011274991b8afd83d5965392941c78d800dbe7b3b8715b939e7f27cf678e05`, boot-image gate 18/18; `hardware_tested=false`, not flashed |
 | XNU probe compile | PASS: `Gta4lEmmc.c` and `Gta4lEmmcProbe.c` compile against the pinned XNU headers with `-Wall -Wextra`; the archive exports `gta4l_emmc_probe_preflight`, `gta4l_emmc_probe_run`, `gta4l_emmc_init` and `gta4l_emmc_read_block` |
 | Patch-series apply | PASS: `sheng-platform-power`, `gta4l-sdhci-snapshot`, `gta4l-sdhci-handoff-audit` and `gta4l-emmc-probe` apply in order to the clean `bsd_init.c` |
 | Reassessment re-run 2026-10-31 | PASS: `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-sdccdxe-decode.py`, `test-gta4l-spmidxe-descriptor-base.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py` and `check-gta4l.py` all exited 0; `git diff --check` clean |

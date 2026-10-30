@@ -18,7 +18,7 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 32 scenarios and 9 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 37 scenarios and 12 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -36,10 +36,13 @@ interrupts and higher-speed modes.
 5. Read `HOST_CONTROL2`, clear only the UHS-mode and execute fields, and select
    the 1.8 V signalling bit for the board's fixed 1.8 V VCCQ rail. Preserve the
    other fields instead of clearing the register.
-6. Read `CORE_VENDOR_SPEC` and set the Qualcomm pad-switch enable. For the fixed
-   1.8 V rail, set the pad-switch bit as well; for 3.3 V signalling leave it
-   clear. This reproduces the Linux `sdhci_msm_set_regulator_caps()` fixed-1.8 V
-   behavior.
+6. Read `CORE_VENDOR_SPEC` and apply the pad-supply policy explicitly. For the
+   fixed-1.8 V rail the caller sets both the pad-switch enable and the pad-switch
+   bit; for 3.3 V signalling both are cleared. This is a board policy, not a
+   reproduction of the mainline gta4l DT state: that DT declares no SDHC1
+   `vqmmc` consumer, so `sdhci_msm_set_regulator_caps()` derives `caps == 0` and
+   the Linux probe leaves both bits at the `CORE_VENDOR_SPEC_POR_VAL` (`0xa9c`)
+   value. The policy follows the sdhci-msm fixed-1.8 V comment instead. See §7.
 7. Enable the polling status bits (`CC`, `TC`, `BRR` and the error mask) while
    leaving both signal-enable registers at zero.
 8. Stop the card clock, enable the SDCC1 AHB and APPS branches and poll
@@ -64,17 +67,23 @@ interrupts and higher-speed modes.
 ### Power and pads
 
 1. Write `POWER_CONTROL = bus power | 3.3 V`.
-2. Poll `CORE_PWRCTL_STATUS` for up to 500 ms. A retained rail still has to
-   produce a controller request; no request is `GTA4L_EMMC_ERR_POWER`, not a
-   silent success.
-3. If `BUS_OFF` is requested, fail. Otherwise clear the status with the
-   documented 10-attempt retry. Exhausting the retries is a failure.
-4. Acknowledge `BUS_SUCCESS`/`IO_SUCCESS` and read the status back; a request
-   that remains set after the acknowledgement is a failure. The ack is a
-   controller-local software ack, not a measurement of the rail.
-5. Write the UEFI-derived active SDC1 pad value `0x9FE4` to the SDC1 QDSD
+2. Poll `CORE_PWRCTL_STATUS` for up to 500 ms. Bus power and IO voltage are
+   independent controller requests: the earlier `HOST_CONTROL2` write can raise
+   an IO request before, together with, or after the bus request.
+3. Handle each observed request separately. `BUS_OFF` is a failure. Each
+   observed set of bits is cleared with the documented 10-attempt retry;
+   exhausting the retries is a failure. `BUS_ON` is acknowledged with
+   `BUS_SUCCESS` and IO-low/high with `IO_SUCCESS`.
+4. Report success only after `BUS_ON` has been observed and acknowledged. An
+   IO-voltage request alone is `GTA4L_EMMC_ERR_POWER`, not a completed bus
+   power-on. A request that remains set after the acknowledgement is also a
+   failure. The ack is a controller-local software ack, not a measurement of the
+   rail.
+5. After bus-on, require two consecutive quiet status reads before enabling the
+   card clock so a separate, slightly delayed IO request is handled.
+6. Write the UEFI-derived active SDC1 pad value `0x9FE4` to the SDC1 QDSD
    register at TLMM `0x00575000`.
-6. Wait 5 ms for power and pads to settle, then enable the card clock. This is
+7. Wait 5 ms for power and pads to settle, then enable the card clock. This is
    the Linux 3.3 V regulator settle bound applied to the retained rail; the core
    also keeps a 1 ms post-enable delay.
 
@@ -96,12 +105,19 @@ eMMC `CMD3` is `SET_RELATIVE_ADDR`: the host assigns the RCA through the
 command argument and the response is R1 status. The core does not derive an RCA
 from the response.
 
+Long (R2) responses are normalized from the SDHCI `RESPONSE3..RESPONSE0`
+register layout, least-significant word first with the CRC byte in the low byte
+of `RESPONSE0`, into the MMC big-endian word order (`cid[0]`/`csd[0]` is bits
+127:96). This is the same shift the Linux `sdhci_read_rsp_136()` path uses. The
+response-type test uses a two-bit mask, so `RESP_SHORT_BUSY` (`CMD7`) is not
+mistaken for a 128-bit response.
+
 The core parses `EXT_CSD_REV` at byte 192, `BUS_WIDTH` at byte 183,
 `PARTITION_CONFIG` at byte 179, `DATA_SECTOR_SIZE` at byte 61 and `SEC_COUNT` at
-bytes 212-215. Initialization requires a sector-addressed card
-(`SEC_COUNT > 2 GiB / 512`) and the user-area partition access bits. A card that
-does not meet either condition returns `GTA4L_EMMC_ERR_UNSUPPORTED` before any
-sector read.
+bytes 212-215. Initialization requires 512-byte data sectors
+(`DATA_SECTOR_SIZE == 0`), a sector-addressed card (`SEC_COUNT > 2 GiB / 512`)
+and the user-area partition access bits. A card that does not meet any condition
+returns `GTA4L_EMMC_ERR_UNSUPPORTED` before any sector read.
 
 ## 3. Completion and error rules
 
@@ -112,7 +128,8 @@ sector read.
 - Command/data timeout, CRC, index, end-bit and other controller errors map to
   distinct result codes.
 - Card R1 errors are checked separately from controller status.
-- Every wait has a microsecond bound and an iteration cap.
+- Every wait has a microsecond bound and an iteration cap, and every poll loop
+  uses the documented 10 µs step.
 - `CMD17` is rejected when the block is at or beyond the discovered capacity.
 - The core never submits `CMD12`, `CMD18`, `CMD24`, `CMD25`, DMA, CQE, ICE or
   tuning operations.
@@ -126,8 +143,8 @@ python3.11 -B scripts/test-gta4l-emmc.py
 The test compiles `package/Gta4lEmmc.c` with `scripts/sim-gta4l-emmc/harness.c`
 using `-std=c11 -Wall -Wextra -Werror`. The simulator independently enforces the
 SDHCI register widths, command encoding, status-enable gating, RCA assignment,
-block bounds and the power-settle interval, so the production core cannot pass
-by sharing a bug with the model.
+block bounds, the power-settle interval and the separate bus/IO request
+sequence, so the production core cannot pass by sharing a bug with the model.
 
 It covers:
 
@@ -139,15 +156,21 @@ It covers:
 - card-not-ready, bad CID, bad CSD and CMD3 R1 errors;
 - reset timeout, clock timeout, RCG busy, power-off, no power request and a
   stuck power-status clear;
+- an IO-only power request, a delayed bus request and a bus-then-IO sequence;
+- a 4 KiB `DATA_SECTOR_SIZE` card;
 - small-card and non-user-partition rejection;
-- 1.8 V and 3.3 V signalling/pad-switch selection;
+- 1.8 V and 3.3 V signalling, plus the explicit pad-switch-on and pad-switch-off
+  policies;
 - EXT_CSD data read;
 - mutation controls for the 400 kHz CFG, M and pad values, the command data bit,
-  the pad-switch and 1.8 V bits, the settle time, an unaligned reset read and a
-  disabled polling status.
+  the pad-switch and 1.8 V bits, the settle time, an unaligned reset read, a
+  disabled polling status, the raw long-response layout, a missing bus-on
+  requirement and a missing 4 KiB sector check.
 
-The test also checks the source policy: only the injected ops are used, and
-the core contains no DMA, CQE, ICE, tuning or card-write command.
+The test also checks the source policy: only the injected ops are used, the core
+contains no DMA, CQE, ICE, tuning or card-write command, the poll loops use the
+10 µs step, and the probe uses width-correct MMIO and aborts on a stalled timing
+source.
 
 ## 5. XNU integration
 
@@ -165,8 +188,13 @@ It conflicts with `gta4l-sdhci-audit`, `gta4l-sdhci-snapshot` and
 requested.
 
 The probe reads `CNTFRQ_EL0` for its delay loop and keeps a 19.2 MHz fallback.
-It sets the fixed-1.8 V signaling policy explicitly because the board's VCCQ
-rail (L11) is 1.8 V.
+A delay loop that exhausts its spin bound panics instead of silently skipping
+the settle interval.
+
+The probe sets the fixed-1.8 V signalling policy (`fixed_1v8 = 1`) and the
+1.8 V pad-supply policy (`pad_pwr_switch = 1`) explicitly because the board's
+VCCQ rail (L11) is 1.8 V. The pad policy is a deliberate departure from the
+mainline gta4l DT-derived register state; see §2 and §7.
 
 The archive is built with the same compile record as `bsd_init.o`, so the core
 and probe use the selected XNU headers and ABI:
@@ -180,6 +208,43 @@ and probe use the selected XNU headers and ABI:
 The build report at `build/gta4l-emmc-probe/build-report.json` records the
 source/header/object hashes and the archive hash. A bootstrap build with no
 compile record links a no-op stub and must be rebuilt before use.
+
+### 5.1 Current diagnostic image
+
+The stage-2 image was built on 2026-10-31 from this tree:
+
+```sh
+./unixnu build kernel -D ../UniXNU-gta4l
+python3.11 -B scripts/build-gta4l-diagnostic-payload.py \
+  --device . --unixnu ../UniXNU --uefi ../Mu-Silicium \
+  --kernel ../UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho \
+  --data-ramdisk ../../out/gta4l/ram-root-sdhci-audit-evidence/root.img \
+  --trust-cache ../../out/gta4l/ram-root-sdhci-audit-evidence/trustcache.bundle \
+  --owner-trust-cache --unique-chip-id 0x1122334455667788 \
+  --diagnostic emmc-probe-2 --kernel-arg rd=md0 --kernel-arg sheng-pmgr=2 \
+  --output ../../out/gta4l/ram-root-emmc-probe-evidence/payload.img \
+  --manifest ../../out/gta4l/ram-root-emmc-probe-evidence/payload.manifest.json
+python3.11 -B scripts/package-gta4l-diagnostic.py \
+  --baseline ../../out/gta4l/boot/boot-ram-root-sdhci-v5.img \
+  --payload ../../out/gta4l/ram-root-emmc-probe-evidence/payload.img \
+  --payload-sha256 baad6342c950d847912ede0ed06f3e14ecc012e022101049f37f8f4a69dd7b39 \
+  --expect-diagnostic emmc-probe-2 \
+  --output ../../out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img \
+  --manifest ../../out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.json
+```
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `kernel.macho` | 51,081,216 | `152bde801bc7f97f470e46713314e9daa62cb3b8a59f46a0f48ce183e0529957` |
+| `payload.img` (80 MiB, stage 2) | 83,886,080 | `baad6342c950d847912ede0ed06f3e14ecc012e022101049f37f8f4a69dd7b39` |
+| `boot-ram-root-emmc-probe-stage2.img` | 85,688,320 | `c7011274991b8afd83d5965392941c78d800dbe7b3b8715b939e7f27cf678e05` |
+
+The payload contract is 7/7 and the boot-image gate is 18/18. The payload's
+kernel arguments include `gta4l-emmc-probe=2`. The image has not been flashed;
+`hardware_tested` is false. Stage 2 still enables bus power and the card clock,
+so a run requires the owner's written approval, a verified EFS/CPEFS backup, a
+known-good BOOT restoration image and the exact procedure; TWRP on `RECOVERY`
+stays untouched.
 
 ## 6. Expected report
 
@@ -202,11 +267,19 @@ storage or filesystem result.
 - No device run exists; the probe has not been booted on the tablet `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
   levels, and it does not prove retention across suspend or shutdown `[U]`.
-- The 1.8 V signaling and pad-switch selection is a documented board policy
-  derived from the L11 rail range; it is not a measurement `[S]/[U]`.
+- The 1.8 V signalling and pad-switch selection is a documented board policy
+  derived from the L11 rail range; it is not a measurement `[S]/[U]`. It is a
+  deliberate departure from the mainline gta4l DT-derived state, where no SDHC1
+  `vqmmc` consumer exists, `caps == 0`, and `sdhci_msm_set_regulator_caps()`
+  leaves both vendor pad bits at the `0xa9c` POR value. The policy follows the
+  sdhci-msm fixed-1.8 V comment (keep the pad switch set so the pads reflect the
+  actual rail) rather than that DT-derived state. A first test should treat a
+  pad-related failure as a policy question, not as proof that the rail is wrong
+  `[S]/[U]`.
 - The power acknowledgement is a controller-local software ack; `BUS_SUCCESS`
-  does not prove the rail voltage, and a missing controller request is reported
-  as a failure rather than assumed away `[U]`.
+  does not prove the rail voltage. The core now requires an observed `BUS_ON`
+  completion and handles separate IO requests, but a request that arrives after
+  the final quiet window still has no interrupt path `[U]`.
 - No DMA, SMMU programming, CQE, ICE, tuning, high-speed mode, multi-block read
   or write path exists `[U]`.
 - No block-device publication, mount, root switch or persistent Data path

@@ -137,6 +137,28 @@ gta4l_emmc_wait32(struct gta4l_emmc_host *host, uint32_t space,
 	return GTA4L_EMMC_ERR_IO;
 }
 
+/* SDHCI stores a 128-bit R2 response in RESPONSE3..RESPONSE0, least
+ * significant word first, with the CRC byte in the low byte of RESPONSE0.
+ * Normalize to the MMC big-endian word order: response[0] is bits 127:96,
+ * matching Linux's sdhci_read_rsp_136() shift. */
+static void
+gta4l_emmc_read_long_response(struct gta4l_emmc_host *host,
+    uint32_t response[4])
+{
+	uint32_t index;
+	uint32_t offset;
+
+	for (index = 0; index < 4; index++) {
+		offset = GTA4L_EMMC_REG_RESPONSE + (3u - index) * 4u;
+		response[index] = gta4l_emmc_read32(host,
+		    GTA4L_EMMC_SPACE_SDHCI, offset) << 8;
+		if (index != 3u) {
+			response[index] |= gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI, offset - 4u) >> 24;
+		}
+	}
+}
+
 static void
 gta4l_emmc_clear_interrupts(struct gta4l_emmc_host *host)
 {
@@ -242,7 +264,7 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		if ((normal & GTA4L_EMMC_INT_CC) != 0) {
 			break;
 		}
-		gta4l_emmc_delay(host, 1);
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 	}
 	if ((normal & GTA4L_EMMC_INT_CC) == 0) {
 		gta4l_emmc_clear_interrupts(host);
@@ -250,16 +272,9 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 	}
 
 	if (response != 0) {
-		if ((flags & GTA4L_EMMC_CMD_RESP_LONG) ==
+		if ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==
 		    GTA4L_EMMC_CMD_RESP_LONG) {
-			response[0] = gta4l_emmc_read32(host,
-			    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_RESPONSE);
-			response[1] = gta4l_emmc_read32(host,
-			    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_RESPONSE + 4);
-			response[2] = gta4l_emmc_read32(host,
-			    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_RESPONSE + 8);
-			response[3] = gta4l_emmc_read32(host,
-			    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_RESPONSE + 12);
+			gta4l_emmc_read_long_response(host, response);
 		} else {
 			response[0] = gta4l_emmc_read32(host,
 			    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_RESPONSE);
@@ -344,7 +359,7 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
 			gta4l_emmc_clear_interrupts(host);
 			return GTA4L_EMMC_OK;
 		}
-		gta4l_emmc_delay(host, 1);
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 	}
 
 	gta4l_emmc_clear_interrupts(host);
@@ -437,70 +452,94 @@ gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
 static int
 gta4l_emmc_power_on(struct gta4l_emmc_host *host)
 {
-	uint32_t status = 0;
+	uint32_t status;
+	uint32_t clear;
 	uint32_t ack;
 	uint32_t iterations;
 	uint32_t index;
-	int cleared = 0;
+	uint32_t attempt;
+	int bus_on_seen = 0;
+	int cleared;
+	int idle = 0;
 
 	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_POWER_CONTROL,
 	    GTA4L_EMMC_POWER_BUS_POWER | GTA4L_EMMC_POWER_3V3);
 	gta4l_emmc_barrier(host);
 
+	/* Bus power and IO voltage are independent controller requests. The
+	 * HOST_CONTROL2 write above can raise an IO request before, with or
+	 * after the bus request, so handle each observed request separately
+	 * and only report success after BUS_ON has actually completed. */
 	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_POWER_TIMEOUT_US);
 	for (index = 0; index < iterations; index++) {
 		status = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) & 0xFu;
-		if (status != 0) {
-			break;
+		if ((status & GTA4L_EMMC_PWRCTL_BUS_OFF) != 0) {
+			gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, status, 0);
+			return GTA4L_EMMC_ERR_POWER;
 		}
+		if (status == 0) {
+			/* After bus-on, require a short quiet window so a
+			 * separate, slightly delayed IO request is handled
+			 * before the card clock starts. */
+			if (bus_on_seen != 0) {
+				idle++;
+				if (idle >= 2) {
+					break;
+				}
+			}
+			gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+			continue;
+		}
+		idle = 0;
+
+		/* Clear only the request bits observed in this pass, retrying
+		 * the documented lost-pulse case. */
+		clear = status;
+		cleared = 0;
+		for (attempt = 0; attempt < 10; attempt++) {
+			gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR, clear);
+			gta4l_emmc_barrier(host);
+			if ((gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) & clear) == 0) {
+				cleared = 1;
+				break;
+			}
+			gta4l_emmc_delay(host, 10);
+		}
+		if (cleared == 0) {
+			gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, status, 0);
+			return GTA4L_EMMC_ERR_POWER;
+		}
+
+		ack = 0;
+		if ((status & GTA4L_EMMC_PWRCTL_BUS_ON) != 0) {
+			ack |= GTA4L_EMMC_PWRCTL_ACK_BUS;
+			bus_on_seen = 1;
+		}
+		if ((status & (GTA4L_EMMC_PWRCTL_IO_HIGH |
+		    GTA4L_EMMC_PWRCTL_IO_LOW)) != 0) {
+			ack |= GTA4L_EMMC_PWRCTL_ACK_IO;
+		}
+		gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_PWRCTL_CTL, ack);
+		gta4l_emmc_barrier(host);
+		if ((gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) & clear) != 0) {
+			gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, status, ack);
+			return GTA4L_EMMC_ERR_POWER;
+		}
+		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, status, ack);
 		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 	}
-	if (status == 0) {
-		/* A retained rail still has to produce a controller request. Do
-		 * not report success without one. */
+
+	if (bus_on_seen == 0) {
+		/* An IO-voltage request alone is not a completed bus power-on. */
 		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, 0, 0);
 		return GTA4L_EMMC_ERR_POWER;
 	}
-	if ((status & GTA4L_EMMC_PWRCTL_BUS_OFF) != 0) {
-		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, status, 0);
-		return GTA4L_EMMC_ERR_POWER;
-	}
-
-	/* Clear the request, retrying the documented lost-pulse case. */
-	for (index = 0; index < 10; index++) {
-		gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
-		    GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR, status);
-		gta4l_emmc_barrier(host);
-		if ((gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
-		    GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) & status) == 0) {
-			cleared = 1;
-			break;
-		}
-		gta4l_emmc_delay(host, 10);
-	}
-	if (cleared == 0) {
-		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, status, 0);
-		return GTA4L_EMMC_ERR_POWER;
-	}
-	ack = 0;
-	if ((status & GTA4L_EMMC_PWRCTL_BUS_ON) != 0) {
-		ack |= GTA4L_EMMC_PWRCTL_ACK_BUS;
-	}
-	if ((status & (GTA4L_EMMC_PWRCTL_IO_HIGH |
-	    GTA4L_EMMC_PWRCTL_IO_LOW)) != 0) {
-		ack |= GTA4L_EMMC_PWRCTL_ACK_IO;
-	}
-	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
-	    GTA4L_EMMC_REG_CORE_PWRCTL_CTL, ack);
-	gta4l_emmc_barrier(host);
-	if ((gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
-	    GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) & status) != 0) {
-		gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, status, ack);
-		return GTA4L_EMMC_ERR_POWER;
-	}
-	gta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, status, ack);
 	return GTA4L_EMMC_OK;
 }
 
@@ -585,8 +624,7 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 
 	/* Legacy timing: clear the UHS mode and execute field, preserve the
 	 * rest. The board's VCCQ rail is fixed at 1.8 V, so select 1.8 V
-	 * signalling and the Qualcomm pad power switch instead of leaving both
-	 * cleared. */
+	 * signalling. */
 	control2 = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_HOST_CONTROL2);
 	control2 &= ~(GTA4L_EMMC_HOST_CONTROL2_UHS_MASK |
@@ -599,13 +637,17 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_HOST_CONTROL2, control2);
 
+	/* The pad power switch is a separate board policy. A fixed-1.8 V
+	 * VCCQ target keeps it set so the pads follow the actual rail; a
+	 * 3.3 V-capable target leaves both vendor bits clear. */
 	vendor = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC);
-	vendor |= GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH_EN;
-	if (host->fixed_1v8 != 0) {
-		vendor |= GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH;
+	if (host->pad_pwr_switch != 0) {
+		vendor |= GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH_EN |
+		    GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH;
 	} else {
-		vendor &= ~GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH;
+		vendor &= ~(GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH_EN |
+		    GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH);
 	}
 	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, vendor);
@@ -674,7 +716,13 @@ gta4l_emmc_validate_response(const uint32_t response[4])
 		if (response[index] != 0) {
 			all_zero = 0;
 		}
-		if (response[index] != 0xFFFFFFFFu) {
+		/* The low byte of the last word is the stripped CRC, not
+		 * response data, so mask it for the all-ones test. */
+		if (index == 3u) {
+			if ((response[index] | 0xFFu) != 0xFFFFFFFFu) {
+				all_ones = 0;
+			}
+		} else if (response[index] != 0xFFFFFFFFu) {
 			all_ones = 0;
 		}
 	}
@@ -849,6 +897,12 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 		return result;
 	}
 	gta4l_emmc_parse_ext_csd(host, ext_csd);
+	if (host->data_sector_size_4k != 0) {
+		/* The read path is fixed at 512-byte sectors. */
+		gta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, 5,
+		    host->data_sector_size_4k);
+		return GTA4L_EMMC_ERR_UNSUPPORTED;
+	}
 	if (host->capacity_blocks <= GTA4L_EMMC_SECTOR_ADDRESS_MIN_BLOCKS) {
 		gta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, 3,
 		    host->capacity_blocks);

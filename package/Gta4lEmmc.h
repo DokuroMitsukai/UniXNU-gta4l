@@ -116,6 +116,7 @@
 #define GTA4L_EMMC_CMD_RESP_LONG           0x0001u
 #define GTA4L_EMMC_CMD_RESP_SHORT          0x0002u
 #define GTA4L_EMMC_CMD_RESP_SHORT_BUSY     0x0003u
+#define GTA4L_EMMC_CMD_RESP_TYPE_MASK      0x0003u
 #define GTA4L_EMMC_CMD_DATA                0x0020u
 #define GTA4L_EMMC_CMD_CRC                 0x0008u
 #define GTA4L_EMMC_CMD_INDEX               0x0010u
@@ -257,6 +258,7 @@ struct gta4l_emmc_host {
 	uint8_t  partition_config;
 	uint8_t  data_sector_size_4k;
 	uint8_t  fixed_1v8;      /* caller: board VCCQ is a fixed 1.8 V rail */
+	uint8_t  pad_pwr_switch; /* caller: select the 1.8 V pad supply */
 	uint8_t  initialized;
 };
 

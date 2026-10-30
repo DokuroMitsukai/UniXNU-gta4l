@@ -45,6 +45,7 @@ struct sim {
 	uint16_t transfer_mode;
 	uint32_t pwr_status;
 	uint32_t power_ack;
+	uint32_t pwr_poll_count;
 	uint32_t buffer_data[GTA4L_EMMC_BLOCK_BYTES / 4u];
 	uint32_t buffer_index;
 	uint32_t last_cmd;
@@ -82,6 +83,13 @@ struct sim {
 	int cmd3_error;
 	int power_no_request;
 	int power_stuck;
+	int power_io_only;
+	int power_delayed_bus;
+	int power_io_delayed;
+	int bus_acked;
+	int bus_delayed_emitted;
+	int io_delayed_emitted;
+	int data_sector_4k;
 	int power_written;
 	int card_clock_before_power;
 	int card_clock_enabled;
@@ -215,6 +223,22 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			return 0;
 		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) {
+			if ((sim->power_delayed_bus != 0) &&
+			    (sim->power_written != 0) &&
+			    (sim->bus_delayed_emitted == 0)) {
+				sim->pwr_poll_count++;
+				if (sim->pwr_poll_count >= 3u) {
+					sim->pwr_status |=
+					    GTA4L_EMMC_PWRCTL_BUS_ON;
+					sim->bus_delayed_emitted = 1;
+				}
+			}
+			if ((sim->power_io_delayed != 0) &&
+			    (sim->bus_acked != 0) &&
+			    (sim->io_delayed_emitted == 0)) {
+				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_HIGH;
+				sim->io_delayed_emitted = 1;
+			}
 			return sim->pwr_status;
 		}
 		if (offset == GTA4L_EMMC_REG_BUFFER_DATA_PORT) {
@@ -268,12 +292,12 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 				if (sim->power_no_request != 0) {
 					sim->pwr_status = 0;
 				} else if (sim->power_off != 0) {
-					sim->pwr_status =
+					sim->pwr_status |=
 					    GTA4L_EMMC_PWRCTL_BUS_OFF;
-				} else {
-					sim->pwr_status =
-					    GTA4L_EMMC_PWRCTL_BUS_ON |
-					    GTA4L_EMMC_PWRCTL_IO_HIGH;
+				} else if ((sim->power_io_only == 0) &&
+				    (sim->power_delayed_bus == 0)) {
+					sim->pwr_status |=
+					    GTA4L_EMMC_PWRCTL_BUS_ON;
 				}
 			}
 		}
@@ -316,6 +340,8 @@ sim_fill_ext_csd(struct sim *sim)
 	memset(sim->ext_csd, 0, sizeof(sim->ext_csd));
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_REV_OFF] = 8;
 	sim->ext_csd[183] = 2;
+	sim->ext_csd[GTA4L_EMMC_EXT_CSD_DATA_SECTOR_SIZE_OFF] =
+	    (uint8_t)(sim->data_sector_4k ? 1 : 0);
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF] =
 	    (uint8_t)sim->partition_config;
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 0] =
@@ -363,7 +389,21 @@ static void
 sim_set_response(struct sim *sim, const uint32_t *words, uint32_t count)
 {
 	uint32_t index;
+	uint32_t reg[4];
 
+	if (count == 4u) {
+		/* Encode a normalized 128-bit response into the SDHCI
+		 * RESPONSE3..RESPONSE0 register order with a zero CRC byte. */
+		reg[3] = words[0] >> 8;
+		reg[2] = (words[1] >> 8) | ((words[0] & 0xFFu) << 24);
+		reg[1] = (words[2] >> 8) | ((words[1] & 0xFFu) << 24);
+		reg[0] = (words[3] >> 8) | ((words[2] & 0xFFu) << 24);
+		for (index = 0; index < 4u; index++) {
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + index * 4u, reg[index]);
+		}
+		return;
+	}
 	for (index = 0; index < count; index++) {
 		sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_RESPONSE + index * 4u, words[index]);
@@ -612,6 +652,18 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 		}
 		return;
 	}
+	if (offset == GTA4L_EMMC_REG_HOST_CONTROL2) {
+		sim->sdhci[offset] = (uint8_t)(value & 0xFFu);
+		sim->sdhci[offset + 1u] = (uint8_t)(value >> 8);
+		if (sim->power_io_delayed == 0) {
+			if ((value & SIM_CTRL_VDD_180) != 0) {
+				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_LOW;
+			} else {
+				sim->pwr_status |= GTA4L_EMMC_PWRCTL_IO_HIGH;
+			}
+		}
+		return;
+	}
 	sim->sdhci[offset] = (uint8_t)(value & 0xFFu);
 	sim->sdhci[offset + 1u] = (uint8_t)(value >> 8);
 }
@@ -635,6 +687,9 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_CTL) {
 			sim->power_ack = value;
 			sim->power_ack_time_us = sim->time_us;
+			if ((value & GTA4L_EMMC_PWRCTL_ACK_BUS) != 0) {
+				sim->bus_acked = 1;
+			}
 			if (sim->power_stuck == 0) {
 				if ((value & GTA4L_EMMC_PWRCTL_ACK_BUS) != 0) {
 					sim->pwr_status &=
@@ -815,6 +870,7 @@ main(int argc, char **argv)
 	host.ops = &sim_ops;
 	host.context = &sim;
 	host.fixed_1v8 = 1;
+	host.pad_pwr_switch = 1;
 
 	if (scenario_is(scenario, "reset-timeout")) {
 		sim.reset_timeout = 1;
@@ -826,6 +882,15 @@ main(int argc, char **argv)
 		sim.power_no_request = 1;
 	} else if (scenario_is(scenario, "power-stuck")) {
 		sim.power_stuck = 1;
+	} else if (scenario_is(scenario, "power-io-only")) {
+		sim.power_io_only = 1;
+	} else if (scenario_is(scenario, "power-delayed-bus")) {
+		sim.power_delayed_bus = 1;
+	} else if (scenario_is(scenario, "power-bus-then-io")) {
+		sim.power_io_delayed = 1;
+	} else if (scenario_is(scenario, "data-sector-4k")) {
+		sim.data_sector_4k = 1;
+		sim_fill_ext_csd(&sim);
 	} else if (scenario_is(scenario, "rcg-busy")) {
 		sim.rcg_busy = 1;
 	} else if (scenario_is(scenario, "cmd-timeout")) {
@@ -858,6 +923,9 @@ main(int argc, char **argv)
 		sim_fill_ext_csd(&sim);
 	} else if (scenario_is(scenario, "signaling-3v3")) {
 		host.fixed_1v8 = 0;
+		host.pad_pwr_switch = 0;
+	} else if (scenario_is(scenario, "pad-switch-off")) {
+		host.pad_pwr_switch = 0;
 	} else if (scenario_is(scenario, "version")) {
 		sim_write32(&sim, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_MCI_VERSION, 0x20000000u);
@@ -876,6 +944,9 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "read-ext-csd") ||
 	    scenario_is(scenario, "read-out-of-range") ||
 	    scenario_is(scenario, "read-last-block") ||
+	    scenario_is(scenario, "power-delayed-bus") ||
+	    scenario_is(scenario, "power-bus-then-io") ||
+	    scenario_is(scenario, "pad-switch-off") ||
 	    scenario_is(scenario, "signaling-3v3")) {
 		check(result == GTA4L_EMMC_OK, "initialization failed");
 		if (result != GTA4L_EMMC_OK) {
@@ -896,8 +967,16 @@ main(int argc, char **argv)
 		    "partition access is not the user area");
 		check(host.data_sector_size_4k == 0u,
 		    "unexpected 4 KiB data sector size");
-		check(host.cid[0] != 0u, "CID is empty");
-		check(host.csd[0] != 0u, "CSD is empty");
+		check(host.cid[0] == 0x15010044u &&
+		    host.cid[1] == 0x5836384Du &&
+		    host.cid[2] == 0x42009005u &&
+		    host.cid[3] == 0xF4661900u,
+		    "CID long-response normalization mismatch");
+		check(host.csd[0] == 0xD0270132u &&
+		    host.csd[1] == 0x0F5903FFu &&
+		    host.csd[2] == 0xF6DBFFEFu &&
+		    host.csd[3] == 0x8E404000u,
+		    "CSD long-response normalization mismatch");
 		check(sim.gcc[GTA4L_EMMC_GCC_SDCC1_APPS_CFG / 4u] ==
 		    0x00002017u, "RCG CFG is not 400 kHz");
 		check(sim.gcc[GTA4L_EMMC_GCC_SDCC1_APPS_M / 4u] == 0x00000001u,
@@ -963,12 +1042,23 @@ main(int argc, char **argv)
 		    "3.3 V signalling unexpectedly has VDD_180 set");
 		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
-		    SIM_PAD_PWR_SWITCH_EN) != 0,
-		    "pad power switch enable is not set");
+		    (SIM_PAD_PWR_SWITCH_EN | SIM_PAD_PWR_SWITCH)) == 0,
+		    "pad power switch is set for 3.3 V signalling");
+	} else if (scenario_is(scenario, "pad-switch-off")) {
+		check((sim_read16(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL2) & SIM_CTRL_VDD_180) != 0,
+		    "1.8 V signalling is not selected");
 		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
-		    SIM_PAD_PWR_SWITCH) == 0,
-		    "pad power switch is set for 3.3 V signalling");
+		    (SIM_PAD_PWR_SWITCH_EN | SIM_PAD_PWR_SWITCH)) == 0,
+		    "pad power switch is set with the policy disabled");
+	} else if (scenario_is(scenario, "power-delayed-bus") ||
+	    scenario_is(scenario, "power-bus-then-io")) {
+		check(sim.bus_acked == 1,
+		    "bus power-on completion was not acknowledged");
+		check(sim.pwr_status == 0,
+		    "a power/IO request was left pending");
+		check(sim.card_clock_enabled == 1, "card clock not enabled");
 	} else if (scenario_is(scenario, "read-arg")) {
 		result = gta4l_emmc_read_block(&host, 0x100000000ULL, block0);
 		check(result == GTA4L_EMMC_ERR_ARG, "overflow block was accepted");
@@ -1046,7 +1136,8 @@ main(int argc, char **argv)
 		case GTA4L_EMMC_ERR_POWER:
 			expected = scenario_is(scenario, "power-off") ||
 			    scenario_is(scenario, "power-no-request") ||
-			    scenario_is(scenario, "power-stuck");
+			    scenario_is(scenario, "power-stuck") ||
+			    scenario_is(scenario, "power-io-only");
 			break;
 		case GTA4L_EMMC_ERR_CMD_TIMEOUT:
 			expected = scenario_is(scenario, "cmd-timeout");
@@ -1073,7 +1164,8 @@ main(int argc, char **argv)
 			break;
 		case GTA4L_EMMC_ERR_UNSUPPORTED:
 			expected = scenario_is(scenario, "small-card") ||
-			    scenario_is(scenario, "partition-access");
+			    scenario_is(scenario, "partition-access") ||
+			    scenario_is(scenario, "data-sector-4k");
 			break;
 		case GTA4L_EMMC_ERR_RESPONSE:
 			expected = scenario_is(scenario, "bad-cid") ||
