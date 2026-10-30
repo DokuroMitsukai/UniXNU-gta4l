@@ -184,9 +184,9 @@ change the outcome.
 
 This section records a bounded, host-only trace of the captured `rpm.img` and
 `xbl.img` bytes. It corrects an earlier table-only reading: the generic `ldoa`
-setter and request handler were identified, but no static table or policy path
-selects L11 or L24, and the XBL images touch only `STEP_CTRL`. None of it is a
-retention result `[S]`.
+setter and request handler were identified, but the bounded scan finds no
+static table or policy path that selects L11 or L24, and the XBL images touch
+only `STEP_CTRL`. None of it is a retention result `[S]`.
 
 ### 7.1 RPM image identity and limits
 
@@ -236,14 +236,15 @@ The captured data segment contains `[S]`:
   table, a single-entry table at `0x4696b74`, an 8-entry table at `0x4696b80`,
   a 13-word list at `0x4696c0c` and a header at `0x4696be0` `[S]`. The
   82-word pointer table at `0x4697e20` (NULL at `0x4697f68`) contains these
-  pointers, but the only traced uses treat `0x4697e20` as a memory-region
-  boundary, not as an iterated table `[S]`. The voltage table's only stored
-  pointer is the descriptor at `0x4696c40`; that descriptor's only stored
-  pointer is the word `0x4697f10` inside the same boundary table, and no
-  stored or PC-relative referrer to `0x4697f10` or `0x4697e20` exists outside
-  the two heap-boundary uses `[S]`. The table is therefore not consulted by
-  any linked path found by the scan; computed addressing, runtime relocation
-  or aliasing remains `[U]`.
+  pointers. Four aligned words in the image equal its runtime-offset address
+  (`0x46006a4`, `0x46221d4`, `0x462227c`, `0x4623ef8`); the two loaded by
+  traced code (`0x46221b2`, `0x4622244`) treat it as a memory-region boundary,
+  and the other two have no resolved PC-relative loader `[S]`. The voltage
+  table's only stored pointer is the descriptor at `0x4696c40`; that
+  descriptor's only stored pointer is the word `0x4697f10` inside the same
+  boundary table, and no stored word equals `0x4697f10` `[S]`. The table is
+  therefore not consulted by any linked path found by the scan; computed
+  addressing, runtime relocation or aliasing remains `[U]`.
 
 ### 7.3 Consumer trace
 
@@ -266,17 +267,22 @@ The trace found the following `[S]`:
   at `0x4615e4c` `[S]`. There is no selector-to-microvolt conversion and no
   PMIC command ID in this handler `[S]`.
 - The class/ID path at `0x4615d08` maps class 0 to `ldoa` and accepts an 8-bit
-  id. The generic setter at `0x4617b48` bounds the id by the registered `ldoa`
-  count (`0x19` = 25) and the mode by 4, so ids 11 and 24 pass those checks if
-  reached `[S]`. The request path at `0x4616e98` indexes a table with the
-  descriptor byte at `+3` plus `0x9f`; under the id interpretation L11 and L24
-  map to `0xaa` and `0xb7` `[C]`.
+  id. The static registration at `0x461749e` supplies a `ldoa` count of 25
+  (`0x19`) `[S]`. The generic setter at `0x4617b48` compares the id against
+  the runtime object's `+8` field and the mode against 4 (`0x4617b60`,
+  `0x4617b74`) `[S]`. The class table at `0x4695774` is zero in the linked
+  image and the object is allocated and filled at runtime by the resource
+  database constructor at `0x46996c4` (table store at `0x4699694`), so the
+  runtime count equalling the static 25 is `[C]`, and ids 11 and 24 passing
+  those bounds is `[C]`. The request path at `0x4616e98` indexes a table with
+  the descriptor byte at `+3` plus `0x9f`; under the id interpretation L11 and
+  L24 map to `0xaa` and `0xb7` `[C]`.
 - The L11 key record at `0x46969e4` has exactly one stored pointer in the whole
   image (`0x46966a8`, the dead selector-array slot); the L24 key record at
   `0x4696a4c` has none `[S]`. No linked code path found by the scan reads the
   24-entry voltage table or the selector array `[S]`, and no traced path writes
-  an L11/L24 voltage, mode or enable register `[U]`. Under the static scan, the
-  only reachable path that can program either rail is the generic setter,
+  an L11/L24 voltage, mode or enable register `[U]`. Under the bounded scan,
+  the only path identified that can program either rail is the generic setter,
   driven by a runtime request; whether such a request exists on this device is
   not established `[U]`.
 
@@ -346,19 +352,21 @@ resource objects, SPMI/PMIC bus writes, or code outside the two `LOAD`
 segments; those remain `[U]`. The scratch scripts were host-only and are not
 vendored.
 
-Representative RPM disassembly command:
+The RPM table and reference findings are reproducible with the committed
+host-only analyzer:
 
 ```sh
-python3 - <<'PY'
-import capstone
-img = open('../../device-dump/private/gta4l-dump/partitions/rpm.img', 'rb').read()
-md = capstone.Cs(capstone.CS_ARCH_ARM, capstone.CS_MODE_THUMB)
-md.detail = True
-off = 0x2ae10 + 0x4698074 - 0x4690000
-for ins in md.disasm(img[off:off + 0x40], 0x4698074):
-    print(hex(ins.address), ins.mnemonic, ins.op_str)
-PY
+python3 scripts/analyze-gta4l-rpm-ldoa.py \
+    ../../device-dump/private/gta4l-dump/partitions/rpm.img
 ```
+
+It verifies the image SHA-256, checks the 24 name records, selector, group
+table, voltage rows, descriptor and boundary word, and prints every aligned
+stored word that equals an anchor's virtual address or runtime-offset form. A
+`reference_count` is a stored-word count, not a control-flow reachability
+result. The captured image is private and is not vendored; the analyzer's
+self-test uses a synthetic image only. The two boundary-table words with no
+resolved PC-relative loader are `0x46006a4` and `0x4623ef8` `[S]`.
 
 The XBL scan covered the eight non-blob file-backed `PT_LOAD` segments
 (`0xc119000`, `0xc11c000`, `0xc225000`, `0xc27b000`, `0xc29c000`, `0xc350000`,
@@ -417,18 +425,21 @@ the result hashes to `410e45ac...f4e97597`.
 
 The defensible statement is: *no direct write to the L11/L24 voltage, mode or
 enable registers was found in the traced RPM paths or the scanned XBL paths; in
-the linked RPM image no static table or policy path selects either rail (L11
-has one stored pointer, into an unreferenced selector list, and L24 has none);
-the RPM image contains LDOA resource tables that include both rails, but their
-only stored reference chain ends in an unreferenced word of a pointer array
-used as a heap boundary; and both XBL RSBP images are downloaded in full to
-PMIC PBS RAM where they touch only L11/L24 `STEP_CTRL`.* This narrows `E7`
-("the exit path is not passive") but does not establish retention: the only
-reachable RPM path is the generic `ldoa` setter, driven by a runtime request
-whose existence is not established; the PBS instruction semantics and their
-effect, the effect of the runtime loader, and the actual rail state across
-handoff, suspend, shutdown and reboot remain unresolved `[U]`. A name match, an
-uninterpreted table or an absent reference is not a retention result `[S]`.
+the linked RPM image the bounded scan finds no static table or policy path that
+selects either rail (L11 has one stored pointer, into an unreferenced selector
+list, and L24 has none); the RPM image contains LDOA resource tables that
+include both rails, but their only stored reference chain ends in an
+unreferenced word of a pointer array used as a heap boundary; and both XBL RSBP
+images are downloaded in full to PMIC PBS RAM where they touch only L11/L24
+`STEP_CTRL`.* This narrows `E7` ("the exit path is not passive") but does not
+establish retention: the only RPM path identified by the scan is the generic
+`ldoa` setter, whose class object and per-id array are built at runtime from
+the resource database, driven by a request whose existence is not established;
+computed addressing, runtime relocation and aliasing are not excluded; the PBS
+instruction semantics and their effect, the effect of the runtime loader, and
+the actual rail state across handoff, suspend, shutdown and reboot remain
+unresolved `[U]`. A name match, an uninterpreted table or an absent reference
+is not a retention result `[S]`.
 
 ## 8. Step 4 contract cross-reference
 

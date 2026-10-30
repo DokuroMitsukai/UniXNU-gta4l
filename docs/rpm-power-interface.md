@@ -176,18 +176,25 @@ bytes `[S]`.
   microvolts), `swen` (a software-enable bit in its state object), `bobm`,
   `pcv1`–`pcv3`; it has no selector conversion and no PMIC command ID `[S]`.
   The class/ID path at `0x4615d08` could address any `ldoa` id, including 11 or
-  24, if a runtime descriptor existed. The generic setter at `0x4617b48`
-  accepts ids below the registered count (`0x19` = 25) and modes up to 4, so
-  ids 11 and 24 pass its bounds `[S]`; no static table or policy path selects
-  either rail, and whether a runtime request exists is `[U]`.
+  24, if a runtime descriptor existed. The static registration at `0x461749e`
+  supplies a count of 25 `[S]`; the setter at `0x4617b48` compares the id
+  against a runtime object field and the mode against 4 `[S]`. The class table
+  at `0x4695774` is zero in the linked image and the object is built at runtime
+  by the resource-database constructor at `0x46996c4`, so the runtime count and
+  ids 11/24 passing the bounds are `[C]`. The bounded scan finds no static
+  table or policy path that selects either rail `[S]`; whether a runtime
+  request exists is `[U]`.
 
 No linked code path found by the scan reads the voltage table or selector
 array `[S]`, and no traced path writes an L11/L24 voltage, mode or enable
-register `[U]`. The only reachable path that can program either rail is the
-generic setter, driven by a runtime request whose existence is not established
-`[U]`. The tables are therefore evidence that the firmware carries LDOA
-resource definitions for both rails, not evidence that it enables, votes or
-retains them. They do not add a readback path to the mainline port `[S]`.
+register `[U]`. The only path identified by the scan that can program either
+rail is the generic setter, driven by a runtime request whose existence is not
+established `[U]`. The tables are therefore evidence that the firmware carries
+LDOA resource definitions for both rails, not evidence that it enables, votes
+or retains them. They do not add a readback path to the mainline port `[S]`.
+The stored-word counts are reproducible with
+`scripts/analyze-gta4l-rpm-ldoa.py`; computed addressing, runtime relocation
+and aliasing remain outside its scope `[U]`.
 
 ## What the mainline port can and cannot report
 
