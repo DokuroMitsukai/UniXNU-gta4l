@@ -14,6 +14,8 @@ analyzer:
   including literal-load destination registers, the builder type byte and the
   registration argument setup and stack stores;
 - decodes independently specified Thumb BL and LDR-literal vectors;
+- checks the production setup and literal-load tables against an independent
+  instruction and register inventory;
 - rejects a wrong image hash, a changed name record, a wrong mapping, a changed
   selector, a changed voltage row, a changed boundary terminator or entry, an
   altered callback literal, a class misattribution, an altered call edge, an
@@ -54,6 +56,33 @@ DATA_OFF = TEXT_OFF + TEXT_SIZE
 DATA_SIZE = 0xc000
 SELECTOR_IDS = [6, 8, 1, 2, 3, 4, 7, 17, 18, 9, 10, 11, 12, 13, 14, 16]
 THUMB_REFERENCE = 0x4696900
+EXPECTED_CODE_SETUP = (
+    (0x4617488, 0x9501),
+    (0x4617492, 0x9600),
+    (0x4617494, 0x4623),
+    (0x461749a, 0xe9cd),
+    (0x461749c, 0x6500),
+    (0x46174a2, 0x4623),
+    (0x46174a8, 0xe9cd),
+    (0x46174aa, 0x6500),
+    (0x46174b0, 0x4623),
+    (0x4698ace, 0x980a),
+    (0x4698ad2, 0x1c71),
+    (0x4698ad4, 0x2210),
+    (0x4698ad6, 0x9001),
+    (0x4698ada, 0x9000),
+    (0x4698adc, 0x9803),
+)
+EXPECTED_LITERAL_LOADS = (
+    (0x4617486, 6, 0x46174c4),
+    (0x461748a, 4, 0x46174cc),
+    (0x461748c, 7, 0x46174d0),
+    (0x4617496, 0, 0x46174c8),
+    (0x46174a4, 0, 0x46174d4),
+    (0x46174b2, 0, 0x46174d8),
+    (0x4698ad0, 3, 0x4698afc),
+    (0x4698ad8, 0, 0x4698af8),
+)
 
 
 def put16(block, offset, value):
@@ -242,6 +271,10 @@ def check_decoders(image):
     assert decode_bl(image, loads, 0x4600200) == 0x4600300
     assert decode_bl(image, loads, 0x4600240) == 0x4600140
     assert decode_bl(image, loads, 0x4600104) is None
+    code_setup = tuple((site, value) for site, value, _ in module['CODE_SETUP'])
+    literal_loads = tuple(module['LITERAL_LOADS'])
+    assert code_setup == EXPECTED_CODE_SETUP, code_setup
+    assert literal_loads == EXPECTED_LITERAL_LOADS, literal_loads
     return module
 
 
@@ -386,13 +419,13 @@ def main():
             directory, image, 'edge-rpm.img', va_offset(0x4615502, 2), 0xF001, width=2)
         expect_failure(call_edge, 'expected 0x4615906', '--expect-sha256', edge_digest, '--code')
 
-        for site, _, label in module['CODE_SETUP']:
+        for site, _ in EXPECTED_CODE_SETUP:
             setup, setup_digest = write_mutation(
                 directory, image, f'setup-{site:x}-rpm.img', va_offset(site, 2),
                 0x46c0, width=2)
-            expect_failure(setup, label, '--expect-sha256', setup_digest, '--code')
+            expect_failure(setup, f'{site:#x} is', '--expect-sha256', setup_digest, '--code')
 
-        for site, dest, _ in module['LITERAL_LOADS']:
+        for site, dest, _ in EXPECTED_LITERAL_LOADS:
             new_dest = 0 if dest else 1
             original = struct.unpack_from('<H', image, va_offset(site, 2))[0]
             literal_dest, literal_dest_digest = write_mutation(
