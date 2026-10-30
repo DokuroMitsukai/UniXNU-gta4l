@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T15:44:00Z`, after the final edits to the
+Hashes were taken at `2026-10-30T15:57:32Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them. The snapshot is intended to be committed without
@@ -18,21 +18,27 @@ update the table.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD at the hash snapshot | `fea601d5274d358d9460b781d51e0260b98ee0d5` (second follow-up commit) |
+| HEAD at the hash snapshot | `48dfac7ba3737e26bd8ff33e0858c2e714ebe25f` (third follow-up commit) |
 | Parent of the correction commit | `1e3072f8ee39a6bbee05204a95fd94604bd6f7ac` |
 | Correction commit paths | 8: 7 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`docs/sdhc-decision-update-2026-10-30.md`) |
 | First follow-up commit paths | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`scripts/test-gta4l-sdccdxe-decode.py`) |
 | Second follow-up commit paths | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-power-pad-dependency-report.md`, `scripts/test-gta4l-sdccdxe-decode.py`) |
-| Dirty entries at the hash snapshot | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-power-pad-dependency-report.md`, `scripts/test-gta4l-sdccdxe-decode.py`) |
-| Staging and commits | None at the snapshot; this third follow-up snapshot lands as one commit on top of `fea601d` |
+| Third follow-up commit paths | 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-power-pad-dependency-report.md`, `scripts/test-gta4l-sdccdxe-decode.py`) |
+| Fourth follow-up paths at this snapshot | 4: 3 modified (`docs/evidence-baseline.md`, `docs/sdhc-decision-memo.md`, `porting.toml`) and 1 added (`docs/sdhc-evidence-gap-checklist.md`) |
+| Dirty entries at the hash snapshot | 4: 3 modified and 1 untracked, exactly the fourth follow-up paths above |
+| Staging and commits | None at the snapshot; this fourth follow-up snapshot lands as one commit on top of `48dfac7` |
 
-The hash table describes the third follow-up working tree: the second follow-up
-commit `fea601d` plus the then-uncommitted report, test and baseline edits
-listed above. The second follow-up commit contains exactly the three paths in
-its row. The first follow-up commit contains exactly the six paths in its row:
-five documentation/porting edits and the new host-only decode test. The
-correction commit `a958e26` contains exactly the eight paths in its row and is
-not the earlier report batch.
+The hash table describes the fourth follow-up working tree: the third follow-up
+commit `48dfac7` plus the then-uncommitted checklist, memo and porting edits
+listed above. The third and second follow-up commits each contain exactly the
+three paths in their rows. The first follow-up commit contains exactly the six
+paths in its row: five documentation/porting edits and the new host-only decode
+test. The correction commit `a958e26` contains exactly the eight paths in its
+row and is not the earlier report batch.
+
+The fourth batch adds the Phase 1 evidence-gap checklist, links it from the
+decision memo and records it in the storage and power porting areas. It adds no
+measurement, device action or activation code and closes no gate.
 
 The second batch derived the status/clear/reset loop bounds from the pinned
 MOVZ instructions, added last-read and delayed-completion boundary cases and
@@ -139,7 +145,8 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `3fd90283078b6917562b0ed996bc1bc4e828997f078dfbec419511b935621442` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `d8e1bcc115fbec3eb26ddeee5ab651a514e87e0d3d76c10f8e0a49aca6fc753e` |
+| Evidence-gap checklist | `docs/sdhc-evidence-gap-checklist.md` | `1b2cd79fc60283e815b374d6e8957a0be3d52039f9a1d735addfd1aa4f759f7f` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `88cd9d6a4ac15ea5e9d738f947db0127d4b929a0c24a3713873e927c29907593` |
 | Retention evidence | `docs/power-retention-evidence.md` | `eb91725bd6a63acded9e63ca0673670f36b43a3253da15d8ec17cb67f0387e07` |
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
@@ -155,7 +162,7 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `14b6206e166b40932f603ef2e39ab83493071dcda95b2b18993f0eb2649d1ca5` |
+| Porting record | `porting.toml` | `91e5afc542c8e2c2e89f8dcfd9cfdb7adebc25fcd5f7210b63a39a0e8f39614c` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `2d8f060327c4d557ff588e90200676b3dfdaf213c60dec0d24c0300f28eb3fd3` |
@@ -285,6 +292,7 @@ sha256sum package/Gta4lSdhciHostInit.c package/Gta4lSdhciHostInit.h \
   scripts/test-gta4l-sdhci-evidence-counts.py \
   scripts/test-gta4l-sdccdxe-decode.py \
   docs/sdhci-host-init.md docs/sdhc-decision-memo.md \
+  docs/sdhc-evidence-gap-checklist.md \
   docs/sdhc-electrical-contract.md docs/power-retention-evidence.md \
   docs/rpm-power-interface.md docs/pm6125-register-map.md \
   docs/sdhc-dependency-trace.md docs/firmware-handoff.md \
@@ -327,7 +335,7 @@ python3.11 - <<'PY'
 import hashlib, pathlib, re
 text = pathlib.Path('docs/evidence-baseline.md').read_text()
 rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-expected = 31
+expected = 32
 paths = [path for path, _ in rows]
 assert len(rows) == expected, f'expected {expected} rows, found {len(rows)}'
 assert len(set(paths)) == len(paths), 'duplicate paths in the table'
@@ -352,7 +360,7 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | --- | --- |
 | `scripts/test-gta4l-diagnostic-payload.py`, `test-gta4l-diagnostic-package.py`, `test-gta4l-boot-image.py`, `test-gta4l-sdhci-handoff-audit.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-xnu-mtimes.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py`, `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `check-gta4l.py` | All exited 0 |
 | `scripts/test-gta4l-sdccdxe-decode.py` (static PE/model check, separate from the diagnostic tests) | PASS: pinned SdccDxe SHA-256, handshake and pad instruction words, MOVZ-derived loop bounds, last-read and delayed-completion boundary cases, wrong-bound negative controls, captured-status selection, three non-aborting timeout paths, TLMM arithmetic, SDC1 pad decode and SDC2 CLK-pull field positions |
-| Hash-table self-check in §6 | `rows=31 mismatches=0` |
+| Hash-table self-check in §6 | `rows=32 mismatches=0` |
 | `porting.toml` parse with `tomllib` | 13 areas |
 | `git diff --check` | Clean |
 
