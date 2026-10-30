@@ -59,14 +59,31 @@ write intersecting `[0x8878,0x8880)`, and resolves the caller stores at
 unresolved non-stack stores remain. No gate disposition changed `[S]`.
 
 Revision 9 (2026-10-31): adds two host-only inputs. The exact captured build's
-vendor package matches the captured BL chain, `boot.img` and `dtbo.img`
+vendor package matches four BL images and both AP images in full, and six BL
+images on their decompressed prefixes with unexplained nonzero trailing bytes
 (`stock-firmware-analysis-audit.md` §7), and the pinned vendor kernel's BUS_ON
 path enables L24, then L11, then pads, acknowledges, waits the 10 ms core delay
-and only then programs the card clock, while sending explicit RPM enable and
+and then programs the card clock, while sending explicit RPM enable and
 voltage requests (`vendor-sdhc-power-sequence.md`). The vendor path is a
 software precedent and a different design from the pinned mainline port; it
 closes no electrical or measurement requirement. No gate disposition changed
 `[S]`.
+
+Revision 10 (2026-10-31): records the broad host-only audit corrections.
+The package comparison now separates four full BL matches from six
+decompressed-prefix matches whose trailing bytes (32–125 nonzero each) are
+unexplained, not padding. The vendor trace now follows the captured DT's
+`rpm-smd-regulator` backend, including aggregation, active/sleep request rules,
+cached-state limits and RPM acknowledgement; it separates the normal cold-start
+path from the BUS_FAIL and 5,000 ms timeout paths and the conditional
+register-restore path, and qualifies the delay claim with the regulator-core
+`enable_time`/ramp-delay and unmeasured RPM/firmware latency. The overlay
+correspondence is name/ID-level only and does not establish that LineageOS
+sources match the shipped binary. The descriptor-base scanner now models 64-bit
+register arithmetic and effective addresses, paired accesses/writeback and
+boundary-crossing accesses, with new wrap and ADR-to-XZR regressions; all six
+result sets are unchanged against the audited `4c447b9` baseline. No gate
+disposition changed `[S]`.
 
 ## 1. Purpose and canonical links
 
@@ -241,10 +258,13 @@ vendor DT, or by the prior controller-local result `[S]`.
 
 - **Established evidence:** The SPMI common `SOFT_START` register `0x4c` exists
   in the register map; the regulator core has a `soft_start` hook; no board ramp
-  property or value is present `[S]`. The RPM regulator ops expose no
-  `set_soft_start`, `enable_time` or `off_on_delay` in the traced path `[S]`.
-  That absence is bounded to the pinned regulator-core/RPM source and the board
-  DT; no vendor datasheet or silicon documentation was available `[S]/[U]`.
+  property or value is present `[S]`. The captured `rpm-smd-regulator` ops
+  expose `enable_time` through `qcom,enable-time`, but the captured L24/L11
+  nodes declare neither that property nor `regulator-enable-ramp-delay`; the
+  SDHCI helper sets no soft-start or `off_on_delay`. The regulator core can
+  still delay when an enable time is nonzero `[S]`. That absence is bounded to
+  the pinned regulator-core/RPM source and the board DT; no vendor datasheet or
+  silicon documentation was available `[S]/[U]`.
 - **Missing documentation or measurement:** Required slew rate, inrush,
   overshoot/undershoot, settling time, brownout and load-step response;
   measured ramp and transient behavior on this board `[U]`.
@@ -270,11 +290,16 @@ vendor DT, or by the prior controller-local result `[S]`.
   stages are separate; the candidate keeps the card clock off `[S]`. The booted
   `SdccDxe` handler performs a controller-local bus-power bit set, reset,
   bounded status/clear polls and a result-only `CORE_PWRCTL_CTL` write, with no
-  regulator action `[S]`. The pinned stock vendor kernel instead enables L24,
-  then L11, then the pads and the IO level, acknowledges BUS_SUCCESS, waits the
-  10 ms core power delay and only then programs the card clock; it performs no
-  delay between the rails or before the acknowledgement
-  (`vendor-sdhc-power-sequence.md`) `[S]`.
+  regulator action `[S]`. The pinned stock vendor kernel enables the controller
+  clock, writes BUS_ON, then enables L24, then L11, then the pads and the IO
+  level, and acknowledges BUS_SUCCESS or BUS_FAIL. The core waits up to
+  5,000 ms and continues after a failure or timeout; the card clock is
+  programmed after the 10 ms core power delay and after the power-status call
+  returns, and a conditional register-restore path can write clock control
+  without a fresh BUS_ON request. The helper inserts no explicit inter-rail
+  delay, but the regulator core can apply `enable_time`/ramp delay (the captured
+  DT declares none), and RPM acknowledgement and firmware latency are
+  unmeasured (`vendor-sdhc-power-sequence.md`) `[S]/[U]`.
 - **Missing documentation or measurement:** Required electrical order and
   minimum delays between L24, L11, pads, reset and clock; whether the candidate's
   no-ack scope leaves a safe pending request; measured sequencing `[U]`.
@@ -395,9 +420,12 @@ vendor DT, or by the prior controller-local result `[S]`.
   not proof for PM6125 `[S]/[U]`. The UEFI handler's result-only write follows a
   controller reset and is not a response to a bus-on request, so it does not
   decide the candidate's acknowledge choice `[S]/[C]`. The descriptor-base
-  override is zero and the bounded scan finds no write intersecting it, but
-  the scan stops at instructions outside its whitelist and leaves internal
-  indirect/computed and runtime/external writers possible `[S]/[U]`.
+  override is zero and the bounded scan finds no write intersecting it. The
+  scan now models 64-bit register arithmetic and effective addresses, paired
+  accesses/writeback and boundary-crossing accesses, and its result sets are
+  unchanged against the audited `4c447b9` baseline, but it still stops at
+  instructions outside its whitelist and leaves internal indirect/computed and
+  runtime/external writers possible `[S]/[U]`.
 
 ### `E9` — Recovery
 
