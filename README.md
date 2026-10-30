@@ -29,8 +29,14 @@ partition layout, payload policy and packaging.
   bounded fixture; this is not a normal-userspace boot. The fixture artifacts
   reproduce byte-for-byte on Linux; see
   [docs/ram-root-fixture-reproducibility.md](docs/ram-root-fixture-reproducibility.md).
-- Display, input, storage, power, GPU and network drivers remain unimplemented
-  or unvalidated.
+- Display, input, power, GPU and network drivers remain unimplemented or
+  unvalidated.
+- A native SDHCI v5/eMMC core is implemented and host-verified in
+  `package/Gta4lEmmc.c`: controller reset, GCC 400 kHz, retained-rail power
+  handshake, enumeration and single-block PIO reads. The opt-in
+  `gta4l-emmc-probe=1` XNU probe is built into the kernel archive list but has
+  not been booted on the tablet. See
+  [docs/emmc-driver.md](docs/emmc-driver.md).
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
   input requirements, not gta4l hardware evidence.
 

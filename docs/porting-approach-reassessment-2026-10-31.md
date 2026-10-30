@@ -35,6 +35,7 @@ the activation gate to block software work `[S]`.
 | Mainline Linux `limonabisi/linux-gta4l`, branch `gta4l-7.2`, commit `cf5f763f0ef8a5b4d8bb4163833cba1160c51894` | Board wiring, controller resources, clocks, resets, power domain, interconnect, SMMU stream, SDHCI v5 and regulator/pinctrl behaviour `[S]` | Primary software reference; pinned copies in `/tmp/opencode/linux-verify/` |
 | Samsung vendor kernel 4.19.157 source archives (CXG1/CWI2, owner-supplied) | Vendor SDHCI, regulator, RPM and pinctrl behaviour; the source used by downstream Android/LineageOS builds `[S]/[U]` | Behavioural cross-check; not the shipped binary and contains no vendor DTS |
 | LineageOS gta4l device tree and kernel configuration | The working Android stack that boots and uses eMMC on this device; microSD support is advertised, but microSD boot is unproven [S]/[U] | Existence proof that the eMMC controller path works under a shipping OS; not an XNU result |
+| Arch Linux ARM on gta4l (`limonabisi/archlinux-on-gta4l`) | Public working distribution: U-Boot plus pmOS kernel 7.2, Arch root on eMMC `userdata`; display, touch, GPU, Wi-Fi, Bluetooth, audio, battery, charging and USB reported working `[S]` | Working-stack evidence for the porting approach; not an XNU, microSD-boot or electrical result |
 | Captured vendor FDT (`live.dts`, `live-fdt.dtb`) | Actual booted board description, eMMC boot medium, SDC2 wiring, regulator and pad nodes `[S]` | Runtime wiring reference |
 | Mu-Silicium UEFI and pinned `SdccDxe.efi` (`4084bbc7...`) | Firmware handoff state and controller-local power/status sequence `[S]` | Handoff contract |
 | UniXNU loader source | Read-only `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL` access, config path and fallback loader behaviour `[S]` | Boot-path integration |
@@ -129,4 +130,5 @@ points here `[S]`.
 | `docs/emmc-reference.md` | eMMC identity and mainline reference provenance |
 | `docs/firmware-handoff.md` | UEFI module inventory and `SdccDxe` trace |
 | `docs/rpm-power-interface.md` | RPM/regulator reference and retained-rail assumptions |
+| `docs/archlinux-gta4l-evidence.md` | Public Arch Linux working-stack evidence for gta4l |
 | `/tmp/opencode/linux-verify/` | Pinned mainline source cache |
