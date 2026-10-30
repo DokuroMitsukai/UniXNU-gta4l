@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T03:16:18Z`, after the final edits to the
+Hashes were taken at `2026-10-30T03:53:37Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,15 +16,16 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `3f4e593111506caed342fe2caeb360f27077c3e6` |
-| Dirty entries at the hash snapshot | 5: 4 modified (`README.md`, `docs/emmc-reference.md`, `porting.toml` and this baseline) and 1 untracked (`docs/native-emmc-reference-audit.md`) |
-| Staging and commits | None at the snapshot; the snapshot lands as one documentation commit |
+| HEAD | `1be9fc1400fba36f49fa40844fec4bb4ecfc3950` |
+| Dirty entries at the hash snapshot | 7 modified (`docs/power-retention-evidence.md`, `docs/rpm-power-interface.md`, `docs/sdhc-decision-memo.md`, `porting.toml`, `scripts/analyze-gta4l-rpm-ldoa.py`, `scripts/test-gta4l-rpm-ldoa-analysis.py` and this baseline) |
+| Staging and commits | None at the snapshot; the snapshot lands as one documentation and tooling commit |
 
-The current snapshot is the evidence branch after the RPM LDOA attribution
-commit, with the NativeEmmc reference credit and audit in the working tree.
-The hash table below describes that working tree, not the original
-evidence-closure tree. The original provenance is retained separately because
-the path lists and dirty inventory are historical observations.
+The current snapshot is the evidence branch after the RPM LDOA attribution and
+NativeEmmc credit commits, with the LDOA attribution reconciliation and the
+analyzer `--code` verification in the working tree. The hash table below
+describes that working tree, not the original evidence-closure tree. The
+original provenance is retained separately because the path lists and dirty
+inventory are historical observations.
 
 ### Historical provenance
 
@@ -113,20 +114,20 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `b410086f0f8cfa29aececdcb5ed11b78a7417f0b7a2f6a1a13078d4d9fafa2f6` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `f0dc6bb3e83bb41b55cd1eeae222065b71d988581a725001b2d48ae7b6309c1e` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
-| Retention evidence | `docs/power-retention-evidence.md` | `3bd52808666c5097cca789aad4225c7119c84b4bce1992a473f558753ce4719a` |
-| RPM interface | `docs/rpm-power-interface.md` | `f206ac04918f40c0f3c5b721087879ffa4808521fc3c58739c5c17055946600a` |
+| Retention evidence | `docs/power-retention-evidence.md` | `40de36658303a574027d6d83c92a5729773b5b74cee87723039e54b9fcaad18c` |
+| RPM interface | `docs/rpm-power-interface.md` | `af3d071f82f5def02750a8468b46877828dff88baf801f43e02b995ecb564780` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `501672b50a86319b7bd095a92b674c162ccc485963e510a708649aa985486c22` |
-| RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `8c741271b9eccf89cad31e75531d8d2c369b1013df261a2dd0bc355aa3e566f5` |
-| RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `0f1179c840a94d470f9053d56f44a85ec8ad6af380b38363d5657d9acf0b8219` |
+| RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `945279935f8c8a0bf182a05ec670bdf36b4a18d07e4469518d65f025883581a3` |
+| RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `e63997c720b5ea1ab6014ef21b0d8de8a94800ad6cbb1b68ddf5e2648f168311` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
 | Repository README | `README.md` | `3b873529003e533565586e48f31619b1b89c85419b28b96494b803633ccf2375` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `922436c78a56f962474c8e814be101b027e37111f7517d9083fc630b400d4c23` |
+| Porting record | `porting.toml` | `0cd77f3577916d4d7c97441313b967029c73cfd238dc7ad083fd72ed352a6412` |
 
 ## 3. Pinned Linux source cache
 
@@ -238,12 +239,13 @@ python3.11 -B scripts/oracle-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-evidence-counts.py
 python3.11 -B scripts/test-gta4l-rpm-ldoa-analysis.py
 python3.11 -B scripts/analyze-gta4l-rpm-ldoa.py \
-  ../../device-dump/private/gta4l-dump/partitions/rpm.img
+  ../../device-dump/private/gta4l-dump/partitions/rpm.img --code
 ```
 
 The analyzer command needs the private `rpm.img`; it refuses a different image
-hash unless `--expect-sha256` is given explicitly. The self-test uses only a
-synthetic image `[S]`.
+hash unless `--expect-sha256` is given explicitly. `--code` checks the
+documented Thumb call sites, literals and class registration. The self-test
+uses only a synthetic image `[S]`.
 
 The host checks are read-only and do not build, flash, boot, power or access a
 device `[S]`.
