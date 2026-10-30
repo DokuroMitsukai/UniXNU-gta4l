@@ -5,13 +5,20 @@
 The booted SPMIDxe PE is pinned by SHA-256. The test maps the documented virtual
 addresses to file offsets through the PE section table, checks the instruction
 words that read the 0x8878 override and conditionally write the descriptor base,
-checks the initial .data layout, and scans the image for direct or bounded
-ADRP/ADR-relative stores to 0x8878.
+checks the initial .data layout, and runs a bounded scan for writes that
+intersect the 8-byte override.
+
+The scan models direct ADRP/ADR page references, ADD/SUB immediate arithmetic,
+general-purpose loads and stores with immediate or pre/post-index addressing,
+pointer values loaded from the initial .data image, caller-saved clobbers at
+calls, direct conditional/unconditional branches, and bounded direct BL
+recursion into .text. It stops at indirect branches, unsupported instructions
+and budget limits, and reports unresolved memory operations.
 
 The scan is a static, image-local check. It does not execute firmware, touch a
-device, or prove that no runtime agent, corrupted pointer, DMA engine or
-different firmware revision can write the writable global. It does not
-establish any electrical behaviour.
+device, or prove that no runtime agent, corrupted pointer, DMA engine,
+unmodeled instruction or different firmware revision can write the writable
+global. It does not establish any electrical behaviour.
 """
 import importlib.util
 import struct
@@ -37,6 +44,13 @@ DESCRIPTOR_BASE = 0x01C00000
 CACHED_CONFIG = 0x8868
 EVENT_HANDLE = 0x8870
 OVERRIDE = 0x8878
+OVERRIDE_END = OVERRIDE + 8
+
+MAX_STEPS = 48
+MAX_CALL_DEPTH = 2
+MAX_BUDGET = 64
+CALLER_SAVED = frozenset(range(19))
+STACK_BASES = frozenset((29, 31))
 
 
 def check(condition, message):
@@ -126,6 +140,10 @@ def sign_extend(value, bits):
     return (value ^ sign) - sign
 
 
+def write_intersects(address, size, start, end):
+    return address < end and start < address + size
+
+
 def check_word(data, rva, expected, label):
     actual = word_at(data, rva)
     check(actual == expected,
@@ -149,6 +167,7 @@ def check_override_path(data):
 
     check_word(data, 0x38c8, 0xa9be4ff4, 'stp x20, x19, [sp, #-0x20]!')
     check_word(data, 0x38d4, 0xb0000034, 'adrp x20, 0x8000')
+    check_word(data, 0x38d8, 0xaa0003f3, 'mov x19, x0')
     check_word(data, 0x38dc, 0xf940ce88, 'ldr x8, [x20, #0x198]')
     check_word(data, 0x38e0, 0xf9400d08, 'ldr x8, [x8, #0x18]')
     check_word(data, 0x38e4, 0xaa0803e0, 'mov x0, x8')
@@ -270,16 +289,22 @@ def decode_mem(word):
 
 
 def decode_pair(word):
-    for mask, base, store, index in (
-            (0xffc00000, 0xa9000000, True, 0),
-            (0xffc00000, 0xa9400000, False, 0),
-            (0xffc00000, 0xa9800000, True, 3),
-            (0xffc00000, 0xa9c00000, False, 3),
-            (0xffc00000, 0xa8800000, True, 1),
-            (0xffc00000, 0xa8c00000, False, 1)):
+    for mask, base, size, store, index in (
+            (0xffc00000, 0xa9000000, 8, True, 0),
+            (0xffc00000, 0xa9400000, 8, False, 0),
+            (0xffc00000, 0xa9800000, 8, True, 3),
+            (0xffc00000, 0xa9c00000, 8, False, 3),
+            (0xffc00000, 0xa8800000, 8, True, 1),
+            (0xffc00000, 0xa8c00000, 8, False, 1),
+            (0xffc00000, 0x29000000, 4, True, 0),
+            (0xffc00000, 0x29400000, 4, False, 0),
+            (0xffc00000, 0x29800000, 4, True, 3),
+            (0xffc00000, 0x29c00000, 4, False, 3),
+            (0xffc00000, 0x28800000, 4, True, 1),
+            (0xffc00000, 0x28c00000, 4, False, 1)):
         if (word & mask) == base:
-            immediate = sign_extend((word >> 15) & 0x7f, 7) * 8
-            return ('store' if store else 'load', (word >> 5) & 0x1f,
+            immediate = sign_extend((word >> 15) & 0x7f, 7) * size
+            return ('store' if store else 'load', size, (word >> 5) & 0x1f,
                     word & 0x1f, (word >> 10) & 0x1f, immediate, index)
     return None
 
@@ -292,6 +317,40 @@ def is_unconditional_branch(word):
     return (word & 0xfc000000) == 0x14000000
 
 
+def is_bl(word):
+    return (word & 0xfc000000) == 0x94000000
+
+
+def is_blr(word):
+    return (word & 0xfffffc1f) == 0xd63f0000
+
+
+def is_br(word):
+    return (word & 0xfffffc1f) == 0xd61f0000
+
+
+def is_conditional_branch(word):
+    if (word & 0xff000010) == 0x54000000:
+        return True
+    if (word & 0x7e000000) in (0x34000000, 0x35000000):
+        return True
+    if (word & 0x7f000000) in (0x36000000, 0x37000000):
+        return True
+    return False
+
+
+def branch_target(word, pc):
+    if (word & 0xfc000000) in (0x14000000, 0x94000000):
+        return pc + (sign_extend(word & 0x03ffffff, 26) << 2)
+    if (word & 0xff000010) == 0x54000000:
+        return pc + (sign_extend((word >> 5) & 0x7ffff, 19) << 2)
+    if (word & 0x7e000000) in (0x34000000, 0x35000000):
+        return pc + (sign_extend((word >> 5) & 0x7ffff, 19) << 2)
+    if (word & 0x7f000000) in (0x36000000, 0x37000000):
+        return pc + (sign_extend((word >> 5) & 0x3fff, 14) << 2)
+    return None
+
+
 def decode_mov_immediate(word):
     encoding = word & 0x7f800000
     if encoding in (0x52800000, 0x72800000, 0xd2800000, 0xf2800000):
@@ -300,12 +359,236 @@ def decode_mov_immediate(word):
 
 
 def data_pointer(data_section_bytes, address):
-    if DATA_VMA <= address < DATA_VMA + len(data_section_bytes) - 7:
+    if DATA_VMA <= address <= DATA_VMA + len(data_section_bytes) - 8:
         value = struct.unpack_from(
             '<Q', data_section_bytes, address - DATA_VMA)[0]
         if value:
             return value
     return None
+
+
+class ScanResult:
+    def __init__(self):
+        self.accesses = []
+        self.stores = []
+        self.calls = []
+        self.boundaries = []
+        self.unresolved = []
+        self.clobbers = []
+        self._access_keys = set()
+        self._store_keys = set()
+        self._call_keys = set()
+        self._boundary_keys = set()
+        self._unresolved_keys = set()
+        self._clobber_keys = set()
+
+    def add_access(self, pc, kind, size, address):
+        key = (pc, kind, size, address)
+        if key not in self._access_keys:
+            self._access_keys.add(key)
+            self.accesses.append(key)
+
+    def add_store(self, pc, size, address):
+        key = (pc, size, address)
+        if key not in self._store_keys:
+            self._store_keys.add(key)
+            self.stores.append(key)
+
+    def add_call(self, pc, target, args):
+        key = (pc, target, tuple(sorted(args.items())))
+        if key not in self._call_keys:
+            self._call_keys.add(key)
+            self.calls.append((pc, target, args))
+
+    def add_boundary(self, pc, reason):
+        key = (pc, reason)
+        if key not in self._boundary_keys:
+            self._boundary_keys.add(key)
+            self.boundaries.append(key)
+
+    def add_unresolved(self, pc, kind, size):
+        key = (pc, kind, size)
+        if key not in self._unresolved_keys:
+            self._unresolved_keys.add(key)
+            self.unresolved.append(key)
+
+    def add_clobber(self, pc, register):
+        key = (pc, register)
+        if key not in self._clobber_keys:
+            self._clobber_keys.add(key)
+            self.clobbers.append(key)
+
+
+def text_word(text, pc):
+    return struct.unpack_from('<I', text, pc - TEXT_VMA)[0]
+
+
+def scan_path(result, text, data_bytes, pc, values, depth, call_stack,
+              steps, budget, visited):
+    if steps <= 0 or budget < 0:
+        result.add_boundary(pc, 'budget')
+        return
+    key = (pc, tuple(sorted(values.items())))
+    if key in visited:
+        return
+    visited.add(key)
+    while steps > 0:
+        if not (TEXT_VMA <= pc < TEXT_VMA + len(text)):
+            return
+        word = text_word(text, pc)
+        if is_ret(word):
+            return
+        if is_unconditional_branch(word):
+            target = branch_target(word, pc)
+            if (target is not None and
+                    TEXT_VMA <= target < TEXT_VMA + len(text) and
+                    budget > 0):
+                scan_path(result, text, data_bytes, target, dict(values),
+                          depth, call_stack, steps - 1, budget - 1, visited)
+            return
+        if is_bl(word):
+            target = branch_target(word, pc)
+            args = {register: values[register]
+                    for register in range(8) if register in values}
+            result.add_call(pc, target, args)
+            if (target is not None and
+                    TEXT_VMA <= target < TEXT_VMA + len(text) and
+                    depth < MAX_CALL_DEPTH and target not in call_stack and
+                    budget > 0):
+                scan_path(result, text, data_bytes, target, dict(args),
+                          depth + 1, call_stack | {target}, MAX_STEPS,
+                          budget - 1, visited)
+            else:
+                result.add_boundary(pc, 'call')
+            for register in CALLER_SAVED:
+                values.pop(register, None)
+            pc += 4
+            steps -= 1
+            continue
+        if is_blr(word) or is_br(word):
+            result.add_boundary(pc, 'indirect branch')
+            if is_br(word):
+                return
+            for register in CALLER_SAVED:
+                values.pop(register, None)
+            pc += 4
+            steps -= 1
+            continue
+        if is_conditional_branch(word):
+            target = branch_target(word, pc)
+            if (target is not None and
+                    TEXT_VMA <= target < TEXT_VMA + len(text) and
+                    budget > 0):
+                scan_path(result, text, data_bytes, target, dict(values),
+                          depth, call_stack, steps - 1, budget - 1, visited)
+            pc += 4
+            steps -= 1
+            continue
+        adrp = decode_adrp(word, pc)
+        adr = decode_adr(word, pc)
+        if adrp or adr:
+            target, register = adrp if adrp else adr
+            values[register] = target
+            pc += 4
+            steps -= 1
+            continue
+        mem = decode_mem(word)
+        if mem:
+            kind, size, store, base, rt, immediate, index = mem
+            if base not in values:
+                if store and base not in STACK_BASES:
+                    result.add_unresolved(pc, kind, size)
+                elif not store:
+                    values.pop(rt, None)
+                pc += 4
+                steps -= 1
+                continue
+            base_value = values[base]
+            if index == 1:
+                address = base_value
+                new_base = base_value + immediate
+            else:
+                address = base_value + immediate
+                new_base = address if index == 3 else base_value
+            result.add_access(pc, kind, size, address)
+            if store:
+                result.add_store(pc, size, address)
+            else:
+                pointer = (data_pointer(data_bytes, address)
+                           if size == 8 else None)
+                if pointer is not None:
+                    values[rt] = pointer
+                else:
+                    values.pop(rt, None)
+            if index in (1, 3):
+                values[base] = new_base
+            pc += 4
+            steps -= 1
+            continue
+        pair = decode_pair(word)
+        if pair:
+            kind, size, base, rt, rt2, immediate, index = pair
+            if base not in values:
+                if kind == 'store' and base not in STACK_BASES:
+                    result.add_unresolved(pc, kind, size)
+                elif kind != 'store':
+                    values.pop(rt, None)
+                    values.pop(rt2, None)
+                pc += 4
+                steps -= 1
+                continue
+            base_value = values[base]
+            if index == 1:
+                address = base_value
+                new_base = base_value + immediate
+            else:
+                address = base_value + immediate
+                new_base = address if index == 3 else base_value
+            result.add_access(pc, kind, size, address)
+            result.add_access(pc, kind, size, address + size)
+            if kind == 'store':
+                result.add_store(pc, size, address)
+                result.add_store(pc, size, address + size)
+            else:
+                for offset, register in ((0, rt), (size, rt2)):
+                    pointer = (data_pointer(data_bytes, address + offset)
+                               if size == 8 else None)
+                    if pointer is not None:
+                        values[register] = pointer
+                    else:
+                        values.pop(register, None)
+            if index in (1, 3):
+                values[base] = new_base
+            pc += 4
+            steps -= 1
+            continue
+        addsub = decode_addsub(word)
+        if addsub:
+            operation, base, destination, immediate = addsub
+            if base in values:
+                values[destination] = values[base] + (
+                    immediate if operation == 'add' else -immediate)
+            else:
+                values.pop(destination, None)
+            pc += 4
+            steps -= 1
+            continue
+        mov = decode_mov(word)
+        if mov:
+            source, destination = mov
+            if source in values:
+                values[destination] = values[source]
+            else:
+                values.pop(destination, None)
+            pc += 4
+            steps -= 1
+            continue
+        destination = word & 0x1f
+        if destination in values:
+            values.pop(destination, None)
+            result.add_clobber(pc, destination)
+        pc += 4
+        steps -= 1
 
 
 def scan_references(data):
@@ -315,8 +598,7 @@ def scan_references(data):
     data_section = section(data, b'.data')
     data_bytes = data[data_section['raw']:
                       data_section['raw'] + data_section['raw_size']]
-    accesses = []
-    stores = []
+    result = ScanResult()
     for offset in range(0, len(text), 4):
         pc = TEXT_VMA + offset
         word = struct.unpack_from('<I', text, offset)[0]
@@ -325,77 +607,9 @@ def scan_references(data):
         if not adrp and not adr:
             continue
         target, register = adrp if adrp else adr
-        values = {register: target}
-        for step in range(1, 28):
-            current = pc + 4 * step
-            if current >= TEXT_VMA + len(text):
-                break
-            current_word = struct.unpack_from(
-                '<I', text, current - TEXT_VMA)[0]
-            mem = decode_mem(current_word)
-            if mem:
-                kind, size, store, base, rt, immediate, index = mem
-                if base in values:
-                    address = values[base] + immediate
-                    accesses.append((current, kind, size, address))
-                    if store:
-                        stores.append((current, size, address))
-                if not store and rt in values:
-                    address = (values[base] + immediate
-                               if base in values else None)
-                    pointer = (data_pointer(data_bytes, address)
-                               if address is not None else None)
-                    if pointer is not None:
-                        values[rt] = pointer
-                    elif rt != register:
-                        del values[rt]
-                if index in (1, 3) and base in values:
-                    del values[base]
-                if is_ret(current_word) or is_unconditional_branch(current_word):
-                    break
-                continue
-            pair = decode_pair(current_word)
-            if pair:
-                kind, base, rt, rt2, immediate, index = pair
-                if base in values:
-                    address = values[base] + immediate
-                    accesses.append((current, kind, 8, address))
-                    if kind == 'store':
-                        stores.append((current, 8, address))
-                        stores.append((current, 8, address + 8))
-                    else:
-                        for item in (rt, rt2):
-                            if item in values:
-                                del values[item]
-                if index in (1, 3) and base in values:
-                    del values[base]
-                if is_ret(current_word) or is_unconditional_branch(current_word):
-                    break
-                continue
-            addsub = decode_addsub(current_word)
-            if addsub:
-                operation, base, destination, immediate = addsub
-                if base in values:
-                    values[destination] = values[base] + (
-                        immediate if operation == 'add' else -immediate)
-                elif destination in values and destination != register:
-                    del values[destination]
-                if is_ret(current_word) or is_unconditional_branch(current_word):
-                    break
-                continue
-            mov = decode_mov(current_word)
-            if mov:
-                source, destination = mov
-                if source in values:
-                    values[destination] = values[source]
-                elif destination in values and destination != register:
-                    del values[destination]
-                if is_ret(current_word) or is_unconditional_branch(current_word):
-                    break
-                continue
-            if is_ret(current_word) or is_unconditional_branch(current_word):
-                break
-    return accesses, stores
+        scan_path(result, text, data_bytes, pc, {register: target}, 0,
+                  frozenset(), MAX_STEPS, MAX_BUDGET, set())
+    return result
 
 
 def count_adrp(data, page):
@@ -411,36 +625,206 @@ def count_adrp(data, page):
     return count
 
 
+def stores_intersecting_override(result):
+    return [item for item in result.stores
+            if write_intersects(item[2], item[1], OVERRIDE, OVERRIDE_END)]
+
+
 def check_scan(data):
     check(count_adrp(data, 0x8000) == 64,
           'ADRP-to-0x8000 site count changed')
-    accesses, stores = scan_references(data)
-    hits = [item for item in accesses if item[3] == OVERRIDE]
+    result = scan_references(data)
+    hits = [item for item in result.accesses if item[3] == OVERRIDE]
     check(len(hits) == 1,
           f'expected one reference to 0x{OVERRIDE:x}, found {len(hits)}')
     check(hits[0][0] == 0x38b4 and hits[0][1] == 'load' and hits[0][2] == 8,
           f'0x{OVERRIDE:x} reference is not the 0x38b4 8-byte load')
-    check(not [item for item in stores if item[2] == OVERRIDE],
-          f'static scan found a store to 0x{OVERRIDE:x}')
-    resolved = [item[2] for item in stores
-                if DATA_VMA <= item[2] < DATA_VMA + DATA_SIZE]
-    check(resolved, 'static scan resolved no .data stores')
-    check(max(resolved) < OVERRIDE,
-          'static scan resolved a .data store at or above the override')
-    check(not [item for item in accesses
+    writes = stores_intersecting_override(result)
+    check(not writes,
+          f'static scan found a write intersecting 0x{OVERRIDE:x}: {writes}')
+    check(not [item for item in result.accesses
                if item[3] == OVERRIDE and item[1] == 'store'],
           'override was resolved as a store access')
+    check((0x38bc, 8, DESCRIPTOR_ARRAY) in result.stores,
+          'descriptor-base store at 0x38bc was not resolved')
+    check((0x38f4, 8, CACHED_CONFIG) in result.stores,
+          'cached-config store at 0x38f4 was not resolved')
+    check((0x210c, 8, EVENT_HANDLE) in result.stores,
+          'event-handle store at 0x210c was not resolved')
+    check((0x2188, 8, EVENT_HANDLE) in result.stores,
+          'event-handle store at 0x2188 was not resolved')
+    check(any(pc == 0x38e8 and target == 0x38b0 and
+              args.get(0) == DESCRIPTOR_ARRAY
+              for pc, target, args in result.calls),
+          '0x38e8 call argument is not the descriptor array')
+    check(any(pc == 0x26b0 and target == 0x38c8 and
+              args.get(0) == CACHED_CONFIG
+              for pc, target, args in result.calls),
+          '0x26b0 call argument is not the cached config')
+    check(any(pc == 0x2710 and target == 0x20f0 and
+              args.get(1) == EVENT_HANDLE
+              for pc, target, args in result.calls),
+          '0x2710 call argument is not the event handle')
+    return result
 
 
-def check_negative_control(data):
+def encode_adrp(pc, target, register):
+    delta = target - (pc & ~0xfff)
+    check(delta % 0x1000 == 0, 'ADRP target is not page aligned')
+    immediate = delta >> 12
+    return (0x90000000 | ((immediate & 0x3) << 29) |
+            (((immediate >> 2) & 0x7ffff) << 5) | register)
+
+
+def encode_add_imm(destination, base, immediate):
+    return (0x91000000 | ((immediate & 0xfff) << 10) |
+            (base << 5) | destination)
+
+
+def encode_ldr_unsigned(target, base, immediate):
+    check(immediate % 8 == 0, 'LDR immediate is not scaled by 8')
+    return (0xf9400000 | (((immediate // 8) & 0xfff) << 10) |
+            (base << 5) | target)
+
+
+def encode_str_unsigned(target, base, immediate):
+    check(immediate % 8 == 0, 'STR immediate is not scaled by 8')
+    return (0xf9000000 | (((immediate // 8) & 0xfff) << 10) |
+            (base << 5) | target)
+
+
+def encode_str_unscaled(target, base, immediate, index):
+    bases = {0: 0xf8000000, 1: 0xf8000400, 3: 0xf8000c00}
+    check(index in bases, 'unsupported unscaled index mode')
+    return (bases[index] | ((immediate & 0x1ff) << 12) |
+            (base << 5) | target)
+
+
+def encode_strb_unsigned(target, base, immediate):
+    return (0x39000000 | ((immediate & 0xfff) << 10) |
+            (base << 5) | target)
+
+
+def encode_mov(destination, source):
+    return 0xaa0003e0 | (source << 16) | destination
+
+
+def encode_bl(pc, target):
+    delta = target - pc
+    check(delta % 4 == 0, 'BL target is not word aligned')
+    return 0x94000000 | ((delta >> 2) & 0x03ffffff)
+
+
+def check_decoders():
+    check(decode_adrp(encode_adrp(0x1100, 0x8000, 8), 0x1100) == (0x8000, 8),
+          'ADRP decode failed')
+    check(decode_adrp(0x10000000, 0x1100) is None,
+          'ADR word decoded as ADRP')
+    check(decode_adr(0x10000080, 0x1000) == (0x1010, 0),
+          'ADR decode failed')
+    check(decode_adr(encode_adrp(0x1100, 0x8000, 8), 0x1100) is None,
+          'ADRP word decoded as ADR')
+    check(decode_addsub(encode_add_imm(8, 8, 0x878)) ==
+          ('add', 8, 8, 0x878), 'ADD decode failed')
+    check(decode_addsub(0xd1000000 | (0x10 << 10) | (8 << 5) | 8) ==
+          ('sub', 8, 8, 0x10), 'SUB decode failed')
+    check(decode_mem(encode_str_unscaled(31, 8, -8, 1)) ==
+          ('store', 8, True, 8, 31, -8, 1), 'post-index store decode failed')
+    check(decode_mem(encode_strb_unsigned(31, 8, 0x87b)) ==
+          ('store', 1, True, 8, 31, 0x87b, None),
+          'byte store decode failed')
+    check(decode_mem(encode_ldr_unsigned(9, 8, 0x198)) ==
+          ('load', 8, False, 8, 9, 0x198, None), 'LDR decode failed')
+
+
+def run_sequence(data, words, start=0x1100):
+    mutated = bytearray(data)
+    for index, word in enumerate(words):
+        struct.pack_into('<I', mutated, pe_offset(mutated, start + 4 * index),
+                         word)
+    return scan_references(bytes(mutated)), start, start + 4 * len(words)
+
+
+def sequence_stores(result, start, end):
+    return [item for item in result.stores if start <= item[0] < end]
+
+
+def check_scanner_controls(data):
+    adrp = encode_adrp(0x1100, 0x8000, 8)
+    add = encode_add_imm(8, 8, 0x878)
+    store = encode_str_unsigned(31, 8, 0)
+    ret = 0xd65f03c0
+
+    result, start, end = run_sequence(data, [adrp, add, store, ret])
+    stores = sequence_stores(result, start, end)
+    check(any(item[2] == OVERRIDE for item in stores),
+          'direct store to 0x8878 was not detected')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_add_imm(8, 8, 0x874), store, ret])
+    stores = sequence_stores(result, start, end)
+    check(any(write_intersects(item[2], item[1], OVERRIDE, OVERRIDE_END)
+              for item in stores),
+          '8-byte store overlapping 0x8878 was not detected')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_strb_unsigned(31, 8, 0x87b), ret])
+    stores = sequence_stores(result, start, end)
+    check(any(write_intersects(item[2], item[1], OVERRIDE, OVERRIDE_END)
+              for item in stores),
+          'byte store overlapping 0x8878 was not detected')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_str_unsigned(31, 8, 0x880), ret])
+    stores = sequence_stores(result, start, end)
+    check(not any(write_intersects(item[2], item[1], OVERRIDE, OVERRIDE_END)
+                  for item in stores),
+          'adjacent store at 0x8880 was misclassified as an override write')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_add_imm(8, 8, 0x880),
+               encode_str_unscaled(31, 8, -8, 1), store, ret])
+    stores = sequence_stores(result, start, end)
+    check((0x1108, 8, 0x8880) in stores,
+          'post-index store address was not the original base')
+    check((0x110c, 8, OVERRIDE) in stores,
+          'post-index base update did not reach 0x8878')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_add_imm(8, 8, 0x880),
+               encode_str_unscaled(31, 8, -8, 3), store, ret])
+    stores = sequence_stores(result, start, end)
+    check((0x1108, 8, OVERRIDE) in stores and
+          (0x110c, 8, OVERRIDE) in stores,
+          'pre-index store or base update did not reach 0x8878')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_ldr_unsigned(9, 8, 0x198),
+               encode_ldr_unsigned(10, 9, 0x18),
+               encode_str_unsigned(31, 10, 0), ret])
+    stores = sequence_stores(result, start, end)
+    check((0x110c, 8, DESCRIPTOR_ARRAY) in stores,
+          'new-register pointer chain did not resolve the descriptor array')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_ldr_unsigned(8, 8, 0), add, store, ret])
+    stores = sequence_stores(result, start, end)
+    check(not any(item[2] == OVERRIDE for item in stores),
+          'root register overwrite was not applied')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_mov(0, 8), encode_bl(0x1108, 0x1000),
+               add, store, ret])
+    stores = sequence_stores(result, start, end)
+    check(not any(item[2] == OVERRIDE for item in stores),
+          'caller-saved register survived a call clobber')
+
     mutated = bytearray(data)
     struct.pack_into('<I', mutated, pe_offset(mutated, 0x38b4), 0xf9043d08)
-    accesses, stores = scan_references(bytes(mutated))
-    check([item for item in stores if item[2] == OVERRIDE],
-          'scanner did not detect a synthetic store to 0x8878')
-    check([item for item in accesses
-           if item[3] == OVERRIDE and item[1] == 'store'],
-          'scanner did not classify the synthetic 0x8878 access as a store')
+    result = scan_references(bytes(mutated))
+    check([item for item in result.stores
+           if write_intersects(item[2], item[1], OVERRIDE, OVERRIDE_END)],
+          'scanner did not detect a synthetic store at 0x38b4')
 
 
 def check_constant_absence(data):
@@ -501,11 +885,16 @@ def main():
           '.text section layout changed')
     check_override_path(data)
     check_data_layout(data)
-    check_scan(data)
-    check_negative_control(data)
+    check_decoders()
+    check_scanner_controls(data)
+    result = check_scan(data)
     check_constant_absence(data)
     check_model()
-    print(f'spmidxe descriptor base: sha256={actual} source={source} PASS')
+    print(f'spmidxe descriptor base: sha256={actual} source={source} '
+          f'accesses={len(result.accesses)} stores={len(result.stores)} '
+          f'calls={len(result.calls)} boundaries={len(result.boundaries)} '
+          f'unresolved={len(result.unresolved)} '
+          f'clobbers={len(result.clobbers)} PASS')
     return 0
 
 
