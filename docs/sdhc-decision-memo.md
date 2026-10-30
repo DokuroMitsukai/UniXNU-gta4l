@@ -79,7 +79,7 @@ blocker `[S]`.
 | ID | Requirement | Existing evidence | Classification | Remaining gap |
 | --- | --- | --- | --- | --- |
 | `E1` | Recommended operating ranges and absolute maxima for eMMC VCC, VCCQ2 and every shared L24/L11 consumer | Vendor DT ranges and requested levels; no PM6125 or eMMC datasheet | Ranges `[S]`; absolute maxima and per-component limits `[U]` | Exact PM6125/eMMC absolute maxima, shared-consumer limits and the values that apply to this board revision |
-| `E2` | SDC1 pad domain, signalling levels, pull-up source and permitted powered/unpowered combinations | Vendor and pinned `sdc1_*` states; L11 1.8 V request; UEFI TLMM writes | Declared settings `[S]`; actual pad domain/state and UEFI encoding `[U]` | Actual pad domain at handoff, pull-up source, unpowered-drive limits and the UEFI-write-to-pad mapping |
+| `E2` | SDC1 pad domain, signalling levels, pull-up source and permitted powered/unpowered combinations | Vendor and pinned `sdc1_*` states; L11 1.8 V request; UEFI TLMM writes; the `0x9fe4` write decodes to the vendor `sdc1_*_on` fields | Declared settings and write-to-pad mapping `[S]`; actual pad domain/state `[U]` | Actual pad domain at handoff, pull-up source, unpowered-drive and back-power limits |
 | `E3` | Shared loads, regulator capability and operating conditions for L24/L11 and their parents | Vendor declared currents (570 mA VCC, 325 mA VDD-IO; UFS 600 mA each); recovery sees eMMC only | Declarations `[S]`; capability, load and UFS population `[U]` | Physical UFS population, actual shared loading, regulator capability and parent loading |
 | `E4` | Ramp, settling, inrush, overshoot/undershoot and brownout requirements | SPMI `SOFT_START` register and regulator-core `soft_start` hook exist; no board values | Hooks `[S]`; behaviour and limits `[U]` | Required slew, inrush, overshoot/undershoot and brownout limits; measured behaviour |
 | `E5` | Electrical supply, pad, reset and clock ordering, including minimum delays | Linux power-IRQ software order `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; controller reset and internal-clock stages are separate | Software order `[S]`; electrical order and delays `[U]` | Required electrical order and minimum delays; whether the no-ack scope leaves a safe pending request |
@@ -216,7 +216,20 @@ path stays unchanged `[S]`.
 `docs/sdhc-power-pad-dependency-report.md` consolidates the remaining VCC/VCCQ,
 SDC1 pad, firmware-handoff, power-request/ack and sequencing/recovery
 dependencies. It records the booted `SdccDxe` controller-local handshake: the
-handler sets the bus-power bit, resets the controller, and acknowledges
-`IO_LOW` or `BUS_OFF | IO_LOW` after bounded polling, with no PMIC/LDO/RPM
-action. That is not a bus-power-on regulator sequence and does not close `E5`
-or `E8`. No `E*` or `S*` gate is closed; the decision remains **NO-GO** `[S]`.
+handler sets the bus-power bit, resets the controller, and writes the
+`IO_SUCCESS` or `BUS_SUCCESS` result bit after bounded polling, with no
+PMIC/LDO/RPM action. That is not a bus-power-on regulator sequence and does not
+close `E5` or `E8`. The report also decodes the SDC1 pad write as the vendor
+active drive/pull configuration, closing only the write-to-pad mapping part of
+`E2`. No electrical `E*` or `S*` gate is closed; the decision remains **NO-GO**
+`[S]`.
+
+## 9. Decision update 2026-10-30
+
+The short update is `docs/sdhc-decision-update-2026-10-30.md`. In summary: the
+corrected UEFI trace proves a controller-local reset plus a result-only power
+status write, not a regulator sequence; the pad decode proves the SDC1 write is
+the vendor active configuration; the remaining blockers are the PM6125/eMMC
+electrical limits, board schematic/test points, actual rail and pad
+measurements, RPM runtime policy, and a qualified `E9` recovery procedure.
+**NO-GO remains** `[S]`.
