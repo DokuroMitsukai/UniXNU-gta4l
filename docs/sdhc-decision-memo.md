@@ -84,7 +84,7 @@ blocker `[S]`.
 | `E4` | Ramp, settling, inrush, overshoot/undershoot and brownout requirements | SPMI `SOFT_START` register and regulator-core `soft_start` hook exist; no board values | Hooks `[S]`; behaviour and limits `[U]` | Required slew, inrush, overshoot/undershoot and brownout limits; measured behaviour |
 | `E5` | Electrical supply, pad, reset and clock ordering, including minimum delays | Linux power-IRQ software order `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; controller reset and internal-clock stages are separate | Software order `[S]`; electrical order and delays `[U]` | Required electrical order and minimum delays; whether the no-ack scope leaves a safe pending request |
 | `E6` | Restrictions on driving CMD/DAT/CLK/reset while a supply is absent; pad leakage | Vendor `vccq2-pwr-collapse-sup` and `qcom,vdd-io-lpm-sup`; no pad leakage data | Properties `[S]`; requirement `[U]` | Which pins may be driven unpowered and whether the card or SoC can back-power a rail |
-| `E7` | L24/L11 and pad state across handoff, suspend, shutdown and reboot | Mainline sends no L11/L24 vote; UEFI exit path is not passive; `pwr=00` is controller-local; a bounded RPM/XBL trace finds LDOA tables for both rails but the bounded scan finds no static RPM table or policy path that selects either rail, and no traced L11/L24 voltage/mode/enable write; runtime policy `[S]/[U]` | No vote and exit trace `[S]`; firmware tables identified `[S]`; static selection not found `[S]`; retention `[U]` | Actual rail state across each transition; runtime LDOA request path (parser/aggregator), latched per-id state, and runtime-built LDOA descriptors; PBS instruction semantics; indirect UEFI effects |
+| `E7` | L24/L11 and pad state across handoff, suspend, shutdown and reboot | Mainline sends no L11/L24 vote; UEFI exit path is not passive; `pwr=00` is controller-local; a bounded RPM/XBL trace finds LDOA tables for both rails but the bounded scan finds no referenced static RPM table or stored pointer/resolvable PC-relative literal that selects either rail, and no traced L11/L24 voltage/mode/enable write; runtime policy `[S]/[U]` | No vote and exit trace `[S]`; firmware tables identified `[S]`; static reference not found `[S]`; retention `[U]` | Actual rail state across each transition; runtime LDOA request path (parser/aggregator), latched per-id state, and runtime-built LDOA descriptors; PBS instruction semantics; indirect UEFI effects |
 | `E8` | Relevant PM6125/controller interrupt and status semantics; consequence of clearing or masking; documented acknowledge-or-not decision | SDHCI power-status semantics `[S]`; arbiter `+0x28` interpretation `[S]/[C]`; PM6125 `QPNPINT` applicability `[U]` | SDHCI `[S]`; PM6125 applicability and decision `[U]` | Whether PM6125 uses the `0x14`/`0x16` `QPNPINT` layout, its USID/subtype, and safe pending-request behaviour |
 | `E9` | Qualified rail-recovery procedure and acceptance criteria | BOOT-partition backup/rollback and payload gates | Software rollback `[S]`; rail recovery `[U]` | Safe-stop, discharge/power-cycle procedure, verification measurement and independent review |
 | `S1` | Bus-power implementation, explicit access policy, bounded waits, trace oracle and negative tests | Host-local diagnostic policy and tests; no bus-power artifact in this tree | Tree-bounded `[S]`; candidate design `[U]` | Approved design and tests for the bus-power candidate |
@@ -116,15 +116,18 @@ does not establish electrical recovery. No blocker above is resolved, and no
 disposition improves because its wording changed `[S]`.
 
 The bounded trace in `power-retention-evidence.md` §7 narrows `E7` by
-identifying the RPM LDOA tables for both rails, finding no static table or
-policy path that selects either rail in the bounded scan, and finding no direct
-L11/L24 voltage, mode or enable write in the traced paths. The LDOA parser and
-aggregator at `0x46151f8`/`0x46153b8` are registered per instance at runtime,
-and the aggregator keeps a latched per-id state and applies through `0x4615906`
-→ `0x4614920`; the separately traced `0x46166c8`/`0x46168dc` pair is the
-`smpa` class. The class object and per-id array are built at runtime, so the
-scan does not prove that any request exists or the runtime bounds `[C]/[U]`. It
-does not establish a retention result, so `E7` stays blocking `[S]/[U]`.
+identifying the RPM LDOA tables for both rails, finding no referenced static
+table or stored pointer/resolvable PC-relative literal that selects either rail
+in the bounded scan, and finding no direct L11/L24 voltage, mode or enable
+write in the traced paths. The LDOA parser and aggregator at
+`0x46151f8`/`0x46153b8` are registered per instance at runtime, and the
+aggregator keeps a latched per-id state and applies through `0x4615906` →
+`0x4614920`; the separately traced `0x46166c8`/`0x46168dc` pair is the `smpa`
+class, and its bridge at `0x4616e10` reaches the class/ID setter at
+`0x4615d08` → `0x4617b48` for class byte `0xb`, but whether that class is LDOA
+is `[U]`. The class object and per-id array are built at runtime, so the scan
+does not prove that any request exists or the runtime bounds `[C]/[U]`. It does
+not establish a retention result, so `E7` stays blocking `[S]/[U]`.
 
 ## 5. Decision record
 
