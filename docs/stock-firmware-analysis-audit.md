@@ -196,3 +196,58 @@ and document counts; they do not cover the voltage, interrupt-specifier,
 XBL-address or disassembly-coverage claims corrected in §4 `[S]`. The audit did
 not authenticate the package, reproduce the RPM disassembly, boot the supplied
 working-port image, or measure any rail, pad or power state `[U]`.
+
+## 7. Exact-build vendor package
+
+`[S]` A Samsung FUS package for the captured build `T505NDXS6CXB1` was
+downloaded on the host with `samloader` 2.2.0. The archive is 4,385,869,977
+bytes with SHA-256
+`e575de6bde656dc7c99e23070906caab9d571b3f369b70e1b579cd74b135fd9c`.
+The CSC/region code and the package filename are withheld at the owner's
+request; they are not needed for the comparison below and must not be inferred
+from the build identifier `[S]`.
+
+`[S]` The BL members are LZ4 frames. The captured partition images are the
+decompressed images padded to the partition size, so the comparison is
+full-image where the sizes agree and prefix-equal otherwise. All compared BL
+images match:
+
+| Stock member | Captured partition | Result |
+| --- | --- | --- |
+| `xbl.elf` | `partitions/xbl.img` | Full SHA-256 match |
+| `abl.elf` | `abl.img` | Full SHA-256 match |
+| `tz.mbn` | `partitions/tz.img` | Full SHA-256 match |
+| `hyp.mbn` | `partitions/hyp.img` | Full SHA-256 match |
+| `xbl_config.elf` | `partitions/xbl_config.img` | Prefix match; captured image padded |
+| `rpm.mbn` | `partitions/rpm.img` | Prefix match; captured image padded |
+| `devcfg.mbn` | `partitions/devcfg.img` | Prefix match; captured image padded |
+| `uefi_sec.mbn` | `partitions/uefisecapp.img` | Prefix match; captured image padded |
+| `apdp.mbn` | `partitions/apdp.img` | Prefix match; captured image padded |
+| `msadp.mbn` | `partitions/msadp.img` | Prefix match; captured image padded |
+
+`[S]` In the AP member, `boot.img` (100,663,296 bytes,
+`1f42eb045ba8eba194c7eb4c944fe6391c068b491003be78a3814ac07d2061c6`) and
+`dtbo.img` (25,165,824 bytes,
+`67546984d6be0d7bf44295dcd9a66745a4a0929993223375a403c537baf39d02`) are
+byte-identical to the captured partitions. The
+captured pre-test backup `boot-before-unixnu-test-20261027.img` is also
+byte-identical to the stock `boot.img` `[S]`.
+
+`[S]` The captured `recovery.img` is TWRP and therefore differs from the stock
+recovery image; that is expected and is not a provenance failure `[S]`.
+
+`[U]` The captured `vbmeta.img` does not match the AP `vbmeta.img.lz4` member,
+including as a prefix. The reason is unresolved: the capture is post-unlock and
+the vbmeta partition may have been rewritten, while the AP member may also be
+matched with a different BL `vbmeta` image. This audit does not conclude that
+the captured vbmeta is modified or that it is stock `[U]`.
+
+`[S]` This comparison establishes that the captured BL chain and the
+boot/dtbo images correspond to the `T505NDXS6CXB1` package, subject to the
+unresolved vbmeta item. It does not authenticate the package beyond the FUS
+download and TLS, does not cover userdata or every partition, and adds no rail,
+pad or power measurement `[S]/[U]`.
+
+`[S]` The firmware archive and all extracted images remain outside the
+repository. Do not commit them, the region code, device-unique identifiers or
+the capture's private partition images.

@@ -58,6 +58,16 @@ write intersecting `[0x8878,0x8880)`, and resolves the caller stores at
 `0x38bc`/`0x38f4` to `0x8140`/`0x8868`; 150 unresolved non-stack loads and 36
 unresolved non-stack stores remain. No gate disposition changed `[S]`.
 
+Revision 9 (2026-10-31): adds two host-only inputs. The exact captured build's
+vendor package matches the captured BL chain, `boot.img` and `dtbo.img`
+(`stock-firmware-analysis-audit.md` §7), and the pinned vendor kernel's BUS_ON
+path enables L24, then L11, then pads, acknowledges, waits the 10 ms core delay
+and only then programs the card clock, while sending explicit RPM enable and
+voltage requests (`vendor-sdhc-power-sequence.md`). The vendor path is a
+software precedent and a different design from the pinned mainline port; it
+closes no electrical or measurement requirement. No gate disposition changed
+`[S]`.
+
 ## 1. Purpose and canonical links
 
 This checklist links every canonical gate to its current evidence, missing
@@ -260,7 +270,11 @@ vendor DT, or by the prior controller-local result `[S]`.
   stages are separate; the candidate keeps the card clock off `[S]`. The booted
   `SdccDxe` handler performs a controller-local bus-power bit set, reset,
   bounded status/clear polls and a result-only `CORE_PWRCTL_CTL` write, with no
-  regulator action `[S]`.
+  regulator action `[S]`. The pinned stock vendor kernel instead enables L24,
+  then L11, then the pads and the IO level, acknowledges BUS_SUCCESS, waits the
+  10 ms core power delay and only then programs the card clock; it performs no
+  delay between the rails or before the acknowledgement
+  (`vendor-sdhc-power-sequence.md`) `[S]`.
 - **Missing documentation or measurement:** Required electrical order and
   minimum delays between L24, L11, pads, reset and clock; whether the candidate's
   no-ack scope leaves a safe pending request; measured sequencing `[U]`.
@@ -308,7 +322,10 @@ vendor DT, or by the prior controller-local result `[S]`.
   stored pointer/resolvable PC-relative literal that selects either rail in the
   bounded scan, and no direct L11/L24 voltage, mode or enable write in the
   traced paths; both XBL RSBP images are downloaded to PMIC PBS RAM and touch
-  only L11/L24 `STEP_CTRL` `[S]`.
+  only L11/L24 `STEP_CTRL` `[S]`. The stock vendor kernel does send explicit
+  RPM `SWEN` enable and voltage requests for L24/L11 on BUS_ON, so the stock
+  design is an active-vote design; that does not describe the pinned mainline
+  port and does not establish retention across transitions `[S]/[U]`.
 - **Missing documentation or measurement:** Actual rail state at handoff and
   across suspend, shutdown and reboot; runtime LDOA request path
   (parser/aggregator), latched per-id state and runtime-built descriptors; PBS
