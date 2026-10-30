@@ -100,16 +100,17 @@ The `0x81a8` handler walks the drive slots and processes the selected
 
 | Call | Observed effect |
 | --- | --- |
-| `0x3f04(drive)` | builds `0x00575000`; writes `0x9fe4` for controller 0, or adds `0x3fe000` and writes `0x1fe4` at `0x00973000` for controller 1; both are TLMM pages, not PMIC. The caller passes `w1=1`, but the callee does not use it. |
+| `0x3f04(drive)` | builds `0x00575000`; writes `0x9fe4` for controller 0, or adds `0x3fe000` and writes `0x1fe4` at `0x00973000` for controller 1; both are the SDC QDSD pad-group registers (`west+0x75000`, `south+0x73000`), not PMIC. `0x9fe4` matches the vendor `sdc1_*_on` drive/pull fields. The caller passes `w1=1`, but the callee does not use it. |
 | `0x69ac(drive, 1)` | sets bit 0 of the SDHCI Power Control byte at slot offset `0x29` (bus power enable) |
-| `0x6458(drive, 1)` | writes `1` to the SDHCI Software Reset byte at `0x2f`; because bus power is on, it also reads `0x240`, writes `0x248`, and writes `0x24c` (v5 power-control status/clear/control) |
+| `0x6458(drive, 1)` | writes `1` to the SDHCI Software Reset byte at `0x2f`; because bus power is on, it reads `0x240`, writes the observed value to `0x248`, and writes `0x24c` with `IO_SUCCESS` (`4`) when `status & 0x3 == 0` or `BUS_SUCCESS` (`1`) otherwise; `0x24c` holds result bits, not the `0x240` request bits |
 | `0x6c20(drive)` | writes vendor registers `0x21c` and `0x220` |
 | `0x6d28(drive)` | clears bit 18 of vendor register `0x20c`; only for the `w19` drive |
 
 The handler also calls clock helpers `0xfbec`, `0xf778`, `0x3f50`, `0xfa44`,
-`0x9e78` and `0xfb00`; none of these touch PMIC or SPMI. `0x6458` waits for
-the reset bit to self-clear and for the vendor power status to settle; both
-waits are bounded by 10000 iterations. The handler does not write the PMIC,
+`0x9e78` and `0xfb00`; none of these touch PMIC or SPMI. `0x6458` waits for the
+reset bit to self-clear (at most 10,000 reads, no delay in that loop) and for
+the vendor power status to settle (at most 10,001 reads and 10,001 delay calls
+in each of the status and clear loops). The handler does not write the PMIC,
 SPMI, RPM, or any LDO register. The only `rpm` strings in the binary are eMMC
 RPMB messages; there are no PMIC, SPMI, LDO, regulator or `vdd` strings. The
 binary also does not contain the PMIC protocol GUID
@@ -366,7 +367,7 @@ do not build an L11/L24 resource request in the traced body `[S]`.
 | --- | --- | --- | --- | --- |
 | Pre-handoff XBL/RPM | Not traced in this pass | Initial L11/L24 programming is not established | None established | Initial, active, sleep and reset policy `[U]` |
 | DXE initialization (before `ExitBootServices`) | `SPMIDxe` `0x266c` → `0x2d90` → `0x2ec8(w3=0)` | Arbiter interrupt status/clear; clears access-enable bit 0 for entries that pass its checks | None observed | Mapping-table contents and APID set `[U]` |
-| `ExitBootServices` notification, TPL 8 | `SdccDxe` `0x2f28` → `0x81a8` | TLMM writes `0x9fe4`/`0x1fe4`; SDHCI power, reset and vendor register writes | Clock helpers; no PMIC/SPMI/RPM call found | Selected drives, TLMM encoding and final register state `[U]` |
+| `ExitBootServices` notification, TPL 8 | `SdccDxe` `0x2f28` → `0x81a8` | SDC QDSD pad writes `0x9fe4`/`0x1fe4`; SDHCI power, reset and vendor register writes | Clock helpers; no PMIC/SPMI/RPM call found | Selected drives and final register state `[U]`; pad encoding resolved `[S]` |
 | `ExitBootServices` notification, TPL `0x10` | `SdccDxe` `0x5888` → `0x5804` | Guarded status-code `LocateProtocol`; sets flag `0x172b8` | None observed | Status-code protocol only `[S]` |
 | `ExitBootServices` notification | `PmicDxe` `0x14dc` → `0x4220` → `0x41ec` → `0x120a8`/`0x11cd4` | SPMI writes to register bytes `0x14`, `0x16` and `0xd1`; `+0x28` arbiter interrupt status/clear | SPMIDxe protocol; arbiter recovery path `0x27bc` → `0x3904` | Slave set, APID bitmap, PM6125 `QPNPINT` applicability, `0xd1` target, null-config hang `[U]` |
 | `ExitBootServices` notification | `EnvDxe` `0x1620` | TZ-milestone call, event close, environment teardown | None to PMIC/SPMI/RPM found | Milestone target and failure path `[U]` |
@@ -387,7 +388,7 @@ the drivers `[U]`.
 
 | Path | Direct MMIO/SPMI | Indirect protocol calls | Runtime branches / unresolved targets | Direct L11/L24 control write? |
 | --- | --- | --- | --- | --- |
-| `SdccDxe` `0x81a8` | TLMM page writes; SDHCI `0x29`, `0x2f`, `0x240`/`0x248`/`0x24c`, `0x21c`/`0x220`, `0x20c` | None to PMIC/SPMI/RPM found | Selected `w19`/`w21` drives; TLMM encoding; vendor values | No `[S]` |
+| `SdccDxe` `0x81a8` | SDC QDSD pad writes; SDHCI `0x29`, `0x2f`, `0x240`/`0x248`/`0x24c`, `0x21c`/`0x220`, `0x20c` | None to PMIC/SPMI/RPM found | Selected `w19`/`w21` drives; pad encoding resolved; vendor values | No `[S]` |
 | `SdccDxe` `0x5888` | None observed | Guarded `LocateProtocol(gEfiStatusCodeRuntimeProtocolGuid)`; nulls the pointer on failure | Status-code protocol only; flag `0x172b8` `[S]` | No `[S]` |
 | `SdccDxe` `0x55b0` | None observed | None | Flag `0x17291` only `[S]` | No `[S]` |
 | `EnvDxe` `0x1620` | None observed | TZ milestone, event close, environment teardown | Milestone target `[U]`; no PMIC/SPMI/RPM | No `[S]` |
@@ -425,8 +426,10 @@ for this pass.
 `uefiplat.cfg` has `Sdc1GpioConfigOn = 0x1E92`,
 `Sdc1GpioConfigOff = 0xA00`, `Sdc2GpioConfigOn = 0x1E92`,
 `Sdc2GpioConfigOff = 0xA00`, and `EnableSDHCSwitch = 0x1`. These are TLMM pad
-and SDHC switch settings. The file has no LDO, `vdd`, `vreg` or regulator
-entry. The only PMIC reference is the `PMIC ARB SPMI` MMIO region.
+and SDHC switch settings. The register write decoded in the `SdccDxe` exit
+handler is `0x9fe4`/`0x1fe4`, not these configuration-map values; the
+relationship between the two remains `[U]`. The file has no LDO, `vdd`, `vreg`
+or regulator entry. The only PMIC reference is the `PMIC ARB SPMI` MMIO region.
 
 ## What this proves
 

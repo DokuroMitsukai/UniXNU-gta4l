@@ -33,7 +33,7 @@ current.
 
 | Input | Use |
 | --- | --- |
-| Pinned Linux `cf5f763f...` (`sdhci-msm.c`, `sdhci.c`, `mmc-core.c`, `core.c`, `rpmpd.c`, `icc-*.c`) | Power-request sequence, rail APIs, OPP/ICC/CX dependencies `[S]` |
+| Pinned Linux `cf5f763f...` (`sdhci-msm.c`, `sdhci.c`, `mmc-core.c`, `core.c`, `rpmpd.c`, `icc-*.c`, `pinctrl-sm6115.c`, `pinctrl-msm.c/.h`, `sm6115.dtsi`) | Power-request sequence, rail APIs, OPP/ICC/CX dependencies and TLMM tile/pad definitions `[S]` |
 | Captured vendor `live.dts` and pinned `board.dts`/`sm6115.dtsi` | L24/L11 requests, pad states, consumers, controller wiring `[S]` |
 | Captured `rpm.img`, `xbl.img`, `xbl_config.img` | LDOA tables, boot PMIC settings, bounded static trace `[S]` |
 | Booted Mu-Silicium `SdccDxe.efi` and `PmicDxeLa.efi` bytes | Exit-handler power/pad/PMIC behavior `[S]` |
@@ -50,10 +50,10 @@ limits `[S]/[U]`.
 | --- | --- | --- | --- | --- |
 | VCC, PM6125 L24 | Vendor `sdhc_1` requests 2.96 V (range 2.704–3.600 V, 570 mA); shared with `ufshc`; RPM-owned; pinned port sends no L24 vote; captured RPM has LDOA 24 tables | If XBL/RPM left L24 enabled and no indirect exit effect disables it, the rail is present at handoff | Actual voltage, enable and power-good; absolute maxima; load; ramp/inrush; UFS population | `E1`, `E3`, `E4`, `E7` |
 | VCCQ, PM6125 L11 | Vendor `sdhc_1` requests 1.8 V (range 1.704–1.952 V, 325 mA); shared with `ufshc`; declared 1.8 V IO domain; RPM-owned; no L11 vote | Pad domain is 1.8 V if L11 is enabled and the pads use that supply | Actual rail and pad domain; pull-up source; unpowered-drive limits; absolute maxima; load | `E1`, `E2`, `E3`, `E4`, `E7` |
-| SDC1 pads | Vendor/pinned active and sleep states; UEFI writes `0x9fe4` at the `0x00575000` page; it also writes `0x1fe4` at the SDC2/TLMM `0x00973000` page; no XNU TLMM code | UEFI leaves the selected drive in its active state | Exact write-to-pad mapping; actual SDC1 state; pad supply; unpowered-drive and back-power limits | `E2`, `E6` |
+| SDC1 pads | Pinned `sm6115.dtsi` TLMM tiles `west=0x500000`, `south=0x900000`; pinned `pinctrl-sm6115.c` places the SDC1 QDSD group at `0x75000` and SDC2 at `0x73000`; UEFI writes `0x9fe4` to `0x575000` and `0x1fe4` to `0x973000`; `0x9fe4` decodes to the vendor `sdc1_*_on` drive/pull fields; no XNU TLMM code | The SDC1 pad supply is 1.8 V if L11 is enabled and the pads use it; the decoded state is the vendor active configuration, not a measured level | Actual pad voltage and state, pull-up source, unpowered-drive and back-power limits | `E2`, `E6` |
 | Firmware handoff | `SdccDxe` sets the bus-power bit, resets the controller, clears/acknowledges the resulting power status, and does not re-enable bus power; the later XNU audit reports `pwr=00`; `PmicDxeLa` writes only `0x14`/`0x16`/`0xd1` and the `+0x28` arbiter path; no direct LDO write found | Rails remain as XBL/RPM left them if no indirect PMIC effect occurs | Runtime `+0x28` bitmap, indirect PMIC effects, actual rail state and retention across transitions | `E5`, `E7`, `E8` |
-| Power request/ack | Linux order is `POWER_CONTROL` → power IRQ → `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; UEFI acknowledges `IO_LOW` and, when either bus bit is observed, `BUS_OFF` (not `BUS_ON`) without rail action; XNU maps no power IRQ and acknowledges nothing | A bare XNU `POWER_CONTROL` write may leave a pending request | PM6125 fault semantics; whether no-ack or ack-without-rail-action is safe; the documented acknowledge-or-not decision | `E5`, `E8`, `S1` |
-| Sequencing, delays, recovery | Linux software order; UEFI reset/power order and 10,000-iteration bounded polls; BOOT-partition backup/rollback | None beyond the software order | Electrical order and minimum delays; rail safe-stop, discharge/power-cycle and re-init; acceptance criteria; independent review | `E5`, `E9`, `S3` |
+| Power request/ack | Linux order is `POWER_CONTROL` → power IRQ → `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; UEFI writes the `IO_SUCCESS` result bit when neither bus request bit is set, or the `BUS_SUCCESS` result bit when either is, without a rail or pad action; XNU maps no power IRQ and acknowledges nothing | A bare XNU `POWER_CONTROL` write may leave a pending request | PM6125 fault semantics; whether no-ack or result-without-rail-action is safe; the documented acknowledge-or-not decision | `E5`, `E8`, `S1` |
+| Sequencing, delays, recovery | Linux software order; UEFI reset/power order with bounded status/clear polls (up to 10,001 reads each) and a 10,000-read reset self-clear poll; BOOT-partition backup/rollback | None beyond the software order | Electrical order and minimum delays; rail safe-stop, discharge/power-cycle and re-init; acceptance criteria; independent review | `E5`, `E9`, `S3` |
 | CX, clocks, fabric, SMMU (post-power) | The Linux probe requests CX SVS_PLUS and both ICC paths attempt votes; GCC branches enabled and block reset self-cleared; internal clock stable; PIO does not use the SDHC DMA master; `sdhc_1` DT has SMMU stream `0xc0` | Retained CX/fabric state may suffice for PIO if it was left high | Physical CX voltage, ICC/fabric state, SMMU stream state, card-clock source rate | Beyond the bus-power candidate; gates card commands/DMA |
 
 No row is closed. DT ranges and current levels are operating intent, not
@@ -70,15 +70,21 @@ registers and the handler does not re-enable bus power `[S]`:
    bus-power bit and preserves the existing voltage-select field. It does not
    select a voltage `[S]`.
 2. `0x6458` reads `POWER_CONTROL`, writes `SOFTWARE_RESET = 1` (`0x2f`), and,
-   only if the bus-power bit was set, polls `CORE_PWRCTL_STATUS` (`0x240`) for up
-   to 10,000 iterations with a one-unit delay call `[S]`.
-3. It writes the observed status to `CORE_PWRCTL_CLEAR` (`0x248`), polls until
-   the status reads zero (again up to 10,000 iterations), then writes
-   `CORE_PWRCTL_CTL` (`0x24c`) with `4` when `status & 0x3 == 0`, or `5`
-   otherwise. Under the pinned Linux bit definitions, `4` is `REQ_IO_LOW` and
-   `5` is `REQ_BUS_OFF | REQ_IO_LOW`; the handler therefore acknowledges IO-low
-   and, when either bus bit was observed, bus-off. It does not acknowledge
-   bus-on `[S]/[C]`.
+   only if the bus-power bit was set before the reset, polls
+   `CORE_PWRCTL_STATUS` (`0x240`). The loop is a do-while shape: it performs at
+   most 10,001 status reads and 10,001 one-unit delay calls, and exits early on
+   a nonzero status `[S]`.
+3. It writes the observed status to `CORE_PWRCTL_CLEAR` (`0x248`), then polls
+   until the status reads zero. That loop also performs at most 10,001 reads and
+   10,001 delay calls. It then writes `CORE_PWRCTL_CTL` (`0x24c`) with `4` when
+   `status & 0x3 == 0`, or `1` otherwise. Under the pinned Linux definitions,
+   `CORE_PWRCTL_CTL` carries result bits, not request bits: bit 0 is
+   `BUS_SUCCESS`, bit 1 `BUS_FAIL`, bit 2 `IO_SUCCESS`, bit 3 `IO_FAIL`. The
+   request names `BUS_OFF`/`BUS_ON`/`IO_LOW`/`IO_HIGH` (bits 0-3) belong to
+   `CORE_PWRCTL_STATUS`. The handler therefore writes `IO_SUCCESS` when neither
+   bus request bit was observed, or `BUS_SUCCESS` when either was; it writes no
+   failure bit and does not perform the corresponding rail or pad action
+   `[S]`.
 4. It waits for the software-reset bit to self-clear, then writes the vendor
    registers at `0x21c`/`0x220` and clears bit 18 of `0x20c` for the selected
    drive `[S]`.
@@ -86,14 +92,45 @@ registers and the handler does not re-enable bus power `[S]`:
 The handler has no PMIC, SPMI, LDO or RPM request. `PmicDxeLa` separately clears
 PMIC interrupt latches/enables and touches the SPMI-arbiter `+0x28` path; those
 writes cannot directly reach the L24/L11 voltage, mode or enable registers
-`[S]`. The UEFI sequence is therefore a controller-local reset and a
-bus-off/IO-low acknowledgement, not a bus-power-on regulator sequence. It must
+`[S]`. The UEFI sequence is therefore a controller-local reset followed by a
+result-only power-status write, not a bus-power-on regulator sequence. It must
 not be copied as a template for enabling bus power `[S]/[C]`.
 
 This narrows `E5` and `E8` by documenting the firmware's exact handshake and ack
 choice. It does not establish that the rails are on, that the pads are in the
-required domain, or that acknowledging a request without a rail action is safe
+required domain, or that a result-only write without a rail action is safe
 `[U]`.
+
+### 4.1 Decoded SDC1 pad write
+
+The same exit handler calls `0x3f04(drive)` before the power/reset sequence. The
+pinned mainline `sm6115.dtsi` defines three TLMM tiles: `west` at `0x00500000`,
+`south` at `0x00900000`, and `east` at `0x00d00000`. The pinned
+`drivers/pinctrl/qcom/pinctrl-sm6115.c` defines the SDC1 QDSD pingroup at
+`ctl_reg = 0x75000` on the west tile and the SDC2 group at `ctl_reg = 0x73000`
+on the south tile, with the pull and drive fields at the bit positions below.
+The UEFI writes therefore land on `0x00575000` (SDC1) and `0x00973000` (SDC2),
+not on a PMIC or GCC page `[S]`.
+
+| Field (SDC1 QDSD, `0x9fe4`) | Bits | Decoded value | Vendor `live.dts` `_on` state |
+| --- | --- | --- | --- |
+| Data drive | 0-2 | `4` → 10 mA | `sdc1_data_on`: 10 mA |
+| CMD drive | 3-5 | `4` → 10 mA | `sdc1_cmd_on`: 10 mA |
+| CLK drive | 6-8 | `7` → 16 mA | `sdc1_clk_on`: 16 mA |
+| Data pull | 9-10 | `3` → pull-up | `sdc1_data_on`: pull-up |
+| CMD pull | 11-12 | `3` → pull-up | `sdc1_cmd_on`: pull-up |
+| CLK pull | 13-14 | `0` → no pull | `sdc1_clk_on`: bias-disable |
+| RCLK pull | 15-16 | `1` → pull-down | `sdc1_rclk_on`: pull-down |
+
+The SDC1 value is therefore the vendor active pad configuration, not an
+arbitrary write. The SDC2 value `0x1fe4` matches the same pattern except that
+its data-drive field is 10 mA while the captured `sdc2_data_on` state is 16 mA;
+SDC2 is the removable-card controller and is outside this eMMC candidate `[S]`.
+This closes the write-to-pad mapping part of `E2`. It does not establish the pad
+supply voltage, the actual pad levels at handoff, the pull-up source, or the
+unpowered-drive/back-power limits `[U]`. The `uefiplat.cfg`
+`Sdc1GpioConfigOn = 0x1E92` / `Off = 0xA00` values are a separate configuration
+map entry; their relationship to the `0x9fe4` register write remains `[U]`.
 
 ## 5. What software cannot establish
 
@@ -141,8 +178,8 @@ activation path, and must first resolve the acknowledge choice:
   is not established `[U]`;
 - acknowledge without a rail action: the controller may treat the request as
   satisfied even though no regulator or pad action occurred; the UEFI handler
-  acknowledges bus-off/IO-low after a reset, not bus-on, so it does not justify
-  this choice `[S]/[U]`;
+  writes a success result after a reset, not a bus-on request, so it does not
+  justify this choice `[S]/[U]`;
 - acknowledge after rail/pad actions: this requires the PMIC/RPM/pad ownership
   and the `E1`–`E9` evidence that is currently absent `[U]`.
 
@@ -154,11 +191,12 @@ that design exists and passes its host checks `[S]`.
 
 ## 8. Disposition
 
-**NO-GO remains.** The UEFI handshake decoding narrows `E5`/`E8` but closes no
-`E*` or `S*` gate. The next legitimate step is the measurement-only baseline
-above, or obtaining the missing datasheets, schematic and recovery procedure.
-Another controller-local probe adds no evidence for the electrical contract and
-is not justified by this report `[S]`.
+**NO-GO remains.** The corrected UEFI handshake decoding narrows `E5`/`E8` and
+the pad decoding closes the write-to-pad mapping part of `E2`, but no electrical
+`E*` or `S*` gate is closed. The next legitimate step is the measurement-only
+baseline above, or obtaining the missing datasheets, schematic and recovery
+procedure. Another controller-local probe adds no evidence for the electrical
+contract and is not justified by this report `[S]`.
 
 ## 9. References
 
@@ -174,4 +212,6 @@ is not justified by this report `[S]`.
 | `docs/sdhci-host-init.md` | Existing controller-local probe, policy and host test results |
 | `docs/sdhci-handoff-audit.md` | Read-only GCC/vendor handoff observations |
 | `docs/emmc-reference.md` | eMMC, controller and GPT inventory |
+| `docs/sdhc-decision-update-2026-10-30.md` | Short corrected decision update |
+| Pinned `pinctrl-sm6115.c` and `sm6115.dtsi` at `cf5f763f...` | TLMM tile bases, SDC QDSD group offsets and field positions |
 | `out/gta4l/ram-root-sdhci-repro-kernel-host-init-evidence/README.md` | Reproduced-kernel host-init result and its limits |

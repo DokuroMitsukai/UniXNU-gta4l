@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T14:48:30Z`, after the final edits to the
+Hashes were taken at `2026-10-30T15:10:00Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them. The snapshot is intended to be committed without
@@ -125,21 +125,22 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `5aca31b8cbbfa3297ca624892fe9a3ce5211fd8437070f1263cfb35ca6aa27ad` |
-| Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `3fd90283078b6917562b0ed996bc1bc4e828997f078dfbec419511b935621442` |
+| Electrical contract | `docs/sdhc-electrical-contract.md` | `88cd9d6a4ac15ea5e9d738f947db0127d4b929a0c24a3713873e927c29907593` |
 | Retention evidence | `docs/power-retention-evidence.md` | `eb91725bd6a63acded9e63ca0673670f36b43a3253da15d8ec17cb67f0387e07` |
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `501672b50a86319b7bd095a92b674c162ccc485963e510a708649aa985486c22` |
 | RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `d967e640ca8f6f7eb0607d0a51aea9b541b21901ed4bf5a0a3e9be090f2fa4a8` |
 | RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `c670e2788044bd8b5054b19452dde8080ee9dc93d794ffe8abf3e2890e202afc` |
-| Dependency trace | `docs/sdhc-dependency-trace.md` | `1f75593c7bab1e4466f9f60711aa9045fabb4d5f3c24c658886fe5cca1c5e323` |
-| Power/pad dependency report | `docs/sdhc-power-pad-dependency-report.md` | `0b20b4ab379b9a4c1f9762d487a118e7207a19128ae8f6053582c6c97ab88344` |
-| Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
+| Dependency trace | `docs/sdhc-dependency-trace.md` | `7399f421fd11db96fcea80e9c3f5bafc178e2d99099391e293188eb0dd8045b9` |
+| Power/pad dependency report | `docs/sdhc-power-pad-dependency-report.md` | `ac6d6bdd4141f4ea191d91194899fc6217d7b15bbaaed49ce98a55f5efc95143` |
+| Decision update 2026-10-30 | `docs/sdhc-decision-update-2026-10-30.md` | `ace78f94d526166478b732dc035a13dcaca346d56e2d94b0fc8a8c45c3fc24fe` |
+| Firmware handoff | `docs/firmware-handoff.md` | `8e6adcbe4a1540573a724a412ad2fe6c2414879017e6422226628bc98b2e2128` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
 | Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `2367061e546cf31d6c594e53fb9975fb37ac9169a0e86ecfe82474363f48e188` |
+| Porting record | `porting.toml` | `a7a7a1e644c6d927061692c57ccee0c0e19bf7008948b6711a362ec6b61ad420` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `2d8f060327c4d557ff588e90200676b3dfdaf213c60dec0d24c0300f28eb3fd3` |
@@ -156,8 +157,8 @@ reproduced-kernel evidence packets; see `kernel-build-recipe.md` §5 and
 The HostInit source correction was a working-tree restoration to the existing
 HEAD blob `3f8f4531...`; it created no content diff and is therefore absent
 from both commits. The regression it removed was an uncommitted local revert to
-`bc228be7...`. `porting.toml` changed only to add the diagnostics finding that
-summarizes the new report; it is not a build-input change.
+`bc228be7...`. In this snapshot, `porting.toml` changed only the diagnostics finding that
+summarizes the power/pad report; it is not a build-input change.
 
 ## 3. Pinned Linux source cache
 
@@ -166,8 +167,8 @@ summarizes the new report; it is not a build-input change.
 | Repository | `https://github.com/limonabisi/linux-gta4l` |
 | Branch and revision | `gta4l-7.2`, commit `cf5f763f0ef8a5b4d8bb4163833cba1160c51894` |
 | Cache path | `/tmp/opencode/linux-verify/` |
-| Cache shape | 23 flat files; **no `.git` directory** |
-| Sorted `sha256sum *` manifest digest | `f3a52fe3f718fb8b56801e25d2303627d7abbaa98e93037f4fb07b985828cdaa` |
+| Cache shape | 26 flat files; **no `.git` directory** |
+| Sorted `sha256sum *` manifest digest | `35b55f07119534f899da80ba1bae933b1bba67f91ec776553f21a91a150987e2` |
 
 ```text
 98192e8a5bd656dd68fe624d03e4a48a6964b4066a3453268d32b05440e2ea90  board.dts
@@ -180,6 +181,9 @@ summarizes the new report; it is not a build-input change.
 3eee0021701861692f738d359e0773af8eb046633b33988edb03c0b90c488777  opp-core.c
 5f181cb21628ed3043fbf5329875fc56b74564770b3755ad8799502811f8e95f  pm6125.dtsi
 32e2f6b0988eba52a2f662fdc2d7132022fbe980f281b2a82babcf3d7f46e18a  pmdomain-core.c
+d6638c03c09f5c0b24d9e343e19fb04ad7d483ec4f1c5fdabde4efc3570d59f8  pinctrl-msm.c
+68e7845e7f785a84c476b03b347b09fbf6789de991f4d0684b81d2af6354d814  pinctrl-msm.h
+c993ffc565c2bb3816ea808d45e23b160c5aa4b77c45a0a176d932307faeaa87  pinctrl-sm6115.c
 2da9e5b25ed33eaff3ebd0c8e497c0fc045c019156e686a8d5675e21e6fc9c57  pmi632.dtsi
 cba250364921bfff3e8cfe10372906631cf2cba70365b2d75eabb8822084b9bd  qcom-spmi-pmic.c
 4148ae42b825fecf124e964e585f775597a77e99df83e274f7236d1640c32370  qcom_smd-regulator.c
@@ -270,6 +274,7 @@ sha256sum package/Gta4lSdhciHostInit.c package/Gta4lSdhciHostInit.h \
   docs/stock-firmware-analysis-audit.md README.md \
   docs/emmc-reference.md docs/native-emmc-reference-audit.md \
   docs/sdhc-power-pad-dependency-report.md \
+  docs/sdhc-decision-update-2026-10-30.md \
   docs/ram-root-fixture-reproducibility.md porting.toml \
   scripts/analyze-gta4l-rpm-ldoa.py scripts/test-gta4l-rpm-ldoa-analysis.py \
   scripts/test-gta4l-ram-root-fixture-recipe.py
@@ -299,7 +304,7 @@ python3.11 - <<'PY'
 import hashlib, pathlib, re
 text = pathlib.Path('docs/evidence-baseline.md').read_text()
 rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-expected = 29
+expected = 30
 paths = [path for path, _ in rows]
 assert len(rows) == expected, f'expected {expected} rows, found {len(rows)}'
 assert len(set(paths)) == len(paths), 'duplicate paths in the table'
@@ -323,7 +328,7 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | Check | Result |
 | --- | --- |
 | `scripts/test-gta4l-diagnostic-payload.py`, `test-gta4l-diagnostic-package.py`, `test-gta4l-boot-image.py`, `test-gta4l-sdhci-handoff-audit.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-xnu-mtimes.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py`, `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `check-gta4l.py` | All exited 0 |
-| Hash-table self-check in §6 | `rows=29 mismatches=0` |
+| Hash-table self-check in §6 | `rows=30 mismatches=0` |
 | `porting.toml` parse with `tomllib` | 13 areas |
 | `git diff --check` | Clean |
 
