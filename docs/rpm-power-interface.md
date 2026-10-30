@@ -184,24 +184,32 @@ bytes `[S]`.
   ids 11/24 passing the bounds are `[C]`. The bounded scan finds no static
   table or policy path that selects either rail `[S]`; whether a runtime
   request exists is `[U]`.
-- The RPM request parser at `0x46166c8` accepts the same `uv`, `swen` and `ma`
-  keys as the Linux driver plus `ssmd`, `freq`, `resn`, `aypa`, `bypa`, `rwen`,
-  `mq`, `bobm`, `gr`, `hr`, `ocv3` and `pcv1`–`pcv3` `[S]`. The aggregation
-  routine at `0x46168dc` calls `0x4616ad0`, which keeps the larger value for
-  several fields (voltage, load and mode under the descriptor interpretation)
-  and ORs the enable bit `[S]/[C]`. The class/ID path
-  `0x4615d08` stores a per-id applied state and calls the setter only when the
-  aggregated enable state changes (mode 1 enable, mode 4 disable) `[S]`. The
-  Linux driver writes only the active state, so the AP contributes no L11/L24
-  request in the traced paths `[S]`. The RPM's output is a latched aggregate of
-  whatever votes exist; boot-time or non-AP votes and the RPM's own
-  suspend/shutdown behaviour remain `[U]`.
+- The class registration at `0x461746c` records `smpa` with count 9 and type
+  `0xc`, `ldoa` with count 25 (`0x19`) and type `0x10`, and `clka` with count
+  15 and type `0xc`; the installed callbacks are the trivial `bx lr` stubs at
+  `0x4617468` and `0x461746a` `[S]`. The per-instance `ldoa` builder at
+  `0x4698944` replaces those defaults with the parser at `0x46151f8` and the
+  aggregator at `0x46153b8` (call site `0x4698ade`, type `0x10`, literals
+  `0x151f9` and `0x153b9`) `[S]`. The parser accepts `ocmd`, `tv`, `uv`, `ma`,
+  `hr`, `bypa`, `ocen`, `pcmd`, `lsmd`, `pcen` and `swen` `[S]`. The aggregator
+  reads the per-id latched state at `[resource+0x14]` (24-byte entries, index
+  `id-1`), compares the new aggregate with that state, and calls `0x4615906`
+  only when the state changes; `0x4615906` commits through `0x4614920` `[S]`.
+  The separately traced parser/aggregator pair at `0x46166c8`/`0x46168dc`
+  belongs to the `smpa` class (type `0xc`), not to `ldoa`; its aggregator
+  reaches the LDOA setter at `0x4615d08` through `0x4616e10` for a pending
+  request whose class byte is `0xb` `[S]`, but whether that request class is
+  LDOA is `[U]`. The Linux driver writes only the active state, so the AP
+  contributes no L11/L24 request in the traced paths `[S]`. The RPM's
+  output is a latched aggregate of whatever votes exist; boot-time or non-AP
+  votes and the RPM's own suspend/shutdown behaviour remain `[U]`.
 
 No linked code path found by the scan reads the voltage table or selector
 array `[S]`, and no traced path writes an L11/L24 voltage, mode or enable
 register `[U]`. The only path identified by the scan that can program either
-rail is the generic setter, driven by a runtime request whose existence is not
-established `[U]`. The tables are therefore evidence that the firmware carries
+rail is the LDOA apply path (`0x46153b8` → `0x4615906` → `0x4614920`), driven
+by a runtime request whose existence is not established `[U]`. The tables are
+therefore evidence that the firmware carries
 LDOA resource definitions for both rails, not evidence that it enables, votes
 or retains them. They do not add a readback path to the mainline port `[S]`.
 The stored-word counts are reproducible with

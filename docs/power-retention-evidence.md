@@ -266,38 +266,46 @@ The trace found the following `[S]`:
   PMIC `ENABLE` register `0x46`; `bobm` is a 3-bit field inserted by the `bfi`
   at `0x4615e4c` `[S]`. There is no selector-to-microvolt conversion and no
   PMIC command ID in this handler `[S]`.
-- The class/ID path at `0x4615d08` maps class 0 to `ldoa` and accepts an 8-bit
-  id. The static registration at `0x461749e` supplies a `ldoa` count of 25
-  (`0x19`) `[S]`. The generic setter at `0x4617b48` compares the id against
-  the runtime object's `+8` field and the mode against 4 (`0x4617b60`,
-  `0x4617b74`) `[S]`. The class table at `0x4695774` is zero in the linked
-  image and the object is allocated and filled at runtime by the resource
-  database constructor at `0x46996c4` (table store at `0x4699694`), so the
-  runtime count equalling the static 25 is `[C]`, and ids 11 and 24 passing
-  those bounds is `[C]`. The request path at `0x4616e98` indexes a table with
-  the descriptor byte at `+3` plus `0x9f`; under the id interpretation L11 and
-  L24 map to `0xaa` and `0xb7` `[C]`.
-- The RPM-side request parser at `0x46166c8` accepts `uv`, `swen`, `ma`,
-  `ssmd`, `freq`, `resn`, `aypa`, `bypa`, `rwen`, `mq`, `bobm`, `gr`, `hr`,
-  `ocv3` and `pcv1`–`pcv3` `[S]`. The aggregation routine at `0x46168dc` calls
-  `0x4616ad0`, which compares the parsed request words field by field and
-  keeps the larger value for several fields (voltage, load and mode under the
-  descriptor interpretation) while OR-ing the enable bit `[S]/[C]`. The
-  class/ID path `0x4615d08` keeps a per-id applied
-  state byte and calls the generic setter only when the aggregated enable
-  state differs from that byte (mode 1 for enable, mode 4 for disable) `[S]`.
-  The Linux driver writes only the active state and no L11/L24 request in the
-  traced paths `[S]`. The RPM output is therefore a latched aggregate of the
-  requests that exist; whether a boot-time or non-AP vote exists, and what the
-  RPM does with its state across suspend and shutdown, remains `[U]`.
+- The class/ID path at `0x4615d08` builds the name `ldoa` plus the class byte
+  (0–6) and accepts an 8-bit id. The generic setter at `0x4617b48` compares the
+  id against the runtime object's `+8` field and the mode against 4
+  (`0x4617b60`, `0x4617b74`) `[S]`. The class table at `0x4695774` is zero in
+  the linked image and the object is allocated and filled at runtime by the
+  resource database constructor at `0x46996c4` (table store at `0x4699694`), so
+  the runtime count equalling the registered 25 is `[C]`, and ids 11 and 24
+  passing those bounds is `[C]`. The request path at `0x4616e98` indexes a
+  table with the descriptor byte at `+3` plus `0x9f`; in the LDOA aggregator
+  the same byte is a domain index checked against 7, so mapping L11 and L24 to
+  fixed indices is not established `[U]`.
+- The class registration at `0x461746c` records `smpa` with count 9 and type
+  `0xc`, `ldoa` with count 25 (`0x19`) and type `0x10`, and `clka` with count
+  15 and type `0xc`; the callbacks it installs are the trivial `bx lr` stubs at
+  `0x4617468` and `0x461746a` `[S]`. The per-instance `ldoa` builder at
+  `0x4698944` replaces those defaults with the parser at `0x46151f8` and the
+  aggregator at `0x46153b8` (call site `0x4698ade`, type `0x10`, literals
+  `0x151f9` and `0x153b9`) `[S]`. The parser accepts `ocmd`, `tv`, `uv`, `ma`,
+  `hr`, `bypa`, `ocen`, `pcmd`, `lsmd`, `pcen` and `swen` and writes them into
+  the resource request descriptor `[S]`. The aggregator reads the per-id
+  latched state at `[resource+0x14]` (24-byte entries, index `id-1`), compares
+  the new aggregate with that state, and calls the apply routine at `0x4615906`
+  only when the state changes; `0x4615906` commits through `0x4614920` `[S]`.
+  For L11 and L24 the table indices are 10 and 23 `[C]`. The separately traced
+  parser/aggregator pair at `0x46166c8`/`0x46168dc` belongs to the `smpa`
+  class (type `0xc`), not to `ldoa`; its keys and merge behavior stand as
+  observed, and its aggregator reaches the LDOA setter at `0x4615d08` through
+  `0x4616e10` for a pending request whose class byte is `0xb` `[S]`, but
+  whether that request class is LDOA is `[U]`. The Linux driver writes only the
+  active state and no traced path writes an L11/L24 request `[S]`. Whether a
+  boot-time or non-AP LDOA request exists, and what the RPM does with its state
+  across suspend and shutdown, remains `[U]`.
 - The L11 key record at `0x46969e4` has exactly one stored pointer in the whole
   image (`0x46966a8`, the dead selector-array slot); the L24 key record at
   `0x4696a4c` has none `[S]`. No linked code path found by the scan reads the
   24-entry voltage table or the selector array `[S]`, and no traced path writes
   an L11/L24 voltage, mode or enable register `[U]`. Under the bounded scan,
-  the only path identified that can program either rail is the generic setter,
-  driven by a runtime request; whether such a request exists on this device is
-  not established `[U]`.
+  the only path identified that can program either rail is the LDOA apply path
+  (`0x46153b8` → `0x4615906` → `0x4614920`), driven by a runtime request;
+  whether such a request exists on this device is not established `[U]`.
 
 The callback site at `0x460cb08` is an indirect vtable call in a descriptor
 aggregation loop, not a command ID `[S]`.

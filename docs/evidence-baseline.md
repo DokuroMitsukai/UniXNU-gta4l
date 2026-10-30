@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T02:55:36Z`, after the final edits to the
+Hashes were taken at `2026-10-30T03:07:49Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -112,17 +112,17 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `9a16b70b13cb3e5fb4d2b5895d5e588338fbbbf1ef330786b089683848e05682` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `b410086f0f8cfa29aececdcb5ed11b78a7417f0b7a2f6a1a13078d4d9fafa2f6` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
-| Retention evidence | `docs/power-retention-evidence.md` | `b99254204faebb979ea46842501cb1534e5b2f67e0ce8f279d319c6017eefa80` |
-| RPM interface | `docs/rpm-power-interface.md` | `b53d226cebfd250d138571d3c17d025d302ba92efcb0336b4269d3c9ce17ca8b` |
+| Retention evidence | `docs/power-retention-evidence.md` | `3bd52808666c5097cca789aad4225c7119c84b4bce1992a473f558753ce4719a` |
+| RPM interface | `docs/rpm-power-interface.md` | `f206ac04918f40c0f3c5b721087879ffa4808521fc3c58739c5c17055946600a` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `501672b50a86319b7bd095a92b674c162ccc485963e510a708649aa985486c22` |
 | RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `8c741271b9eccf89cad31e75531d8d2c369b1013df261a2dd0bc355aa3e566f5` |
 | RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `0f1179c840a94d470f9053d56f44a85ec8ad6af380b38363d5657d9acf0b8219` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
-| Porting record | `porting.toml` | `7e2df5d998e94ab6fffc978df71bd6a674809f18c9020902d23c0fe295c63529` |
+| Porting record | `porting.toml` | `488b59b11c3060454c5a55fe7e901a6136fa69df618a10f6e65ed0db270cc654` |
 
 ## 3. Pinned Linux source cache
 
