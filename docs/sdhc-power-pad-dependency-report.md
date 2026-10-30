@@ -70,11 +70,11 @@ registers and the handler does not re-enable bus power `[S]`:
    bus-power bit and preserves the existing voltage-select field. It does not
    select a voltage `[S]`.
 2. `0x6458` receives the drive in `w0` and the reset value in `w1`; the caller
-   passes `1`. It reads `POWER_CONTROL`, writes that value to
-   `SOFTWARE_RESET` (`0x2f`), and enters the status/clear/result path only when
-   `w1 == 1` and the bus-power bit was set in the captured `POWER_CONTROL`
-   byte. If either condition is false, it skips directly to the reset poll and
-   writes no `CORE_PWRCTL_CTL` value `[S]`.
+   passes `1`. It captures the current `POWER_CONTROL` byte, writes the `w1`
+   reset argument to `SOFTWARE_RESET` (`0x2f`), and enters the
+   status/clear/result path only when `w1 == 1` and the captured
+   `POWER_CONTROL` bus-power bit was set. If either condition is false, it
+   skips directly to the reset poll and writes no `CORE_PWRCTL_CTL` value `[S]`.
 3. The status poll is a do-while shape: at most 10,001
    `CORE_PWRCTL_STATUS` (`0x240`) reads and 10,001 one-unit delay calls, with
    early exit on a nonzero value. On exhaustion it forces the captured status
@@ -104,6 +104,10 @@ status never clears, it still writes the result selected from the captured
 value; if the reset bit never self-clears, it still returns and the caller
 proceeds to the vendor writes. A success-bit write therefore records the branch
 the handler took, not that the controller completed the handshake `[S]`.
+
+This decoding pins the instruction bytes and models the loop behaviour; it does
+not execute the firmware `[S]`. The static regression check is
+`scripts/test-gta4l-sdccdxe-decode.py`.
 
 The pad write is separate from this handshake. `0x3f04(drive)` is called
 earlier for each processed drive and writes `0x9fe4`/`0x1fe4` unconditionally;
@@ -144,10 +148,13 @@ not on a PMIC or GCC page `[S]`.
 | RCLK pull | 15-16 | `1` → pull-down | `sdc1_rclk_on`: pull-down |
 
 The SDC1 value is therefore the vendor active pad configuration, not an
-arbitrary write. The SDC2 value `0x1fe4` uses the same data/CMD/CLK drive and
-pull fields, but its RCLK bits (15-16) are zero rather than pull-down, and its
-data-drive field is 10 mA while the captured `sdc2_data_on` state is 16 mA;
-SDC2 is the removable-card controller and is outside this eMMC candidate `[S]`.
+arbitrary write. The pinned SDC2 group at `0x73000` defines only CLK, CMD and
+DATA fields (pull starts at bits 14, 11 and 9; drive at bits 6, 3 and 0); it has
+no RCLK entry. In those SDC2 fields, `0x1fe4` decodes to CLK drive 16 mA with no
+pull, CMD drive 10 mA with pull-up, and DATA drive 10 mA with pull-up. The raw
+bits 15-16 are zero, but they are not a defined SDC2 RCLK field. The data-drive
+field is 10 mA while the captured `sdc2_data_on` state is 16 mA; SDC2 is the
+removable-card controller and is outside this eMMC candidate `[S]`.
 This closes the write-to-pad mapping part of `E2`. It does not establish the pad
 supply voltage, the actual pad levels at handoff, the pull-up source, or the
 unpowered-drive/back-power limits `[U]`. The `uefiplat.cfg`
