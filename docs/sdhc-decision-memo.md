@@ -233,3 +233,11 @@ the vendor active configuration; the remaining blockers are the PM6125/eMMC
 electrical limits, board schematic/test points, actual rail and pad
 measurements, RPM runtime policy, and a qualified `E9` recovery procedure.
 **NO-GO remains** `[S]`.
+
+## 10. Evidence-gap checklist 2026-10-30
+
+`docs/sdhc-evidence-gap-checklist.md` links every canonical `E*`/`S*` gate to
+its established evidence, missing input, acquisition route, responsible role,
+closure criterion and dependencies. It is a host-only inventory: it adds no
+measurement, closes no gate and does not change any disposition. The decision
+remains **NO-GO** `[S]`.
