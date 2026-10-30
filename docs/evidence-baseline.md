@@ -5,9 +5,9 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-29T22:34:28Z`, after the final edits to the
-files below. This document is untracked and its own hash is not listed. Hashes
-describe a dirty working tree and change with later edits; re-run the commands
+Hashes were taken at `2026-10-30T02:47:44Z`, after the final edits to the
+files below. This document's own hash is not listed. Hashes describe the
+working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
 
 ## 1. Repository state
@@ -15,12 +15,23 @@ in §6 before reusing them.
 | Item | Value |
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
-| Branch | `bringup/tab-a7-qemu-fixture` |
-| HEAD | `e2d0cfc08c0c0119f3c55d1bcb6f9b8323893961` |
-| Dirty entries at the hash snapshot | 27: 8 modified, 19 untracked (including this document) |
-| Staging and commits | None at the snapshot; the snapshot and the listed paths land as the five-commit evidence-closure series |
+| Branch | `bringup/sdhc-evidence` |
+| HEAD | `bd6b31821da982fc515825fd038cc24097298462` |
+| Dirty entries at the hash snapshot | 8: 6 modified (the four evidence documents, `porting.toml` and this baseline) and 2 untracked (the RPM LDOA analyzer and its self-test) |
+| Staging and commits | None at the snapshot; the snapshot lands as one documentation commit |
 
-The tree was already dirty. This task edited only paths already in that set and
+The current snapshot is the evidence branch after the RPM LDOA documentation
+commit. The hash table below describes that working tree, not the original
+evidence-closure tree. The original provenance is retained separately because
+the path lists and dirty inventory are historical observations.
+
+### Historical provenance
+
+The original evidence-closure snapshot was taken on
+`bringup/tab-a7-qemu-fixture` at
+`e2d0cfc08c0c0119f3c55d1bcb6f9b8323893961` with 27 dirty entries: 8 modified
+and 19 untracked, including this document. The tree was already dirty. This
+task edited only paths already in that set and
 added this document and `docs/stock-firmware-analysis-audit.md`; it did not
 discard, stage, commit or revert existing work.
 No pre-task snapshot exists, so the exact line-level split between earlier work
@@ -101,15 +112,17 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `1d99c47bff26edfc4b029097c91eb168b7b62f55f1e1929c565ea6e14c1cd177` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `d1ab69864acb1f95a25d84c6b42622a602de2377a09f718f10eb67624d1be652` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
-| Retention evidence | `docs/power-retention-evidence.md` | `461897f65448fd1611aada3ae8ecd1d04d813785d64d38705ba312eb7260a096` |
-| RPM interface | `docs/rpm-power-interface.md` | `ec6cb2660b0f062ac7a39f1ef803927de4bf1b782405117a829b171a36aa62a3` |
-| PM6125 register map | `docs/pm6125-register-map.md` | `569555fb3b41e37b9c680f8e140b011619e9d417bec6374d354da85853168a50` |
+| Retention evidence | `docs/power-retention-evidence.md` | `7860a0eb5ed50ef47579239142ccea9b2bed74c7a8fd448002da01fb4aba9caa` |
+| RPM interface | `docs/rpm-power-interface.md` | `2e40d735df15e471ccf89556a8c479ecb2d7c9597d97bd79d0c0692745765084` |
+| PM6125 register map | `docs/pm6125-register-map.md` | `501672b50a86319b7bd095a92b674c162ccc485963e510a708649aa985486c22` |
+| RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `8c741271b9eccf89cad31e75531d8d2c369b1013df261a2dd0bc355aa3e566f5` |
+| RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `0f1179c840a94d470f9053d56f44a85ec8ad6af380b38363d5657d9acf0b8219` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
-| Porting record | `porting.toml` | `721381d6cfea8bfc18e0804c5fbdca4c32ace4ea25d1755dcc2f1470bfd6c3b9` |
+| Porting record | `porting.toml` | `0c419878994ddb31738a420fa11f3ada077e9d3368bae8423dfa191c82942601` |
 
 ## 3. Pinned Linux source cache
 
@@ -212,13 +225,21 @@ sha256sum package/Gta4lSdhciHostInit.c package/Gta4lSdhciHostInit.h \
   docs/sdhc-electrical-contract.md docs/power-retention-evidence.md \
   docs/rpm-power-interface.md docs/pm6125-register-map.md \
   docs/sdhc-dependency-trace.md docs/firmware-handoff.md \
-  docs/stock-firmware-analysis-audit.md porting.toml
+  docs/stock-firmware-analysis-audit.md porting.toml \
+  scripts/analyze-gta4l-rpm-ldoa.py scripts/test-gta4l-rpm-ldoa-analysis.py
 ( cd /tmp/opencode/linux-verify && sha256sum * | sort -k2 | sha256sum )
 python3.11 -B scripts/test-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-host-init-sim.py
 python3.11 -B scripts/oracle-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-evidence-counts.py
+python3.11 -B scripts/test-gta4l-rpm-ldoa-analysis.py
+python3.11 -B scripts/analyze-gta4l-rpm-ldoa.py \
+  ../../device-dump/private/gta4l-dump/partitions/rpm.img
 ```
+
+The analyzer command needs the private `rpm.img`; it refuses a different image
+hash unless `--expect-sha256` is given explicitly. The self-test uses only a
+synthetic image `[S]`.
 
 The host checks are read-only and do not build, flash, boot, power or access a
 device `[S]`.
