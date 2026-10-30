@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T08:37:41Z`, after the final edits to the
+Hashes were taken at `2026-10-30T09:10:17Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,14 +16,14 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `fce403bf520d5b75bb48d9c926d4e7143ba8fc0c` |
-| Dirty entries at the hash snapshot | 2 modified (`docs/evidence-baseline.md` and `docs/ram-root-fixture-reproducibility.md`) |
+| HEAD | `cf3bf9ad0592fcd7ed0752d346a77853d3abf2ba` |
+| Dirty entries at the hash snapshot | 2 modified (`docs/evidence-baseline.md` and `docs/ram-root-fixture-reproducibility.md`) and 1 untracked (`scripts/test-gta4l-ram-root-fixture-recipe.py`) |
 | Staging and commits | None at the snapshot; the snapshot lands as one documentation and tooling commit |
 
 The current snapshot is the evidence branch after the Linux
 fixture-reproduction, stale-status reconciliation, recipe-correction and
-input-pin commits, with the mechanical enforcement of those pins in the
-working tree. The hash table below describes that working tree, not the
+input-pin commits, with the exact compiler check and its regression test in
+the working tree. The hash table below describes that working tree, not the
 original evidence-closure tree. The original provenance is retained separately
 because the path lists and dirty inventory are historical observations.
 
@@ -128,7 +128,8 @@ bytes of the previously booted image `[S]`.
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
 | Porting record | `porting.toml` | `9771164882e042b33875483655c386b85b418e954a17fc838ce507cb0448a128` |
-| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `7bcb3c58a5ce8804f28835052191f684163d62f2634e2947dd4b60f47dd80e6e` |
+| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
+| RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 
 ## 3. Pinned Linux source cache
 
@@ -234,12 +235,14 @@ sha256sum package/Gta4lSdhciHostInit.c package/Gta4lSdhciHostInit.h \
   docs/stock-firmware-analysis-audit.md README.md \
   docs/emmc-reference.md docs/native-emmc-reference-audit.md \
   docs/ram-root-fixture-reproducibility.md porting.toml \
-  scripts/analyze-gta4l-rpm-ldoa.py scripts/test-gta4l-rpm-ldoa-analysis.py
+  scripts/analyze-gta4l-rpm-ldoa.py scripts/test-gta4l-rpm-ldoa-analysis.py \
+  scripts/test-gta4l-ram-root-fixture-recipe.py
 ( cd /tmp/opencode/linux-verify && sha256sum * | sort -k2 | sha256sum )
 python3.11 -B scripts/test-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-host-init-sim.py
 python3.11 -B scripts/oracle-gta4l-sdhci-host-init.py
 python3.11 -B scripts/test-gta4l-sdhci-evidence-counts.py
+python3.11 -B scripts/test-gta4l-ram-root-fixture-recipe.py
 python3.11 -B scripts/test-gta4l-rpm-ldoa-analysis.py
 python3.11 -B scripts/analyze-gta4l-rpm-ldoa.py \
   ../../device-dump/private/gta4l-dump/partitions/rpm.img --code
@@ -260,7 +263,7 @@ python3.11 - <<'PY'
 import hashlib, pathlib, re
 text = pathlib.Path('docs/evidence-baseline.md').read_text()
 rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-expected = 23
+expected = 24
 paths = [path for path, _ in rows]
 assert len(rows) == expected, f'expected {expected} rows, found {len(rows)}'
 assert len(set(paths)) == len(paths), 'duplicate paths in the table'
