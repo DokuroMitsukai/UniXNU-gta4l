@@ -15,9 +15,9 @@ dynamic objects.
 
 The optional `--code` checks decode only the documented Thumb sites and direct
 call instructions, including literal-load destination registers, the builder
-type byte and the callback argument setup and stack stores. They are mechanical
-instruction checks, not control-flow reachability or proof that a callback
-executes at runtime.
+type byte and the registration argument setup and stack stores. They are
+mechanical instruction checks, not control-flow reachability or proof that a
+callback executes at runtime.
 
 Usage:
     python3 scripts/analyze-gta4l-rpm-ldoa.py IMAGE
@@ -132,17 +132,21 @@ LITERAL_LOADS = (
     (0x4698ad8, 0, 0x4698af8),
 )
 CODE_SETUP = (
-    (0x4617488, 0x9501, 'smpa bridge stack argument r5'),
-    (0x4617492, 0x9600, 'smpa callback stack argument r6'),
-    (0x461749a, 0xe9cd, 'smpa callback stack pair low'),
-    (0x461749c, 0x6500, 'smpa callback stack pair high'),
-    (0x46174a2, 0x4623, 'ldoa callback argument mov r3,r4'),
-    (0x46174a8, 0xe9cd, 'ldoa callback stack pair low'),
-    (0x46174aa, 0x6500, 'ldoa callback stack pair high'),
-    (0x46174b0, 0x4623, 'clka callback argument mov r3,r4'),
+    (0x4617488, 0x9501, 'smpa registration stack word [sp,#4] from r5'),
+    (0x4617492, 0x9600, 'smpa registration stack word [sp] from r6'),
+    (0x4617494, 0x4623, 'smpa registration argument r3 from r4'),
+    (0x461749a, 0xe9cd, 'ldoa registration stack pair low'),
+    (0x461749c, 0x6500, 'ldoa registration stack pair high'),
+    (0x46174a2, 0x4623, 'ldoa registration argument r3 from r4'),
+    (0x46174a8, 0xe9cd, 'clka registration stack pair low'),
+    (0x46174aa, 0x6500, 'clka registration stack pair high'),
+    (0x46174b0, 0x4623, 'clka registration argument r3 from r4'),
+    (0x4698ace, 0x980a, 'builder object argument [sp,#0x28]'),
+    (0x4698ad2, 0x1c71, 'builder instance count r6+1'),
     (0x4698ad4, 0x2210, 'builder ldoa type 0x10'),
-    (0x4698ad6, 0x9001, 'builder class stack argument'),
-    (0x4698ada, 0x9000, 'builder callback stack argument'),
+    (0x4698ad6, 0x9001, 'builder object stack argument [sp,#4]'),
+    (0x4698ada, 0x9000, 'builder callback stack argument [sp]'),
+    (0x4698adc, 0x9803, 'builder registration argument [sp,#0xc]'),
 )
 
 

@@ -394,34 +394,34 @@ It verifies the image SHA-256, the ELF header and the captured `LOAD`/`PT_NULL`
 layout, checks the 24 name records, all 16 selector ids and the terminator, the
 three exact group-table entries, the L11/L24 voltage rows, the descriptor pair,
 the 82 nonzero unique runtime-offset boundary entries and the terminator, the
-linked-zero class table, and prints every aligned stored word in a `PT_LOAD`
-segment that equals an anchor's virtual address, runtime-offset form or
-Thumb-tagged form. `PT_NULL` words are reported but are not scanned. A
-`reference_count` is a stored-word count, not a control-flow reachability
-result.
+exact boundary word at `0x4697f10`, the linked-zero class table, and prints
+every aligned stored word in a `PT_LOAD` segment that equals an anchor's virtual
+address, runtime-offset form or Thumb-tagged form. `PT_NULL` words are reported
+but are not scanned. A `reference_count` is a stored-word count, not a
+control-flow reachability result.
 
 `--code` decodes only the documented Thumb sites and direct call instructions:
 the `bx lr` stubs at `0x4617468`/`0x461746a`; the class registration at
 `0x461746c` (`smpa` 9/`0xc`, `ldoa` 25/`0x10`, `clka` 15/`0xc`, Thumb callback
 literals `0x17469`/`0x1746b`); the literal-load destination registers (`r6`,
-`r4`, `r7`, `r3` and `r0`); the callback argument moves and stack stores; the
-builder type byte `0x10` at `0x4698ad4`; the builder literals
-`0x153b9`/`0x151f9` at `0x4698af8`/`0x4698afc`; the builder call at `0x4698ade`
-to `0x460ae14`; and the direct calls at `0x4615502` (aggregator → apply),
-`0x4615970` (apply → commit), `0x4616e8a` (`smpa` bridge → class/ID setter) and
-`0x4615d7c` (class/ID setter → generic setter). These are mechanical
-instruction checks at documented sites, not proof that a callback executes or
-that a request exists at runtime. The self-test covers a wrong hash, a changed
-name record, a wrong mapping, a matching word in `PT_NULL`, a Thumb-tagged
-reference, an altered callback literal, a class misattribution, an altered call
-edge, a changed selector, a changed voltage row, a changed boundary terminator,
-a zeroed or duplicated boundary entry, a duplicated group-table entry, an
-altered literal-load destination, an altered builder type, an altered callback
-argument move and an altered callback stack store, plus independently specified
-Thumb BL and LDR-literal decoder vectors. The captured image is private and is
-not vendored; the analyzer's self-test uses a synthetic image only. The two
-boundary-table words with no resolved PC-relative loader are `0x46006a4` and
-`0x4623ef8` `[S]`.
+`r4`, `r7`, `r3` and `r0`); the registration argument moves, stack stores,
+instance count and argument sources; the builder type byte `0x10` at
+`0x4698ad4`; the builder literals `0x153b9`/`0x151f9` at
+`0x4698af8`/`0x4698afc`; the builder call at `0x4698ade` to `0x460ae14`; and
+the direct calls at `0x4615502` (aggregator → apply), `0x4615970` (apply →
+commit), `0x4616e8a` (`smpa` bridge → class/ID setter) and `0x4615d7c`
+(class/ID setter → generic setter). These are mechanical instruction checks at
+documented sites, not proof that a callback executes or that a request exists
+at runtime. The self-test covers a wrong hash, a changed name record, a wrong
+mapping, a matching word in `PT_NULL`, a Thumb-tagged reference, an altered
+callback literal, a class misattribution, an altered call edge, a changed
+selector, a changed voltage row, a changed boundary terminator, a zeroed or
+duplicated boundary entry, a duplicated group-table entry, an altered
+literal-load destination and an altered registration setup instruction, plus
+independently specified Thumb BL and LDR-literal decoder vectors. The captured
+image is private and is not vendored; the analyzer's self-test uses a synthetic
+image only. The two boundary-table words with no resolved PC-relative loader
+are `0x46006a4` and `0x4623ef8` `[S]`.
 
 The XBL scan covered the eight non-blob file-backed `PT_LOAD` segments
 (`0xc119000`, `0xc11c000`, `0xc225000`, `0xc27b000`, `0xc29c000`, `0xc350000`,

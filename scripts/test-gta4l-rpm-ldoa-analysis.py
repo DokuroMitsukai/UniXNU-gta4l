@@ -12,13 +12,13 @@ analyzer:
 - recognizes a Thumb-tagged reference;
 - verifies the documented Thumb call sites and literals with `--code`,
   including literal-load destination registers, the builder type byte and the
-  callback argument setup and stack stores;
+  registration argument setup and stack stores;
 - decodes independently specified Thumb BL and LDR-literal vectors;
 - rejects a wrong image hash, a changed name record, a wrong mapping, a changed
   selector, a changed voltage row, a changed boundary terminator or entry, an
   altered callback literal, a class misattribution, an altered call edge, an
-  altered literal-load destination, an altered builder type, an altered
-  callback argument move and an altered callback stack store;
+  altered literal-load destination and an altered registration setup
+  instruction;
 - produces deterministic output.
 
 No private firmware is read or vendored.
@@ -115,6 +115,7 @@ def build_code(image):
     put_code16(image, 0x461748e, 0x2109)
     put_code16(image, 0x4617490, 0x220c)
     put_code16(image, 0x4617492, 0x9600)
+    put_code16(image, 0x4617494, 0x4623)
     put_code16(image, 0x461749a, 0xe9cd)
     put_code16(image, 0x461749c, 0x6500)
     put_code16(image, 0x461749e, 0x2119)
@@ -140,10 +141,13 @@ def build_code(image):
     put_code_bytes(image, 0x46174d4, b'ldoa')
     put_code_bytes(image, 0x46174d8, b'clka')
     put_code16(image, 0x4698ad0, 0x4B0A)
+    put_code16(image, 0x4698ace, 0x980a)
+    put_code16(image, 0x4698ad2, 0x1c71)
     put_code16(image, 0x4698ad4, 0x2210)
     put_code16(image, 0x4698ad6, 0x9001)
     put_code16(image, 0x4698ad8, 0x4807)
     put_code16(image, 0x4698ada, 0x9000)
+    put_code16(image, 0x4698adc, 0x9803)
     put_code32(image, 0x4698af8, 0x153b9)
     put_code32(image, 0x4698afc, 0x151f9)
     put_bl(image, 0x4615502, 0x4615906)
@@ -238,6 +242,7 @@ def check_decoders(image):
     assert decode_bl(image, loads, 0x4600200) == 0x4600300
     assert decode_bl(image, loads, 0x4600240) == 0x4600140
     assert decode_bl(image, loads, 0x4600104) is None
+    return module
 
 
 def write_mutation(directory, image, name, offset, value, width=4):
@@ -256,7 +261,7 @@ def write_mutation(directory, image, name, offset, value, width=4):
 def main():
     image = build_image()
     digest = hashlib.sha256(image).hexdigest()
-    check_decoders(image)
+    module = check_decoders(image)
 
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / 'synthetic-rpm.img'
@@ -307,10 +312,16 @@ def main():
         assert 'code_builder_literal: site=0x4698af8 value=0x153b9 target=0x46153b8' in code_output, code_output
         assert 'code_literal_load: site=0x461748c dest=r7 target=0x46174d0' in code_output, code_output
         assert 'code_literal_load: site=0x4698ad0 dest=r3 target=0x4698afc' in code_output, code_output
-        assert 'code_setup: site=0x46174a2 label="ldoa callback argument mov r3,r4" value=0x4623' in code_output, code_output
+        assert 'code_setup: site=0x4617494 label="smpa registration argument r3 from r4" value=0x4623' in code_output, code_output
+        assert 'code_setup: site=0x461749a label="ldoa registration stack pair low" value=0xe9cd' in code_output, code_output
+        assert 'code_setup: site=0x46174a2 label="ldoa registration argument r3 from r4" value=0x4623' in code_output, code_output
+        assert 'code_setup: site=0x46174a8 label="clka registration stack pair low" value=0xe9cd' in code_output, code_output
+        assert 'code_setup: site=0x4698ace label="builder object argument [sp,#0x28]" value=0x980a' in code_output, code_output
+        assert 'code_setup: site=0x4698ad2 label="builder instance count r6+1" value=0x1c71' in code_output, code_output
         assert 'code_setup: site=0x4698ad4 label="builder ldoa type 0x10" value=0x2210' in code_output, code_output
-        assert 'code_setup: site=0x4698ad6 label="builder class stack argument" value=0x9001' in code_output, code_output
-        assert 'code_setup: site=0x4698ada label="builder callback stack argument" value=0x9000' in code_output, code_output
+        assert 'code_setup: site=0x4698ad6 label="builder object stack argument [sp,#4]" value=0x9001' in code_output, code_output
+        assert 'code_setup: site=0x4698ada label="builder callback stack argument [sp]" value=0x9000' in code_output, code_output
+        assert 'code_setup: site=0x4698adc label="builder registration argument [sp,#0xc]" value=0x9803' in code_output, code_output
         assert 'result: PASS' in code_output, code_output
 
         second = run(path, '--expect-sha256', digest)
@@ -375,35 +386,20 @@ def main():
             directory, image, 'edge-rpm.img', va_offset(0x4615502, 2), 0xF001, width=2)
         expect_failure(call_edge, 'expected 0x4615906', '--expect-sha256', edge_digest, '--code')
 
-        builder_type, builder_type_digest = write_mutation(
-            directory, image, 'builder-type-rpm.img', va_offset(0x4698ad4, 2), 0x220c, width=2)
-        expect_failure(builder_type, 'builder ldoa type 0x10', '--expect-sha256',
-                       builder_type_digest, '--code')
+        for site, _, label in module['CODE_SETUP']:
+            setup, setup_digest = write_mutation(
+                directory, image, f'setup-{site:x}-rpm.img', va_offset(site, 2),
+                0x46c0, width=2)
+            expect_failure(setup, label, '--expect-sha256', setup_digest, '--code')
 
-        callback_dest, callback_dest_digest = write_mutation(
-            directory, image, 'callback-dest-rpm.img', va_offset(0x461748c, 2), 0x4810, width=2)
-        expect_failure(callback_dest, 'loads into r0, expected r7', '--expect-sha256',
-                       callback_dest_digest, '--code')
-
-        builder_dest, builder_dest_digest = write_mutation(
-            directory, image, 'builder-dest-rpm.img', va_offset(0x4698ad0, 2), 0x480a, width=2)
-        expect_failure(builder_dest, 'loads into r0, expected r3', '--expect-sha256',
-                       builder_dest_digest, '--code')
-
-        callback_move, callback_move_digest = write_mutation(
-            directory, image, 'callback-move-rpm.img', va_offset(0x46174a2, 2), 0x46c0, width=2)
-        expect_failure(callback_move, 'ldoa callback argument', '--expect-sha256',
-                       callback_move_digest, '--code')
-
-        callback_store, callback_store_digest = write_mutation(
-            directory, image, 'callback-store-rpm.img', va_offset(0x4698ada, 2), 0x46c0, width=2)
-        expect_failure(callback_store, 'builder callback stack argument', '--expect-sha256',
-                       callback_store_digest, '--code')
-
-        pair_store, pair_store_digest = write_mutation(
-            directory, image, 'pair-store-rpm.img', va_offset(0x46174a8, 2), 0x46c0, width=2)
-        expect_failure(pair_store, 'ldoa callback stack pair low', '--expect-sha256',
-                       pair_store_digest, '--code')
+        for site, dest, _ in module['LITERAL_LOADS']:
+            new_dest = 0 if dest else 1
+            original = struct.unpack_from('<H', image, va_offset(site, 2))[0]
+            literal_dest, literal_dest_digest = write_mutation(
+                directory, image, f'load-{site:x}-rpm.img', va_offset(site, 2),
+                original ^ ((dest ^ new_dest) << 8), width=2)
+            expect_failure(literal_dest, f'loads into r{new_dest}, expected r{dest}',
+                           '--expect-sha256', literal_dest_digest, '--code')
 
         missing = Path(directory) / 'missing-rpm.img'
         expect_failure(missing, 'No such file or directory')
