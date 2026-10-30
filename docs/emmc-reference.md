@@ -35,6 +35,36 @@ Both GPTs validate: protective MBR, header CRC, entry-array CRC, 84 entries,
 The GPT partition list matches recovery's `mmcblk0p1` through `mmcblk0p80`.
 The earlier shifted 76-entry map is invalid and must not be used.
 
+## Candidate eMMC part
+
+`[S]` A Samsung/Arrow product brief for `KMDX60018M-B425` lists 32 GB eMMC 5.1
+storage, 24 Gb (3 GB) LPDDR4X, a 254-ball FBGA package and 4266 Mbps, with
+product status "Sample". A public UFI log for an SM-A042M reports product name
+`DX68MB`, a 32 GB user area (31,268,536,320 bytes) and selects
+`KMDX60018M-B425/32GB+LPDDR4X (BGA254)`. A 16rd thread title independently
+names the same part and package. The captured tablet reports product name
+`DX68MB` and 61,071,360 × 512-byte sectors, the same user capacity. Sources
+inspected: the Samsung/Arrow two-page product brief, the UFI log, and 16rd
+thread `638821` (title only; the attached datasheet is gated).
+
+`[C]` These matches make `KMDX60018M-B425` the leading candidate for the
+installed MCP. They do not prove the exact ordering part or revision: the
+captured CID's serial/date bytes differ from the UFI example, and a tool's
+"eMMC selected" line is not a package marking.
+
+`[U]` The full electrical datasheet is still absent. The inspected free sources
+give capacity, package and interface speed but not VCC/VCCQ2 absolute maxima,
+power-up/down sequencing, inrush, back-power or unpowered-drive limits. The
+earlier claims of a 153-ball discrete eMMC and alternate BOM parts
+`KMQE60013M-B318` / `KMGD6001BM-B421` are not supported by the inspected
+sources.
+
+`[S]/[U]` The available SM-T505 service-manual pages show a single eMMC+DDR
+package (`U0101`), consistent with an MCP, but the document's PMIC label
+(`PM4250`) and the photographed board revision (`85943_1_04`, low-resolution)
+do not match the captured PM6125 and bootloader identifiers. The pages cannot
+identify the installed package or its limits.
+
 ## Linux reference
 
 Repository:

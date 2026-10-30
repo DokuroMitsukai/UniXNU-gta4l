@@ -13,6 +13,8 @@ stated), **[U]** unknown.
 | Input | Revision / hash | Use |
 | --- | --- | --- |
 | `LineageOS/android_kernel_samsung_sm6115` | `cbd2ed85b0262bbcafaa9e0cc6a979e1eaa2c1d4` (lineage-24.0 at trace time) | Vendor SDHCI, MMC core and RPM regulator sources `[S]` |
+| Samsung `T505NDXS7CXG1` source | ZIP `84e8f9934987834da6867d37243bb18fe6fab623019e3d7a4e10fa603f069f8e`; `Kernel.tar.gz` `4e9ba469592a135e9847c9e8cebe51000286f7f0e2c2c11dac0e6832268ff402`; kernel 4.19.157 | Official vendor source for the CXG1 build `[S]` |
+| Samsung `T505NDXS5CWI2` source | ZIP `b00cbe4827b62af8ea888b89b000e31368b644e5ec0c07ba6b65a164718081fb`; `Kernel.tar.gz` `49d3bfbca5bf35f8412f9316946fc07e8444e6d976cfe9718503add33e5dc203`; kernel 4.19.157 | Comparison release; relevant files byte-identical `[S]` |
 | `LineageOS/android_device_samsung_gta4l` | `ed99b5e1a435a04cc44e51aa0f7331c3a5ee82ea` | Device makefiles and configuration `[S]` |
 | `LineageOS/android_device_samsung_gta4l-common` | `52bcebf80079036f90f09daa950af3ad5fb015b6` | Common device configuration `[S]` |
 | `arch/arm64/boot/dts/vendor/qcom/P85946-qrd-overlay.dts` | `f03828c2682f4ef509e686ac895d35f978b233200774c4ff321ebc8f3d9d656b` | Board overlay declaring the `sdhc_1` and UFS supplies; applicability is name/ID-level only `[S]/[U]` |
@@ -28,6 +30,36 @@ These repositories are research inputs and are not vendored here. The trace is
 pinned by commit and file hash so it can be re-fetched unchanged `[S]`. Pinning
 establishes reproducibility of the research inputs, not that these sources are
 the binaries shipped on the captured device `[S]/[U]`.
+
+`[S]` The official CXG1 and CWI2 kernel archives contain Linux 4.19.157 and
+`arch/arm64/configs/gta4l_mea_jt_defconfig`. The files below are byte-identical
+in both releases:
+
+| File | SHA-256 (CXG1 = CWI2) |
+| --- | --- |
+| `drivers/mmc/host/sdhci-msm.c` | `347530fd6d700f2fa56825c11e574761ed7aaaaad14788d815108b4219447b5f` |
+| `drivers/mmc/host/sdhci.c` | `6efb32596145fa2dfe15c7ad3a10b58076bb354f6da10658422b16f415af3308` |
+| `drivers/mmc/core/core.c` | `023c76f941b09673663a3275c5a43721ef9d7b970abdf3903f7b2f071b4649ca` |
+| `drivers/mmc/core/host.c` | `4df339ce21382be5b3608b0fa423946481764c9f7fa9c359e37ea72ece2d8faa` |
+| `drivers/regulator/rpm-smd-regulator.c` | `f934ab1df958905c11962b2c1eae2226ba9015f77853ba62ea3c1835710fd970` |
+| `drivers/regulator/core.c` | `7ccd1a482052da3123ed854caa2f1b44835d5867eb9d03f80beed2aadb1cd7a4` |
+
+The two source ZIPs use the same displayed filename but differ by SHA-256;
+keep them keyed by build ID and archive hash. The companion `Platform.tar.gz`
+contains Android platform modules, not kernel DTS. The Samsung listing also
+offers the older `T505NDXU4CWD1` source, which was not inspected.
+
+`[S]` The official source confirms the normal power-up ordering, the 5,000 ms
+wait, the BUS_FAIL acknowledgement, the register-restore gate and the RPM-SMD
+aggregation described below. `rpm-smd-regulator.c` differs from the pinned
+LineageOS file only by one `EXPORT_SYMBOL` line. The SDHCI power-up block and
+`mmc_power_up()` with its 10 ms default are equivalent. The official source
+omits the LineageOS card-detect early-fail and no-card cleanup blocks; those
+remain specific to the pinned LineageOS revision in this trace. The archive
+contains no vendor board DTS.
+
+`[S]/[U]` The exact CXB1 source is unavailable, so correspondence between these
+source releases and the shipped CXB1 binary remains `[U]`.
 
 ## 2. Board wiring
 
@@ -99,9 +131,10 @@ which the vendor driver implements as `sdhci_msm_check_power_status()` `[S]`.
 (`MSM_PWR_IRQ_TIMEOUT_MS`). If the requested state is already recorded, it
 re-initialises the completion and does not wait. If the wait times out, it
 warns, dumps the power-control registers and continues. It does not abort the
-power-up sequence. After the wait, if card detect reports no card while
-`REQ_BUS_ON` was requested, it writes `SDHCI_POWER_CONTROL = 0` and requests
-`REQ_BUS_OFF` `[S]`.
+power-up sequence. In the pinned LineageOS revision only, after the wait, if
+card detect reports no card while `REQ_BUS_ON` was requested, it writes
+`SDHCI_POWER_CONTROL = 0` and requests `REQ_BUS_OFF`; the official CXG1/CWI2
+source omits that block `[S]/[U]`.
 
 `[S]` The handler `sdhci_msm_pwr_irq()` handles `CORE_PWRCTL_BUS_ON` in this
 order:
@@ -241,6 +274,9 @@ also wait for its acknowledgement, whose latency is not measured `[S]/[U]`.
   board-level authentication.
 - `[U]` The timeout and failure-acknowledgement paths' electrical consequences,
   and the clock state written by the register-restore path.
+- `[U]` Whether the shipped CXB1 binary contains the LineageOS card-detect
+  early-fail and no-card cleanup blocks, which are absent from the official
+  CXG1/CWI2 source.
 
 ## 6. Relationship to the pinned port
 

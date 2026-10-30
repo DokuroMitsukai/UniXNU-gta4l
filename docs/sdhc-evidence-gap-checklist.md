@@ -85,6 +85,20 @@ boundary-crossing accesses, with new wrap and ADR-to-XZR regressions; all six
 result sets are unchanged against the audited `4c447b9` baseline. No gate
 disposition changed `[S]`.
 
+Revision 11 (2026-10-31): records the official Samsung CXG1/CWI2 source
+comparison and the resulting limitations. The official source (kernel 4.19.157,
+`gta4l_mea_jt_defconfig`) contains the same power/regulator logic as the pinned
+trace, with the relevant files byte-identical between CXG1 and CWI2; it omits
+the LineageOS card-detect early-fail/cleanup blocks, and the exact CXB1 source
+remains unavailable. The inspected SM-T505 service-manual pages are not
+verified for the T505N: the block diagram says PM4250 while the captured DT uses
+PM6125, and the board photo appears 85943_1_04 REV1.0 while the document title
+says 85943_1_21; they cannot establish L11/L24 nets or population. A Samsung
+product brief and a public UFI log make KMDX60018M-B425 (32 GB eMMC 5.1 +
+24 Gb LPDDR4X, 254FBGA) the leading eMMC candidate, but the exact installed
+part and its electrical limits remain unconfirmed. No gate disposition changed
+`[S]`.
+
 ## 1. Purpose and canonical links
 
 This checklist links every canonical gate to its current evidence, missing
@@ -194,9 +208,10 @@ vendor DT, or by the prior controller-local result `[S]`.
   on an approved measurement procedure `[C]`.
 - **Status and unresolved contradictions:** Open. The vendor init level
   (2.704 V) and requested level (2.960 V) differ; which value applies at the XNU
-  handoff is not established `[U]`. "DX68MB" is a captured product string, not
-  proof of the exact ordering part or its datasheet `[U]`. A declared UFS
-  consumer does not prove UFS population `[S]/[U]`.
+  handoff is not established `[U]`. "DX68MB" is a captured product string; a
+  product brief and UFI log make `KMDX60018M-B425` the leading candidate, but
+  the exact ordering part and its datasheet remain unresolved `[S]/[C]/[U]`.
+  A declared UFS consumer does not prove UFS population `[S]/[U]`.
 
 ### `E2` — IO compatibility
 
@@ -577,6 +592,7 @@ unrelated Mu-Silicium dependency documentation; they are not board inputs `[S]`.
 | Input | Local status | Evidence or path | Authority and limits |
 | --- | --- | --- | --- |
 | Pinned Linux source cache | Present, outside the repository | `/tmp/opencode/linux-verify/`, 26 flat files, manifest digest `35b55f07119534f899da80ba1bae933b1bba67f91ec776553f21a91a150987e2`; revision `cf5f763f0ef8a5b4d8bb4163833cba1160c51894` | Source behaviour, register map, pad definitions and lifecycle `[S]`; not electrical limits or measurements; cache is ephemeral and has no `.git` `[S]/[U]` |
+| Official Samsung kernel source | Present, outside the repository | `T505NDXS7CXG1` ZIP `84e8f993...069f8e`; `T505NDXS5CWI2` ZIP `b00cbe48...081fb`; kernel 4.19.157; relevant files byte-identical | Confirms the vendor power/regulator logic `[S]`; no vendor DTS and not the captured CXB1 binary `[S]/[U]` |
 | Captured vendor FDT | Present, private, not tracked | `device-dump/private/gta4l-dump/live-fdt.dtb` SHA-256 `da1cb76f...a0b6ebc`; `live.dts` SHA-256 `81c18655...6a9b629` | Board description and bootargs identifiers `[S]`; post-unlock current-state, not authenticated stock, not population or measurement `[S]/[U]` |
 | RPM image | Present, private, not tracked | `device-dump/private/gta4l-dump/partitions/rpm.img` SHA-256 `272bebd3...b4937c6` | Bounded static LDOA analysis `[S]`; not runtime policy or retention `[U]` |
 | XBL and XBL config images | Present, private, not tracked | `xbl.img` SHA-256 `a09c7b62...9e073e`; `xbl_config.img` SHA-256 `6dbaad63...20d99e`; embedded `pmic_settings.bin` SHA-256 `410e45ac...f4e97597` | Bounded static boot-PMIC analysis `[S]`; PBS semantics and runtime effect unresolved `[U]` |
@@ -586,9 +602,9 @@ unrelated Mu-Silicium dependency documentation; they are not board inputs `[S]`.
 | Host-only analysis and tests | Present | `docs/evidence-baseline.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `docs/power-retention-evidence.md`, `docs/pmic-audit.md`, `docs/pm6125-*`, `scripts/test-gta4l-sdccdxe-decode.py` and the host-init suite | Bounded source, firmware and host evidence `[S]`; no hardware or electrical result `[S]` |
 | Board identifiers | Present in captured bootargs | `androidboot.hwversion=REV1.0`, `androidboot.revision=0`, `androidboot.board_id=P85946KA1`, serial `R9KT601KVHW` | Bootloader-provided identifiers `[S]`; not PCB revision, population, schematic match or safe test-point record `[U]` |
 | PM6125 datasheet or vendor register description | Absent | Only the source-derived map in `docs/pm6125-register-map.md` and identity inventory in `docs/pm6125-identity-evidence.md` | The map supplies bases, offsets and enable bit `[S]`; it does not supply absolute maxima, transient limits, fault semantics or a vendor read-safety statement `[U]` |
-| Exact Samsung eMMC datasheet | Absent | Only CID/CSD/product string and sector count | Card identity `[S]`; no VCC/VCCQ2 limits, power-up sequence or inrush data `[U]` |
+| Exact Samsung eMMC datasheet | Absent; leading candidate identified | Samsung product brief and UFI log identify `KMDX60018M-B425` (32 GB eMMC 5.1 + 24 Gb LPDDR4X, 254FBGA); full datasheet absent | Candidate identity `[S]/[C]`; no VCC/VCCQ2 limits, power-up sequence or inrush data `[U]` |
 | Shared-consumer and parent-supply limits | Absent | Only vendor DT declarations for `sdhc_1`/`ufshc` and the parent net names | Declared current `[S]`; no per-consumer datasheet, UFS population or L9/L23 loading and capability data `[U]` |
-| Board schematic, netlist, CAD or boardview | Absent | No PDF/schematic/CAD/boardview/netlist found in the repository or workspace search | DT describes intended wiring `[S]`; it does not prove population, net topology, decoupling or safe test points `[U]` |
+| Board schematic, netlist, CAD or boardview | Absent | No T505N-specific schematic located in the inspected sources. The inspected SM-T505 family pages show PMIC PM4250 and a board photo that appears 85943_1_04 REV1.0, while the captured DT uses PM6125 and the document title says 85943_1_21 | DT describes intended wiring `[S]`; the SM-T505 pages do not prove T505N population, net topology, decoupling or safe test points `[S]/[U]` |
 | SM6115 pad and SDHC power-control documentation | Absent | Pinned DTS/pinctrl source only | Pad field mapping `[S]`; no absolute pad limits or vendor power-control semantics `[U]` |
 | Vendor power-policy or runtime RPM documentation | Absent | Bounded static RPM/XBL trace only | Narrowed `E7` `[S]`; runtime policy, PBS semantics and retention unresolved `[U]` |
 | Verified safe measurement points | Absent | No schematic or board inspection record | Cannot connect a measurement to a known net without speculation `[U]` |
@@ -640,8 +656,8 @@ limits with page or section references `[S]`.
 | ID | Gates | Required evidence | Applicability to establish | Proposed acquisition route and custodian | Provenance to record | Extraction required | Current conflicts or blockers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `D1` | `E1`, `E4`, `E6`, `E8` | PM6125 datasheet or vendor register description | Installed PM6125 silicon and package variant; USID/subtype; L11/L24 and common-block applicability | Owner-supplied vendor document; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, page count, applicability statement | Absolute maxima, LDO operating limits, soft-start and transient data, fault/`QPNPINT` semantics, SPMI read/write caveats with page/section | PM6125 identity and USID unresolved (`pmic-audit.md`); the source-derived map is not a datasheet `[U]` |
-| `D2` | `E1`, `E3`, `E4`, `E5` | Samsung eMMC datasheet for the exact ordering part | Exact part behind `DX68MB` and the CID; package marking and ordering code | Owner or vendor service documentation; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, exact ordering part and marking match | VCC/VCCQ2 operating and absolute-maximum ranges, power-up sequence, inrush, back-power and unpowered-drive restrictions with page/section | Product string and CID do not prove the ordering part or datasheet applicability `[U]` |
-| `D3` | `E1`, `E2`, `E3`, `E6`, `S2` | SM-T505N service schematic, netlist, PCB/CAD or boardview matched to `REV1.0`/`P85946KA1`/`T505NDXS6CXB1` | Board revision, population variant, UFS population, L11/L24 nets, decoupling, SDC1 pad supply and pull-ups, safe test points | Owner or service documentation; custodian: device owner; inspection: qualified operator under separate approval `[U]` | Origin, revision, checksum, redistribution terms, board/revision match, sheet index | Net topology, population, decoupling, pad domains and test points; mark which facts each source establishes with sheet/page | Bootloader identifiers are not a PCB revision; no board document found locally `[U]` |
+| `D2` | `E1`, `E3`, `E4`, `E5` | Samsung eMMC datasheet for the exact ordering part | Leading candidate `KMDX60018M-B425` (32 GB eMMC 5.1 + 24 Gb LPDDR4X, 254FBGA) from a Samsung product brief and a public UFI log; exact installed ordering part, package marking and full datasheet still absent | Owner or vendor service documentation; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, exact ordering part and marking match | VCC/VCCQ2 operating and absolute-maximum ranges, power-up sequence, inrush, back-power and unpowered-drive restrictions with page/section | Product string/CID and a tool-selected part name do not prove the installed ordering part; full electrical limits remain absent `[S]/[C]/[U]` |
+| `D3` | `E1`, `E2`, `E3`, `E6`, `S2` | SM-T505N service schematic, netlist, PCB/CAD or boardview matched to `REV1.0`/`P85946KA1`/`T505NDXS6CXB1`; no T505N-specific document located in the inspected sources (the inspected SM-T505 family pages show PM4250 and 85943_1_04, not the captured PM6125) | Board revision, population variant, UFS population, L11/L24 nets, decoupling, SDC1 pad supply and pull-ups, safe test points | Owner or service documentation; custodian: device owner; inspection: qualified operator under separate approval `[U]` | Origin, revision, checksum, redistribution terms, board/revision match, sheet index | Net topology, population, decoupling, pad domains and test points; mark which facts each source establishes with sheet/page | Bootloader identifiers are not a PCB revision; the SM-T505 family pages do not match the captured PM6125/board revision and cannot establish L11/L24 nets, population or test points `[S]/[U]` |
 | `D4` | `E2`, `E5`, `E6`, `E8` | SM6115 pad and SDHC power-control documentation; SPMI-arbiter register documentation | Installed SoC revision; SDC1 TLMM pad limits; SDHCI power-control and arbiter clear/read-back semantics | Owner-supplied SoC or vendor documentation; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, SoC revision applicability | Pad absolute limits, drive/pull constraints, power-control semantics, arbiter bits 31:8 read-back and write rules with page/section | Pinned DTS gives field mapping only; arbiter semantics unresolved (`pmic-audit.md`) `[U]` |
 | `D5` | `E7` | RPM/NPA power-policy documentation or qualified runtime evidence | RPM firmware revision in `rpm.img`; L11/L24 runtime requests and retention across transitions; `GlinkDxe`/`NpaDxe` effects | Owner-supplied vendor documentation, or a separately approved runtime trace; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, firmware-image match, trace method and calibration | Initial/active/sleep/reset policy, request and aggregation rules and PBS semantics with page/section or trace evidence; transition-retention measurements are tracked in `D6` | Bounded static trace narrows but does not close `E7`; no runtime policy evidence `[U]` |
 | `D6` | `E1`–`E7`, `E9`, `S2` | Qualified measurement and recovery records | Rails, pads, current and transients; power-up/down order and minimum delays; pad leakage and back-power; transition retention; safe-stop, discharge/power-cycle and re-initialization | Separate approved device procedures under `sdhc-decision-memo.md` §6.2–§6.3; operator: qualified measurement operator; approval: device owner `[U]` | Procedure revision, instrument calibration/resolution/bandwidth/uncertainty, board and firmware hashes, raw traces, timestamps | Measured values against sourced limits; sequencing order and delays; leakage/back-power; retention and recovery acceptance criteria; anomalies and repetitions | No measurement or rail-recovery procedure exists; device action is not authorized; `D5` supplies the policy inputs `[U]` |
@@ -677,15 +693,20 @@ Register rules:
 1. **L24 init versus requested voltage.** The vendor DT declares init 2.704 V
    and a requested level of 2.960 V; which value applies at the XNU handoff is
    not established `[S]/[U]`.
-2. **eMMC exact part.** `DX68MB` is a captured product string; the exact Samsung
-   ordering part and datasheet applicability remain unresolved `[S]/[U]`.
+2. **eMMC exact part.** `DX68MB` is a captured product string; a Samsung product
+   brief and UFI log make `KMDX60018M-B425` the leading candidate, but the exact
+   Samsung ordering part, package marking and datasheet applicability remain
+   unresolved `[S]/[C]/[U]`.
 3. **UFS population.** The vendor DT declares `ufshc` `status = "ok"` and
    600 mA on each shared rail, while mainline disables it and recovery observes
    only eMMC; physical population is unknown `[S]/[U]`.
 4. **Board revision.** The memo records the board revision as unknown; the
    captured bootargs report `REV1.0`, `revision=0` and `board_id=P85946KA1`.
    These identifiers do not establish the PCB revision, population variant or
-   schematic match `[S]/[U]`.
+   schematic match. The inspected SM-T505 family pages show a different
+   PMIC/revision and are not a verified T505N board record; the manual's own board photo
+   appears 85943_1_04, so its 85943_1_21 title is not a board-revision
+   verification `[S]/[U]`.
 5. **Pad configuration map.** The relationship between
    `uefiplat.cfg` `Sdc1GpioConfigOn = 0x1E92` / `Off = 0xA00` and the `0x9fe4`
    TLMM write remains unresolved `[U]`.
@@ -721,6 +742,9 @@ Register rules:
   documentation, non-scanning USID and runtime APID/descriptor-base evidence,
   verified safe test points, a qualified rail-recovery procedure, independent
   review and separate owner approval `[U]`.
+- The inspected SM-T505 family service-manual pages are not a verified T505N
+  board record; no T505N-specific schematic was located in the inspected
+  sources `[S]/[U]`.
 - Phase 2 tracking is prepared as a template in §6. It records provenance,
   applicability, extraction and conflict fields, but no document has been
   acquired `[U]`.
