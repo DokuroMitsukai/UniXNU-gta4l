@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T14:45:30Z`, after the final edits to the
+Hashes were taken at `2026-10-30T14:48:30Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them. The snapshot is intended to be committed without
@@ -21,6 +21,14 @@ update the table.
 | HEAD | `3c3d586dd1feb1d63ade4452800a4ccc7cbcee31` |
 | Dirty entries at the hash snapshot | 6 changed: 5 modified (`docs/evidence-baseline.md`, `docs/kernel-build-recipe.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `porting.toml`) and 1 untracked (`docs/sdhc-power-pad-dependency-report.md`) |
 | Staging and commits | None at the snapshot; the snapshot lands as one commit covering the documentation and host-only tooling |
+
+The dirty-entry row is the pre-commit snapshot, not the post-commit tree. The
+report batch contained exactly those six paths: five modified
+(`docs/evidence-baseline.md`, `docs/kernel-build-recipe.md`,
+`docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`,
+`porting.toml`) and one added (`docs/sdhc-power-pad-dependency-report.md`).
+The earlier documentation batch contained the eleven paths listed in the
+previous snapshot: six modified and five added.
 
 The current snapshot is the evidence branch after the Linux
 fixture-reproduction, stale-status reconciliation, recipe-correction,
@@ -144,6 +152,12 @@ qualified `HOST INIT REPORT` wording). The historical `bc228be7...` source
 (`HOST INIT OK` wording) was used only for the isolated kernel replay and the
 reproduced-kernel evidence packets; see `kernel-build-recipe.md` §5 and
 `out/gta4l/ram-root-sdhci-repro-kernel-host-init-evidence/README.md`.
+
+The HostInit source correction was a working-tree restoration to the existing
+HEAD blob `3f8f4531...`; it created no content diff and is therefore absent
+from both commits. The regression it removed was an uncommitted local revert to
+`bc228be7...`. `porting.toml` changed only to add the diagnostics finding that
+summarizes the new report; it is not a build-input change.
 
 ## 3. Pinned Linux source cache
 
@@ -300,6 +314,18 @@ for path, got, want in bad:
 raise SystemExit(1 if bad else 0)
 PY
 ```
+
+### 6.1 Validation record
+
+After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
+`PATH=/tmp/opencode/py311/bin:$PATH` and `LC_ALL=C`:
+
+| Check | Result |
+| --- | --- |
+| `scripts/test-gta4l-diagnostic-payload.py`, `test-gta4l-diagnostic-package.py`, `test-gta4l-boot-image.py`, `test-gta4l-sdhci-handoff-audit.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-xnu-mtimes.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py`, `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `check-gta4l.py` | All exited 0 |
+| Hash-table self-check in §6 | `rows=29 mismatches=0` |
+| `porting.toml` parse with `tomllib` | 13 areas |
+| `git diff --check` | Clean |
 
 The host checks are read-only and do not build, flash, boot, power or access a
 device `[S]`.
