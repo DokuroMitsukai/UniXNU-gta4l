@@ -14,13 +14,11 @@ analyzer:
   including literal-load destination registers, the builder type byte and the
   registration argument setup and stack stores;
 - decodes independently specified Thumb BL and LDR-literal vectors;
-- checks the production setup and literal-load tables against an independent
-  instruction and register inventory;
+- checks the production setup, literal-load and code tables against an
+  independent instruction, register and literal inventory;
 - rejects a wrong image hash, a changed name record, a wrong mapping, a changed
-  selector, a changed voltage row, a changed boundary terminator or entry, an
-  altered callback literal, a class misattribution, an altered call edge, an
-  altered literal-load destination and an altered registration setup
-  instruction;
+  selector, a changed voltage row, a changed boundary terminator or entry, and
+  an alteration at every documented code site;
 - produces deterministic output.
 
 No private firmware is read or vendored.
@@ -83,6 +81,37 @@ EXPECTED_LITERAL_LOADS = (
     (0x4698ad0, 3, 0x4698afc),
     (0x4698ad8, 0, 0x4698af8),
 )
+EXPECTED_CALL_EDGES = (
+    (0x4615502, 0x4615906),
+    (0x4615970, 0x4614920),
+    (0x4616e8a, 0x4615d08),
+    (0x4615d7c, 0x4617b48),
+    (0x4698ade, 0x460ae14),
+)
+EXPECTED_CLASS_IMMEDIATES = (
+    (0x461748e, 0x2109),
+    (0x4617490, 0x220c),
+    (0x461749e, 0x2119),
+    (0x46174a0, 0x2210),
+    (0x46174ac, 0x210f),
+    (0x46174ae, 0x220c),
+)
+EXPECTED_CLASS_BLX = (0x4617498, 0x46174a6, 0x46174b4)
+EXPECTED_CLASS_STRINGS = (
+    (0x46174c8, b'smpa'),
+    (0x46174d4, b'ldoa'),
+    (0x46174d8, b'clka'),
+)
+EXPECTED_CLASS_LITERALS = (
+    (0x46174c4, 0x17469, 0x4617468),
+    (0x46174cc, 0x1746b, 0x461746a),
+    (0x46174d0, 0xae15, 0x460ae14),
+)
+EXPECTED_BUILDER_LITERALS = (
+    (0x4698af8, 0x153b9, 0x46153b8),
+    (0x4698afc, 0x151f9, 0x46151f8),
+)
+EXPECTED_CLASS_STUBS = (0x4617468, 0x461746a)
 
 
 def put16(block, offset, value):
@@ -273,14 +302,27 @@ def check_decoders(image):
     assert decode_bl(image, loads, 0x4600104) is None
     code_setup = tuple((site, value) for site, value, _ in module['CODE_SETUP'])
     literal_loads = tuple(module['LITERAL_LOADS'])
+    call_edges = tuple((site, target) for site, _, target in module['CALL_EDGES'])
+    class_immediates = tuple((site, value) for site, value, _ in module['CLASS_IMMEDIATES'])
+    class_literals = tuple(module['CLASS_LITERALS'])
+    builder_literals = tuple(module['BUILDER_LITERALS'])
     assert code_setup == EXPECTED_CODE_SETUP, code_setup
     assert literal_loads == EXPECTED_LITERAL_LOADS, literal_loads
+    assert call_edges == EXPECTED_CALL_EDGES, call_edges
+    assert class_immediates == EXPECTED_CLASS_IMMEDIATES, class_immediates
+    assert tuple(module['CLASS_BLX']) == EXPECTED_CLASS_BLX
+    assert tuple(module['CLASS_STRINGS']) == EXPECTED_CLASS_STRINGS
+    assert class_literals == EXPECTED_CLASS_LITERALS, class_literals
+    assert builder_literals == EXPECTED_BUILDER_LITERALS, builder_literals
+    assert tuple(module['CLASS_STUBS']) == EXPECTED_CLASS_STUBS
     return module
 
 
 def write_mutation(directory, image, name, offset, value, width=4):
     mutated = bytearray(image)
-    if width == 4:
+    if isinstance(value, (bytes, bytearray)):
+        mutated[offset:offset + len(value)] = value
+    elif width == 4:
         put32(mutated, offset, value)
     elif width == 2:
         put16(mutated, offset, value)
@@ -361,6 +403,10 @@ def main():
         assert second.returncode == 0, second.stderr
         assert second.stdout == output
 
+        second_code = run(path, '--expect-sha256', digest, '--code')
+        assert second_code.returncode == 0, second_code.stderr
+        assert second_code.stdout == code_output
+
         expect_failure(path, 'does not match')
 
         mutated = bytearray(image)
@@ -407,17 +453,53 @@ def main():
         expect_failure(group_duplicate, 'group table entry 1', '--expect-sha256',
                        group_duplicate_digest)
 
-        callback, callback_digest = write_mutation(
-            directory, image, 'callback-rpm.img', va_offset(0x4698af8), 0x153b8)
-        expect_failure(callback, 'builder literal', '--expect-sha256', callback_digest, '--code')
+        for site, _ in EXPECTED_CALL_EDGES:
+            call_edge, edge_digest = write_mutation(
+                directory, image, f'call-{site:x}-rpm.img', va_offset(site, 2),
+                0x46c0, width=2)
+            expect_failure(call_edge, f'{site:#x} calls', '--expect-sha256',
+                           edge_digest, '--code')
 
-        class_type, class_digest = write_mutation(
-            directory, image, 'class-rpm.img', va_offset(0x46174a0, 2), 0x220c, width=2)
-        expect_failure(class_type, 'ldoa type 0x10', '--expect-sha256', class_digest, '--code')
+        for site, _ in EXPECTED_CLASS_IMMEDIATES:
+            class_immediate, class_digest = write_mutation(
+                directory, image, f'class-imm-{site:x}-rpm.img', va_offset(site, 2),
+                0x46c0, width=2)
+            expect_failure(class_immediate, f'{site:#x} is', '--expect-sha256',
+                           class_digest, '--code')
 
-        call_edge, edge_digest = write_mutation(
-            directory, image, 'edge-rpm.img', va_offset(0x4615502, 2), 0xF001, width=2)
-        expect_failure(call_edge, 'expected 0x4615906', '--expect-sha256', edge_digest, '--code')
+        for site in EXPECTED_CLASS_BLX:
+            class_blx, class_blx_digest = write_mutation(
+                directory, image, f'class-blx-{site:x}-rpm.img', va_offset(site, 2),
+                0x46c0, width=2)
+            expect_failure(class_blx, 'class registration call', '--expect-sha256',
+                           class_blx_digest, '--code')
+
+        for site, text in EXPECTED_CLASS_STRINGS:
+            class_string, string_digest = write_mutation(
+                directory, image, f'class-string-{site:x}-rpm.img',
+                va_offset(site, len(text)), b'x' * len(text), width=len(text))
+            expect_failure(class_string, 'class string at', '--expect-sha256',
+                           string_digest, '--code')
+
+        for site, literal, _ in EXPECTED_CLASS_LITERALS:
+            class_literal, literal_digest = write_mutation(
+                directory, image, f'class-literal-{site:x}-rpm.img',
+                va_offset(site), literal ^ 1)
+            expect_failure(class_literal, 'class literal at', '--expect-sha256',
+                           literal_digest, '--code')
+
+        for site in EXPECTED_CLASS_STUBS:
+            stub, stub_digest = write_mutation(
+                directory, image, f'stub-{site:x}-rpm.img', va_offset(site, 2),
+                0x46c0, width=2)
+            expect_failure(stub, 'callback stub', '--expect-sha256', stub_digest, '--code')
+
+        for site, literal, _ in EXPECTED_BUILDER_LITERALS:
+            builder_literal, builder_digest = write_mutation(
+                directory, image, f'builder-literal-{site:x}-rpm.img',
+                va_offset(site), literal ^ 1)
+            expect_failure(builder_literal, 'builder literal at', '--expect-sha256',
+                           builder_digest, '--code')
 
         for site, _ in EXPECTED_CODE_SETUP:
             setup, setup_digest = write_mutation(

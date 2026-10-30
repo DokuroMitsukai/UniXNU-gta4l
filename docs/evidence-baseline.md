@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T06:40:16Z`, after the final edits to the
+Hashes were taken at `2026-10-30T06:48:14Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,17 +16,17 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `3a9c1e2de400706b96256d60f940ecd0097bd66e` |
-| Dirty entries at the hash snapshot | 2 modified (`scripts/test-gta4l-rpm-ldoa-analysis.py` and this baseline) |
+| HEAD | `1b073315a3cc7d5f87fbe07bccd5ba1261d5295b` |
+| Dirty entries at the hash snapshot | 3 modified (`docs/power-retention-evidence.md`, `scripts/test-gta4l-rpm-ldoa-analysis.py` and this baseline) |
 | Staging and commits | None at the snapshot; the snapshot lands as one documentation and tooling commit |
 
 The current snapshot is the evidence branch after the RPM LDOA attribution,
 NativeEmmc credit, attribution-reconciliation, initial-hardening and
-registration-check commits, with the independent self-test inventory and the
-provenance correction in the working tree. The hash table below describes that
-working tree, not the original evidence-closure tree. The original provenance
-is retained separately because the path lists and dirty inventory are
-historical observations.
+registration-check commits, with the independent self-test inventory,
+exhaustive per-site negative controls and the provenance correction in the
+working tree. The hash table below describes that working tree, not the
+original evidence-closure tree. The original provenance is retained separately
+because the path lists and dirty inventory are historical observations.
 
 ### Historical provenance
 
@@ -117,11 +117,11 @@ bytes of the previously booted image `[S]`.
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
 | Decision memo | `docs/sdhc-decision-memo.md` | `f0dc6bb3e83bb41b55cd1eeae222065b71d988581a725001b2d48ae7b6309c1e` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
-| Retention evidence | `docs/power-retention-evidence.md` | `328664e1104518497e397fb4da7b3fb630eb25a233ff6ecf4c801c575f7e4607` |
+| Retention evidence | `docs/power-retention-evidence.md` | `eb91725bd6a63acded9e63ca0673670f36b43a3253da15d8ec17cb67f0387e07` |
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `501672b50a86319b7bd095a92b674c162ccc485963e510a708649aa985486c22` |
 | RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `d967e640ca8f6f7eb0607d0a51aea9b541b21901ed4bf5a0a3e9be090f2fa4a8` |
-| RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `f801d099753e69162126edb8898ca98248f82b2e5186e86abd724fb95b658b85` |
+| RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `c670e2788044bd8b5054b19452dde8080ee9dc93d794ffe8abf3e2890e202afc` |
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |

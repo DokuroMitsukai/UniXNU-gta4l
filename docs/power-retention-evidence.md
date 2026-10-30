@@ -413,12 +413,13 @@ commit), `0x4616e8a` (`smpa` bridge → class/ID setter) and `0x4615d7c`
 (class/ID setter → generic setter). These are mechanical instruction checks at
 documented sites, not proof that a callback executes or that a request exists
 at runtime. The self-test covers a wrong hash, a changed name record, a wrong
-mapping, a matching word in `PT_NULL`, a Thumb-tagged reference, an altered
-callback literal, a class misattribution, an altered call edge, a changed
+mapping, a matching word in `PT_NULL`, a Thumb-tagged reference, a changed
 selector, a changed voltage row, a changed boundary terminator, a zeroed or
-duplicated boundary entry, a duplicated group-table entry, an altered
-literal-load destination and an altered registration setup instruction, plus
-independently specified Thumb BL and LDR-literal decoder vectors. The captured
+duplicated boundary entry, a duplicated group-table entry, and an alteration at
+every documented code site (call edge, class immediate, BLX, class string,
+class literal, builder literal, callback stub, literal-load destination and
+registration setup instruction), plus independently specified Thumb BL and
+LDR-literal decoder vectors and `--code` output determinism. The captured
 image is private and is not vendored; the analyzer's self-test uses a synthetic
 image only. The two boundary-table words with no resolved PC-relative loader
 are `0x46006a4` and `0x4623ef8` `[S]`.
