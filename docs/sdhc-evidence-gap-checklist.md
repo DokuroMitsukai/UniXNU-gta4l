@@ -12,10 +12,16 @@ Tags: `[S]` established by a pinned source, captured DT, traced firmware bytes,
 or recorded host evidence; `[C]` conditional inference with the condition
 stated; `[U]` not established by the available evidence.
 
+Revision 2 (2026-10-30): separates staged approvals from gate closure, labels
+dependencies as informational, adds claim-level source references, records the
+SPMI-arbiter acquisition gaps, narrows unsupported acquisition restrictions,
+marks roles as proposed and adds the Phase 2 acquisition register. No gate
+disposition changed `[S]`.
+
 ## 1. Purpose and canonical links
 
 This checklist links every canonical gate to its current evidence, missing
-input, acquisition route, responsible role, closure criterion and dependencies.
+input, acquisition route, proposed role, closure criterion and dependencies.
 It does not create new gates and does not restate the closure criteria as new
 requirements. The canonical definitions remain:
 
@@ -31,6 +37,36 @@ requirements. The canonical definitions remain:
 Closure criteria below are quoted from the "Closure criterion" column of
 `sdhc-decision-memo.md` §4. The citation is part of the record; the criterion is
 not redefined here `[S]`.
+
+Three record-keeping distinctions prevent this inventory from being read as a
+closure order:
+
+- **Dependencies are informational cross-links, not prerequisites.** The
+  `Informational cross-dependencies` field records which gates share inputs or
+  constrain each other. It does not define a closure sequence and does not
+  create a cycle. The staged approvals are governed only by
+  `sdhc-decision-memo.md` §6.1–§6.4: documentation and host-side closure,
+  approval of a measurement-only baseline, approval of a controlled activation
+  experiment, and capability approval. A measurement-only experiment may be
+  approved before the measurement-dependent gates close (memo §6.2); activation
+  requires the memo §6.3 conditions: baseline results, the `S1` design and host
+  tests, the documentation closure for `E1`–`E6` and `E8`, defined acceptance
+  limits, `E9` recovery, `S3` review and `S4` approval; capability approval
+  requires the controlled activation results, the measurement-dependent closure
+  of `E1`–`E7`, the `E8` decision and independent review (memo §6.4) `[S]`.
+- **Responsibilities are proposed, not accepted assignments.** No assignment
+  record exists. Role key: **document custodian** obtains or retains the input
+  and records its provenance; **technically qualified author/analyst** produces
+  the host-only extraction, design, decision or procedure; **measurement
+  operator** executes an approved device procedure; **independent reviewer**
+  reviews without authoring; **approving owner** gives separate written
+  approval. `S3` and `S4` remain separate roles `[S]`. Every proposed role
+  remains unconfirmed until the owner accepts it in writing `[U]`.
+- **Evidence references are claim-level where the record supports it.** §3.1
+  maps each gate's claim group to the deriving document section, pinned input
+  or artifact and observation stage. Historical device observations are
+  distinguished from current host-tested source; neither is a measurement
+  `[S]/[U]`.
 
 ## 2. Status summary
 
@@ -79,15 +115,16 @@ vendor DT, or by the prior controller-local result `[S]`.
   description, exact eMMC datasheet, and board schematic/netlist. Host-only
   qualification if the documents are supplied; no live PMIC read substitutes for
   them `[S]`.
-- **Responsible:** Device owner (document acquisition and applicability);
-  build agent (host-only extraction and citation once supplied).
+- **Proposed responsible:** Device owner (document custodian and applicability);
+  build agent (technically qualified analyst for host-only extraction and
+  citation once supplied).
 - **Acceptance criterion (source):** "Datasheets and schematic/netlist establish
   operating ranges and absolute maxima for VCC, VCCQ2 and every shared
   consumer" (`sdhc-decision-memo.md` §4, `E1`) `[S]`.
 - **Non-substitutes (source):** DT ranges, PMIC readback and controller bits
   (`sdhc-decision-memo.md` §4, `E1`) `[S]`.
-- **Dependencies:** `E2`, `E3`, `E7`; the measurement-dependent part also depends
-  on an approved measurement procedure `[S]`.
+- **Informational cross-dependencies:** `E2`, `E3`, `E7`; the measurement-dependent part also depends
+  on an approved measurement procedure `[C]`.
 - **Status and unresolved contradictions:** Open. The vendor init level
   (2.704 V) and requested level (2.960 V) differ; which value applies at the XNU
   handoff is not established `[U]`. "DX68MB" is a captured product string, not
@@ -107,14 +144,14 @@ vendor DT, or by the prior controller-local result `[S]`.
 - **Acquisition route:** PM6125/eMMC/SoC pad documentation and a verified
   schematic, then a pad measurement under a separately approved procedure
   (`sdhc-decision-memo.md` §6.2) `[S]`.
-- **Responsible:** Device owner (documents and approval); qualified measurement
+- **Proposed responsible:** Device owner (document custodian and approving owner); qualified measurement
   operator (pad measurement).
 - **Acceptance criterion (source):** "Pad domain, pull-up source and
   unpowered-drive limits established, and the handoff state measured"
   (`sdhc-decision-memo.md` §4, `E2`) `[S]`.
 - **Non-substitutes (source):** DT pinctrl values, UEFI write values and
   `INT_STABLE` (`sdhc-decision-memo.md` §4, `E2`) `[S]`.
-- **Dependencies:** `E1`, `E3`, `E6` `[S]`.
+- **Informational cross-dependencies:** `E1`, `E3`, `E6` `[C]`.
 - **Status and unresolved contradictions:** Open. The relationship between the
   `uefiplat.cfg` `Sdc1GpioConfigOn = 0x1E92` / `Off = 0xA00` entries and the
   `0x9fe4` register write remains unresolved `[U]`. The SDC2 decode gives DATA
@@ -136,14 +173,15 @@ vendor DT, or by the prior controller-local result `[S]`.
 - **Acquisition route:** Schematic/netlist/population evidence and physical
   inspection, then current measurement under separate device approval
   (`sdhc-decision-memo.md` §4, `E3`) `[S]`.
-- **Responsible:** Device owner (population/schematic evidence and approval);
-  qualified measurement operator (current measurement).
+- **Proposed responsible:** Device owner (document custodian and approving
+  owner); qualified measurement operator (measurement operator for current
+  measurement).
 - **Acceptance criterion (source):** "Population and shared loading
   established; regulator capability and measured current within limits"
   (`sdhc-decision-memo.md` §4, `E3`) `[S]`.
 - **Non-substitutes (source):** DT declared current and recovery eMMC inventory
   (`sdhc-decision-memo.md` §4, `E3`) `[S]`.
-- **Dependencies:** `E1`, `E4` `[S]`.
+- **Informational cross-dependencies:** `E1`, `E4` `[C]`.
 - **Status and unresolved contradictions:** Open. The vendor DT declares
   `ufshc` `status = "ok"` and shares both rails, while mainline disables it and
   recovery sees only eMMC; physical UFS population is unresolved `[S]/[U]`.
@@ -155,20 +193,22 @@ vendor DT, or by the prior controller-local result `[S]`.
   in the register map; the regulator core has a `soft_start` hook; no board ramp
   property or value is present `[S]`. The RPM regulator ops expose no
   `set_soft_start`, `enable_time` or `off_on_delay` in the traced path `[S]`.
+  That absence is bounded to the pinned regulator-core/RPM source and the board
+  DT; no vendor datasheet or silicon documentation was available `[S]/[U]`.
 - **Missing documentation or measurement:** Required slew rate, inrush,
   overshoot/undershoot, settling time, brownout and load-step response;
   measured ramp and transient behavior on this board `[U]`.
 - **Acquisition route:** PM6125/eMMC datasheet transient data plus
   oscilloscope/current-probe capture under a separately approved procedure
   (`sdhc-decision-memo.md` §4, `E4`) `[S]`.
-- **Responsible:** Device owner (documents and approval); qualified measurement
+- **Proposed responsible:** Device owner (document custodian and approving owner); qualified measurement
   operator (capture).
 - **Acceptance criterion (source):** "Ramp, inrush, overshoot/undershoot,
   settling and brownout requirements established and measured"
   (`sdhc-decision-memo.md` §4, `E4`) `[S]`.
 - **Non-substitutes (source):** Soft-start register and regulator-core hook
   (`sdhc-decision-memo.md` §4, `E4`) `[S]`.
-- **Dependencies:** `E1`, `E3` `[S]`.
+- **Informational cross-dependencies:** `E1`, `E3` `[C]`.
 - **Status and unresolved contradictions:** Open. The existence of a soft-start
   hook does not establish a configured ramp, and no board value or capture
   exists `[S]/[U]`.
@@ -186,13 +226,13 @@ vendor DT, or by the prior controller-local result `[S]`.
   no-ack scope leaves a safe pending request; measured sequencing `[U]`.
 - **Acquisition route:** Datasheet and board documentation, then controlled
   measurement under separate approval (`sdhc-decision-memo.md` §4, `E5`) `[S]`.
-- **Responsible:** Device owner (documents and approval); qualified measurement
+- **Proposed responsible:** Device owner (document custodian and approving owner); qualified measurement
   operator (sequencing capture).
 - **Acceptance criterion (source):** "Electrical order and minimum delays
   established and verified" (`sdhc-decision-memo.md` §4, `E5`) `[S]`.
 - **Non-substitutes (source):** Linux software order (`sdhc-decision-memo.md`
   §4, `E5`) `[S]`.
-- **Dependencies:** `E2`, `E7`, `E8` `[S]`.
+- **Informational cross-dependencies:** `E2`, `E7`, `E8` `[C]`.
 - **Status and unresolved contradictions:** Open. Linux software order is not an
   electrical order `[S]`. The UEFI handler writes a success result after a
   controller reset; it is not a bus-power-on regulator sequence and does not
@@ -209,13 +249,13 @@ vendor DT, or by the prior controller-local result `[S]`.
   limits; measured leakage/back-power behavior `[U]`.
 - **Acquisition route:** Datasheet/schematic limits plus pad-leakage measurement
   under separate approval (`sdhc-decision-memo.md` §4, `E6`) `[S]`.
-- **Responsible:** Device owner (documents and approval); qualified measurement
+- **Proposed responsible:** Device owner (document custodian and approving owner); qualified measurement
   operator (leakage/back-power measurement).
 - **Acceptance criterion (source):** "Unpowered-drive restrictions and
   back-powering limits established" (`sdhc-decision-memo.md` §4, `E6`) `[S]`.
 - **Non-substitutes (source):** Vendor properties and software reset state
   (`sdhc-decision-memo.md` §4, `E6`) `[S]`.
-- **Dependencies:** `E2`, `E5` `[S]`.
+- **Informational cross-dependencies:** `E2`, `E5` `[C]`.
 - **Status and unresolved contradictions:** Open. The two vendor properties are
   hints, not limits; their electrical meaning is unresolved `[S]/[U]`.
 
@@ -232,19 +272,21 @@ vendor DT, or by the prior controller-local result `[S]`.
 - **Missing documentation or measurement:** Actual rail state at handoff and
   across suspend, shutdown and reboot; runtime LDOA request path
   (parser/aggregator), latched per-id state and runtime-built descriptors; PBS
-  instruction semantics; indirect UEFI effects; transition measurements `[U]`.
+  instruction semantics; indirect UEFI/transport effects (`GlinkDxe`/`NpaDxe`)
+  on L11/L24 requests; transition measurements `[U]`.
 - **Acquisition route:** RPM firmware documentation or reversing plus
   transition measurements under separate approval (`sdhc-decision-memo.md` §4,
   `E7`) `[S]`.
-- **Responsible:** Device owner (vendor documentation/approval); build agent
-  (host-only firmware trace within the existing scope); qualified measurement
-  operator (transition measurements).
+- **Proposed responsible:** Device owner (document custodian and approving
+  owner); build agent (technically qualified analyst for a bounded host-only
+  trace); qualified measurement operator (measurement operator for transition
+  measurements).
 - **Acceptance criterion (source):** "Initial/active/sleep/reset policy and
   retention across each transition established" (`sdhc-decision-memo.md` §4,
   `E7`) `[S]`.
 - **Non-substitutes (source):** No AP vote, `pwr=00`, DT `always-on` and
   firmware trace (`sdhc-decision-memo.md` §4, `E7`) `[S]`.
-- **Dependencies:** `E1`, `E5` `[S]`.
+- **Informational cross-dependencies:** `E1`, `E5` `[C]`.
 - **Status and unresolved contradictions:** Open. The retained-rail hypothesis
   is conditional; an absent AP vote is not retention, and the bounded static
   trace is not a runtime policy result `[S]/[U]`. The class object and per-id
@@ -261,19 +303,25 @@ vendor DT, or by the prior controller-local result `[S]`.
   interpretation `[S]/[C]`. Whether PM6125 uses the `0x14`/`0x16` `QPNPINT`
   layout is unresolved `[U]`.
 - **Missing documentation or measurement:** PM6125 fault semantics, USID/subtype
-  and `QPNPINT` applicability; safe pending-request behavior; a documented
-  acknowledge-or-not decision `[U]`.
+  and `QPNPINT` applicability; SPMI-arbiter clear-register read/write semantics
+  (what bits 31:8 read as and whether writing them back is safe); runtime
+  APID/owner-status evidence for the `+0x28` path; descriptor-base override
+  population; safe pending-request behavior; a documented acknowledge-or-not
+  decision `[U]`.
 - **Acquisition route:** PM6125 register description/datasheet and non-scanning
-  identity evidence; live PMIC access remains blocked (`sdhc-decision-memo.md`
-  §4, `E8`) `[S]`.
-- **Responsible:** Device owner (documents); build agent (host-only analysis of
-  supplied documentation); independent reviewer (decision review).
+  identity evidence; SoC SPMI-arbiter register documentation; runtime APID
+  bitmap or transport trace; a write analysis covering indirect and computed
+  stores for the descriptor base; live PMIC access remains blocked
+  (`sdhc-decision-memo.md` §4, `E8`) `[S]`.
+- **Proposed responsible:** Device owner (document custodian); build agent
+  (technically qualified analyst and proposed decision author); independent
+  reviewer (reviewer).
 - **Acceptance criterion (source):** "Fault semantics established and a
   documented acknowledge-or-not decision with pending-request behaviour"
   (`sdhc-decision-memo.md` §4, `E8`) `[S]`.
 - **Non-substitutes (source):** Generic arbiter layout, PMI632 analogy and
   SDHCI semantics (`sdhc-decision-memo.md` §4, `E8`) `[S]`.
-- **Dependencies:** `E5`, `E7` `[S]`.
+- **Informational cross-dependencies:** `E5`, `E7` `[C]`.
 - **Status and unresolved contradictions:** Open. A generic `QPNPINT` layout is
   not proof for PM6125 `[S]/[U]`. The UEFI handler's result-only write follows a
   controller reset and is not a response to a bus-on request, so it does not
@@ -291,13 +339,14 @@ vendor DT, or by the prior controller-local result `[S]`.
 - **Acquisition route:** Written procedure with safe stop, discharge/power-cycle
   and re-init order, verification measurement, and independent review
   (`sdhc-decision-memo.md` §4, `E9`) `[S]`.
-- **Responsible:** Device owner (procedure/approval); qualified measurement
-  operator (verification); independent reviewer (review).
+- **Proposed responsible:** Build agent (proposed procedure author, host-only);
+  qualified measurement operator (measurement operator for verification);
+  independent reviewer (reviewer); device owner (approving owner).
 - **Acceptance criterion (source):** "Qualified recovery procedure and
   acceptance criteria established" (`sdhc-decision-memo.md` §4, `E9`) `[S]`.
 - **Non-substitutes (source):** Software rollback (`sdhc-decision-memo.md` §4,
   `E9`) `[S]`.
-- **Dependencies:** `E1`–`E8` `[S]`.
+- **Informational cross-dependencies:** `E1`–`E8` `[C]`.
 - **Status and unresolved contradictions:** Open. Software rollback repairs
   software only; it cannot repair electrical damage `[S]`.
 
@@ -315,13 +364,13 @@ vendor DT, or by the prior controller-local result `[S]`.
   negative tests for the candidate `[U]`.
 - **Acquisition route:** Host-only design after the applicable `E5`/`E8`
   documentation is available (`sdhc-decision-memo.md` §4, `S1`) `[S]`.
-- **Responsible:** Build agent (host-only design/tests); independent reviewer
-  (design review).
+- **Proposed responsible:** Build agent (technically qualified design author);
+  independent reviewer (reviewer).
 - **Acceptance criterion (source):** "Approved design passes its policy, oracle
   and negative tests" (`sdhc-decision-memo.md` §4, `S1`) `[S]`.
 - **Non-substitutes (source):** Host-local diagnostic result
   (`sdhc-decision-memo.md` §4, `S1`) `[S]`.
-- **Dependencies:** `E5`, `E8` `[S]`.
+- **Informational cross-dependencies:** `E5`, `E8` `[C]`.
 - **Status and unresolved contradictions:** Open. Passing host tests do not
   change the electrical decision, and the existing controller-local policy is
   not a bus-power policy `[S]`.
@@ -341,14 +390,15 @@ vendor DT, or by the prior controller-local result `[S]`.
   state; CX state; verified safe measurement points `[U]`.
 - **Acquisition route:** Documentation plus measurement under separate approval
   (`sdhc-decision-memo.md` §4, `S2`) `[S]`.
-- **Responsible:** Device owner (board revision/population evidence and
-  approval); qualified measurement operator (starting-state measurement).
+- **Proposed responsible:** Device owner (document custodian and approving
+  owner); build agent (proposed record author); qualified measurement operator
+  (measurement operator for starting-state measurement).
 - **Acceptance criterion (source):** "Complete starting-state record, with the
   measurement-dependent parts of `E1`/`E2`/`E7` closed"
   (`sdhc-decision-memo.md` §4, `S2`) `[S]`.
 - **Non-substitutes (source):** Prior controller-local observation
   (`sdhc-decision-memo.md` §4, `S2`) `[S]`.
-- **Dependencies:** `E1`, `E2`, `E7` `[S]`.
+- **Informational cross-dependencies:** `E1`, `E2`, `E7` `[C]`.
 - **Status and unresolved contradictions:** Open and narrowed. The memo records
   the board revision as unknown; the captured `hwversion`/`revision`/`board_id`
   strings narrow the identifier but do not establish the PCB revision,
@@ -364,12 +414,13 @@ vendor DT, or by the prior controller-local result `[S]`.
   `[U]`.
 - **Acquisition route:** A reviewer who is not the author and does not rely on
   the same-author oracle (`sdhc-decision-memo.md` §4, `S3`) `[S]`.
-- **Responsible:** Independent human reviewer.
+- **Proposed responsible:** Independent human reviewer (reviewer; not yet
+  assigned).
 - **Acceptance criterion (source):** "Independent review finds no unresolved
   safety-critical finding" (`sdhc-decision-memo.md` §4, `S3`) `[S]`.
 - **Non-substitutes (source):** Same-author oracle (`sdhc-decision-memo.md` §4,
   `S3`) `[S]`.
-- **Dependencies:** `E1`–`E9`, `S1`, `S2` `[S]`.
+- **Informational cross-dependencies:** `E1`–`E9`, `S1`, `S2` `[C]`.
 - **Status and unresolved contradictions:** Open. No independent review exists
   `[U]`.
 
@@ -381,15 +432,39 @@ vendor DT, or by the prior controller-local result `[S]`.
   the exact device procedure, after the technical prerequisites are met `[U]`.
 - **Acquisition route:** Written owner approval for the exact procedure
   (`sdhc-decision-memo.md` §4, `S4`) `[S]`.
-- **Responsible:** Device owner.
+- **Proposed responsible:** Device owner (approving owner; no approval
+  recorded).
 - **Acceptance criterion (source):** "Separate written owner approval for the
   exact device procedure" (`sdhc-decision-memo.md` §4, `S4`) `[S]`.
 - **Non-substitutes (source):** Prior host-init approval
   (`sdhc-decision-memo.md` §4, `S4`) `[S]`.
-- **Dependencies:** `S1`, `S3`, `E9` `[S]`.
+- **Informational cross-dependencies:** `S1`, `S3`, `E9` `[C]`.
 - **Status and unresolved contradictions:** Open. Requesting approval while the
   technical gates fail would imply the prerequisites are met; they are not
   `[S]`.
+
+### 3.1 Gate source references
+
+These are claim-level pointers to the existing derivations, not a new evidence
+claim. Stage labels distinguish vendor-DT declarations, current host-tested
+source and historical device observations from electrical measurements. None of
+these rows is a measurement `[S]/[U]`.
+
+| Gate | Claim group | Deriving record and section | Pinned input or artifact | Stage |
+| --- | --- | --- | --- | --- |
+| `E1` | Rail request levels and declared currents; PMIC bases and enable bit | `docs/pm6125-identity-evidence.md` §Consumer assignment; `docs/pm6125-register-map.md` §Regulator bases, §Common register layout | Captured `device-dump/private/gta4l-dump/live.dts`; pinned Linux `cf5f763f...` | Vendor DT and host source |
+| `E2` | SDC1 pad active/sleep states; TLMM offset; UEFI write decode | `docs/sdhc-power-pad-dependency-report.md` §4.1; `docs/sdhc-decision-update-2026-10-30.md` §2; `docs/sdhc-dependency-trace.md` §4, §7.1 | Pinned DTS/pinctrl; `SdccDxe.efi` `4084bbc7...`; `scripts/test-gta4l-sdccdxe-decode.py` | Host decode of booted image |
+| `E3` | Declared currents; shared parent inputs; recovery inventory | `docs/pm6125-identity-evidence.md` §Consumer assignment; `docs/sdhc-power-pad-dependency-report.md` §3; `docs/emmc-reference.md` §Local tablet evidence | Vendor DT; recovery observation | DT declaration and historical device observation |
+| `E4` | Soft-start register and hook; absent board ramp configuration | `docs/power-path-decision.md` §Contract items: present versus absent; `docs/pm6125-register-map.md` §Common register layout; `docs/sdhc-electrical-contract.md` §3 | Pinned `qcom_smd-regulator.c` and regulator core | Host source |
+| `E5` | Linux power-IRQ order; UEFI handler sequence | `docs/sdhc-dependency-trace.md` §3, §4; `docs/sdhc-decision-update-2026-10-30.md` §1; `docs/sdhc-power-pad-dependency-report.md` §4 | Pinned `sdhci-msm.c`; `SdccDxe.efi` | Host source and booted-image decode |
+| `E6` | Vendor collapse and low-power-mode properties | `docs/pm6125-identity-evidence.md` §Consumer assignment; `docs/sdhc-power-pad-dependency-report.md` §3 | Vendor DT | DT declaration |
+| `E7` | No AP vote; non-passive UEFI path; bounded RPM/XBL trace | `docs/power-retention-evidence.md` §1, §4, §5, §7.2, §7.4, §7.6; `docs/pmic-audit.md` §Consolidated blocker ledger | Pinned `qcom_smd-regulator.c`; `rpm.img` `272bebd3...`; `xbl.img`/`xbl_config.img` | Host source and bounded static firmware analysis |
+| `E8` | SDHCI status/clear/CTL; UEFI writes; arbiter `+0x28`; PMIC bytes | `docs/pmic-audit.md` §Findings 2, §Consolidated blocker ledger; `docs/sdhc-decision-update-2026-10-30.md` §1; `docs/pm6125-register-map.md` §Interrupt registers are a separate block | `SdccDxe.efi`, `PmicDxeLa.efi`, `SPMIDxe.efi`; pinned SDHCI source | Booted-image decode and host source |
+| `E9` | BOOT rollback and payload gates; absence of rail recovery | `docs/evidence-baseline.md` §1, §4; `docs/sdhc-decision-memo.md` §4 | BOOT-partition backup/rollback and payload-gate records | Historical host and device record |
+| `S1` | Host diagnostic, policy, oracle and tests; no bus-power policy | `docs/sdhci-host-init.md` §Host access-policy verification (Step 5); `docs/evidence-baseline.md` §2 | `package/Gta4lSdhciHostInit.c`, simulator, oracle and tests | Current host-tested source |
+| `S2` | Controller-local start state; bootargs identifiers | `docs/sdhci-handoff-audit.md` §Report, §Hardware result; `docs/sdhci-host-init.md` §Implementation status; `device-dump/private/gta4l-dump/CAPTURE-INFO.md`; `docs/evidence-baseline.md` §4 | Captured `live.dts`; host-init result recorded in `docs/sdhci-host-init.md` §Implementation status | Historical device observation |
+| `S3` | Same-author software oracle only | `docs/sdhci-host-init.md` §5.5, §5.7 | Oracle script | Current host test |
+| `S4` | Prior host-init approval does not transfer | `docs/sdhc-decision-memo.md` §6.3–§6.4 | Approval records | Decision record |
 
 ## 4. Local input inventory
 
@@ -434,18 +509,55 @@ electrical limit `[S]`.
 | Input | Preferred acquisition | Acceptable fallback | Stop condition |
 | --- | --- | --- | --- |
 | PM6125 limits and fault semantics | PM6125 datasheet or vendor register description applicable to the installed silicon | None for absolute maxima, transients, back-powering or fault semantics | Absent documentation leaves `E1`, `E4`, `E6`, `E8` open `[S]` |
+| SPMI-arbiter clear/read-back and runtime APID evidence | SoC SPMI-arbiter register documentation; runtime APID bitmap or transport trace | Bounded static trace narrows but does not close `E8` | Absent evidence leaves the arbiter and runtime-APID parts of `E8` open `[S]` |
 | Exact eMMC limits | Samsung datasheet for the exact `DX68MB` ordering part, resolved from package marking or vendor documentation | None; a generic eMMC specification is not the exact part's datasheet | Absent documentation leaves `E1`, `E4`, `E5` open `[S]` |
-| Board topology and population | SM-T505N service schematic/netlist/boardview matched to the captured board identifiers and revision | None; the vendor DT is not a schematic | Absent documentation leaves `E2`, `E3`, `E6`, `S2` open `[S]` |
+| Board topology and population | SM-T505N service schematic/netlist/boardview matched to the captured board identifiers and revision | Verified revision-matched PCB/CAD or population record for the facts it establishes; the vendor DT alone is not a schematic. Schematic-dependent limits and safe connection points still require a schematic/netlist or qualified inspection | Absent board evidence leaves `E2`, `E3`, `E6`, `S2` open; unverified points keep measurement blocked `[S]` |
 | SoC pad and SDHC power-control semantics | SM6115 documentation for the installed SoC revision | Pinned DTS/pinctrl source only for field mapping, not limits | Absent documentation leaves `E2`, `E5`, `E6` open `[S]` |
 | Runtime power policy | Vendor RPM documentation or a qualified runtime trace | Bounded static RPM/XBL analysis narrows but does not close `E7` | Absent evidence leaves `E7` open `[S]` |
 | Physical starting state | Measurement-only procedure under `sdhc-decision-memo.md` §6.2, with independent review and separate approval | None; PMIC readback reports commanded state, not measured voltage | Unverified test points or absent recovery leave the measurement blocked `[S]` |
 | Recovery | Written safe-stop, discharge/power-cycle and re-init procedure with verification and independent review | None; software rollback is not electrical recovery | Absent procedure leaves `E9` open `[S]` |
 | Independent review and owner approval | Independent human review, then separate written owner approval for the exact procedure | None | Prior approvals and same-author checks do not transfer `[S]` |
 
-Do not substitute a DT range, a PMIC readback, a controller bit, a firmware
-trace or a software rollback for any row above `[S]`.
+Firmware traces and static analysis cannot replace electrical ratings or
+physical measurements, and repeating an unchanged analysis supplies no new
+evidence `[S]`. Qualified host-only analysis remains an acquisition route where
+it can answer a specific open question, for example extracting limits from a
+supplied document or tracing a newly identified runtime path; it does not close
+a measurement-dependent gate by itself `[S]/[C]`. A DT range, PMIC readback,
+controller bit or software rollback likewise does not substitute for the
+corresponding measurement or electrical limit `[S]`.
 
-## 6. Unresolved contradictions and decisions
+## 6. Phase 2 acquisition register
+
+Status: template and proposed tracking record `[U]`. No document in this
+register has been acquired; every row remains an open blocker. When an input
+arrives, record the provenance fields before using it, keep proprietary material
+outside the public repository unless redistribution is permitted, and extract
+limits with page or section references `[S]`.
+
+| ID | Required evidence | Applicability to establish | Proposed acquisition route and custodian | Provenance to record | Extraction required | Current conflicts or blockers |
+| --- | --- | --- | --- | --- | --- | --- |
+| `D1` | PM6125 datasheet or vendor register description | Installed PM6125 silicon and package variant; USID/subtype; L11/L24 and common-block applicability | Owner-supplied vendor document; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, page count, applicability statement | Absolute maxima, LDO operating limits, soft-start and transient data, fault/`QPNPINT` semantics, SPMI read/write caveats with page/section | PM6125 identity and USID unresolved (`pmic-audit.md`); the source-derived map is not a datasheet `[U]` |
+| `D2` | Samsung eMMC datasheet for the exact ordering part | Exact part behind `DX68MB` and the CID; package marking and ordering code | Owner or vendor service documentation; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, exact ordering part and marking match | VCC/VCCQ2 operating and absolute-maximum ranges, power-up sequence, inrush, back-power and unpowered-drive restrictions with page/section | Product string and CID do not prove the ordering part or datasheet applicability `[U]` |
+| `D3` | SM-T505N service schematic, netlist, PCB/CAD or boardview matched to `REV1.0`/`P85946KA1`/`T505NDXS6CXB1` | Board revision, population variant, UFS population, L11/L24 nets, decoupling, SDC1 pad supply and pull-ups, safe test points | Owner or service documentation; custodian: device owner; inspection: qualified operator under separate approval `[U]` | Origin, revision, checksum, redistribution terms, board/revision match, sheet index | Net topology, population, decoupling, pad domains and test points; mark which facts each source establishes with sheet/page | Bootloader identifiers are not a PCB revision; no board document found locally `[U]` |
+| `D4` | SM6115 pad and SDHC power-control documentation; SPMI-arbiter register documentation | Installed SoC revision; SDC1 TLMM pad limits; SDHCI power-control and arbiter clear/read-back semantics | Owner-supplied SoC or vendor documentation; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, SoC revision applicability | Pad absolute limits, drive/pull constraints, power-control semantics, arbiter bits 31:8 read-back and write rules with page/section | Pinned DTS gives field mapping only; arbiter semantics unresolved (`pmic-audit.md`) `[U]` |
+| `D5` | RPM/NPA power-policy documentation or qualified runtime evidence | RPM firmware revision in `rpm.img`; L11/L24 runtime requests and retention across transitions; `GlinkDxe`/`NpaDxe` effects | Owner-supplied vendor documentation, or a separately approved runtime trace; custodian: device owner; analysis: build agent `[U]` | Origin, revision/date, checksum, redistribution terms, firmware-image match, trace method and calibration | Initial/active/sleep/reset policy, request and aggregation rules, PBS semantics, transition retention with page/section or trace evidence | Bounded static trace narrows but does not close `E7`; no runtime policy evidence `[U]` |
+| `D6` | Qualified measurement and recovery records | Actual rails, pads, current and transients; safe-stop, discharge/power-cycle and re-initialization | Separate approved device procedures; operator: qualified measurement operator; approval: device owner `[U]` | Procedure revision, instrument calibration/resolution/bandwidth/uncertainty, board and firmware hashes, raw traces, timestamps | Measured values against sourced limits; recovery acceptance criteria; anomalies and repetitions | No measurement or rail-recovery procedure exists; device action is not authorized `[U]` |
+
+Register rules:
+
+- An input is usable only after its origin, revision, applicability and checksum
+  are recorded, and a conflicting specification is logged as a blocker `[S]`.
+- Authoritative specifications, analogous-part data and third-party analysis are
+  recorded separately; an analogous part does not close a gate `[S]`.
+- Private or proprietary material stays outside the public repository unless
+  redistribution is permitted; cite its location and hash rather than copying
+  it `[S]`.
+- This register does not assign work or authorize acquisition involving device
+  access; proposed custodians remain unconfirmed until the owner accepts them
+  `[U]`.
+
+## 7. Unresolved contradictions and decisions
 
 1. **L24 init versus requested voltage.** The vendor DT declares init 2.704 V
    and a requested level of 2.960 V; which value applies at the XNU handoff is
@@ -481,29 +593,33 @@ trace or a software rollback for any row above `[S]`.
     cannot repair electrical damage; rail safe-stop and recovery acceptance
     criteria are absent `[S]/[U]`.
 
-## 7. Phase 1 outcome
+## 8. Phase 1 outcome
 
 - The canonical `E1`–`E9` and `S1`–`S4` gates are linked to their current
-  evidence, missing inputs, acquisition routes, responsible roles, closure
-  criteria, dependencies and contradictions `[S]`.
+  evidence, missing inputs, acquisition routes, proposed roles, closure criteria,
+  informational cross-dependencies and contradictions `[S]`.
 - No gate is closed, no disposition improves, and **NO-GO remains** `[S]`.
 - The exact missing inputs are the PM6125 datasheet/register description, the
   exact Samsung eMMC datasheet, the revision-matched board schematic/netlist and
-  population record, SM6115 pad/power-control documentation, verified safe test
-  points, a qualified rail-recovery procedure, independent review and separate
-  owner approval `[U]`.
+  population record, SM6115 pad/power-control and SPMI-arbiter documentation,
+  runtime APID/descriptor-base evidence, verified safe test points, a qualified
+  rail-recovery procedure, independent review and separate owner approval `[U]`.
+- Phase 2 tracking is prepared as a template in §6. It records provenance,
+  applicability, extraction and conflict fields, but no document has been
+  acquired `[U]`.
 - No device state, firmware, image, access policy or activation code was changed
   by this checklist `[S]`.
-- The next legitimate work is host-only: qualify and cite the missing documents
-  when the owner supplies them. Do not run another controller-local probe, do
-  not scan PMIC slaves, and do not treat this checklist as approval for any
-  device action `[S]`.
+- The next legitimate work is host-only: qualify and cite missing documents when
+  supplied, and run targeted analysis that answers a specific open question. Do
+  not run another controller-local probe, do not scan PMIC slaves, do not repeat
+  an unchanged static trace of the same pinned bytes as if it were new evidence,
+  and do not treat this checklist as approval for any device action `[S]`.
 
 If the documents are unavailable, this blocker list is the outcome; a new
-controller-local image or another static trace of the same pinned bytes is not
-a substitute `[S]`.
+controller-local image or an unchanged static trace of the same pinned bytes is
+not a substitute `[S]`.
 
-## 8. References
+## 9. References
 
 | Reference | Use |
 | --- | --- |
