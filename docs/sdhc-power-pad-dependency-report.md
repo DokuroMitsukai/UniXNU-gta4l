@@ -1,0 +1,177 @@
+# gta4l SDHC power and pad dependency report
+
+Date: 2026-10-30
+
+Status: host-only consolidation `[S]`. No device write, image build, flash,
+boot, power change, PMIC/SPMI access or RPM vote was made for this report. The
+device decision remains **NO-GO** (`sdhc-decision-memo.md`); this report does
+not authorize bus-power activation, card-clock activation, card commands, DMA
+or storage access.
+
+Tags: `[S]` established by a pinned source, captured DT, traced firmware bytes,
+or recorded host evidence; `[C]` conditional inference with the condition
+stated; `[U]` not established by the available evidence.
+
+## 1. Purpose and limits
+
+This report consolidates the remaining dependencies for the
+`sdhc-bus-power-activation` candidate: the eMMC VCC/VCCQ rails, the SDC1 pads,
+the firmware handoff, the controller power-request/acknowledge path, and the
+required sequencing, delays and recovery. It also records the CX, clock, fabric
+and SMMU dependencies that matter after bus power, because a bus-power result
+must not be mistaken for card-readiness.
+
+The detailed derivations remain in `sdhc-electrical-contract.md`,
+`sdhc-dependency-trace.md`, `power-path-decision.md`,
+`power-retention-evidence.md`, `rpm-power-interface.md`, `firmware-handoff.md`
+and `sdhci-host-init.md`. This report adds one host-side decoding: the exact
+controller-local power handshake in the booted `SdccDxe` exit handler. It does
+not repeat the earlier source traces and does not measure any rail, pad or
+current.
+
+## 2. Inputs
+
+| Input | Use |
+| --- | --- |
+| Pinned Linux `cf5f763f...` (`sdhci-msm.c`, `sdhci.c`, `mmc-core.c`, `core.c`, `rpmpd.c`, `icc-*.c`) | Power-request sequence, rail APIs, OPP/ICC/CX dependencies `[S]` |
+| Captured vendor `live.dts` and pinned `board.dts`/`sm6115.dtsi` | L24/L11 requests, pad states, consumers, controller wiring `[S]` |
+| Captured `rpm.img`, `xbl.img`, `xbl_config.img` | LDOA tables, boot PMIC settings, bounded static trace `[S]` |
+| Booted Mu-Silicium `SdccDxe.efi` and `PmicDxeLa.efi` bytes | Exit-handler power/pad/PMIC behavior `[S]` |
+| `sdhci-handoff-audit.md`, `sdhci-host-init.md`, both reproduced-kernel evidence packets | Controller-local handoff and host-init results `[S]` |
+| Recovery eMMC identity | Samsung `DX68MB`, CID `150100445836384d42009005f4661900`, CSD `d02701320f5903fff6dbffef8e404000`, 61,071,360 logical sectors `[S]` |
+
+The eMMC identity is a read-only recovery observation. The CID/CSD identify the
+card; they are not a datasheet and do not establish voltage, current or timing
+limits `[S]/[U]`.
+
+## 3. Summary
+
+| Dependency | Proven `[S]` | Conditional `[C]` | Missing `[U]` | Memo ID |
+| --- | --- | --- | --- | --- |
+| VCC, PM6125 L24 | Vendor `sdhc_1` requests 2.96 V (range 2.704–3.600 V, 570 mA); shared with `ufshc`; RPM-owned; pinned port sends no L24 vote; captured RPM has LDOA 24 tables | If XBL/RPM left L24 enabled and no indirect exit effect disables it, the rail is present at handoff | Actual voltage, enable and power-good; absolute maxima; load; ramp/inrush; UFS population | `E1`, `E3`, `E4`, `E7` |
+| VCCQ, PM6125 L11 | Vendor `sdhc_1` requests 1.8 V (range 1.704–1.952 V, 325 mA); shared with `ufshc`; declared 1.8 V IO domain; RPM-owned; no L11 vote | Pad domain is 1.8 V if L11 is enabled and the pads use that supply | Actual rail and pad domain; pull-up source; unpowered-drive limits; absolute maxima; load | `E1`, `E2`, `E3`, `E4`, `E7` |
+| SDC1 pads | Vendor/pinned active and sleep states; UEFI writes `0x9fe4` at the `0x00575000` page; it also writes `0x1fe4` at the SDC2/TLMM `0x00973000` page; no XNU TLMM code | UEFI leaves the selected drive in its active state | Exact write-to-pad mapping; actual SDC1 state; pad supply; unpowered-drive and back-power limits | `E2`, `E6` |
+| Firmware handoff | `SdccDxe` sets the bus-power bit, resets the controller, clears/acknowledges the resulting power status, and does not re-enable bus power; the later XNU audit reports `pwr=00`; `PmicDxeLa` writes only `0x14`/`0x16`/`0xd1` and the `+0x28` arbiter path; no direct LDO write found | Rails remain as XBL/RPM left them if no indirect PMIC effect occurs | Runtime `+0x28` bitmap, indirect PMIC effects, actual rail state and retention across transitions | `E5`, `E7`, `E8` |
+| Power request/ack | Linux order is `POWER_CONTROL` → power IRQ → `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; UEFI acknowledges `IO_LOW` and, when either bus bit is observed, `BUS_OFF` (not `BUS_ON`) without rail action; XNU maps no power IRQ and acknowledges nothing | A bare XNU `POWER_CONTROL` write may leave a pending request | PM6125 fault semantics; whether no-ack or ack-without-rail-action is safe; the documented acknowledge-or-not decision | `E5`, `E8`, `S1` |
+| Sequencing, delays, recovery | Linux software order; UEFI reset/power order and 10,000-iteration bounded polls; BOOT-partition backup/rollback | None beyond the software order | Electrical order and minimum delays; rail safe-stop, discharge/power-cycle and re-init; acceptance criteria; independent review | `E5`, `E9`, `S3` |
+| CX, clocks, fabric, SMMU (post-power) | The Linux probe requests CX SVS_PLUS and both ICC paths attempt votes; GCC branches enabled and block reset self-cleared; internal clock stable; PIO does not use the SDHC DMA master; `sdhc_1` DT has SMMU stream `0xc0` | Retained CX/fabric state may suffice for PIO if it was left high | Physical CX voltage, ICC/fabric state, SMMU stream state, card-clock source rate | Beyond the bus-power candidate; gates card commands/DMA |
+
+No row is closed. DT ranges and current levels are operating intent, not
+absolute-maximum ratings or measurements `[S]`.
+
+## 4. Decoded firmware power handshake
+
+The booted `SdccDxe.efi` (`4084bbc7...`) exit handler at `0x81a8` performs a
+controller-local sequence; the reset clears the standard power and clock
+registers and the handler does not re-enable bus power `[S]`:
+
+1. `0x69ac` reads `POWER_CONTROL` (`0x29`), clears bit 0, ORs the requested
+   value, and writes the byte back. The handler calls it with `1`, so it sets the
+   bus-power bit and preserves the existing voltage-select field. It does not
+   select a voltage `[S]`.
+2. `0x6458` reads `POWER_CONTROL`, writes `SOFTWARE_RESET = 1` (`0x2f`), and,
+   only if the bus-power bit was set, polls `CORE_PWRCTL_STATUS` (`0x240`) for up
+   to 10,000 iterations with a one-unit delay call `[S]`.
+3. It writes the observed status to `CORE_PWRCTL_CLEAR` (`0x248`), polls until
+   the status reads zero (again up to 10,000 iterations), then writes
+   `CORE_PWRCTL_CTL` (`0x24c`) with `4` when `status & 0x3 == 0`, or `5`
+   otherwise. Under the pinned Linux bit definitions, `4` is `REQ_IO_LOW` and
+   `5` is `REQ_BUS_OFF | REQ_IO_LOW`; the handler therefore acknowledges IO-low
+   and, when either bus bit was observed, bus-off. It does not acknowledge
+   bus-on `[S]/[C]`.
+4. It waits for the software-reset bit to self-clear, then writes the vendor
+   registers at `0x21c`/`0x220` and clears bit 18 of `0x20c` for the selected
+   drive `[S]`.
+
+The handler has no PMIC, SPMI, LDO or RPM request. `PmicDxeLa` separately clears
+PMIC interrupt latches/enables and touches the SPMI-arbiter `+0x28` path; those
+writes cannot directly reach the L24/L11 voltage, mode or enable registers
+`[S]`. The UEFI sequence is therefore a controller-local reset and a
+bus-off/IO-low acknowledgement, not a bus-power-on regulator sequence. It must
+not be copied as a template for enabling bus power `[S]/[C]`.
+
+This narrows `E5` and `E8` by documenting the firmware's exact handshake and ack
+choice. It does not establish that the rails are on, that the pads are in the
+required domain, or that acknowledging a request without a rail action is safe
+`[U]`.
+
+## 5. What software cannot establish
+
+| Missing input | Why it is required | Available evidence is not a substitute |
+| --- | --- | --- |
+| PM6125 datasheet or vendor register description | Absolute maxima, LDO electrical limits, soft-start, fault semantics, `QPNPINT` applicability and the `+0x28` bitmap meaning | DT ranges, register readback and the bounded RPM/XBL trace report commands or structure, not electrical limits or runtime state `[S]` |
+| eMMC datasheet for Samsung `DX68MB` | VCC/VCCQ2 operating and absolute ranges, power-up sequence, inrush and initial-state requirements | CID, CSD, sector count and recovery operation identify the card; they do not state its limits `[S]` |
+| Board schematic, netlist and population evidence | L24/L11 test points, decoupling, UFS population, shared loading, SDC1 pad supply and pull-up source | Vendor DT declares consumers and parents; it does not prove population, loading or net topology `[S]` |
+| Calibrated physical measurement | Actual L24/L11 voltage, enable/power-good, pad levels, current, ramp and transients at handoff | `pwr=00` is a controller-local bit; PMIC readback is commanded state; neither is a rail measurement `[S]` |
+| RPM runtime policy | L11/L24 retention across handoff, suspend, shutdown and reboot; whether any runtime LDOA request exists | The bounded static trace finds no referenced static selector and no direct LDO write; it does not establish runtime policy `[S]/[U]` |
+| Qualified recovery and independent review | Safe stop, discharge/power-cycle, re-init order, acceptance criteria and a non-author review | BOOT-partition rollback repairs software only; it cannot repair electrical damage `[S]` |
+
+A software register read or a DT request cannot close these items. No speculative
+PMIC scan, SPMI transaction, RPM vote or pad write is authorized to try to close
+them `[S]`.
+
+## 6. Next actionable experiment: measurement-only baseline
+
+The first justified device experiment is the baseline measurement described in
+`sdhc-decision-memo.md` §6.2. It does not enable bus power or the card clock and
+issues no card command. It is still a separate device procedure with its own
+approval and recovery requirements.
+
+| Item | Requirement |
+| --- | --- |
+| Observation point | A read-only post-handoff state that does not enable bus power or the card clock; the existing host-init panic screen leaves both off and issues no rail write `[S]` |
+| Quantities | L24 DC voltage, L11 DC voltage, SDC1 CLK/CMD/DAT DC levels and pull behavior, with a common ground reference; current only with a calibrated probe or known shunt `[C]` |
+| Instruments | Calibrated DMM for DC; optional differential probe and oscilloscope for transients; recorded calibration, resolution and uncertainty. Required bandwidth and acceptance limits are not established until the datasheets are available `[U]` |
+| Connection points | Test points or component pads identified from a verified schematic; do not probe PMIC balls directly; use short ground returns and avoid shorting adjacent pads `[C]` |
+| Procedure | Verify instruments and ground; take at least two stable samples at the observation point; record rail, pad and controller state together; do not write `POWER_CONTROL`, `CORE_PWRCTL_CLEAR`/`CTL`, PMIC/SPMI/RPM or TLMM `[C]` |
+| Acceptance | Record values and compare only against limits established by the applicable datasheets. DT ranges are operating intent, not absolute maxima; do not invent pass/fail thresholds `[S]` |
+| Stop conditions | Any rail outside a documented limit, unexpected current, brownout/reset, unexpected card-clock activity, thermal event or unexpected power request: stop and follow the separately reviewed recovery method. `E9` is not yet qualified, so this procedure cannot be approved without one `[U]` |
+
+The measurement can narrow `E1`, `E2`, `E7` and `S2`. It cannot close `E3`–`E6`,
+`E8`, `E9`, `S1`, `S3` or `S4`. If no schematic and safe test points are
+available, those documents and connection points are the exact blockers; a new
+controller image would not substitute for them `[S]`.
+
+## 7. Bus-power-only design gate
+
+A host-only bus-power design may be prepared only as a design, not as an
+activation path, and must first resolve the acknowledge choice:
+
+- no acknowledge: the controller may leave a pending request, and its behaviour
+  is not established `[U]`;
+- acknowledge without a rail action: the controller may treat the request as
+  satisfied even though no regulator or pad action occurred; the UEFI handler
+  acknowledges bus-off/IO-low after a reset, not bus-on, so it does not justify
+  this choice `[S]/[U]`;
+- acknowledge after rail/pad actions: this requires the PMIC/RPM/pad ownership
+  and the `E1`–`E9` evidence that is currently absent `[U]`.
+
+Any future design must also define the exact register allowlist and widths,
+preconditions, bounded waits, abort end state, simulated success/timeout/failure
+cases, a trace oracle and negative tests. It must keep the card clock off, issue
+no command, and avoid DMA, CQE, ICE and storage writes. `S1` remains open until
+that design exists and passes its host checks `[S]`.
+
+## 8. Disposition
+
+**NO-GO remains.** The UEFI handshake decoding narrows `E5`/`E8` but closes no
+`E*` or `S*` gate. The next legitimate step is the measurement-only baseline
+above, or obtaining the missing datasheets, schematic and recovery procedure.
+Another controller-local probe adds no evidence for the electrical contract and
+is not justified by this report `[S]`.
+
+## 9. References
+
+| Reference | Use |
+| --- | --- |
+| `docs/sdhc-decision-memo.md` | Canonical `E1`–`E9`/`S1`–`S4` blockers and NO-GO decision |
+| `docs/sdhc-electrical-contract.md` | Candidate definition, contract matrix and measurement requirements |
+| `docs/sdhc-dependency-trace.md` | CX, ICC, GCC, pads, SMMU and IRQ prerequisites beyond L11/L24 |
+| `docs/power-path-decision.md` | Rail ranges, consumers and RPM-vs-SPMI decision |
+| `docs/power-retention-evidence.md` | Transition-by-transition retention evidence and bounded RPM/XBL trace |
+| `docs/rpm-power-interface.md` | RPM resource IDs, LDOA tables and transport limits |
+| `docs/firmware-handoff.md` | Mu-Silicium exit-handler trace and booted-driver provenance |
+| `docs/sdhci-host-init.md` | Existing controller-local probe, policy and host test results |
+| `docs/sdhci-handoff-audit.md` | Read-only GCC/vendor handoff observations |
+| `docs/emmc-reference.md` | eMMC, controller and GPT inventory |
+| `out/gta4l/ram-root-sdhci-repro-kernel-host-init-evidence/README.md` | Reproduced-kernel host-init result and its limits |

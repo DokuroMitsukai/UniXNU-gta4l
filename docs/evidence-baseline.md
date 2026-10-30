@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T14:41:00Z`, after the final edits to the
+Hashes were taken at `2026-10-30T14:45:30Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them. The snapshot is intended to be committed without
@@ -19,7 +19,7 @@ update the table.
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
 | HEAD | `3c3d586dd1feb1d63ade4452800a4ccc7cbcee31` |
-| Dirty entries at the hash snapshot | 11 changed: 6 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/evidence-baseline.md`, `docs/firmware-build-recipe.md`, `docs/kernel-build-recipe.md`, `porting.toml`, `scripts/build-gta4l-diagnostic-payload.py`) and 5 untracked (`docs/payload-build-recipe.md`, `scripts/normalize-gta4l-adt-seed.py`, `scripts/pin-gta4l-xnu-mtimes.py`, `scripts/test-gta4l-diagnostic-payload.py`, `scripts/test-gta4l-xnu-mtimes.py`) |
+| Dirty entries at the hash snapshot | 6 changed: 5 modified (`docs/evidence-baseline.md`, `docs/kernel-build-recipe.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `porting.toml`) and 1 untracked (`docs/sdhc-power-pad-dependency-report.md`) |
 | Staging and commits | None at the snapshot; the snapshot lands as one commit covering the documentation and host-only tooling |
 
 The current snapshot is the evidence branch after the Linux
@@ -117,20 +117,21 @@ bytes of the previously booted image `[S]`.
 | Access-policy oracle | `scripts/oracle-gta4l-sdhci-host-init.py` | `488e2d0150692569fe20303facd4b7be3e5afa79e680f6c3785cad35bc570990` |
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
-| Decision memo | `docs/sdhc-decision-memo.md` | `6dc5e9683ab832c2e32be77b03e61e779a7946e49b6d39417fd4bd15b033bd18` |
+| Decision memo | `docs/sdhc-decision-memo.md` | `5aca31b8cbbfa3297ca624892fe9a3ce5211fd8437070f1263cfb35ca6aa27ad` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `dbf24739068f1bb679110e5f7ad189614b713dee2cc3a6c00c4ee90c1082357d` |
 | Retention evidence | `docs/power-retention-evidence.md` | `eb91725bd6a63acded9e63ca0673670f36b43a3253da15d8ec17cb67f0387e07` |
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
 | PM6125 register map | `docs/pm6125-register-map.md` | `501672b50a86319b7bd095a92b674c162ccc485963e510a708649aa985486c22` |
 | RPM LDOA analyzer | `scripts/analyze-gta4l-rpm-ldoa.py` | `d967e640ca8f6f7eb0607d0a51aea9b541b21901ed4bf5a0a3e9be090f2fa4a8` |
 | RPM LDOA analyzer self-test | `scripts/test-gta4l-rpm-ldoa-analysis.py` | `c670e2788044bd8b5054b19452dde8080ee9dc93d794ffe8abf3e2890e202afc` |
-| Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
+| Dependency trace | `docs/sdhc-dependency-trace.md` | `1f75593c7bab1e4466f9f60711aa9045fabb4d5f3c24c658886fe5cca1c5e323` |
+| Power/pad dependency report | `docs/sdhc-power-pad-dependency-report.md` | `0b20b4ab379b9a4c1f9762d487a118e7207a19128ae8f6053582c6c97ab88344` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
 | Repository README | `README.md` | `b29a6e0729d0b101f17dcd9ce452656daeeeafad7bce7355158e290e7ac1d7f5` |
 | eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `09e674f88bc0aab9d12ba7c77fe3d02bb0d9027a09e33b330790a02e5296b6c7` |
+| Porting record | `porting.toml` | `2367061e546cf31d6c594e53fb9975fb37ac9169a0e86ecfe82474363f48e188` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `2d8f060327c4d557ff588e90200676b3dfdaf213c60dec0d24c0300f28eb3fd3` |
@@ -218,6 +219,12 @@ firmware volume as the previously booted image `[S]`.
 Private firmware and device dumps are referenced by path and hash only; their
 contents are not duplicated in this repository `[S]`.
 
+Build provenance note: the Mu-Silicium parent is at `e14626a3...`; its
+`Mu_Basecore` submodule carries 10 uncommitted platform edits at this snapshot.
+The payload and boot images tested here preserve the v5 baseline firmware bytes
+and do not rebuild firmware from that subtree. A future firmware rebuild must
+pin or discard those edits `[S]`.
+
 ## 5. Evidence categories
 
 | Category | What it is | What it is not |
@@ -248,6 +255,7 @@ sha256sum package/Gta4lSdhciHostInit.c package/Gta4lSdhciHostInit.h \
   docs/sdhc-dependency-trace.md docs/firmware-handoff.md \
   docs/stock-firmware-analysis-audit.md README.md \
   docs/emmc-reference.md docs/native-emmc-reference-audit.md \
+  docs/sdhc-power-pad-dependency-report.md \
   docs/ram-root-fixture-reproducibility.md porting.toml \
   scripts/analyze-gta4l-rpm-ldoa.py scripts/test-gta4l-rpm-ldoa-analysis.py \
   scripts/test-gta4l-ram-root-fixture-recipe.py
@@ -277,7 +285,7 @@ python3.11 - <<'PY'
 import hashlib, pathlib, re
 text = pathlib.Path('docs/evidence-baseline.md').read_text()
 rows = re.findall(r'^\| [^|]+ \| `([^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-expected = 28
+expected = 29
 paths = [path for path, _ in rows]
 assert len(rows) == expected, f'expected {expected} rows, found {len(rows)}'
 assert len(set(paths)) == len(paths), 'duplicate paths in the table'
