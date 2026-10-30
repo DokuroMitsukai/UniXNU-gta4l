@@ -44,8 +44,8 @@ configuration = ["CONFIG_XNU_ARMCPU=y, CONFIG_XNU_NATIVE_ARCH_TIMER=y, CONFIG_XN
 procedure = ["Boot the boot CPU first with the timer diagnostic counters; compare INTID 27 and INTID 19; test SGI delivery before enabling any SPI-IPI workaround."]
 findings = ["The live timer specifiers match TB128FU: PPI 3 is the EL1 virtual timer, so INTID 19 is the gta4l candidate. The current ArmCpu default is 27 and INTID 27 may be another asserted source on this SoC; this is not yet measured on gta4l.", "TB128FU found SGIs undelivered and used software-pended SPIs 504..511 (INTIDs 536..543). Its GIC capacity and unused-line inventory do not transfer to gta4l; do not enable SPI IPIs before measuring ours.", "The TB128FU ArmCpu fork does not retain GICv2. Port only its timer/IPI mechanisms with per-device defaults so the shared GICv2 path stays intact."]
 completion = ["Every enabled CPU reaches its entry checkpoint and timer/IPI handling works on each enabled CPU."]
-limits = ["No CPU or timer result exists on gta4l yet; the kernel has not linked. Secondary-CPU bring-up and IPI delivery are untested."]
-next_action = ["After the kernel links, port the timer selection with the 27 default, test INTID 19 on the boot CPU, and record the interrupt counters before starting secondary CPUs."]
+limits = ["The kernel links on the host and the boot CPU ran the bounded fs/timer fixture on the tablet; that fixture's single blocking poll does not establish sustained timer stability. Secondary-CPU bring-up and IPI delivery are untested."]
+next_action = ["Port the timer selection with the 27 default, test INTID 19 on the boot CPU, and record the interrupt counters before starting secondary CPUs."]
 evidence = []
 
 [[area]]
