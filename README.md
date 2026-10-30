@@ -40,6 +40,18 @@ findings are compared at pinned revisions in
 [docs/tb128fu-comparison.md](docs/tb128fu-comparison.md), with the upstream
 BSD-2-Clause-Patent credit. No TB128FU source is imported here.
 
+## NativeEmmc reference
+
+The Redmi Note 9 (merlinx) NativeEmmc driver by
+[Dracen](https://github.com/Dracen-W) is a read-only XNU block-device
+reference, pinned at `4980f1070b0c822dedb9eb350df710a57df28590`
+([catalog](https://unixnu.com/drivers/community-native-emmc)). It targets the
+MediaTek MT6768 MSDC controller, not the SM6115 SDHCI v5 controller, so its
+register and command code is not transferable. The host-only static audit in
+[docs/native-emmc-reference-audit.md](docs/native-emmc-reference-audit.md)
+records the reusable publication patterns, the MediaTek-specific parts and the
+completion/error-path findings. No code is imported.
+
 ## Inputs
 
 | Item | Value |

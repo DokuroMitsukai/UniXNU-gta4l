@@ -5,7 +5,7 @@ closure `[S]`. It is not a hardware result, an electrical measurement or
 permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-Hashes were taken at `2026-10-30T03:07:49Z`, after the final edits to the
+Hashes were taken at `2026-10-30T03:16:18Z`, after the final edits to the
 files below. This document's own hash is not listed. Hashes describe the
 working tree at the snapshot and change with later edits; re-run the commands
 in §6 before reusing them.
@@ -16,12 +16,13 @@ in §6 before reusing them.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD | `bd6b31821da982fc515825fd038cc24097298462` |
-| Dirty entries at the hash snapshot | 6 modified: the four evidence documents, `porting.toml` and this baseline |
+| HEAD | `3f4e593111506caed342fe2caeb360f27077c3e6` |
+| Dirty entries at the hash snapshot | 5: 4 modified (`README.md`, `docs/emmc-reference.md`, `porting.toml` and this baseline) and 1 untracked (`docs/native-emmc-reference-audit.md`) |
 | Staging and commits | None at the snapshot; the snapshot lands as one documentation commit |
 
-The current snapshot is the evidence branch after the RPM LDOA documentation
-commit. The hash table below describes that working tree, not the original
+The current snapshot is the evidence branch after the RPM LDOA attribution
+commit, with the NativeEmmc reference credit and audit in the working tree.
+The hash table below describes that working tree, not the original
 evidence-closure tree. The original provenance is retained separately because
 the path lists and dirty inventory are historical observations.
 
@@ -122,7 +123,10 @@ bytes of the previously booted image `[S]`.
 | Dependency trace | `docs/sdhc-dependency-trace.md` | `67c91e40e6e11e4d128b52ed9f4445a796900f12ca4663ddafa646d407a27984` |
 | Firmware handoff | `docs/firmware-handoff.md` | `974855b4177194b2effc3166a42f5c8fc79926a19f5bce14c65c7598675c1ef1` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `735545c60d47456b28f7fa6c0c50607008dbd1207941386b3bd907c8bff63fe4` |
-| Porting record | `porting.toml` | `488b59b11c3060454c5a55fe7e901a6136fa69df618a10f6e65ed0db270cc654` |
+| Repository README | `README.md` | `3b873529003e533565586e48f31619b1b89c85419b28b96494b803633ccf2375` |
+| eMMC reference | `docs/emmc-reference.md` | `55620c2e45af66a8d3453d949d939da568436cc4c0fa3697b42da17a014f242d` |
+| NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
+| Porting record | `porting.toml` | `922436c78a56f962474c8e814be101b027e37111f7517d9083fc630b400d4c23` |
 
 ## 3. Pinned Linux source cache
 
