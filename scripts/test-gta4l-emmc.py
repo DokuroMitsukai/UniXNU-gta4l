@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / 'package' / 'Gta4lEmmc.c'
 HEADER = ROOT / 'package' / 'Gta4lEmmc.h'
+PROBE = ROOT / 'package' / 'Gta4lEmmcProbe.c'
 HARNESS = ROOT / 'scripts' / 'sim-gta4l-emmc' / 'harness.c'
 
 SCENARIOS = [
@@ -36,6 +37,7 @@ SCENARIOS = [
     'read-repeat',
     'read-ext-csd',
     'signaling-3v3',
+    'pad-switch-off',
     'version',
     'reset-timeout',
     'clock-timeout',
@@ -43,6 +45,10 @@ SCENARIOS = [
     'power-off',
     'power-no-request',
     'power-stuck',
+    'power-io-only',
+    'power-delayed-bus',
+    'power-bus-then-io',
+    'data-sector-4k',
     'cmd-timeout',
     'cmd-crc',
     'cmd-index',
@@ -130,12 +136,48 @@ def check_source() -> None:
     assert '*(' not in core.replace('*(uint8_t *)', ''), \
         'core contains a raw pointer dereference'
 
+    # Audit regressions: long-response normalization, the bus-on completion
+    # requirement, the 512-byte sector-size requirement, the explicit pad
+    # policy and the documented 10 us poll step.
+    assert 'gta4l_emmc_read_long_response' in core, \
+        'SDHCI long-response normalization missing'
+    assert 'bus_on_seen' in core, 'bus-on completion tracking missing'
+    assert 'data_sector_size_4k != 0' in core, \
+        '4 KiB data-sector rejection missing'
+    assert 'host->pad_pwr_switch' in core, 'explicit pad policy missing'
+    assert 'gta4l_emmc_delay(host, 1);' not in core, \
+        'poll loops must use the documented 10 us step'
+    assert core.count(
+        'gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);') >= 5, \
+        'poll loops must use the documented 10 us step'
+
+    # The probe must use width-correct MMIO, stop on a stalled counter and
+    # state the fixed-1.8 V pad policy explicitly.
+    probe = PROBE.read_text()
+    assert 'generic counter ' in probe and 'stalled (hz=' in probe, \
+        'probe must abort on a stalled timing source'
+    assert 'host.pad_pwr_switch = 1;' in probe, \
+        'probe fixed-1.8 V pad policy missing'
+    for name, width in (
+            ('gta4l_emmc_probe_read8', 'uint8_t'),
+            ('gta4l_emmc_probe_read16', 'uint16_t'),
+            ('gta4l_emmc_probe_write8', 'uint8_t'),
+            ('gta4l_emmc_probe_write16', 'uint16_t')):
+        start = probe.index(name)
+        end = probe.index('\n}\n', start)
+        body = probe[start:end]
+        assert f'*(volatile {width} *)' in body, \
+            f'{name} does not use a {width} MMIO access'
+        assert 'volatile uint32_t' not in body, \
+            f'{name} uses a 32-bit access for a narrower register'
+
     # The simulator must model the register semantics the core depends on.
     for token in ('sim->normal_int', 'sim->error_int', 'sim->normal_enable',
                   'sim->error_enable', 'sim->pwr_status',
                   'sim->buffer_data', 'sim_command_ok', 'access_violation',
                   'command_error', 'SIM_CMD_DATA', 'SIM_PAD_PWR_SWITCH',
-                  'SIM_POWER_SETTLE_US'):
+                  'SIM_POWER_SETTLE_US', 'power_io_only',
+                  'power_delayed_bus', 'power_io_delayed', 'data_sector_4k'):
         assert token in harness, f'harness missing {token}'
     assert 'GTA4L_EMMC_REG_BUFFER_DATA_PORT' in harness
 
@@ -216,52 +258,75 @@ def main() -> int:
             return 1
 
         # Mutation controls: a wrong clock encoding, pad value, command bit,
-        # signalling bit, settle time or access width must be rejected by the
-        # same simulator that accepts the real core.
+        # signalling bit, settle time, access width, response layout, power
+        # completion or sector-size check must be rejected by the same
+        # simulator that accepts the real core.
         mutations = [
             ('clock-cfg',
              'GTA4L_EMMC_RCG_400K_CFG            0x00002017u',
              'GTA4L_EMMC_RCG_400K_CFG            0x00000401u',
-             'Gta4lEmmc.h', ()),
+             'Gta4lEmmc.h', (), 'success'),
             ('clock-m',
              'GTA4L_EMMC_RCG_400K_M              0x00000001u',
              'GTA4L_EMMC_RCG_400K_M              0x00000002u',
-             'Gta4lEmmc.h', ()),
+             'Gta4lEmmc.h', (), 'success'),
             ('pad',
              'GTA4L_EMMC_SDC1_PAD_ACTIVE         0x00009FE4u',
              'GTA4L_EMMC_SDC1_PAD_ACTIVE         0x00001FE4u',
-             'Gta4lEmmc.h', ()),
+             'Gta4lEmmc.h', (), 'success'),
             ('cmd-data',
              'GTA4L_EMMC_CMD_DATA                0x0020u',
              'GTA4L_EMMC_CMD_DATA                0x0004u',
-             'Gta4lEmmc.h', ()),
+             'Gta4lEmmc.h', (), 'success'),
             ('pad-switch',
              'GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH_EN 0x00008000u',
              'GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH_EN 0x00000000u',
-             'Gta4lEmmc.h', ()),
+             'Gta4lEmmc.h', (), 'success'),
             ('vdd-180',
              'GTA4L_EMMC_HOST_CONTROL2_VDD_180   0x0008u',
              'GTA4L_EMMC_HOST_CONTROL2_VDD_180   0x0000u',
-             'Gta4lEmmc.h', ()),
+             'Gta4lEmmc.h', (), 'success'),
             ('settle',
              'GTA4L_EMMC_POWER_SETTLE_US         5000u',
              'GTA4L_EMMC_POWER_SETTLE_US         0u',
-             'Gta4lEmmc.h', ()),
+             'Gta4lEmmc.h', (), 'success'),
             ('unaligned-reset',
              'if ((gta4l_emmc_read8(host, space, offset) & mask) == value) {',
              'if ((gta4l_emmc_read16(host, space, offset) & mask) == value) {',
-             'Gta4lEmmc.c', ()),
+             'Gta4lEmmc.c', (), 'success'),
             ('status-disabled',
              '\tgta4l_emmc_enable_status(host);',
              '\t/* status disabled mutation */',
-             'Gta4lEmmc.c', ('-Wno-unused-function',)),
+             'Gta4lEmmc.c', ('-Wno-unused-function',), 'success'),
+            ('long-response-raw',
+             'offset = GTA4L_EMMC_REG_RESPONSE + (3u - index) * 4u;',
+             'offset = GTA4L_EMMC_REG_RESPONSE + index * 4u;',
+             'Gta4lEmmc.c', (), 'success'),
+            ('no-bus-on-required',
+             '\tif (bus_on_seen == 0) {\n'
+             '\t\t/* An IO-voltage request alone is not a completed bus '
+             'power-on. */\n'
+             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_POWER, 0, 0);\n'
+             '\t\treturn GTA4L_EMMC_ERR_POWER;\n'
+             '\t}\n',
+             '\t/* bus-on requirement removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'power-io-only'),
+            ('no-4k-reject',
+             '\tif (host->data_sector_size_4k != 0) {\n'
+             '\t\t/* The read path is fixed at 512-byte sectors. */\n'
+             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, 5,\n'
+             '\t\t    host->data_sector_size_4k);\n'
+             '\t\treturn GTA4L_EMMC_ERR_UNSUPPORTED;\n'
+             '\t}\n',
+             '\t/* 4 KiB sector check removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'data-sector-4k'),
         ]
-        for name, old, new, filename, extra in mutations:
+        for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)
             mutated = build(compiler, directory / name, f'emmc-{name}',
                             core=core, header_dir=directory / name,
                             extra_flags=extra)
-            if not run(mutated, 'success', expect_success=False):
+            if not run(mutated, scenario, expect_success=False):
                 print(f'mutation {name} was accepted')
                 return 1
 

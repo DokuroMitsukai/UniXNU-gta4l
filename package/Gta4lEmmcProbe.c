@@ -174,7 +174,12 @@ gta4l_emmc_probe_delay_us(void *context, uint32_t microseconds)
 	start = gta4l_emmc_probe_counter();
 	while ((gta4l_emmc_probe_counter() - start) < ticks) {
 		if (++spins > limit) {
-			break;
+			/* A stalled counter would silently skip the settle
+			 * interval. Stop the diagnostic instead. */
+			panic("GTA4L-EMMC PROBE FAILED: generic counter "
+			    "stalled (hz=%u us=%u)",
+			    (unsigned int)hz,
+			    (unsigned int)microseconds);
 		}
 		__asm__ volatile("yield");
 	}
@@ -326,9 +331,14 @@ gta4l_emmc_probe_run(void)
 	bzero(&host, sizeof(host));
 	host.ops = &gta4l_emmc_probe_ops;
 	host.context = &probe;
-	/* The board's VCCQ rail (L11) is fixed at 1.8 V; see
-	 * docs/linux-regulator-lifecycle.md. */
+	/* Board policy: L11/VCCQ is a fixed 1.8 V rail, so select 1.8 V
+	 * signalling and keep the pad power switch in the 1.8 V position.
+	 * The mainline gta4l DT declares no SDHC1 vqmmc consumer, so the
+	 * Linux probe leaves both vendor pad bits at the POR value; this
+	 * explicit policy follows the sdhci-msm fixed-1.8 V comment instead
+	 * of that DT-derived state. See docs/emmc-driver.md. */
 	host.fixed_1v8 = 1;
+	host.pad_pwr_switch = 1;
 
 	if (stage == 2) {
 		result = gta4l_emmc_controller_init(&host);
