@@ -48,6 +48,8 @@ SCENARIOS = [
     'power-io-only',
     'power-delayed-bus',
     'power-bus-then-io',
+    'power-wrong-io',
+    'power-wrong-io-then-correct',
     'power-churn',
     'data-sector-4k',
     'cmd-timeout',
@@ -150,6 +152,8 @@ def check_source() -> None:
     assert ('GTA4L_EMMC_PWRCTL_ACK_BUS |\n\t\t\t    '
             'GTA4L_EMMC_PWRCTL_ACK_IO;') in core, \
         'BUS_ON must acknowledge both BUS and IO completion'
+    assert '(status & io_request) != 0' in core, \
+        'IO completion must match the requested level'
     assert 'data_sector_size_4k != 0' in core, \
         '4 KiB data-sector rejection missing'
     assert 'host->pad_pwr_switch' in core, 'explicit pad policy missing'
@@ -187,7 +191,8 @@ def check_source() -> None:
                   'SIM_POWER_SETTLE_US', 'power_io_only',
                   'power_delayed_bus', 'power_io_delayed', 'data_sector_4k',
                   'power_churn', 'io_delayed_emitted', 'io_poll_count',
-                  'last_clear'):
+                  'last_clear', 'power_wrong_io',
+                  'power_io_wrong_then_correct'):
         assert token in harness, f'harness missing {token}'
     assert 'previous & SIM_CTRL_VDD_180' in harness, \
         'simulator does not model the VDD_180 transition'
@@ -341,6 +346,13 @@ def main() -> int:
              '\t\t\t}\n'
              '\t\t\t(void)io_done;\n',
              'Gta4lEmmc.c', (), 'power-bus-then-io'),
+            ('wrong-io-accepted',
+             '\t\t\tif ((io_request != 0) &&\n'
+             '\t\t\t    ((status & io_request) != 0)) {\n'
+             '\t\t\t\tio_done = 1;\n'
+             '\t\t\t}\n',
+             '\t\t\tio_done = 1;\n',
+             'Gta4lEmmc.c', (), 'power-wrong-io'),
             ('exhaustion-success',
              '\tif (settled == 0) {\n'
              '\t\t/* The loop must end on a quiet window with both completions\n'
