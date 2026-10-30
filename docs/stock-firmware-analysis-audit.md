@@ -207,23 +207,31 @@ The CSC/region code and the package filename are withheld at the owner's
 request; they are not needed for the comparison below and must not be inferred
 from the build identifier `[S]`.
 
-`[S]` The BL members are LZ4 frames. The captured partition images are the
-decompressed images padded to the partition size, so the comparison is
-full-image where the sizes agree and prefix-equal otherwise. All compared BL
-images match:
+`[S]` The BL members are LZ4 frames. Four decompressed members are exactly the
+size of their captured partitions and match byte-for-byte. The other six are
+smaller than their partitions; their captured images match the stock member on
+the decompressed prefix, but the remaining partition bytes are not zero and are
+not explained by this audit. The comparison therefore establishes the stock
+payload prefix, not full-partition equality:
 
-| Stock member | Captured partition | Result |
-| --- | --- | --- |
-| `xbl.elf` | `partitions/xbl.img` | Full SHA-256 match |
-| `abl.elf` | `abl.img` | Full SHA-256 match |
-| `tz.mbn` | `partitions/tz.img` | Full SHA-256 match |
-| `hyp.mbn` | `partitions/hyp.img` | Full SHA-256 match |
-| `xbl_config.elf` | `partitions/xbl_config.img` | Prefix match; captured image padded |
-| `rpm.mbn` | `partitions/rpm.img` | Prefix match; captured image padded |
-| `devcfg.mbn` | `partitions/devcfg.img` | Prefix match; captured image padded |
-| `uefi_sec.mbn` | `partitions/uefisecapp.img` | Prefix match; captured image padded |
-| `apdp.mbn` | `partitions/apdp.img` | Prefix match; captured image padded |
-| `msadp.mbn` | `partitions/msadp.img` | Prefix match; captured image padded |
+| Stock member | Stock bytes | Captured partition | Result |
+| --- | --- | --- | --- |
+| `xbl.elf` | 4,194,304 | `partitions/xbl.img` | Full SHA-256 match |
+| `abl.elf` | 4,194,304 | `abl.img` | Full SHA-256 match |
+| `tz.mbn` | 4,194,304 | `partitions/tz.img` | Full SHA-256 match |
+| `hyp.mbn` | 1,048,576 | `partitions/hyp.img` | Full SHA-256 match |
+| `xbl_config.elf` | 43,628 | `partitions/xbl_config.img` | Prefix match; 4,150,676 trailing bytes, 32 nonzero |
+| `rpm.mbn` | 226,528 | `partitions/rpm.img` | Prefix match; 297,760 trailing bytes, 48 nonzero |
+| `devcfg.mbn` | 43,436 | `partitions/devcfg.img` | Prefix match; 87,636 trailing bytes, 52 nonzero |
+| `uefi_sec.mbn` | 126,051 | `partitions/uefisecapp.img` | Prefix match; 1,971,101 trailing bytes, 125 nonzero |
+| `apdp.mbn` | 14,020 | `partitions/apdp.img` | Prefix match; 510,268 trailing bytes, 92 nonzero |
+| `msadp.mbn` | 14,020 | `partitions/msadp.img` | Prefix match; 510,268 trailing bytes, 109 nonzero |
+
+`[U]` For each of the six prefix matches, the first byte after the stock member
+is nonzero and the trailing region contains 32–125 nonzero bytes. This audit
+does not establish whether those bytes are padding, stale content, a second
+stage or something else; they are recorded as unexplained. Do not describe
+these partitions as full matches.
 
 `[S]` In the AP member, `boot.img` (100,663,296 bytes,
 `1f42eb045ba8eba194c7eb4c944fe6391c068b491003be78a3814ac07d2061c6`) and
@@ -242,11 +250,12 @@ the vbmeta partition may have been rewritten, while the AP member may also be
 matched with a different BL `vbmeta` image. This audit does not conclude that
 the captured vbmeta is modified or that it is stock `[U]`.
 
-`[S]` This comparison establishes that the captured BL chain and the
-boot/dtbo images correspond to the `T505NDXS6CXB1` package, subject to the
-unresolved vbmeta item. It does not authenticate the package beyond the FUS
-download and TLS, does not cover userdata or every partition, and adds no rail,
-pad or power measurement `[S]/[U]`.
+`[S]` This comparison establishes that the captured BL payloads and the
+boot/dtbo images correspond to the `T505NDXS6CXB1` package: four BL images and
+both AP images match in full, and six BL images match on their decompressed
+prefixes with unexplained trailing bytes. It does not authenticate the package
+beyond the FUS download and TLS, does not cover userdata or every partition, and
+adds no rail, pad or power measurement `[S]/[U]`.
 
 `[S]` The firmware archive and all extracted images remain outside the
 repository. Do not commit them, the region code, device-unique identifiers or

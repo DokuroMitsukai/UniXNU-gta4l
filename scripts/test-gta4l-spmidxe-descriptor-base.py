@@ -60,6 +60,7 @@ MAX_CALL_DEPTH = 2
 MAX_BUDGET = 64
 CALLER_SAVED = frozenset(range(19))
 STACK_BASES = frozenset((29, 31))
+MASK64 = (1 << 64) - 1
 
 
 def check(condition, message):
@@ -156,7 +157,11 @@ def sign_extend(value, bits):
 
 
 def write_intersects(address, size, start, end):
-    return address < end and start < address + size
+    address &= MASK64
+    limit = address + size
+    if address < end and start < min(limit, 1 << 64):
+        return True
+    return limit > (1 << 64) and start < limit - (1 << 64)
 
 
 def check_word(data, rva, expected, label):
@@ -240,7 +245,7 @@ def decode_adrp(word, pc):
     immlo = (word >> 29) & 0x3
     immhi = (word >> 5) & 0x7ffff
     imm = sign_extend((immhi << 2) | immlo, 21)
-    return (pc & ~0xfff) + (imm << 12), word & 0x1f
+    return ((pc & ~0xfff) + (imm << 12)) & MASK64, word & 0x1f
 
 
 def decode_adr(word, pc):
@@ -249,7 +254,7 @@ def decode_adr(word, pc):
     immlo = (word >> 29) & 0x3
     immhi = (word >> 5) & 0x7ffff
     imm = sign_extend((immhi << 2) | immlo, 21)
-    return pc + imm, word & 0x1f
+    return (pc + imm) & MASK64, word & 0x1f
 
 
 def decode_addsub(word):
@@ -396,13 +401,22 @@ def decode_register_only(word):
 
 
 def slot_mask(address, size, data_len):
-    start = max(address, DATA_VMA)
-    end = min(address + size, DATA_VMA + data_len)
-    if start >= end:
-        return 0
-    first = (start - DATA_VMA) // 8
-    last = (end - 1 - DATA_VMA) // 8
-    return ((1 << (last - first + 1)) - 1) << first
+    address &= MASK64
+    data_end = DATA_VMA + data_len
+    limit = address + size
+    ranges = [(address, min(limit, 1 << 64))]
+    if limit > (1 << 64):
+        ranges.append((0, limit - (1 << 64)))
+    mask = 0
+    for start, end in ranges:
+        start = max(start, DATA_VMA)
+        end = min(end, data_end)
+        if start >= end:
+            continue
+        first = (start - DATA_VMA) // 8
+        last = (end - 1 - DATA_VMA) // 8
+        mask |= ((1 << (last - first + 1)) - 1) << first
+    return mask
 
 
 def data_pointer(data_bytes, address, invalid_mask):
@@ -585,12 +599,12 @@ def _scan_path(result, text, data_bytes, pc, values, invalid, depth,
                 pc += 4
                 steps -= 1
                 continue
-            base_value = values[base]
+            base_value = values[base] & MASK64
             if index == 1:
                 address = base_value
-                new_base = base_value + immediate
+                new_base = (base_value + immediate) & MASK64
             else:
-                address = base_value + immediate
+                address = (base_value + immediate) & MASK64
                 new_base = address if index == 3 else base_value
             result.add_access(pc, kind, size, address)
             if store:
@@ -630,18 +644,18 @@ def _scan_path(result, text, data_bytes, pc, values, invalid, depth,
                 pc += 4
                 steps -= 1
                 continue
-            base_value = values[base]
+            base_value = values[base] & MASK64
             if index == 1:
                 address = base_value
-                new_base = base_value + immediate
+                new_base = (base_value + immediate) & MASK64
             else:
-                address = base_value + immediate
+                address = (base_value + immediate) & MASK64
                 new_base = address if index == 3 else base_value
             result.add_access(pc, kind, size, address)
-            result.add_access(pc, kind, size, address + size)
+            result.add_access(pc, kind, size, (address + size) & MASK64)
             if kind == 'store':
                 result.add_store(pc, size, address)
-                result.add_store(pc, size, address + size)
+                result.add_store(pc, size, (address + size) & MASK64)
                 mask = slot_mask(address, 2 * size, len(data_bytes))
                 invalid |= mask
                 may_invalid |= mask
@@ -666,8 +680,8 @@ def _scan_path(result, text, data_bytes, pc, values, invalid, depth,
             operation, base, destination, immediate = addsub
             if destination != 31:
                 if base in values:
-                    values[destination] = values[base] + (
-                        immediate if operation == 'add' else -immediate)
+                    values[destination] = (values[base] + (
+                        immediate if operation == 'add' else -immediate)) & MASK64
                 else:
                     values.pop(destination, None)
             pc += 4
@@ -800,6 +814,27 @@ def encode_adrp(pc, target, register):
 def encode_add_imm(destination, base, immediate):
     return (0x91000000 | ((immediate & 0xfff) << 10) |
             (base << 5) | destination)
+
+
+def encode_sub_imm(destination, base, immediate):
+    return (0xd1000000 | ((immediate & 0xfff) << 10) |
+            (base << 5) | destination)
+
+
+def encode_adr(pc, target, register):
+    delta = target - pc
+    check(-(1 << 20) <= delta < (1 << 20), 'ADR target is out of range')
+    immediate = delta & 0x1fffff
+    return (0x10000000 | ((immediate & 0x3) << 29) |
+            (((immediate >> 2) & 0x7ffff) << 5) | register)
+
+
+def encode_stp(target, target2, base, immediate, index):
+    bases = {0: 0xa9000000, 1: 0xa8800000, 3: 0xa9800000}
+    check(index in bases, 'unsupported pair index mode')
+    check(immediate % 8 == 0, 'STP immediate is not scaled by 8')
+    return (bases[index] | (((immediate // 8) & 0x7f) << 15) |
+            (target2 << 10) | (base << 5) | target)
 
 
 def encode_ldr_unsigned(target, base, immediate):
@@ -946,6 +981,77 @@ def check_scanner_controls(data):
           'pre-index store or base update did not reach 0x8878')
 
     result, start, end = run_sequence(
+        data, [adrp, encode_add_imm(8, 8, 0x870),
+               encode_stp(0, 1, 8, 0, 0), ret])
+    stores = sequence_stores(result, start, end)
+    check((0x1108, 8, 0x8870) in stores and
+          (0x1108, 8, OVERRIDE) in stores,
+          'paired store did not record both 8-byte accesses')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_add_imm(8, 8, 0x870),
+               encode_stp(0, 1, 8, 16, 1),
+               encode_str_unsigned(31, 8, 0), ret])
+    stores = sequence_stores(result, start, end)
+    check((0x1108, 8, 0x8870) in stores and
+          (0x1108, 8, OVERRIDE) in stores,
+          'post-index paired store did not record both accesses')
+    check((0x110c, 8, 0x8880) in stores,
+          'post-index paired store writeback was not applied')
+
+    result, start, end = run_sequence(
+        data, [adrp, encode_add_imm(8, 8, 0x880),
+               encode_stp(0, 1, 8, -16, 3),
+               encode_str_unsigned(31, 8, 0), ret])
+    stores = sequence_stores(result, start, end)
+    check((0x1108, 8, 0x8870) in stores and
+          (0x1108, 8, OVERRIDE) in stores,
+          'pre-index paired store did not record both accesses')
+    check((0x110c, 8, 0x8870) in stores,
+          'pre-index paired store writeback was not applied')
+
+    data_bytes = firmware_data(data)
+
+    check(write_intersects(MASK64 - 3, 8, 0, 4),
+          'wrapped store range was not intersected')
+    check(not write_intersects(MASK64 - 3, 8, OVERRIDE, OVERRIDE_END),
+          'wrapped store was misclassified as an override write')
+
+    shifted_add = 0x91400000 | (0x8 << 10) | (8 << 5) | 8
+    result = run_direct(data_bytes, [
+        encode_add_imm(8, 8, 1),
+        shifted_add,
+        encode_str_unsigned(31, 8, 0x878),
+        ret], values={8: MASK64})
+    check((0x1008, 8, OVERRIDE) in result.stores,
+          'demonstrated ADD overflow missed the 0x8878 store')
+
+    result = run_direct(data_bytes, [
+        encode_add_imm(8, 8, 0x879),
+        shifted_add,
+        encode_str_unsigned(31, 8, 0),
+        ret], values={8: MASK64})
+    check(any(write_intersects(item[2], item[1], OVERRIDE, OVERRIDE_END)
+              for item in result.stores),
+          '64-bit wrapping ADD did not reach 0x8878')
+
+    result = run_direct(data_bytes, [
+        encode_str_unscaled(31, 8, 8, 1),
+        encode_str_unsigned(31, 8, 0),
+        ret], values={8: MASK64})
+    check((0x1000, 8, MASK64) in result.stores and
+          (0x1004, 8, 7) in result.stores,
+          'post-index base update did not wrap at 64 bits')
+
+    result = run_direct(data_bytes, [
+        encode_str_unscaled(31, 8, 8, 3),
+        encode_str_unsigned(31, 8, 0),
+        ret], values={8: MASK64})
+    check((0x1000, 8, 7) in result.stores and
+          (0x1004, 8, 7) in result.stores,
+          'pre-index base update did not wrap at 64 bits')
+
+    result, start, end = run_sequence(
         data, [adrp, encode_ldr_unsigned(9, 8, 0x198),
                encode_ldr_unsigned(10, 9, 0x18),
                encode_str_unsigned(31, 10, 0), ret])
@@ -966,8 +1072,6 @@ def check_scanner_controls(data):
     check(not any(item[2] == OVERRIDE for item in stores),
           'caller-saved register survived a call clobber')
 
-    data_bytes = firmware_data(data)
-
     result = run_direct(data_bytes, [
         encode_adrp(0x1000, 0x8000, 8),
         encode_ldr_unsigned(31, 8, 0x198),
@@ -984,6 +1088,35 @@ def check_scanner_controls(data):
     check(not any(write_intersects(item[2], item[1], OVERRIDE, OVERRIDE_END)
                   for item in stores),
           'ADRP XZR seeded the stack pointer as an address register')
+
+    result, start, end = run_sequence(
+        data, [encode_adr(0x1100, 0x1000, 31),
+               encode_str_unsigned(0, 31, 0x878), ret])
+    stores = sequence_stores(result, start, end)
+    check(not any(write_intersects(item[2], item[1], OVERRIDE, OVERRIDE_END)
+                  for item in stores),
+          'ADR XZR seeded the stack pointer as an address register')
+
+    result = run_direct(data_bytes, [
+        encode_sub_imm(8, 8, 1),
+        encode_str_unsigned(31, 8, 0),
+        ret], values={8: 0})
+    check((0x1004, 8, MASK64) in result.stores,
+          'SUB underflow did not wrap at 64 bits')
+    check(write_intersects(MASK64, 8, 0, 8),
+          'wrapped SUB store range was not intersected')
+
+    result = run_direct(data_bytes, [
+        encode_strb_unsigned(31, 8, 0x879),
+        ret], values={8: MASK64})
+    check((0x1000, 1, 0x878) in result.stores,
+          'effective-address wrap was not applied')
+
+    result = run_direct(data_bytes, [
+        encode_stp(0, 1, 8, 0, 0), ret], values={8: MASK64 - 4})
+    check((0x1000, 8, MASK64 - 4) in result.stores and
+          (0x1000, 8, 3) in result.stores,
+          'paired store crossing the address-space boundary was not masked')
 
     result = run_direct(data_bytes, [
         encode_adrp(0x1000, 0x8000, 8),
