@@ -277,6 +277,19 @@ The trace found the following `[S]`:
   those bounds is `[C]`. The request path at `0x4616e98` indexes a table with
   the descriptor byte at `+3` plus `0x9f`; under the id interpretation L11 and
   L24 map to `0xaa` and `0xb7` `[C]`.
+- The RPM-side request parser at `0x46166c8` accepts `uv`, `swen`, `ma`,
+  `ssmd`, `freq`, `resn`, `aypa`, `bypa`, `rwen`, `mq`, `bobm`, `gr`, `hr`,
+  `ocv3` and `pcv1`–`pcv3` `[S]`. The aggregation routine at `0x46168dc` calls
+  `0x4616ad0`, which compares the parsed request words field by field and
+  keeps the larger value for several fields (voltage, load and mode under the
+  descriptor interpretation) while OR-ing the enable bit `[S]/[C]`. The
+  class/ID path `0x4615d08` keeps a per-id applied
+  state byte and calls the generic setter only when the aggregated enable
+  state differs from that byte (mode 1 for enable, mode 4 for disable) `[S]`.
+  The Linux driver writes only the active state and no L11/L24 request in the
+  traced paths `[S]`. The RPM output is therefore a latched aggregate of the
+  requests that exist; whether a boot-time or non-AP vote exists, and what the
+  RPM does with its state across suspend and shutdown, remains `[U]`.
 - The L11 key record at `0x46969e4` has exactly one stored pointer in the whole
   image (`0x46966a8`, the dead selector-array slot); the L24 key record at
   `0x4696a4c` has none `[S]`. No linked code path found by the scan reads the
@@ -434,8 +447,10 @@ images are downloaded in full to PMIC PBS RAM where they touch only L11/L24
 `STEP_CTRL`.* This narrows `E7` ("the exit path is not passive") but does not
 establish retention: the only RPM path identified by the scan is the generic
 `ldoa` setter, whose class object and per-id array are built at runtime from
-the resource database, driven by a request whose existence is not established;
-computed addressing, runtime relocation and aliasing are not excluded; the PBS
+the resource database and which is reached from a request-driven aggregator
+that keeps a latched per-id state; whether any request exists is not
+established; computed addressing, runtime relocation and aliasing are not
+excluded; the PBS
 instruction semantics and their effect, the effect of the runtime loader, and
 the actual rail state across handoff, suspend, shutdown and reboot remain
 unresolved `[U]`. A name match, an uninterpreted table or an absent reference

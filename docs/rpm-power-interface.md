@@ -184,6 +184,18 @@ bytes `[S]`.
   ids 11/24 passing the bounds are `[C]`. The bounded scan finds no static
   table or policy path that selects either rail `[S]`; whether a runtime
   request exists is `[U]`.
+- The RPM request parser at `0x46166c8` accepts the same `uv`, `swen` and `ma`
+  keys as the Linux driver plus `ssmd`, `freq`, `resn`, `aypa`, `bypa`, `rwen`,
+  `mq`, `bobm`, `gr`, `hr`, `ocv3` and `pcv1`–`pcv3` `[S]`. The aggregation
+  routine at `0x46168dc` calls `0x4616ad0`, which keeps the larger value for
+  several fields (voltage, load and mode under the descriptor interpretation)
+  and ORs the enable bit `[S]/[C]`. The class/ID path
+  `0x4615d08` stores a per-id applied state and calls the setter only when the
+  aggregated enable state changes (mode 1 enable, mode 4 disable) `[S]`. The
+  Linux driver writes only the active state, so the AP contributes no L11/L24
+  request in the traced paths `[S]`. The RPM's output is a latched aggregate of
+  whatever votes exist; boot-time or non-AP votes and the RPM's own
+  suspend/shutdown behaviour remain `[U]`.
 
 No linked code path found by the scan reads the voltage table or selector
 array `[S]`, and no traced path writes an L11/L24 voltage, mode or enable
