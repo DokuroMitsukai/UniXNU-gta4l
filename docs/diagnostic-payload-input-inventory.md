@@ -107,8 +107,8 @@ cache `17693480cbb8d0ebab55adf4728717ce004957666d6ad47bfb9dc46d4c3716c0`
 | UniXNU checkout | payload build | `src/UniXNU` | commit `6ee4ada8a82f5bd2d9032b4d7cf033e878e0551f` | present-sibling | Detached; supplies `unixnu`, payload builder and boot-image helper `[S]` |
 | Mu-Silicium checkout | firmware and DTB | `src/Mu-Silicium` | commit `e14626a3757007a2dbc902d3db323620d5568923` | present-sibling | Working tree has a modified `Mu_Basecore` submodule `[S]` |
 | Boot DTB source | boot image | `src/Mu-Silicium/Resources/DTBs/gta4l.dtb` | `e2ae2d671e28d9e295cc98ea3573ee6b41c46f5402e0769a417228d9fd8927fd` | present-sibling | Patched to `dc4c719d...` by `board.toml`; the v5 `boot.json` records the unpatched hash `[S]` |
-| Tested firmware FD | boot image | outer FV of the v5 image | `42f900a38e582026f5daabb70b19b340f0697f2f90b0248c53ecebc07f4186e9` | embedded | No standalone file found in the workspace matches; recoverable with `scripts/extract-gta4l-firmware.py` `[S]` |
-| Current Mu-Silicium FD | rebuild only | `src/Mu-Silicium/Build/gta4lPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd` | `b2b5bdce7e3005f04d8883b40adac5bb750736fb3aad54244470b6bc9d80308f` | present-sibling | Same 86-module count but 45 of 86 PE hashes differ from the tested image `[S]` |
+| Tested firmware FD | boot image | outer FV of the v5 image | `42f900a38e582026f5daabb70b19b340f0697f2f90b0248c53ecebc07f4186e9` | embedded | Not in this workspace; the historical build host retains the standalone Build FD (same hash), and `boot.json` records `fd_sha256`; see `firmware-build-recipe.md` `[S]` |
+| Current Mu-Silicium FD | rebuild only | `src/Mu-Silicium/Build/gta4lPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd` | `b2b5bdce7e3005f04d8883b40adac5bb750736fb3aad54244470b6bc9d80308f` | present-sibling | Local clang 21.1.8 build at a different absolute path; 45 of 86 PE hashes differ from the tested image. The tested toolchain is Arch clang 22.1.8; see `firmware-build-recipe.md` `[S]` |
 | Local committed FD | firmware reference | `src/UniXNU-gta4l/SILICIUM_UEFI.fd` | `3d5dbd6ff28093e38a16c02af813fe7d2624d8e9b83ff407045e467e86904f5a` | tracked | Gzip-wrapped; outer FV `4a8ca2cd...`, inner FV `2443e52a...`; not the booted image `[S]` |
 | Fixture compiler | fixture replay | host `/usr/bin/clang-21` via the toolchain shim | clang 21.1.8 | present-host | Pinned path and exact version in the fixture recipe `[S]` |
 | Fixture signer | fixture replay | `rcodesign` tarball | pinned by the recipe | fetched per replay | Not installed system-wide; the replay prefix is volatile `[S]` |
@@ -293,7 +293,11 @@ the pinned Mu-Silicium revision, then rebuild and repackage the payload. The
 packaging step is replayable from the existing baseline and payloads, the
 fixture data inputs have a pinned recipe, and the kernel source/patch and
 prelink stages are replayed in `kernel-build-recipe.md`. A full kernel
-compile/link replay and firmware reproduction are not established.
+compile/link replay remains not established. Firmware build provenance and the
+module replay are recorded in `firmware-build-recipe.md`: the tested outer FD
+`42f900a3...` is built from Mu-Silicium `e14626a...`, the `mu_basecore-8f10084c`
+feed at `cfb9372...`, UniXNU `4561854...`, `Binaries` `a1501e0c...` and Arch
+clang 22.1.8. The inner FV differs in exactly 8 bytes (the `PcdDxe` PDB GUID).
 
 ### Kernel build bootstrap caveat
 
@@ -313,12 +317,18 @@ a compile record `[S]`.
    source, patch, compiler, linker, archive and prelink inputs are pinned, and
    the source/patch and prelink stages are replayed. A full compile/link replay
    and the evidence-image kernels remain not established.
-2. Rebuild Mu-Silicium at `e14626a...` and compare all 86 PE module hashes with
-   the tested image `42f900a3...`/`3bb7847a...`. Identify the source or
-   toolchain delta before treating the firmware as reproducible.
-3. Only after (2), rebuild the diagnostic payload against the v5 baseline, run
-   both gates with the expected payload hash, and compare the resulting boot
-   image. Do not flash; the SDHC decision remains NO-GO.
+2. Firmware build provenance is recorded in `firmware-build-recipe.md`. A
+   clean replay at the historical absolute path reproduces 153 of 156 `.efi`
+   build outputs byte-for-byte; the three `PcdDxe` copies differ only in the
+   8-byte debug-directory GUID (random stack-cookie text and PCD flag order in
+   the generated `AutoGen` files). The inner FV differs in exactly those 8
+   bytes. A bit-exact outer FD is conditional on pinning that generated text;
+   the stock `build` driver has no supported pin. The earlier 45-of-86 PE
+   difference was the laptop's clang 21.1.8 build at a different path, not the
+   tested toolchain.
+3. With (2) recorded, rebuild the diagnostic payload against the v5 baseline,
+   run both gates with the expected payload hash, and compare the resulting
+   boot image. Do not flash; the SDHC decision remains NO-GO.
 
 ## 10. References
 
@@ -327,6 +337,8 @@ a compile record `[S]`.
 - `docs/ram-root-fixture-reproducibility.md` — fixture inputs, pins and replay
 - `docs/firmware-handoff.md` — tested firmware provenance and the current-build
   difference
+- `docs/firmware-build-recipe.md` — firmware inputs, the clean replay, and the
+  `PcdDxe` debug-GUID delta
 - `docs/sdhci-snapshot.md` — v5 hardware result and activation argument
 - `docs/sdhci-handoff-audit.md` — audit v2 image and script inventory
 - `docs/sdhci-host-init.md` — host-init v2 image and bounded writes
