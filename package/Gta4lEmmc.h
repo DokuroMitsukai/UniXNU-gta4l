@@ -75,6 +75,20 @@
 #define GTA4L_EMMC_PRESENT_CMD_INHIBIT     0x00000001u
 #define GTA4L_EMMC_PRESENT_DAT_INHIBIT     0x00000002u
 
+/* Host Control 2 (0x3E). Preserve the reserved and vendor fields and change
+ * only the UHS/tuning/1.8 V signalling fields. */
+#define GTA4L_EMMC_HOST_CONTROL2_UHS_MASK  0x0007u
+#define GTA4L_EMMC_HOST_CONTROL2_VDD_180   0x0008u
+#define GTA4L_EMMC_HOST_CONTROL2_TUNING    0x0040u
+
+/* Qualcomm vendor-spec pad power switch (CORE_VENDOR_SPEC, 0x20C). */
+#define GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH_EN 0x00008000u
+#define GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH    0x00010000u
+
+/* Power-on to card-clock settle time (Linux waits 5 ms after a 3.3 V
+ * regulator transition; the retained 1.8 V rail uses the same bound). */
+#define GTA4L_EMMC_POWER_SETTLE_US         5000u
+
 #define GTA4L_EMMC_INT_CC                  0x0001u
 #define GTA4L_EMMC_INT_TC                  0x0002u
 #define GTA4L_EMMC_INT_BRR                 0x0020u
@@ -102,7 +116,7 @@
 #define GTA4L_EMMC_CMD_RESP_LONG           0x0001u
 #define GTA4L_EMMC_CMD_RESP_SHORT          0x0002u
 #define GTA4L_EMMC_CMD_RESP_SHORT_BUSY     0x0003u
-#define GTA4L_EMMC_CMD_DATA                0x0004u
+#define GTA4L_EMMC_CMD_DATA                0x0020u
 #define GTA4L_EMMC_CMD_CRC                 0x0008u
 #define GTA4L_EMMC_CMD_INDEX               0x0010u
 
@@ -167,8 +181,14 @@
 #define GTA4L_EMMC_OCR_VALUE               0x40FF8080u
 #define GTA4L_EMMC_DEFAULT_RCA             1u
 #define GTA4L_EMMC_EXT_CSD_BYTES           512u
+#define GTA4L_EMMC_EXT_CSD_DATA_SECTOR_SIZE_OFF 61u
+#define GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF 179u
 #define GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF   212u
 #define GTA4L_EMMC_EXT_CSD_REV_OFF         192u
+#define GTA4L_EMMC_EXT_CSD_PARTITION_ACCESS_MASK 0x07u
+/* eMMC devices above 2 GiB are sector addressed (JEDEC; Linux sets
+ * MMC_STATE_BLOCKADDR when SEC_COUNT > 2 GiB / 512). */
+#define GTA4L_EMMC_SECTOR_ADDRESS_MIN_BLOCKS 4194304u
 #define GTA4L_EMMC_R1_STATE_MASK           0x00001E00u
 #define GTA4L_EMMC_R1_STATE_SHIFT          9u
 #define GTA4L_EMMC_R1_STATE_TRAN           4u
@@ -234,6 +254,9 @@ struct gta4l_emmc_host {
 	uint32_t mci_version;
 	uint8_t  ext_csd_rev;
 	uint8_t  bus_width;
+	uint8_t  partition_config;
+	uint8_t  data_sector_size_4k;
+	uint8_t  fixed_1v8;      /* caller: board VCCQ is a fixed 1.8 V rail */
 	uint8_t  initialized;
 };
 

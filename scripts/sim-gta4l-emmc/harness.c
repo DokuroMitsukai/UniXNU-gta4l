@@ -19,23 +19,47 @@
 #define SIM_TLMM_WORDS 0x04u
 #define SIM_MAX_LOG    128u
 
+/* Independent copies of the SDHCI semantics the simulator enforces. These
+ * are deliberately not taken from the production header, so a mutated header
+ * cannot change what the simulator accepts. */
+#define SIM_CMD_DATA            0x0020u
+#define SIM_TM_BLOCK_COUNT_EN   0x0002u
+#define SIM_TM_READ             0x0010u
+#define SIM_CTRL_VDD_180        0x0008u
+#define SIM_PAD_PWR_SWITCH_EN   0x00008000u
+#define SIM_PAD_PWR_SWITCH      0x00010000u
+#define SIM_POWER_SETTLE_US     5000u
+
 struct sim {
 	uint8_t  sdhci[SIM_SDHCI_SIZE];
 	uint32_t gcc[SIM_GCC_WORDS];
 	uint32_t tlmm[SIM_TLMM_WORDS];
 	uint16_t normal_int;
 	uint16_t error_int;
+	uint16_t normal_enable;
+	uint16_t error_enable;
+	uint16_t normal_signal;
+	uint16_t error_signal;
+	uint16_t block_size;
+	uint16_t block_count;
+	uint16_t transfer_mode;
 	uint32_t pwr_status;
 	uint32_t power_ack;
 	uint32_t buffer_data[GTA4L_EMMC_BLOCK_BYTES / 4u];
 	uint32_t buffer_index;
 	uint32_t last_cmd;
+	uint32_t last_cmd_argument;
 	uint32_t cmd_count;
+	uint32_t cmd3_argument;
 	uint32_t rca;
+	uint32_t sector_count;
+	uint32_t partition_config;
 	uint8_t  ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
 	uint32_t cid[4];
 	uint32_t csd[4];
 	uint64_t time_us;
+	uint64_t card_clock_time_us;
+	uint64_t power_ack_time_us;
 	uint32_t log_event[SIM_MAX_LOG];
 	uint32_t log_a[SIM_MAX_LOG];
 	uint32_t log_b[SIM_MAX_LOG];
@@ -55,13 +79,65 @@ struct sim {
 	int card_never_ready;
 	int bad_cid;
 	int bad_csd;
-	int rca_zero;
+	int cmd3_error;
+	int power_no_request;
+	int power_stuck;
 	int power_written;
 	int card_clock_before_power;
 	int card_clock_enabled;
 	int reset_written;
 	int branch_writes;
+	int access_violation;
+	int command_error;
 };
+
+static int
+sim_sdhci_width_ok(uint32_t offset, uint32_t width)
+{
+	switch (offset) {
+	case 0x28u: /* HOST_CONTROL */
+	case 0x29u: /* POWER_CONTROL */
+	case 0x2Eu: /* TIMEOUT_CONTROL */
+	case 0x2Fu: /* SOFTWARE_RESET */
+		return width == 1u;
+	case 0x04u: /* BLOCK_SIZE */
+	case 0x06u: /* BLOCK_COUNT */
+	case 0x0Cu: /* TRANSFER_MODE */
+	case 0x0Eu: /* COMMAND */
+	case 0x2Cu: /* CLOCK_CONTROL */
+	case 0x30u: /* NORMAL_INT_STATUS */
+	case 0x32u: /* ERROR_INT_STATUS */
+	case 0x34u: /* NORMAL_INT_ENABLE */
+	case 0x36u: /* ERROR_INT_ENABLE */
+	case 0x38u: /* NORMAL_INT_SIGNAL */
+	case 0x3Au: /* ERROR_INT_SIGNAL */
+	case 0x3Eu: /* HOST_CONTROL2 */
+		return width == 2u;
+	case 0x08u: /* ARGUMENT */
+	case 0x10u: /* RESPONSE */
+	case 0x14u:
+	case 0x18u:
+	case 0x1Cu:
+	case 0x20u: /* BUFFER_DATA_PORT */
+	case 0x24u: /* PRESENT_STATE */
+	case 0x40u: /* CAPABILITIES */
+	case 0x20Cu: /* CORE_VENDOR_SPEC */
+	case 0x240u: /* CORE_PWRCTL_STATUS */
+	case 0x244u: /* CORE_PWRCTL_MASK */
+	case 0x248u: /* CORE_PWRCTL_CLEAR */
+	case 0x24Cu: /* CORE_PWRCTL_CTL */
+	case 0x318u: /* MCI_VERSION */
+		return width == 4u;
+	default:
+		return 0;
+	}
+}
+
+static int
+sim_region_ok(uint32_t offset, uint32_t width, uint32_t size)
+{
+	return ((offset % width) == 0u) && ((offset + width) <= size);
+}
 
 static uint8_t
 sim_read8(void *context, uint32_t space, uint32_t offset)
@@ -69,12 +145,24 @@ sim_read8(void *context, uint32_t space, uint32_t offset)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		if (!sim_sdhci_width_ok(offset, 1u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		return sim->sdhci[offset];
 	}
 	if (space == GTA4L_EMMC_SPACE_GCC) {
+		if (!sim_region_ok(offset, 1u, SIM_GCC_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		return (uint8_t)(sim->gcc[offset / 4u] >> ((offset & 3u) * 8u));
 	}
 	if (space == GTA4L_EMMC_SPACE_TLMM) {
+		if (!sim_region_ok(offset, 1u, SIM_TLMM_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		return (uint8_t)(sim->tlmm[offset / 4u] >> ((offset & 3u) * 8u));
 	}
 	return 0;
@@ -86,19 +174,31 @@ sim_read16(void *context, uint32_t space, uint32_t offset)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		if (!sim_sdhci_width_ok(offset, 2u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
-			return sim->normal_int;
+			return sim->normal_int & sim->normal_enable;
 		}
 		if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
-			return sim->error_int;
+			return sim->error_int & sim->error_enable;
 		}
 		return (uint16_t)(sim->sdhci[offset] |
 		    ((uint16_t)sim->sdhci[offset + 1u] << 8));
 	}
 	if (space == GTA4L_EMMC_SPACE_GCC) {
+		if (!sim_region_ok(offset, 2u, SIM_GCC_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		return (uint16_t)(sim->gcc[offset / 4u] >> ((offset & 3u) * 8u));
 	}
 	if (space == GTA4L_EMMC_SPACE_TLMM) {
+		if (!sim_region_ok(offset, 2u, SIM_TLMM_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		return (uint16_t)(sim->tlmm[offset / 4u] >> ((offset & 3u) * 8u));
 	}
 	return 0;
@@ -110,6 +210,10 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		if (!sim_sdhci_width_ok(offset, 4u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) {
 			return sim->pwr_status;
 		}
@@ -125,9 +229,17 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 		    ((uint32_t)sim->sdhci[offset + 3u] << 24);
 	}
 	if (space == GTA4L_EMMC_SPACE_GCC) {
+		if (!sim_region_ok(offset, 4u, SIM_GCC_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		return sim->gcc[offset / 4u];
 	}
 	if (space == GTA4L_EMMC_SPACE_TLMM) {
+		if (!sim_region_ok(offset, 4u, SIM_TLMM_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return 0;
+		}
 		return sim->tlmm[offset / 4u];
 	}
 	return 0;
@@ -139,6 +251,10 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		if (!sim_sdhci_width_ok(offset, 1u)) {
+			sim->access_violation = 1;
+			return;
+		}
 		sim->sdhci[offset] = value;
 		if (offset == GTA4L_EMMC_REG_SOFTWARE_RESET) {
 			sim->reset_written = 1;
@@ -149,23 +265,15 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 		if (offset == GTA4L_EMMC_REG_POWER_CONTROL) {
 			sim->power_written = 1;
 			if ((value & GTA4L_EMMC_POWER_BUS_POWER) != 0) {
-				sim->pwr_status = sim->power_off ?
-				    GTA4L_EMMC_PWRCTL_BUS_OFF :
-				    (GTA4L_EMMC_PWRCTL_BUS_ON |
-				    GTA4L_EMMC_PWRCTL_IO_HIGH);
-			}
-		}
-		if (offset == GTA4L_EMMC_REG_CLOCK_CONTROL) {
-			if (((value & GTA4L_EMMC_CLOCK_CARD_EN) != 0) &&
-			    (sim->power_written == 0)) {
-				sim->card_clock_before_power = 1;
-			}
-			if ((value & GTA4L_EMMC_CLOCK_CARD_EN) != 0) {
-				sim->card_clock_enabled = 1;
-			}
-			if ((value & GTA4L_EMMC_CLOCK_INT_EN) != 0) {
-				if (!sim->clock_timeout) {
-					sim->sdhci[offset] |= GTA4L_EMMC_CLOCK_INT_STABLE;
+				if (sim->power_no_request != 0) {
+					sim->pwr_status = 0;
+				} else if (sim->power_off != 0) {
+					sim->pwr_status =
+					    GTA4L_EMMC_PWRCTL_BUS_OFF;
+				} else {
+					sim->pwr_status =
+					    GTA4L_EMMC_PWRCTL_BUS_ON |
+					    GTA4L_EMMC_PWRCTL_IO_HIGH;
 				}
 			}
 		}
@@ -175,6 +283,10 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 		uint32_t shift = (offset & 3u) * 8u;
 		uint32_t mask = 0xFFu << shift;
 
+		if (!sim_region_ok(offset, 1u, SIM_GCC_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return;
+		}
 		sim->gcc[offset / 4u] = (sim->gcc[offset / 4u] & ~mask) |
 		    ((uint32_t)value << shift);
 		return;
@@ -183,6 +295,10 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 		uint32_t shift = (offset & 3u) * 8u;
 		uint32_t mask = 0xFFu << shift;
 
+		if (!sim_region_ok(offset, 1u, SIM_TLMM_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return;
+		}
 		sim->tlmm[offset / 4u] = (sim->tlmm[offset / 4u] & ~mask) |
 		    ((uint32_t)value << shift);
 		return;
@@ -195,11 +311,13 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value);
 static void
 sim_fill_ext_csd(struct sim *sim)
 {
-	uint32_t count = 61071360u;
+	uint32_t count = sim->sector_count;
 
 	memset(sim->ext_csd, 0, sizeof(sim->ext_csd));
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_REV_OFF] = 8;
 	sim->ext_csd[183] = 2;
+	sim->ext_csd[GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF] =
+	    (uint8_t)sim->partition_config;
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 0] =
 	    (uint8_t)(count & 0xFFu);
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 1] =
@@ -252,18 +370,68 @@ sim_set_response(struct sim *sim, const uint32_t *words, uint32_t count)
 	}
 }
 
+static int
+sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
+    uint16_t flags)
+{
+	uint32_t response_type = flags & 0x3u;
+	int data = (flags & SIM_CMD_DATA) != 0;
+	int read = (sim->transfer_mode & SIM_TM_READ) != 0;
+	int block_count_en =
+	    (sim->transfer_mode & SIM_TM_BLOCK_COUNT_EN) != 0;
+
+	switch (index) {
+	case GTA4L_EMMC_CMD0:
+		return response_type == 0u && data == 0;
+	case GTA4L_EMMC_CMD1:
+		return response_type == 2u && data == 0;
+	case GTA4L_EMMC_CMD2:
+		return response_type == 1u && data == 0;
+	case GTA4L_EMMC_CMD3:
+		return response_type == 2u && data == 0 &&
+		    ((argument >> 16) != 0u);
+	case GTA4L_EMMC_CMD7:
+		return response_type == 3u && data == 0 &&
+		    ((argument >> 16) == sim->rca);
+	case GTA4L_EMMC_CMD9:
+		return response_type == 1u && data == 0 &&
+		    ((argument >> 16) == sim->rca);
+	case GTA4L_EMMC_CMD13:
+		return response_type == 2u && data == 0 &&
+		    ((argument >> 16) == sim->rca);
+	case GTA4L_EMMC_CMD8:
+		return response_type == 2u && data != 0 && read &&
+		    block_count_en && sim->block_size == 512u &&
+		    sim->block_count == 1u;
+	case GTA4L_EMMC_CMD17:
+		return response_type == 2u && data != 0 && read &&
+		    block_count_en && sim->block_size == 512u &&
+		    sim->block_count == 1u &&
+		    argument < sim->sector_count;
+	default:
+		return 0;
+	}
+}
+
 static void
 sim_command(struct sim *sim, uint16_t command)
 {
 	uint32_t index = (command >> 8) & 0x3Fu;
+	uint32_t flags = command & 0xFFu;
 	uint32_t argument = sim_read32(sim, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_ARGUMENT);
 	uint32_t response = 0x00000900u; /* READY_FOR_DATA | TRAN */
 	uint32_t words[4];
 
 	sim->last_cmd = index;
+	sim->last_cmd_argument = argument;
 	sim->cmd_count++;
 	sim->buffer_index = 0;
+
+	if (!sim_command_ok(sim, index, argument, (uint16_t)flags)) {
+		sim->command_error = 1;
+		return;
+	}
 
 	if ((sim->cmd_timeout != 0) && (index == GTA4L_EMMC_CMD0)) {
 		return;
@@ -298,8 +466,14 @@ sim_command(struct sim *sim, uint16_t command)
 		sim_set_response(sim, words, 4);
 		break;
 	case GTA4L_EMMC_CMD3:
-		sim->rca = sim->rca_zero ? 0u : 1u;
-		response = sim->rca << 16;
+		/* eMMC SET_RELATIVE_ADDR: the host assigns the RCA in the
+		 * argument; the response is R1 status. */
+		sim->cmd3_argument = argument;
+		sim->rca = argument >> 16;
+		response = 0x00000900u;
+		if (sim->cmd3_error != 0) {
+			response |= 0x00000080u;
+		}
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		sim_set_response(sim, &response, 1);
 		break;
@@ -366,9 +540,30 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 	struct sim *sim = (struct sim *)context;
 
 	if (space != GTA4L_EMMC_SPACE_SDHCI) {
+		uint32_t size = (space == GTA4L_EMMC_SPACE_GCC) ?
+		    SIM_GCC_WORDS * 4u : SIM_TLMM_WORDS * 4u;
+
+		if (!sim_region_ok(offset, 2u, size)) {
+			sim->access_violation = 1;
+			return;
+		}
 		sim_write8(context, space, offset, (uint8_t)(value & 0xFFu));
-		sim_write8(context, space, offset + 1u, (uint8_t)(value >> 8));
+		sim_write8(context, space, offset + 1u,
+		    (uint8_t)(value >> 8));
 		return;
+	}
+	if (!sim_sdhci_width_ok(offset, 2u)) {
+		sim->access_violation = 1;
+		return;
+	}
+	if (offset == GTA4L_EMMC_REG_BLOCK_SIZE) {
+		sim->block_size = value;
+	}
+	if (offset == GTA4L_EMMC_REG_BLOCK_COUNT) {
+		sim->block_count = value;
+	}
+	if (offset == GTA4L_EMMC_REG_TRANSFER_MODE) {
+		sim->transfer_mode = value;
 	}
 	if (offset == GTA4L_EMMC_REG_COMMAND) {
 		sim->sdhci[offset] = (uint8_t)(value & 0xFFu);
@@ -384,6 +579,22 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 		sim->error_int &= (uint16_t)~value;
 		return;
 	}
+	if (offset == GTA4L_EMMC_REG_NORMAL_INT_ENABLE) {
+		sim->normal_enable = value;
+		return;
+	}
+	if (offset == GTA4L_EMMC_REG_ERROR_INT_ENABLE) {
+		sim->error_enable = value;
+		return;
+	}
+	if (offset == GTA4L_EMMC_REG_NORMAL_INT_SIGNAL) {
+		sim->normal_signal = value;
+		return;
+	}
+	if (offset == GTA4L_EMMC_REG_ERROR_INT_SIGNAL) {
+		sim->error_signal = value;
+		return;
+	}
 	if (offset == GTA4L_EMMC_REG_CLOCK_CONTROL) {
 		sim->sdhci[offset] = (uint8_t)(value & 0xFFu);
 		sim->sdhci[offset + 1u] = (uint8_t)(value >> 8);
@@ -393,6 +604,7 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 		}
 		if ((value & GTA4L_EMMC_CLOCK_CARD_EN) != 0) {
 			sim->card_clock_enabled = 1;
+			sim->card_clock_time_us = sim->time_us;
 		}
 		if (((value & GTA4L_EMMC_CLOCK_INT_EN) != 0) &&
 		    (sim->clock_timeout == 0)) {
@@ -410,18 +622,29 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		if (!sim_sdhci_width_ok(offset, 4u)) {
+			sim->access_violation = 1;
+			return;
+		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR) {
-			sim->pwr_status &= ~value;
+			if (sim->power_stuck == 0) {
+				sim->pwr_status &= ~value;
+			}
 			return;
 		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_CTL) {
 			sim->power_ack = value;
-			if ((value & GTA4L_EMMC_PWRCTL_ACK_BUS) != 0) {
-				sim->pwr_status &= ~GTA4L_EMMC_PWRCTL_BUS_ON;
-			}
-			if ((value & GTA4L_EMMC_PWRCTL_ACK_IO) != 0) {
-				sim->pwr_status &= ~(GTA4L_EMMC_PWRCTL_IO_LOW |
-				    GTA4L_EMMC_PWRCTL_IO_HIGH);
+			sim->power_ack_time_us = sim->time_us;
+			if (sim->power_stuck == 0) {
+				if ((value & GTA4L_EMMC_PWRCTL_ACK_BUS) != 0) {
+					sim->pwr_status &=
+					    ~GTA4L_EMMC_PWRCTL_BUS_ON;
+				}
+				if ((value & GTA4L_EMMC_PWRCTL_ACK_IO) != 0) {
+					sim->pwr_status &=
+					    ~(GTA4L_EMMC_PWRCTL_IO_LOW |
+					    GTA4L_EMMC_PWRCTL_IO_HIGH);
+				}
 			}
 			return;
 		}
@@ -432,6 +655,10 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 		return;
 	}
 	if (space == GTA4L_EMMC_SPACE_GCC) {
+		if (!sim_region_ok(offset, 4u, SIM_GCC_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return;
+		}
 		sim->gcc[offset / 4u] = value;
 		if (offset == GTA4L_EMMC_GCC_SDCC1_BCR) {
 			if ((value & GTA4L_EMMC_BCR_BLOCK_RESET) != 0) {
@@ -458,6 +685,10 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 		return;
 	}
 	if (space == GTA4L_EMMC_SPACE_TLMM) {
+		if (!sim_region_ok(offset, 4u, SIM_TLMM_WORDS * 4u)) {
+			sim->access_violation = 1;
+			return;
+		}
 		sim->tlmm[offset / 4u] = value;
 	}
 }
@@ -505,8 +736,12 @@ static void
 sim_init(struct sim *sim)
 {
 	memset(sim, 0, sizeof(*sim));
+	sim->sector_count = 61071360u;
+	sim->partition_config = 0u;
 	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_MCI_VERSION,
 	    0x10000072u);
+	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, 0x00000A9Cu);
 	sim->gcc[GTA4L_EMMC_GCC_SDCC1_APPS_CBCR / 4u] =
 	    GTA4L_EMMC_CBCR_CLOCK_ENABLE;
 	sim->gcc[GTA4L_EMMC_GCC_SDCC1_AHB_CBCR / 4u] =
@@ -579,6 +814,7 @@ main(int argc, char **argv)
 	memset(&host, 0, sizeof(host));
 	host.ops = &sim_ops;
 	host.context = &sim;
+	host.fixed_1v8 = 1;
 
 	if (scenario_is(scenario, "reset-timeout")) {
 		sim.reset_timeout = 1;
@@ -586,6 +822,10 @@ main(int argc, char **argv)
 		sim.clock_timeout = 1;
 	} else if (scenario_is(scenario, "power-off")) {
 		sim.power_off = 1;
+	} else if (scenario_is(scenario, "power-no-request")) {
+		sim.power_no_request = 1;
+	} else if (scenario_is(scenario, "power-stuck")) {
+		sim.power_stuck = 1;
 	} else if (scenario_is(scenario, "rcg-busy")) {
 		sim.rcg_busy = 1;
 	} else if (scenario_is(scenario, "cmd-timeout")) {
@@ -608,8 +848,16 @@ main(int argc, char **argv)
 		sim.bad_cid = 1;
 	} else if (scenario_is(scenario, "bad-csd")) {
 		sim.bad_csd = 1;
-	} else if (scenario_is(scenario, "rca-zero")) {
-		sim.rca_zero = 1;
+	} else if (scenario_is(scenario, "cmd3-error")) {
+		sim.cmd3_error = 1;
+	} else if (scenario_is(scenario, "small-card")) {
+		sim.sector_count = 4096u;
+		sim_fill_ext_csd(&sim);
+	} else if (scenario_is(scenario, "partition-access")) {
+		sim.partition_config = 1u;
+		sim_fill_ext_csd(&sim);
+	} else if (scenario_is(scenario, "signaling-3v3")) {
+		host.fixed_1v8 = 0;
 	} else if (scenario_is(scenario, "version")) {
 		sim_write32(&sim, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_MCI_VERSION, 0x20000000u);
@@ -625,7 +873,10 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "read-no-tc") ||
 	    scenario_is(scenario, "read-no-brr") ||
 	    scenario_is(scenario, "read-repeat") ||
-	    scenario_is(scenario, "read-ext-csd")) {
+	    scenario_is(scenario, "read-ext-csd") ||
+	    scenario_is(scenario, "read-out-of-range") ||
+	    scenario_is(scenario, "read-last-block") ||
+	    scenario_is(scenario, "signaling-3v3")) {
 		check(result == GTA4L_EMMC_OK, "initialization failed");
 		if (result != GTA4L_EMMC_OK) {
 			fprintf(stderr, "init result %d\n", result);
@@ -634,10 +885,17 @@ main(int argc, char **argv)
 	}
 
 	if (scenario_is(scenario, "success")) {
-		check(host.rca == 1u, "RCA is not 1");
+		check(host.rca == GTA4L_EMMC_DEFAULT_RCA,
+		    "RCA is not the assigned value");
+		check(sim.cmd3_argument == (GTA4L_EMMC_DEFAULT_RCA << 16),
+		    "CMD3 argument did not carry the RCA");
 		check(host.capacity_blocks == 61071360u, "capacity mismatch");
 		check(host.ext_csd_rev == 8u, "EXT_CSD revision mismatch");
 		check(host.bus_width == 2u, "bus width mismatch");
+		check(host.partition_config == 0u,
+		    "partition access is not the user area");
+		check(host.data_sector_size_4k == 0u,
+		    "unexpected 4 KiB data sector size");
 		check(host.cid[0] != 0u, "CID is empty");
 		check(host.csd[0] != 0u, "CSD is empty");
 		check(sim.gcc[GTA4L_EMMC_GCC_SDCC1_APPS_CFG / 4u] ==
@@ -655,24 +913,78 @@ main(int argc, char **argv)
 		check(sim.card_clock_enabled == 1, "card clock not enabled");
 		check(sim.card_clock_before_power == 0,
 		    "card clock enabled before power");
+		check(sim.card_clock_time_us >=
+		    sim.power_ack_time_us + SIM_POWER_SETTLE_US,
+		    "card clock enabled before the power settle delay");
+		check(sim.access_violation == 0,
+		    "core used a wrong register width or unaligned access");
+		check(sim.command_error == 0,
+		    "core sent a command with wrong encoding or state");
+		check(sim.normal_enable == (GTA4L_EMMC_INT_CC |
+		    GTA4L_EMMC_INT_TC | GTA4L_EMMC_INT_BRR),
+		    "normal status enables are not set for polling");
+		check(sim.error_enable == GTA4L_EMMC_INT_ERR_MASK,
+		    "error status enables are not set for polling");
+		check(sim.normal_signal == 0u && sim.error_signal == 0u,
+		    "interrupt signalling is not suppressed");
+		check((sim_read16(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL2) & SIM_CTRL_VDD_180) != 0,
+		    "1.8 V signalling is not selected");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    (SIM_PAD_PWR_SWITCH_EN | SIM_PAD_PWR_SWITCH)) ==
+		    (SIM_PAD_PWR_SWITCH_EN | SIM_PAD_PWR_SWITCH),
+		    "fixed-1.8 V pad power switch is not selected");
 		check(sim.last_cmd == GTA4L_EMMC_CMD8,
 		    "initialization did not end with CMD8");
+		check(sim.last_cmd_argument == 0u,
+		    "CMD8 argument is not zero");
 		check(sim.log_count > 0, "no log events");
 
 		result = gta4l_emmc_read_block(&host, 0, block0);
 		check(result == GTA4L_EMMC_OK, "block 0 read failed");
 		if (result == GTA4L_EMMC_OK) {
 			check_block(&sim, 0, block0, "block 0");
+			check(sim.last_cmd_argument == 0u,
+			    "CMD17 block 0 argument mismatch");
 		}
 		result = gta4l_emmc_read_block(&host, 1, block1);
 		check(result == GTA4L_EMMC_OK, "block 1 read failed");
 		if (result == GTA4L_EMMC_OK) {
 			check_block(&sim, 1, block1, "block 1");
+			check(sim.last_cmd_argument == 1u,
+			    "CMD17 block 1 argument mismatch");
 		}
-		check(sim.last_cmd == GTA4L_EMMC_CMD17, "last command is not CMD17");
+		check(sim.last_cmd == GTA4L_EMMC_CMD17,
+		    "last command is not CMD17");
+	} else if (scenario_is(scenario, "signaling-3v3")) {
+		check((sim_read16(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL2) & SIM_CTRL_VDD_180) == 0,
+		    "3.3 V signalling unexpectedly has VDD_180 set");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    SIM_PAD_PWR_SWITCH_EN) != 0,
+		    "pad power switch enable is not set");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    SIM_PAD_PWR_SWITCH) == 0,
+		    "pad power switch is set for 3.3 V signalling");
 	} else if (scenario_is(scenario, "read-arg")) {
 		result = gta4l_emmc_read_block(&host, 0x100000000ULL, block0);
 		check(result == GTA4L_EMMC_ERR_ARG, "overflow block was accepted");
+	} else if (scenario_is(scenario, "read-out-of-range")) {
+		result = gta4l_emmc_read_block(&host, host.capacity_blocks,
+		    block0);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "block at capacity was accepted");
+	} else if (scenario_is(scenario, "read-last-block")) {
+		result = gta4l_emmc_read_block(&host,
+		    (uint64_t)host.capacity_blocks - 1u, block0);
+		check(result == GTA4L_EMMC_OK, "last block read failed");
+		if (result == GTA4L_EMMC_OK) {
+			check_block(&sim, host.capacity_blocks - 1u, block0,
+			    "last block");
+		}
 	} else if (scenario_is(scenario, "read-without-init")) {
 		struct gta4l_emmc_host empty;
 
@@ -732,7 +1044,9 @@ main(int argc, char **argv)
 			    scenario_is(scenario, "rcg-busy");
 			break;
 		case GTA4L_EMMC_ERR_POWER:
-			expected = scenario_is(scenario, "power-off");
+			expected = scenario_is(scenario, "power-off") ||
+			    scenario_is(scenario, "power-no-request") ||
+			    scenario_is(scenario, "power-stuck");
 			break;
 		case GTA4L_EMMC_ERR_CMD_TIMEOUT:
 			expected = scenario_is(scenario, "cmd-timeout");
@@ -754,10 +1068,16 @@ main(int argc, char **argv)
 		case GTA4L_EMMC_ERR_CARD_NOT_READY:
 			expected = scenario_is(scenario, "card-not-ready");
 			break;
+		case GTA4L_EMMC_ERR_CARD_STATUS:
+			expected = scenario_is(scenario, "cmd3-error");
+			break;
+		case GTA4L_EMMC_ERR_UNSUPPORTED:
+			expected = scenario_is(scenario, "small-card") ||
+			    scenario_is(scenario, "partition-access");
+			break;
 		case GTA4L_EMMC_ERR_RESPONSE:
 			expected = scenario_is(scenario, "bad-cid") ||
-			    scenario_is(scenario, "bad-csd") ||
-			    scenario_is(scenario, "rca-zero");
+			    scenario_is(scenario, "bad-csd");
 			break;
 		default:
 			expected = 0;

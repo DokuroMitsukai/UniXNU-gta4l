@@ -6,12 +6,12 @@ permission to activate bus power or the card clock; the decision remains
 **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
 Hashes were first taken at `2026-10-30T21:06:39Z` and refreshed on
-`2026-10-31` after the porting-approach reassessment and the native eMMC
-implementation. This document's own hash is not listed. Hashes describe the
-working tree at the snapshot and change with later edits; re-run the commands
-in §6 before reusing them. The snapshot is intended to be committed without
-further content changes; if the committed content differs, re-run §6 and
-update the table.
+`2026-10-31` after the porting-approach reassessment, the native eMMC
+implementation and the eMMC audit fixes. This document's own hash is not
+listed. Hashes describe the working tree at the snapshot and change with later
+edits; re-run the commands in §6 before reusing them. The snapshot is intended
+to be committed without further content changes; if the committed content
+differs, re-run §6 and update the table.
 
 ## 1. Repository state
 
@@ -19,7 +19,7 @@ update the table.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD at the hash snapshot | `9f8cf0815879b5200510cf3322bd346ea04995f6` (porting-approach reassessment commit) |
+| HEAD at the hash snapshot | `4c1c7a1` (native eMMC implementation commit) |
 | Parent of the fourteenth evidence batch | `95ff0a1293194b2108f4041068c77f18e708c1fd` (same commit) |
 | Correction commit paths | 8: 7 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`docs/sdhc-decision-update-2026-10-30.md`) |
 | First follow-up commit paths | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`scripts/test-gta4l-sdccdxe-decode.py`) |
@@ -40,8 +40,9 @@ update the table.
 | Fourteenth evidence-batch paths at this snapshot | 5 modified (`docs/emmc-reference.md`, `docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `docs/vendor-sdhc-power-sequence.md`, `porting.toml`) |
 | Fifteenth reassessment paths at this snapshot | 3: 2 modified (`docs/sdhc-decision-memo.md`, `porting.toml`) and 1 added (`docs/porting-approach-reassessment-2026-10-31.md`) |
 | Sixteenth implementation paths at this snapshot | 15: 6 modified (`README.md`, `board.toml`, `docs/evidence-baseline.md`, `docs/porting-approach-reassessment-2026-10-31.md`, `patches/xnu/series`, `porting.toml`) and 9 added (`docs/archlinux-gta4l-evidence.md`, `docs/emmc-driver.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `patches/xnu/gta4l-emmc-probe.patch`, `scripts/build-gta4l-emmc-probe.py`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py`) |
-| Dirty entries at the hash snapshot | 15, exactly the sixteenth implementation paths above |
-| Staging and commits | None at the snapshot; this sixteenth batch lands as one commit on top of `9f8cf08` |
+| Seventeenth audit-fix paths at this snapshot | 8 modified (`docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py`) |
+| Dirty entries at the hash snapshot | 8, exactly the seventeenth audit-fix paths above |
+| Staging and commits | None at the snapshot; this seventeenth batch lands as one commit on top of `4c1c7a1` |
 
 The hash table describes the fourteenth evidence-batch working tree: the
 checker-fix commit `95ff0a1` plus the then-uncommitted official-source,
@@ -146,6 +147,19 @@ board patch wiring, the `docs/emmc-driver.md` record and the
 porting area, README and reassessment. The probe has not been booted on the
 tablet; no block device, filesystem, DMA, CQE, ICE, write or microSD path
 exists, and no electrical gate is closed.
+
+The seventeenth batch corrects the eMMC audit findings: the command
+data-present bit is `0x20`; status bits are enabled for polling with signalling
+left off; the reset is polled with byte accesses; CMD3 assigns the RCA through
+the argument and checks R1; a missing or stuck power request and exhausted
+status-clear retries are failures; `HOST_CONTROL2` is updated in place and the
+fixed-1.8 V pad switch is selected; a 5 ms settle precedes the card clock; and
+sector reads are bounded by the discovered capacity and the user-partition
+selection. The simulator now enforces register widths, command encoding,
+status-enable gating and RCA/block bounds independently, and the host test has
+32 scenarios and 9 mutation controls. The probe adds stage 2 (host only) and
+stage 3 (identification only) and reads `CNTFRQ_EL0` for its delay loop. The
+probe is still not booted on the tablet and no electrical gate is closed.
 
 The second batch derived the status/clear/reset loop bounds from the pinned
 MOVZ instructions, added last-read and delayed-completion boundary cases and
@@ -273,15 +287,15 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `0f124426c44734d5669d626d87b99c16f0653870860e8f40c0200aa51c083d9c` |
 | eMMC reference | `docs/emmc-reference.md` | `0d605ec482d5b77ae428dead608543cb157e331d90ec0a68a31457dcf0ec44e9` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `c5f53c0d11e1c9b9ad046f63a83f5ff30a9fb2f9ffc3df765bf35201b88b617e` |
+| Porting record | `porting.toml` | `a753fc512a69e2343b84970ecc938c23948ff5cf90936bb8e07fe8f6ff1fb77a` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `9c8ffc4b99a1f385f6c7c89df42d291dc028561914008552217d450da0371680` |
-| eMMC core header | `package/Gta4lEmmc.h` | `b3336fdcb22bf10d76e953cb0135f1ae4fb8bb7912cd770c50b09eb72370888c` |
-| eMMC core source | `package/Gta4lEmmc.c` | `c2e79e61adc96a442cb5ecae72cc31e8c12451a0f174e891c6ac2ac11f778723` |
-| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `4dd532ae5027be26f500e7b2e7b6c16fd38afafb15128f5e9907d8f95a93c959` |
-| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `d3e802b0c9c063b740734f232e03fc95afa9333e2e4443b08b4fabab7c60ae16` |
-| eMMC host test | `scripts/test-gta4l-emmc.py` | `066c2c8458b5be04cc9176a903d709c0ed0ac8f41f41fc93ed103f1d4bcfb627` |
+| eMMC driver record | `docs/emmc-driver.md` | `264f61be334ad9989a5d56cd82b028c6313169d3d983078b775f20d5b2e8ee67` |
+| eMMC core header | `package/Gta4lEmmc.h` | `97cc918e77a54229e64ddf1649284f23dbff90a3c36da9d965d0b370ce15e09a` |
+| eMMC core source | `package/Gta4lEmmc.c` | `093e1e6e19e51f7242e5f1584128692bed08bfa0ed87d6b2932b7513b8685ff6` |
+| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `0cea388d124273a8105832f612da87c50ee1298760091caddcf17f2276c0daf7` |
+| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `724e8fc1cc691083e53e4672d5e02ea3423036e9295c0d725852a08bf4fd6a63` |
+| eMMC host test | `scripts/test-gta4l-emmc.py` | `d0c26bd0bb41f6a8f3c98a7c1c67c0a3faee2894921777d74bac36f562298f6c` |
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `c0d742df56cbf69c499537e077be6b590ea1e89e33f656b21c3215561dae0157` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
@@ -292,8 +306,9 @@ bytes of the previously booted image `[S]`.
 
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
-row. The §6 self-check expected 35 until an earlier correction, then 36, then
-37, and now expects 45.
+row. The seventeenth batch refreshed the eight changed-file hashes without
+adding a row. The §6 self-check expected 35 until an earlier correction, then
+36, then 37, and now expects 45.
 
 The active tree carries the committed `bf2e7d4` source (`3f8f4531...`, the
 qualified `HOST INIT REPORT` wording). The historical `bc228be7...` source
@@ -497,7 +512,7 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | Workflow token scoping (offline harness) | PASS: all 5 extracted patch strings attach the dummy token only to HTTPS GitHub hosts and strip it on cross-host redirects; no real token was used |
 | Official Samsung source comparison | PASS: CXG1/CWI2 ZIP and tarball hashes recorded; kernel 4.19.157; six relevant driver files byte-identical; no vendor DTS |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |
-| Native eMMC host test | PASS: 25 simulator scenarios and 3 mutation controls; the production core compiles with `-std=c11 -Wall -Wextra -Werror` and with the real `bsd_init.o` compile record |
+| Native eMMC host test | PASS: 32 simulator scenarios and 9 mutation controls; the production core compiles with `-std=c11 -Wall -Wextra -Werror` and with the real `bsd_init.o` compile record |
 | XNU probe compile | PASS: `Gta4lEmmc.c` and `Gta4lEmmcProbe.c` compile against the pinned XNU headers with `-Wall -Wextra`; the archive exports `gta4l_emmc_probe_preflight`, `gta4l_emmc_probe_run`, `gta4l_emmc_init` and `gta4l_emmc_read_block` |
 | Patch-series apply | PASS: `sheng-platform-power`, `gta4l-sdhci-snapshot`, `gta4l-sdhci-handoff-audit` and `gta4l-emmc-probe` apply in order to the clean `bsd_init.c` |
 | Reassessment re-run 2026-10-31 | PASS: `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-sdccdxe-decode.py`, `test-gta4l-spmidxe-descriptor-base.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py` and `check-gta4l.py` all exited 0; `git diff --check` clean |
