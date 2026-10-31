@@ -1,10 +1,12 @@
 # gta4l native SDHCI v5 / eMMC core
 
 Status: host-tested implementation `[S]`; stage 2 (controller/host init only)
-ran on the tablet and reported success `[C]`; card identification, sector reads
-and the later stages remain `[U]`. The core is opt-in. The stage-2 run was made
-under the owner's approval for that exact procedure, with verified EFS/SEC_EFS
-backups and a known-good BOOT restoration image. The
+ran on the tablet and reported success `[C]`; stage 3 (identification) ran and
+stopped at a command CRC error with no identification report `[C]`; card
+identification, sector reads and the later stages remain `[U]`. The core is
+opt-in. Both runs were made under the owner's approval for that exact
+procedure, with verified EFS/SEC_EFS backups and a known-good BOOT restoration
+image. The
 `sdhc-bus-power-activation` NO-GO still applies to any operation not separately
 approved.
 
@@ -279,6 +281,38 @@ kernel arguments include `gta4l-emmc-probe=2`. The build manifest keeps
 `hardware_tested=false` as built; the image was subsequently flashed to BOOT
 only for the stage-2 run in §5.2. TWRP on `RECOVERY` was not touched.
 
+The stage-3 image was built from the same kernel on 2026-10-31:
+
+```sh
+python3.11 -B scripts/build-gta4l-diagnostic-payload.py \
+  --device . --unixnu ../UniXNU --uefi ../Mu-Silicium \
+  --kernel ../UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho \
+  --data-ramdisk ../../out/gta4l/ram-root-sdhci-audit-evidence/root.img \
+  --trust-cache ../../out/gta4l/ram-root-sdhci-audit-evidence/trustcache.bundle \
+  --owner-trust-cache --unique-chip-id 0x1122334455667788 \
+  --diagnostic emmc-probe-3 --kernel-arg rd=md0 --kernel-arg sheng-pmgr=2 \
+  --output ../../out/gta4l/ram-root-emmc-probe-stage3-evidence/payload.img \
+  --manifest ../../out/gta4l/ram-root-emmc-probe-stage3-evidence/payload.manifest.json
+python3.11 -B scripts/package-gta4l-diagnostic.py \
+  --baseline ../../out/gta4l/boot/boot-ram-root-sdhci-v5.img \
+  --payload ../../out/gta4l/ram-root-emmc-probe-stage3-evidence/payload.img \
+  --payload-sha256 4028e432f200dc1069a50f1baa6786d2f4861b187f2c5a0bd126bb20f5a9cd41 \
+  --expect-diagnostic emmc-probe-3 \
+  --output ../../out/gta4l/ram-root-emmc-probe-stage3-evidence/boot-ram-root-emmc-probe-stage3.img \
+  --manifest ../../out/gta4l/ram-root-emmc-probe-stage3-evidence/boot-ram-root-emmc-probe-stage3.json
+```
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| `kernel.macho` (unchanged) | 51,081,216 | `1a4710892e49fa96c053de8f33f1b4b5d89a36fc3d688febd6fa0f7e4a89003a` |
+| `payload.img` (80 MiB, stage 3) | 83,886,080 | `4028e432f200dc1069a50f1baa6786d2f4861b187f2c5a0bd126bb20f5a9cd41` |
+| `boot-ram-root-emmc-probe-stage3.img` | 85,688,320 | `88b4d28607b371fe008922131c6ee51f27f73da30249fd4a07969f770fa90d87` |
+
+The stage-3 payload contract is 7/7 and its boot-image gate is 18/18. The
+payload's kernel arguments include `gta4l-emmc-probe=3`, and the manifest keeps
+`hardware_tested=false` as built. The image was subsequently written to BOOT
+only for the stage-3 run in §5.3; TWRP on `RECOVERY` was not touched.
+
 ### 5.2 Hardware stage-2 result (2026-10-31)
 
 The owner connected the tablet (SM-T505N, TWRP 3.7.1) and
@@ -316,6 +350,59 @@ Photo: `out/gta4l/ram-root-emmc-probe-evidence/host-report-stage2.jpg`
 (sha256 `d049547e8fd6135aafe6fb8aff13c9e8295cb9e2012b3944cdb66ac364882a2c`);
 transcript: `host-report-stage2.txt` in the same directory.
 
+### 5.3 Hardware stage-3 result (2026-10-31)
+
+The owner approved the BOOT-only stage-3 procedure and the tablet was in TWRP
+when the image was written. The current stage-2 boot content was saved first
+as partition sha256
+`545b57ebc3d451cae0ab87b8020fa28619c144023300833892481b529abf8475`; the same
+sha256 was confirmed on the pulled copy. The image was written to `boot` only,
+the first 85,688,320 bytes read back identical to the image, and `recovery`
+remained byte-identical to the recorded TWRP partition
+(`14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae`).
+
+The tablet booted the image and panicked before any identification report (the
+panic also printed the frame addresses and the page/free counts; the
+transcript keeps those lines):
+
+```text
+GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967288 mci=10000072 pwr=0f
+clk=0007 hc2=0008 ven=00318a0c pst=00000000 cfg=00002017 cmd=0000
+0000 log=4/1/268435570 @Gta4lEmmcProbe.c:373
+```
+
+- `rc=4294967288` is `0xFFFFFFF8`, i.e. `-8` = `GTA4L_EMMC_ERR_CMD_CRC`
+  (`package/Gta4lEmmc.h:208`): a command completed with a response CRC error.
+- `mci=10000072`, `pwr=0f`, `clk=0007`, `hc2=0008`, `ven=00318a0c` and
+  `pst=00000000` repeat the stage-2 host-init state: the v5 controller
+  initialized, bus power is on, no power/IO request is pending, the internal
+  clock is stable and the card clock is enabled, and 1.8 V signalling is
+  selected.
+- `log=4/1/268435570` is four log events; the last is `RESET` with
+  `0x10000072`. That is the final log written by
+  `gta4l_emmc_controller_init()`, so host init completed and the failure came
+  from the card-command sequence that follows `CMD0`.
+- `cfg=00002017` and `cmd=00000000` are the GCC SDCC1 apps config/command
+  registers at the failure, not SDHCI command state.
+
+This is a failing state `[C]` and is not labeled established. It establishes
+that the stage-2 controller state repeats and that identification did not
+complete; it does not establish which command failed, why, or that the card is
+absent, unsupported or faulty `[U]`. This build does not record the failing
+command index or the SDHCI interrupt/error status, so the CRC fault can only
+be bounded to "a CRC-checked command after `CMD0`" `[U]`. In this path the
+CRC-checked commands are `CMD2`, `CMD3`, `CMD7`, `CMD8`, `CMD9` and `CMD13`;
+`CMD1` is sent without CRC checking. No RCA, capacity, EXT_CSD revision, bus
+width, OCR, EXT_CSD checksum, CID, CSD or sector data was obtained. Stage 3
+performs no sector read by design, so no card content was touched `[C]`.
+
+Photo: `out/gta4l/ram-root-emmc-probe-stage3-evidence/host-report-stage3.jpg`
+(sha256 `0014db219d5d3dd1b1db572845d81c8a6fb966d0912c0c23aae02c9d70a082c9`);
+transcript: `host-report-stage3.txt` in the same directory (sha256
+`69096eca388c1497c7acc59261ce29ca29ae4a771ec613f79928c4188b429794`). The
+transcript keeps the on-screen wrap; the source file named by the panic is
+`package/Gta4lEmmcProbe.c`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
@@ -334,7 +421,8 @@ storage or filesystem result.
 
 ## 7. Limits and residual risks
 
-- Stage 2 ran on the tablet `[C]`; stage 3 and the full sector read have not
+- Stage 2 ran on the tablet `[C]`; stage 3 ran and stopped at a command CRC
+  error `[C]`; a successful identification and the full sector read have not
   run `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
   levels, and it does not prove retention across suspend or shutdown `[U]`.
@@ -361,7 +449,10 @@ storage or filesystem result.
 - The exact vendor source/binary correspondence and the firmware runtime slot
   table remain `[U]`.
 
-Stage 2 is complete; the next device step is stage 3 (identification), then the
-full read, each under a separately approved BOOT-only procedure. The next
-software step is a read-only `IOBlockStorageDevice` publication over the same
-core, followed by multi-block reads and a documented stop/recovery policy.
+Stage 2 is complete. Stage 3 did not complete identification: it stopped at a
+command CRC error that the current report cannot attribute to a command. Any
+follow-up device step still needs a separately approved BOOT-only procedure.
+The next software step is a diagnostic revision that records the command index
+and the SDHCI interrupt/error status, followed by a read-only
+`IOBlockStorageDevice` publication over the same core, multi-block reads and a
+documented stop/recovery policy.
