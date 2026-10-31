@@ -21,6 +21,7 @@ stated), **[U]** unknown.
 | `device-dump/private/gta4l-dump/live.dts` | Captured vendor DT `[S]` |
 | `src/Mu-Silicium/Binaries/gta4l/...` (`SdccDxe.efi`, `uefiplat.cfg`) | Handoff exit path `[S]` |
 | `package/Gta4lSdhciHostInit.*`, `docs/sdhci-handoff-audit.md`, `docs/sdhci-host-init.md` | Current XNU state `[S]` |
+| `docs/sdhc-power-pad-dependency-report.md` | Consolidated power/pad dependencies and the next measurement-only step `[S]` |
 
 ## Summary table
 
@@ -29,7 +30,7 @@ stated), **[U]** unknown.
 | 1 | `SM6115_VDDCX` corner | Genpd attach powers the domain; probe requests SVS_PLUS (192); genpd aggregates across attached devices/subdomains and the provider caches that aggregate, which may be higher; a pre-sync aggregate may emit `max_state` `[S]` | No rpmpd/RPM code | Request or prove sufficient; emitted corner and physical voltage are not measurements `[C]` |
 | 2 | SDHC interconnect | Probe binds both paths and requests 800000/300000 kBps; both paths attempt RPM master/slave votes and provider bus-clock votes `[S]` | No ICC driver | DMA prerequisite; PIO does not use the DMA master `[S/C]` |
 | 3 | GCC SDCC1 branches | Enable bits set at handoff; frequency not measured (`ac=0x4221`, `ahb=0x1`, `ice=0x4229`, `bcr=0`) `[S]` | Read/verify only | Keep as a gate; card-clock output gating is controller-local, a source-rate change needs the RCG `[S/C]` |
-| 4 | TLMM SDC1 pads | Configured by UEFI; mainline does not bind pinctrl to `sdhc_1` `[S]` | No TLMM code | Trust handoff for read-only, or program pads before commands `[C]` |
+| 4 | TLMM SDC1 pads | Configured by UEFI to the vendor active state (`0x9fe4` at `0x575000`); mainline does not bind pinctrl to `sdhc_1` `[S]` | No TLMM code | Trust handoff for read-only, or program pads before commands `[C]` |
 | 5 | SMMU stream `0xc0` | Mainline DT attaches it; vendor DT has no `iommus`; no SDHC attachment found in the inspected SDCC/`uefiplat` scope `[S]` | No SMMU driver | Bypass state is unknown; absence of references is not proof `[U]` |
 | 6 | L24 vmmc / L11 vqmmc | Vendor levels are requested values; handoff state and retention are unknown `[U]` | No regulator path | Prior L11/L24 contract; see `power-retention-evidence.md` |
 | 7 | HC IRQ 348 / power IRQ 352 | Wired in DT/vendor `[S]` | Not mapped | Needed to handle core power requests `[C]` |
@@ -199,8 +200,8 @@ the GCC RCG (`sdhci-msm.c:1858-1892`, `378-415`; `gcc-sm6115.c:1248-1272`,
   `0x3fe000` and writes `0x1fe4` at `0x00973000` for controller 1
   (`/tmp/opencode/sdccdxe.dis:3020-3033`) `[S]`. **Correction:** an earlier
   version of this document used `0x0093e000` from a secondary summary; the
-  disassembly arithmetic yields `0x00973000`. The exact mapping between those
-  writes and the config values remains `[U]`.
+  disassembly arithmetic yields `0x00973000`. The register write mapping is
+  resolved below; the relationship to the `uefiplat.cfg` values remains `[U]`.
 
 ### Decoded vendor settings versus handoff state
 
@@ -214,13 +215,15 @@ the GCC RCG (`sdhci-msm.c:1858-1892`, `378-415`; `gcc-sm6115.c:1248-1272`,
 | Vendor `sdhc_1` pinctrl binding (`live.dts:2070-2072`) | active = `0x289`/`0x28b`/`0x28d`/`0x28f`; sleep = `0x28a`/`0x28c`/`0x28e`/`0x290` | `[S]` |
 | `uefiplat.cfg` | `Sdc1GpioConfigOn = 0x1E92`, `Sdc1GpioConfigOff = 0xA00` | `[S]` |
 | `SdccDxe` controller-1 write | `0x1fe4` at TLMM page `0x00973000` | `[S]` |
-| Mapping between the config values, the `SdccDxe` write and the vendor pad fields | not established | `[U]` |
+| Mapping between the `SdccDxe` register write and the vendor pad fields | SDC1 `0x9fe4` = data 10 mA, CMD 10 mA, CLK 16 mA, data/CMD pull-up, CLK no-pull, RCLK pull-down; matches the vendor `sdc1_*_on` state | `[S]` |
+| Relationship of the `uefiplat.cfg` `Sdc1GpioConfigOn`/`Off` values to the register write | not established | `[U]` |
 | Actual SDC1 pad state at XNU handoff | not measured | `[U]` |
 
 The vendor and pinned device trees agree on the active/sleep pad settings, so
-the decoded intent is consistent `[S]`. That is not a handoff observation: the
-UEFI write is established, but its field encoding and the resulting pad state
-are not. The board also declares both `sdhc_1` and `ufshc` on L24 and L11, with
+the decoded intent is consistent `[S]`. The UEFI register write is established
+and its field encoding now matches the vendor active state; the resulting pad
+state is still not measured. The board also declares both `sdhc_1` and `ufshc`
+on L24 and L11, with
 the parents `vdd_l23_l24` shared with L23 and `vdd_l9_l11` shared with L9; the
 declaration does not establish physical population or loading (`sdhc-electrical-
 contract.md` §2) `[S]/[U]`.
@@ -253,7 +256,9 @@ or use a path that does not depend on it.
 - Pinned `hc_irq` = SPI 348, `pwr_irq` = SPI 352 (`sm6115.dtsi:1106-1108`) `[S]`.
 - The power IRQ handler reads `CORE_PWRCTL_STATUS`, clears it, and responds to
   `CORE_PWRCTL_BUS_ON/OFF` and `IO_HIGH/LOW` by applying vmmc, vqmmc and pinctrl
-  and acknowledging through `CORE_PWRCTL_CTL` (`sdhci-msm.c:1686-1829`) `[S]`.
+  and acknowledging through `CORE_PWRCTL_CTL`, whose bits are
+  `BUS_SUCCESS`/`BUS_FAIL`/`IO_SUCCESS`/`IO_FAIL` results, not the request bits
+  (`sdhci-msm.c:1686-1829`) `[S]`.
 - The local request chain is: `mmc_power_up()` sets the power mode and calls
   `mmc_set_ios()` (`mmc-core.c:1338-1363`); `sdhci_set_ios()` calls
   `host->ops->set_power` when present, otherwise `sdhci_set_power()`
@@ -338,7 +343,7 @@ Files fetched from `limonabisi/linux-gta4l` at commit
 2. Whether the retained NoC/ICC state satisfies the 384 MHz OPP bandwidth `[U]`.
 3. Whether PIO needs any ICC config-path state beyond what firmware retained `[U]`.
 4. Exact SMMU state of stream `0xc0` at XNU handoff `[U]`.
-5. Exact semantics of the `SdccDxe` TLMM writes vs `uefiplat.cfg` values `[U]`.
+5. Relationship of the `uefiplat.cfg` values to the resolved `SdccDxe` TLMM register writes `[U]`.
 6. Whether the HostInit ICE-branch refusal should remain a hard gate `[C]`.
 
 ## 10. Readiness prerequisites by capability

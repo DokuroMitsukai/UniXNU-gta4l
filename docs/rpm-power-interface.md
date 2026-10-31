@@ -159,6 +159,8 @@ bytes `[S]`.
 
 - 24 `ldoa` key records at VA `0x4696994`–`0x4696a54`, 8 bytes each (`ldoa` plus
   id), in id order 1–24. L11 is at `0x46969e4` and L24 at `0x4696a4c` `[S]`.
+  The L11 record has exactly one stored pointer in the whole image
+  (`0x46966a8`, the selector slot); L24 has none `[S]`.
 - A 24-entry voltage table at VA `0x4696a54`, 12 bytes per entry, aligned with
   the key records `[C]`. L11's entry (`0x4696acc`) carries 1704–1952 mV and
   L24's (`0x4696b68`) carries 2704–3600 mV, matching the board DTS ranges above
@@ -166,18 +168,60 @@ bytes `[S]`.
 - A NULL-terminated selector array at VA `0x469667c` whose 16 stored words,
   under the link-base-relative interpretation `[C]`, select ids 6, 8, 1, 2, 3,
   4, 7, 17, 18, 9, 10, 11, 12, 13, 14 and 16: L11 is present, L24 is absent
-  `[S]`. What the array selects at run time is unresolved `[U]`.
+  `[S]`. The array's only stored pointer is the three-entry table at
+  `0x46966fc`–`0x4696720`, and that table has no stored or PC-relative
+  referrer, so no referenced chain found by the whole-image scan reaches it
+  `[S]`. Computed addressing, runtime relocation or aliasing remains `[U]`.
 - A generic key/value handler at `0x4615da4` that consumes `uv` (32-bit
   microvolts), `swen` (a software-enable bit in its state object), `bobm`,
   `pcv1`–`pcv3`; it has no selector conversion and no PMIC command ID `[S]`.
   The class/ID path at `0x4615d08` could address any `ldoa` id, including 11 or
-  24, if a runtime descriptor existed; none was found `[U]`.
+  24, if a runtime descriptor existed. The class registration at `0x461746c`
+  supplies a count of 25 (the `movs r1,#0x19` at `0x461749e`) `[S]`; the setter
+  at `0x4617b48` compares the id against a runtime object field and the mode
+  against 4 `[S]`. The class table
+  at `0x4695774` is zero in the linked image and the object is built at runtime
+  by the resource-database constructor at `0x46996c4`, so the runtime count and
+  ids 11/24 passing the bounds are `[C]`. The bounded scan finds no referenced
+  static table or stored pointer/resolvable PC-relative literal that selects
+  either rail `[S]`; whether a runtime request exists is `[U]`.
+- The class registration at `0x461746c` records `smpa` with count 9 and type
+  `0xc`, `ldoa` with count 25 (`0x19`) and type `0x10`, and `clka` with count
+  15 and type `0xc`; the installed callbacks are the trivial `bx lr` stubs at
+  `0x4617468` and `0x461746a` `[S]`. The per-instance `ldoa` builder at
+  `0x4698944` replaces those defaults with the parser at `0x46151f8` and the
+  aggregator at `0x46153b8` (call site `0x4698ade`, type `0x10`, literals
+  `0x151f9` and `0x153b9`) `[S]`. The parser accepts `ocmd`, `tv`, `uv`, `ma`,
+  `hr`, `bypa`, `ocen`, `pcmd`, `lsmd`, `pcen` and `swen` `[S]`. The aggregator
+  reads the per-id latched state at `[resource+0x14]` (24-byte entries, index
+  `id-1`), compares the new aggregate with that state, and calls `0x4615906`
+  only when the state changes; `0x4615906` commits through `0x4614920` `[S]`.
+  The separately traced parser/aggregator pair at `0x46166c8`/`0x46168dc`
+  belongs to the `smpa` class (type `0xc`), not to `ldoa`; its aggregator
+  reaches the LDOA setter at `0x4615d08` through `0x4616e10` for a pending
+  request whose class byte is `0xb` `[S]`, but whether that request class is
+  LDOA is `[U]`. The Linux driver writes only the active state, so the AP
+  contributes no L11/L24 request in the traced paths `[S]`. The aggregator
+  keeps a latched per-id aggregate of whatever votes exist; boot-time or
+  non-AP votes and the RPM's own suspend/shutdown behaviour remain `[U]`.
 
-No traced code path reads the voltage table or selector array, and no traced
-path writes an L11/L24 voltage, mode or enable register `[U]`. The tables are
-therefore evidence that the firmware carries LDOA resource definitions for both
-rails, not evidence that it enables, votes or retains them. They do not add a
-readback path to the mainline port `[S]`.
+No referenced stored-pointer or resolvable PC-relative-literal chain in the
+linked image reaches the voltage table or selector array `[S]`, and no traced
+path writes an L11/L24 voltage, mode or enable register `[U]`. The paths
+identified by the scan that can address either rail are the LDOA apply path
+(`0x46153b8` → `0x4615906` → `0x4614920`) and the class/ID setter path
+(`0x4615d08` → `0x4617b48`), which the `smpa`-class aggregator reaches
+through `0x4616e10` for class byte `0xb` `[S]`. Whether either path is driven
+by a runtime L11/L24 request is not established `[U]`. The tables are therefore evidence that the
+firmware carries LDOA resource definitions for both rails, not evidence that it
+enables, votes or retains them. They do not add a readback path to the mainline
+port `[S]`. The stored-word counts, the table landmarks and the documented
+Thumb callback/call sites are reproducible with
+`scripts/analyze-gta4l-rpm-ldoa.py --code`; the wider function trace that
+established the parser/aggregator behaviour came from earlier scratch capstone
+analysis that is not vendored, and computed addressing, runtime relocation,
+aliasing and whether a callback executes at runtime remain outside the
+analyzer's scope `[U]`.
 
 ## What the mainline port can and cannot report
 

@@ -8,13 +8,15 @@ These are development integration pins, not hardware-qualified releases.
 
 | Component | Repository | Branch | Commit |
 | --- | --- | --- | --- |
-| UniXNU | `DokuroMitsukai/UniXNU` | `integration/hero2lte-gta4l` | `456185449295c50365c54353b0a4b385ab50a17e` |
-| Mu-Silicium | `DokuroMitsukai/Mu-Silicium` | `integration/hero2lte-gta4l` | `e14626a3757007a2dbc902d3db323620d5568923` |
+| UniXNU | `DokuroMitsukai/UniXNU` | `—` | `456185449295c50365c54353b0a4b385ab50a17e` |
+| Mu-Silicium | `DokuroMitsukai/Mu-Silicium` | `—` | `e14626a3757007a2dbc902d3db323620d5568923` |
 | DarwinBoot | `DokuroMitsukai/DarwinBoot` | `bringup/shared-video` | `3f2f304784f8fbfbf2ebfdc8eba3af3577d92967` |
 | ArmCpu | `DokuroMitsukai/ArmCpu` | `main` | `c9c4bd87cabc1fe6736e171cd2540313ac4b7883` |
 | SM6115 SoC tree | `DokuroMitsukai/UniXNU-sm6115-common` | `main` | `4137c1c1fbe2b3693e5a61985fd01bbacc8fdabc` |
-| UniXNU-exynos8890-common | `DokuroMitsukai/UniXNU-exynos8890-common` | `main` | `0258950adf615983aec3c87ca65cb52b2310ec95` |
 | Tab A7 device | `DokuroMitsukai/UniXNU-gta4l` | `bringup/tab-a7-qemu-fixture` | this repository; use the branch head |
+
+The UniXNU and Mu-Silicium integration commits are pinned by SHA and are not on
+the shared `main` branches.
 
 ## Board policy
 
@@ -33,9 +35,6 @@ It keeps:
 - payload size 192 MiB
 - `panic_screen = true`
 - `debug=0x14e`
-
-The S7 Edge `board.toml` currently sets `ENABLE_SECUREBOOT = "0"`; its firmware
-build is a development image, not a security-preserving result.
 
 The NoNameBuilder working-copy test settings (`ENABLE_SECUREBOOT=0`, the
 smaller payload, the reset probes and the `cs_enforcement_disable` argument)
@@ -83,7 +82,7 @@ Run from `src/UniXNU` unless noted.
 | `python3 src/Mu-Silicium/Resources/Scripts/test_bootshim.py` | PASS |
 | `python3 scripts/check-gta4l.py` (device repo) | PASS |
 | `python3 scripts/qemu-smoke.py --help` (device repo) | PASS |
-| `./unixnu status --json -D ../UniXNU-gta4l` | PASS; base `4561854`, Format 2 output path, device branch `bringup/tab-a7-qemu-fixture` |
+| `./unixnu status --json -D ../UniXNU-gta4l` | PASS; `schema_version` 2, Format 2 output path and the configured arch/SoC/OS/device layers |
 | `python3 scripts/porting-record.py check --device ../UniXNU-gta4l` | PASS; 13 structured areas |
 | `dtc -I dts -O dtb -i ../UniXNU-sm6115-common/dts ...` | PASS |
 | `python3 scripts/make-adt.py --dtb ... --os-profile ... --board ../UniXNU-gta4l/board.toml ...` | PASS; 13,552-byte ADT with `/options`, NVRAM, crypto hash and AMFI platform code |
@@ -105,22 +104,9 @@ PASS on this host:
 Output: `src/Mu-Silicium/Build/gta4lPkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd`.
 Built with `ENABLE_SECUREBOOT=1`.
 
-### S7 Edge
-
-PASS on this host. Run from the S7 Edge workspace `src/UniXNU`:
-
-```sh
-./unixnu build firmware --uefi ../Mu-Silicium -D ../UniXNU-hero2lte -j "$(nproc)"
-```
-
-Output: `src/Mu-Silicium/Build/hero2ltePkg/DEBUG_CLANGPDB/FV/SILICIUM_UEFI.fd`.
-Built with `ENABLE_SECUREBOOT=0` from
-`UniXNU-hero2lte/board.toml`; this pin does not change that setting. Treat the
-S7 Edge image as a development build, not a security-preserving result.
-
 ## Kernel build
 
-Attempted for Tab A7 on this Linux host with the S7 Edge workspace toolchain
+Attempted for Tab A7 on this Linux host with the shared workspace toolchain
 plus locally built `tcsh` and `unifdef`.
 
 The old Format 1 tree stopped at the corecrypto archive step, but the XNU

@@ -71,11 +71,11 @@ reference, not a board configuration to import.
 
 | Area | TB128FU evidence | gta4l decision |
 | --- | --- | --- |
-| Timer INTID | `armcpu-timer-intid=19`; the SM6225 DT timer node lists PPIs 1, 2, 3, 0 | **Adapt.** Add or port a per-device timer selection while keeping INTID 27 as the default. Our `UniXNU-sm6115-common` timer node has the same `<1 1>, <1 2>, <1 3>, <1 0>` list, so 19 is the first candidate to test. Do not change the shared default for S7 Edge. |
+| Timer INTID | `armcpu-timer-intid=19`; the SM6225 DT timer node lists PPIs 1, 2, 3, 0 | **Adapt.** Add or port a per-device timer selection while keeping INTID 27 as the default. Our `UniXNU-sm6115-common` timer node has the same `<1 1>, <1 2>, <1 3>, <1 0>` list, so 19 is the first candidate to test. Do not change the shared default for other ports. |
 | SGI/IPI delivery | SGIs did not arrive; `armcpu-spi-ipi=1` with `armcpu-spi-ipi-base=536`; TB's GIC has 544 INTIDs and its DT uses SPIs through 429 | **Adapt after measurement.** Do not enable SPI IPIs on gta4l until the boot CPU takes an SGI and we know our GIC capacity and unused lines. Port the mechanism as an opt-in boot argument, never as the shared default. |
 | PAN | `CONFIG_XNU_NATIVE_PAN=n` with a comment that the Cortex-A73/Kryo Silver cores are ARMv8.0 | **Applied.** gta4l now sets `CONFIG_XNU_NATIVE_PAN=n`; `msr PAN, #1` is undefined on these cores. |
 | PMGR / AMFI | `CONFIG_XNU_SHENG_PMGR=y`, `sheng-pmgr=2`; the bridge publishes the original nub through an ABI-audited provider and touches no hardware | **Adapt behind gates.** The bridge is the best candidate for the AMFI "No PMGR" dependency, but it must pass its contract audit against our kernelcache and prelink. Do not use it to bypass AMFI; unsupported power operations must keep failing explicitly. |
-| `ArmCpu` changes | The TB128FU fork adds timer/SPI-IPI arguments and simplifies the GIC path; it does not retain our GICv2 support | **Do not merge wholesale.** Port the timer and IPI mechanisms with per-device defaults. Preserve gta4l's GICv3 path and S7 Edge's GICv2 path. |
+| `ArmCpu` changes | The TB128FU fork adds timer/SPI-IPI arguments and simplifies the GIC path; it does not retain our GICv2 support | **Do not merge wholesale.** Port the timer and IPI mechanisms with per-device defaults. Preserve gta4l's GICv3 path and the shared GICv2 path. |
 | Graphics | Adreno 610 without GMU; SMMU context, zap shader, CP, interrupts and `NativeAdreno`; Metal user space not complete | **Adapt later.** Verify our GPU revision, firmware and SMMU topology. Do not adapt the Adreno 740 path as a substitute. Console/timer stability comes first. |
 | Display / touch | GOP framebuffer plus a legacy display probe; Himax HX83102E on QUP SE0 SPI | **Compare before reuse.** The Tab A7 panel and touch controller are not established in the current record. Reuse only after matching the hardware IDs and firmware protocol. |
 | Storage | SM6225 UFS link, `Tb128fuUfs` and the verified-root policy | **Do not reuse.** gta4l boots from eMMC (`4744000.sdhci`, `fstab_suffix=emmc`). UFS is a different controller and root policy. |
@@ -101,7 +101,7 @@ Our `UniXNU-sm6115-common` DTSI uses the same four specifiers. Our current
 3. confirm timer ticks and no storm on the boot CPU;
 4. only then enable secondary CPUs.
 
-Do not change the shared default to 19; S7 Edge is a different GIC/timer
+Do not change the shared default to 19; other devices are a different GIC/timer
 population.
 
 ### 2. SGIs may not be the IPI mechanism
@@ -160,9 +160,9 @@ PMGR publication was still not independently read back.
 ### 5. The ArmCpu fork is not a drop-in
 
 The TB128FU `ArmCpu` fork contains the timer and SPI-IPI work, but it removed
-the GICv2 code that our shared component still carries for S7 Edge. A
-wholesale merge would regress the Exynos path. Port the mechanisms with
-per-device configuration and run the S7 Edge GICv2 host tests before updating
+the GICv2 code that our shared component still carries for other devices. A
+wholesale merge would regress the shared GICv2 path. Port the mechanisms with
+per-device configuration and run the shared GICv2 host tests before updating
 the shared pin.
 
 ### 6. Graphics, storage and memory are separate projects

@@ -100,16 +100,17 @@ The `0x81a8` handler walks the drive slots and processes the selected
 
 | Call | Observed effect |
 | --- | --- |
-| `0x3f04(drive)` | builds `0x00575000`; writes `0x9fe4` for controller 0, or adds `0x3fe000` and writes `0x1fe4` at `0x00973000` for controller 1; both are TLMM pages, not PMIC. The caller passes `w1=1`, but the callee does not use it. |
+| `0x3f04(drive)` | builds `0x00575000`; writes `0x9fe4` for controller 0, or adds `0x3fe000` and writes `0x1fe4` at `0x00973000` for controller 1; both are the SDC QDSD pad-group registers (`west+0x75000`, `south+0x73000`), not PMIC. `0x9fe4` matches the vendor `sdc1_*_on` drive/pull fields. The caller passes `w1=1`, but the callee does not use it. |
 | `0x69ac(drive, 1)` | sets bit 0 of the SDHCI Power Control byte at slot offset `0x29` (bus power enable) |
-| `0x6458(drive, 1)` | writes `1` to the SDHCI Software Reset byte at `0x2f`; because bus power is on, it also reads `0x240`, writes `0x248`, and writes `0x24c` (v5 power-control status/clear/control) |
-| `0x6c20(drive)` | writes vendor registers `0x21c` and `0x220` |
+| `0x6458(drive, 1)` | writes `1` to the SDHCI Software Reset byte at `0x2f`; when bus power was already set, it reads `0x240`, writes the captured value to `0x248`, and writes `0x24c` with `IO_SUCCESS` (`4`) when `captured_status & 0x3 == 0` or `BUS_SUCCESS` (`1`) otherwise; `0x24c` holds result bits, not the `0x240` request bits |
+| `0x6c20(drive)` | writes vendor registers `0x21c` and `0x220` for each processed drive |
 | `0x6d28(drive)` | clears bit 18 of vendor register `0x20c`; only for the `w19` drive |
 
 The handler also calls clock helpers `0xfbec`, `0xf778`, `0x3f50`, `0xfa44`,
-`0x9e78` and `0xfb00`; none of these touch PMIC or SPMI. `0x6458` waits for
-the reset bit to self-clear and for the vendor power status to settle; both
-waits are bounded by 10000 iterations. The handler does not write the PMIC,
+`0x9e78` and `0xfb00`; none of these touch PMIC or SPMI. `0x6458` waits for the
+reset bit to self-clear (at most 10,000 reads, no delay in that loop) and for
+the vendor power status to settle (at most 10,001 reads and 10,001 delay calls
+in each of the status and clear loops). The handler does not write the PMIC,
 SPMI, RPM, or any LDO register. The only `rpm` strings in the binary are eMMC
 RPMB messages; there are no PMIC, SPMI, LDO, regulator or `vdd` strings. The
 binary also does not contain the PMIC protocol GUID
@@ -117,6 +118,12 @@ binary also does not contain the PMIC protocol GUID
 the GCC SDCC clocks (`gcc_sdcc1_ahb_clk`, `gcc_sdcc1_apps_clk`,
 `gcc_sdcc2_ahb_clk`, `gcc_sdcc2_apps_clk`) and RPMB. The PMIC binary contains
 the GUID once.
+
+`0x6458`'s polls are bounded and non-aborting. Status exhaustion forces the
+captured value to zero and still selects `IO_SUCCESS`; clear-poll exhaustion
+still writes the result selected from the captured status; reset-poll exhaustion
+still returns, after which `0x6c20` and (for the `w19` drive) `0x6d28` run. The
+`0x24c` write therefore records the branch taken, not proven completion.
 
 The reset clears the standard power and clock control registers, and the
 handler does not re-enable bus power after it. The firmware's final state at
@@ -306,8 +313,9 @@ or `vdd` name in the exit path, and the LDO driver it does contain
 ## Bounded handoff timeline and side-effect map
 
 This pass reconciles the three traced drivers and performs a bounded scan of the
-locally available firmware inventory. It does not disassemble every
-`ExitBootServices` callback. The scan covers the 90-module local volume
+locally available firmware inventory. An expanded pass now disassembles every
+`ExitBootServices` registration in the shipping set and follows each
+notification body. The scan covers the 90-module local volume
 `src/UniXNU-gta4l/SILICIUM_UEFI.fd` (file SHA-256 `3d5dbd6f...`; decompressed
 source `7c20a5b9...`, outer FV `4a8ca2cd...`, inner FV `2443e52a...`) `[S]`.
 That volume is not the booted image (outer `42f900a3...`, inner `3bb7847a...`),
@@ -316,10 +324,48 @@ but its three driver PEs are byte-identical to the booted drivers `[S]`.
 The `gEfiEventExitBootServicesGuid` bytes occur in 11 modules of the local
 volume: `DxeCore`, `CapsuleRuntimeDxe`, `EnvDxe`, `GlinkDxe`, `NpaDxe`,
 `SdccDxe`, `PmicDxe`, `UsbfnDwc3Dxe`, `XhciDxe`, `UsbMsdDxe` and
-`UsbConfigDxe` `[S]`. Only `SdccDxe` and `PmicDxe` were traced in depth;
-`SPMIDxe` is reached indirectly through the PMIC protocol `[S]`. The other
-modules are not traced, so their callback reachability and any indirect effect
-on L11/L24 are not established `[U]`.
+`UsbConfigDxe` `[S]`. `DxeCore` only carries the GUID for its own core handling
+and registers no callback `[S]`. The other ten each register at least one
+notification; the inventory below records the registration site, the
+notification body and the reached effects `[S]`. `SPMIDxe` is reached indirectly
+through the PMIC protocol `[S]`.
+
+### EBS-callback inventory
+
+Each row is a static disassembly of the registration site and the notification
+body. "Reached set" is the transitive `bl`/`b` closure from the body, so it
+over-approximates when a body ends in `br` rather than `ret`. No module below
+references the PMIC protocol GUID (`cea4489f...`) or the SPMI protocol GUID
+(`fa5f306b...`) except `PmicDxe` itself `[S]`.
+
+| Module | Register site → body | Reached effects | Rail verdict |
+| --- | --- | --- | --- |
+| `SdccDxe` | `0x360c` → `0x2f28` → `0x81a8` | TLMM page writes; SDHCI `0x29`/`0x2f`/`0x240`/`0x248`/`0x24c`/`0x21c`/`0x220`/`0x20c`; no PMIC/SPMI/RPM call | No direct L11/L24 control write `[S]` |
+| `SdccDxe` | `0x5690` → `0x55b0` | Sets flag byte `0x17291`; reach=1 | No rail effect `[S]` |
+| `SdccDxe` | `0x5920` → `0x5888` → `0x5804` | Guarded `LocateProtocol(gEfiStatusCodeRuntimeProtocolGuid)` via `gBS+0x140`; nulls the pointer on failure; sets flag `0x172b8` | Status-code lookup only `[S]` |
+| `EnvDxe` | `0x174c` → `0x1620` | TZ-milestone call and event close; no PMIC/SPMI/RPM GUID or power string in the 126-function reached set | No rail effect found `[S]` |
+| `EnvDxe` | `0x44b4` → `0x43d4` | Sets flag byte `0xe339`; reach=1 | No rail effect `[S]` |
+| `EnvDxe` | `0x4820` → `0x4780` → `0x46fc` | Guarded `LocateProtocol(gEfiStatusCodeRuntimeProtocolGuid)`; sets flag `0xe360` | Status-code lookup only `[S]` |
+| `PmicDxe` | `0x14f0` → `0x14dc` → `0x4220` | `LocateProtocol(PMIC guid 0x1d1e8)`; interface `+0x08` = `0x41ec` → `0x120a8`/`0x11cd4` (SPMI writes to `0x14`/`0x16` and `0xd1`); error path logs via `0x3e70`/`0x4194`/`0x4510` | No direct L11/L24 control write `[S]`; arbiter/indirect effects `[U]` |
+| `GlinkDxe` | `0x13dc` → `0x146c` → `0x4a04` | Builds a GLINK RPM port (`"rpm"`, `"glink_ssr"`, `"RPM"`) and calls the port open/register path `0x2214`; no PMIC/SPMI GUID and no NPA/RPM regulator request found | No direct rail write `[S]`; RPM-side effect `[U]` |
+| `NpaDxe` | `0x149c` | Calls the NPA protocol method at interface `+0x20`, then `gBS->UninstallMultipleProtocolInterfaces`; no PMIC/SPMI GUID | NPA teardown only `[S]` |
+| `CapsuleRuntimeDxe` | `0x102bc` → `0x10708` | Sets flag `0x30ff9`; calls `0x10c40`; prints via `0x103d0` with string `0x20b10`; no PMIC/SPMI/RPM | No rail effect found `[S]` |
+| `UsbConfigDxe` | `0x16e4` | USB configuration teardown; no PMIC/SPMI GUID or power string in the reached set | No rail effect found `[S]` |
+| `UsbMsdDxe` | `0x15b4` | USB mass-storage teardown; no PMIC/SPMI GUID or power string in the reached set | No rail effect found `[S]` |
+| `UsbfnDwc3Dxe` | `0x1bb0` | USB device-controller teardown; no PMIC/SPMI GUID or power string in the reached set | No rail effect found `[S]` |
+| `XhciDxe` | `0x1e6c` → `0x49e4` | xHCI teardown: cancels controller timers and calls `0x5500`; no PMIC/SPMI GUID or power string in the reached set | No rail effect found `[S]` |
+
+`gEfiStatusCodeRuntimeProtocolGuid` is `D2B2B828-0826-48A7-B3DF-983C006024F0`.
+Its use by the `SdccDxe` and `EnvDxe` notifications is a status-code lookup, not
+a PMIC/SPMI access `[S]`. This resolves the earlier `[U]` on those two
+`LocateProtocol` targets.
+
+The `PmicDxe` row is the important one: the notification does reach SPMI, but
+only through the protocol method `0x41ec` and only with register bytes `0x14`,
+`0x16` and `0xd1`. It is the same path recorded in the timeline and side-effect
+map below, not a new write `[S]`. The `GlinkDxe` and `NpaDxe` rows touch the
+RPM/NPA transport layer, so their indirect effect on a rail is left `[U]`; they
+do not build an L11/L24 resource request in the traced body `[S]`.
 
 ### Timeline
 
@@ -327,22 +373,37 @@ on L11/L24 are not established `[U]`.
 | --- | --- | --- | --- | --- |
 | Pre-handoff XBL/RPM | Not traced in this pass | Initial L11/L24 programming is not established | None established | Initial, active, sleep and reset policy `[U]` |
 | DXE initialization (before `ExitBootServices`) | `SPMIDxe` `0x266c` → `0x2d90` → `0x2ec8(w3=0)` | Arbiter interrupt status/clear; clears access-enable bit 0 for entries that pass its checks | None observed | Mapping-table contents and APID set `[U]` |
-| `ExitBootServices` notification, TPL 8 | `SdccDxe` `0x2f28` → `0x81a8` | TLMM writes `0x9fe4`/`0x1fe4`; SDHCI power, reset and vendor register writes | Clock helpers; no PMIC/SPMI/RPM call found | Selected drives, TLMM encoding and final register state `[U]` |
-| `ExitBootServices` notification, TPL `0x10` | `SdccDxe` `0x5888` | Locates a protocol and sets a flag | None observed | Target protocol and purpose `[U]` |
+| `ExitBootServices` notification, TPL 8 | `SdccDxe` `0x2f28` → `0x81a8` | SDC QDSD pad writes `0x9fe4`/`0x1fe4`; SDHCI power, reset and vendor register writes | Clock helpers; no PMIC/SPMI/RPM call found | Selected drives and final register state `[U]`; pad encoding resolved `[S]` |
+| `ExitBootServices` notification, TPL `0x10` | `SdccDxe` `0x5888` → `0x5804` | Guarded status-code `LocateProtocol`; sets flag `0x172b8` | None observed | Status-code protocol only `[S]` |
 | `ExitBootServices` notification | `PmicDxe` `0x14dc` → `0x4220` → `0x41ec` → `0x120a8`/`0x11cd4` | SPMI writes to register bytes `0x14`, `0x16` and `0xd1`; `+0x28` arbiter interrupt status/clear | SPMIDxe protocol; arbiter recovery path `0x27bc` → `0x3904` | Slave set, APID bitmap, PM6125 `QPNPINT` applicability, `0xd1` target, null-config hang `[U]` |
+| `ExitBootServices` notification | `EnvDxe` `0x1620` | TZ-milestone call, event close, environment teardown | None to PMIC/SPMI/RPM found | Milestone target and failure path `[U]` |
+| `ExitBootServices` notification | `EnvDxe` `0x43d4` | Sets flag `0xe339` | None | No rail effect `[S]` |
+| `ExitBootServices` notification | `EnvDxe` `0x4780` → `0x46fc` | Guarded status-code `LocateProtocol`; sets flag `0xe360` | None to PMIC/SPMI/RPM found | None `[S]` |
+| `ExitBootServices` notification | `CapsuleRuntimeDxe` `0x10708` | Sets flag `0x30ff9`; capsule cleanup; status print | None to PMIC/SPMI/RPM found | Capsule state only `[S]` |
+| `ExitBootServices` notification | `GlinkDxe` `0x146c` → `0x4a04` | GLINK RPM port registration/teardown (`"rpm"`, `"glink_ssr"`) | GLINK/RPM transport; no NPA regulator request found | RPM-side effect `[U]` |
+| `ExitBootServices` notification | `NpaDxe` `0x149c` | NPA protocol `+0x20` call; uninstalls protocol interfaces | NPA teardown | NPA-side effect `[U]` |
+| `ExitBootServices` notification | `UsbConfigDxe`/`UsbMsdDxe`/`UsbfnDwc3Dxe`/`XhciDxe` | USB controller teardown; no PMIC/SPMI GUID or power string found | None to PMIC/SPMI/RPM found | No rail effect found `[S]` |
 | Handoff to XNU | Not traced | Rail and pad state at entry is not measured | None established | Retention and pad state `[U]` |
 
-The relative order of the SdccDxe and PmicDxe notifications is not established
-from the static images. Both register for the same event, and the runtime order
-depends on registration and TPL; the timeline therefore does not assert an order
-between the two drivers `[U]`.
+The relative order of the notifications is not established from the static
+images. They register for the same event, and the runtime order depends on
+registration and TPL; the timeline therefore does not assert an order between
+the drivers `[U]`.
 
 ### Side-effect map
 
 | Path | Direct MMIO/SPMI | Indirect protocol calls | Runtime branches / unresolved targets | Direct L11/L24 control write? |
 | --- | --- | --- | --- | --- |
-| `SdccDxe` `0x81a8` | TLMM page writes; SDHCI `0x29`, `0x2f`, `0x240`/`0x248`/`0x24c`, `0x21c`/`0x220`, `0x20c` | None to PMIC/SPMI/RPM found | Selected `w19`/`w21` drives; TLMM encoding; vendor values | No `[S]` |
-| `SdccDxe` `0x5888` | None observed | Locates one protocol | Protocol target and flag use `[U]` | No `[S]` |
+| `SdccDxe` `0x81a8` | SDC QDSD pad writes; SDHCI `0x29`, `0x2f`, `0x240`/`0x248`/`0x24c`, `0x21c`/`0x220`, `0x20c` | None to PMIC/SPMI/RPM found | Selected `w19`/`w21` drives; pad encoding resolved; vendor values | No `[S]` |
+| `SdccDxe` `0x5888` | None observed | Guarded `LocateProtocol(gEfiStatusCodeRuntimeProtocolGuid)`; nulls the pointer on failure | Status-code protocol only; flag `0x172b8` `[S]` | No `[S]` |
+| `SdccDxe` `0x55b0` | None observed | None | Flag `0x17291` only `[S]` | No `[S]` |
+| `EnvDxe` `0x1620` | None observed | TZ milestone, event close, environment teardown | Milestone target `[U]`; no PMIC/SPMI/RPM | No `[S]` |
+| `EnvDxe` `0x43d4` | None observed | None | Flag `0xe339` only `[S]` | No `[S]` |
+| `EnvDxe` `0x4780` → `0x46fc` | None observed | Guarded `LocateProtocol(gEfiStatusCodeRuntimeProtocolGuid)` | Status-code protocol only; flag `0xe360` `[S]` | No `[S]` |
+| `CapsuleRuntimeDxe` `0x10708` | None observed | Capsule cleanup; status print | Capsule state only `[S]` | No `[S]` |
+| `GlinkDxe` `0x146c` → `0x4a04` | None observed | GLINK RPM port registration/teardown (`"rpm"`, `"glink_ssr"`) | No NPA regulator request in the traced body `[S]`; RPM-side effect `[U]` | No `[S]` |
+| `NpaDxe` `0x149c` | None observed | NPA protocol `+0x20`; `UninstallMultipleProtocolInterfaces` | NPA teardown `[S]` | No `[S]` |
+| `UsbConfigDxe`/`UsbMsdDxe`/`UsbfnDwc3Dxe`/`XhciDxe` | None observed | USB controller teardown | No PMIC/SPMI GUID or power string found `[S]` | No `[S]` |
 | `PmicDxe` `0x120a8` | SPMI `0xff` writes to `(slave << 8) \| 0x16` and `\| 0x14` | `0x7f18` reaches the `+0x28` arbiter entry | Table `0x11c3c(0x87/0x88)`, stride 6; slave set `[U]` | No known control register `[S]` |
 | `PmicDxe` `0x11cd4` | SPMI write `(u16 >> 14)` to `(u16 << 8) \| 0xd1` | None beyond the SPMI write wrapper | Table `0x11c3c(0x9a/0x9b)`, stride 4; `0xd1` target `[U]` | No known control register `[S]` |
 | `SPMIDxe` `0x2e20` (`+0x28`) | Arbiter `irq_status`/`irq_clear` read-modify-write | Reached from PmicDxe | APID owner/status bitmap contents `[U]` | No `[S]` |
@@ -350,25 +411,31 @@ between the two drivers `[U]`.
 | `SPMIDxe` `0x3904` (recovery) | Writes arbiter owner/APID registers at `base+apid*4+0xa700` and `base+apid*4+0x40900` | Reached from the transaction core `0x27bc` when conditions permit | Whether recovery ran during the recorded boot `[U]` | No `[S]` |
 
 **Boundary.** The supportable statement is: no direct L11/L24 control-register
-write was found in the bounded traces of `SdccDxe`, `PmicDxe` and the reached
-`SPMIDxe` paths `[S]`. It is not: the handoff cannot affect the rails `[U]`.
-The untraced `ExitBootServices` modules, the runtime SPMI tables, the APID
-bitmap, the unresolved `0xd1` target, the PM6125 `QPNPINT` applicability and
-the non-returning null-configuration path in `0x120a8` all remain open. A
-bounded scan also found power-related strings in untraced modules
-(`GlinkDxe`/`NpaDxe` for RPM and `rpm_requests`; `ClockDxe`/`VcsDxe` for `vdd`;
-`UFSDxe` for RPM; `DALSys` for `L11`/RPM/PMIC/SPMI; `BdsDxe`/`SimpleFbDxe` for
-PMIC/SPMI; `AdcDxe` for SPMI), which is a reason to keep the boundary rather
-than to claim a negative `[S]/[U]`. Expanding this into unrestricted reversing
-is out of scope for this pass.
+write was found in any traced `ExitBootServices` notification body `[S]`. It is
+not: the handoff cannot affect the rails `[U]`. The runtime SPMI tables, the
+APID bitmap, the unresolved `0xd1` target, the PM6125 `QPNPINT` applicability,
+the non-returning null-configuration path in `0x120a8`, and the RPM/NPA
+transport effects of the `GlinkDxe` and `NpaDxe` bodies all remain open.
+
+Modules that contain power-related strings but do **not** register an
+`ExitBootServices` notification (`ClockDxe`/`VcsDxe` for `vdd`; `UFSDxe` for
+RPM; `DALSys` for `L11`/RPM/PMIC/SPMI; `BdsDxe`/`SimpleFbDxe` for PMIC/SPMI;
+`AdcDxe` for SPMI) are outside this inventory. Their own protocol GUIDs are not
+referenced by any traced EBS body, so they are not reached through a GUID lookup
+from an EBS callback `[S]`; an indirect dispatch through a non-GUID interface is
+not fully excluded `[U]`. This is a reason to keep the boundary rather than to claim
+a negative `[S]/[U]`. Expanding this into unrestricted reversing is out of scope
+for this pass.
 
 ## Platform config
 
 `uefiplat.cfg` has `Sdc1GpioConfigOn = 0x1E92`,
 `Sdc1GpioConfigOff = 0xA00`, `Sdc2GpioConfigOn = 0x1E92`,
 `Sdc2GpioConfigOff = 0xA00`, and `EnableSDHCSwitch = 0x1`. These are TLMM pad
-and SDHC switch settings. The file has no LDO, `vdd`, `vreg` or regulator
-entry. The only PMIC reference is the `PMIC ARB SPMI` MMIO region.
+and SDHC switch settings. The register write decoded in the `SdccDxe` exit
+handler is `0x9fe4`/`0x1fe4`, not these configuration-map values; the
+relationship between the two remains `[U]`. The file has no LDO, `vdd`, `vreg`
+or regulator entry. The only PMIC reference is the `PMIC ARB SPMI` MMIO region.
 
 ## What this proves
 
@@ -380,6 +447,11 @@ entry. The only PMIC reference is the `PMIC ARB SPMI` MMIO region.
   `0x14`, `0x16` or `0xd1`. Its writes cannot directly address the L11/L24
   range, voltage, mode or enable registers, which are registers `0x40`, `0x41`,
   `0x45`, `0x46`, `0x48`, `0x4c` and `0x61` of their peripherals.
+- All ten modules that register an `ExitBootServices` notification were traced
+  to their bodies. None of them except `PmicDxe` locates the PMIC or SPMI
+  protocol. `SdccDxe`, `EnvDxe`, `CapsuleRuntimeDxe` and the four USB modules
+  set flags, do status-code lookups or tear down their own controllers;
+  `GlinkDxe` and `NpaDxe` only touch the GLINK/RPM/NPA transport layer.
 - The UEFI platform config does not configure L24/L11.
 
 ## What this does not prove
@@ -407,7 +479,15 @@ entry. The only PMIC reference is the `PMIC ARB SPMI` MMIO region.
   unchanged, so the effect of that read-modify-write is not established.
 - It does not establish that the callback has no indirect effect on the rails.
   The constants exclude direct writes to the listed control registers by the
-  two traced callees; they do not exclude every indirect path.
+  traced callees; they do not exclude every indirect path.
+- It does not establish the RPM-side effect of the `GlinkDxe` GLINK port
+  registration or the NPA-side effect of the `NpaDxe` protocol teardown. Neither
+  body builds an L11/L24 resource request in the traced instructions, but the
+  remote RPM firmware's handling of the transport is not visible here `[U]`.
+- The inventory covers the 11 modules that carry the EBS GUID in the local
+  shipping volume. It does not cover a different firmware revision, a
+  runtime-loaded driver, or a protocol method that an EBS body reaches only
+  through a non-GUID dispatch `[U]`.
 - It does not establish the complete arbiter command sequence. PmicDxe delegates
   to the SPMI protocol, so the arbiter access lives in `SPMIDxe.efi`; the entry
   points and `0x2e20` are traced here and in `spmi-0x28-analysis.md`, but the
@@ -423,17 +503,20 @@ entry. The only PMIC reference is the `PMIC ARB SPMI` MMIO region.
 
 ## Safety conclusion
 
-The firmware trace supports a precise but limited claim: the two traced callees
-cannot directly address an L11/L24 control register, because every address they
-write carries register byte `0x14`, `0x16` or `0xd1`, while the control registers
-are `0x40`, `0x41`, `0x45`, `0x46`, `0x48`, `0x4c` and `0x61`.
+The firmware trace supports a precise but limited claim: no traced
+`ExitBootServices` notification body writes an L11/L24 control register, and the
+only SPMI-writing body (`PmicDxe`) can reach only register bytes `0x14`, `0x16`
+or `0xd1`, while the control registers are `0x40`, `0x41`, `0x45`, `0x46`,
+`0x48`, `0x4c` and `0x61`. The other nine registering modules set flags, do
+status-code lookups, tear down their own controllers, or touch only the
+GLINK/RPM/NPA transport.
 
 It does **not** support "the callback cannot change the rails". The `+0x28`
 operation is arbiter interrupt status/clear, not a regulator access, but the
-runtime bitmap contents and any other indirect path remain unresolved, and the
-trace shows the handoff is not PMIC-passive. A software-visible success at the
-RAM-root stage is not evidence of electrical safety either; software rollback
-cannot repair electrical damage.
+runtime bitmap contents, the RPM/NPA transport effects and any other indirect
+path remain unresolved, and the trace shows the handoff is not PMIC-passive. A
+software-visible success at the RAM-root stage is not evidence of electrical
+safety either; software rollback cannot repair electrical damage.
 
 Keep bus power and the card clock off, issue no card command, DMA or storage
 write, and do not acknowledge `CORE_PWRCTL_STATUS` from XNU. The remaining
@@ -469,3 +552,12 @@ For the SPMI transport, search `PmicDxeLa.efi` for the little-endian GUID bytes
 `LocateProtocol` arguments at `0x13310`. The same GUID appears in `SPMIDxe.efi`
 at file offset `0x8048`; the `InstallMultipleProtocolInterfaces` call at `0x16e8`
 passes it with the interface at `0x8088`.
+
+The EBS-callback inventory is reproduced by scanning every `bootmods/*.efi`
+image for the EBS GUID bytes, resolving each `adrp`/`add` pair to its target,
+then following `bl`/`b` from the notification body. Resolve an `adrp` target as
+the page base and add the immediate only from the matching `add`; do not treat a
+page-relative `adrp` result as a full address. The status-code GUID bytes are
+`28b8b2d22608a748b3df983c006024f0` (`gEfiStatusCodeRuntimeProtocolGuid`); its
+two EBS uses are the guarded `LocateProtocol` calls in `SdccDxe` `0x5804` and
+`EnvDxe` `0x46fc`.
