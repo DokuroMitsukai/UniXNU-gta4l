@@ -23,12 +23,45 @@
  * are deliberately not taken from the production header, so a mutated header
  * cannot change what the simulator accepts. */
 #define SIM_CMD_DATA            0x0020u
+#define SIM_CMD_CRC             0x0008u
+#define SIM_CMD_INDEX           0x0010u
+#define SIM_CMD_CRC_NONE        0xFFu
 #define SIM_TM_BLOCK_COUNT_EN   0x0002u
 #define SIM_TM_READ             0x0010u
 #define SIM_CTRL_VDD_180        0x0008u
 #define SIM_PAD_PWR_SWITCH_EN   0x00008000u
 #define SIM_PAD_PWR_SWITCH      0x00010000u
-#define SIM_POWER_SETTLE_US     5000u
+#define SIM_DLL_RST             0x40000000u
+#define SIM_DLL_PDN             0x20000000u
+#define SIM_VENDOR_MCLK_SEL_MASK   0x00000300u
+#define SIM_VENDOR_MCLK_SEL_DFLT   0x00000200u
+#define SIM_VENDOR_MCLK_SEL_HS400  0x00000300u
+#define SIM_VENDOR_HC_SELECT_IN_EN 0x00040000u
+#define SIM_VENDOR_HC_SELECT_IN_MASK 0x00380000u
+#define SIM_VENDOR_CLK_PWRSAVE     0x00000002u
+#define SIM_VENDOR_SPEC_POR        0x00000A9Cu
+#define SIM_VENDOR3_PWRSAVE_DLL    0x00000008u
+#define SIM_VENDOR_INITIAL         0x00318A0Cu
+#define SIM_POWER_SETTLE_US     10000u
+#define SIM_CARD_CLOCK_SETTLE_US 1000u
+#define SIM_CMD0_DELAY_US       1000u
+#define SIM_CMD0_POST_DELAY_US  2000u
+
+/* Independent GCC SDCC1 offsets and reset/branch/RCG semantics. */
+#define SIM_GCC_BCR             0x00u
+#define SIM_GCC_APPS_CBCR       0x04u
+#define SIM_GCC_AHB_CBCR        0x08u
+#define SIM_GCC_ICE_CBCR        0x0Cu
+#define SIM_GCC_APPS_CMD        0x28u
+#define SIM_GCC_APPS_CFG        0x2Cu
+#define SIM_GCC_APPS_M          0x30u
+#define SIM_GCC_APPS_N          0x34u
+#define SIM_GCC_APPS_D          0x38u
+#define SIM_BCR_BLOCK_RESET     0x00000001u
+#define SIM_BCR_DELAY_US        200u
+#define SIM_CBCR_CLOCK_ENABLE   0x00000001u
+#define SIM_CBCR_CLK_OFF        0x80000000u
+#define SIM_RCG_CMD_UPDATE      0x00000001u
 
 struct sim {
 	uint8_t  sdhci[SIM_SDHCI_SIZE];
@@ -64,6 +97,9 @@ struct sim {
 	uint64_t time_us;
 	uint64_t card_clock_time_us;
 	uint64_t power_ack_time_us;
+	uint64_t cmd0_time_us;
+	uint64_t cmd1_time_us;
+	int cmd1_seen;
 	uint32_t log_event[SIM_MAX_LOG];
 	uint32_t log_a[SIM_MAX_LOG];
 	uint32_t log_b[SIM_MAX_LOG];
@@ -74,7 +110,9 @@ struct sim {
 	int power_off;
 	int rcg_busy;
 	int cmd_timeout;
-	int cmd_crc;
+	uint32_t cmd_crc_index;
+	int cmd_crc_with_cc;
+	int clear_response_on_w1c;
 	int cmd_index;
 	int data_timeout;
 	int data_crc;
@@ -105,7 +143,26 @@ struct sim {
 	int card_clock_before_power;
 	int card_clock_enabled;
 	int reset_written;
+	int bcr_reset;
 	int branch_writes;
+	int apps_branch_fail;
+	int ahb_branch_fail;
+	int trace_armed;
+	int bcr_asserted;
+	int bcr_deasserted;
+	int bcr_assert_pending;
+	int bcr_reasserted;
+	int bcr_short_pulse;
+	int sdhci_before_bcr_deassert;
+	int sdhci_before_clocks;
+	int apps_branch_enabled;
+	int ahb_branch_enabled;
+	int dll_rst_written;
+	int dll_pdn_written;
+	int dll_pdn_before_rst;
+	uint64_t bcr_assert_time_us;
+	uint64_t bcr_pulse_us;
+	uint32_t cmd1_timeouts_remaining;
 	int access_violation;
 	int command_error;
 };
@@ -140,7 +197,10 @@ sim_sdhci_width_ok(uint32_t offset, uint32_t width)
 	case 0x20u: /* BUFFER_DATA_PORT */
 	case 0x24u: /* PRESENT_STATE */
 	case 0x40u: /* CAPABILITIES */
+	case 0x200u: /* CORE_DLL_CONFIG */
+	case 0x208u: /* CORE_DLL_STATUS */
 	case 0x20Cu: /* CORE_VENDOR_SPEC */
+	case 0x250u: /* CORE_VENDOR_SPEC3 */
 	case 0x240u: /* CORE_PWRCTL_STATUS */
 	case 0x244u: /* CORE_PWRCTL_MASK */
 	case 0x248u: /* CORE_PWRCTL_CLEAR */
@@ -158,12 +218,28 @@ sim_region_ok(uint32_t offset, uint32_t width, uint32_t size)
 	return ((offset % width) == 0u) && ((offset + width) <= size);
 }
 
+static void
+sim_note_sdhci_access(struct sim *sim)
+{
+	if (sim->trace_armed == 0) {
+		return;
+	}
+	if (sim->bcr_deasserted == 0) {
+		sim->sdhci_before_bcr_deassert = 1;
+	}
+	if ((sim->apps_branch_enabled == 0) ||
+	    (sim->ahb_branch_enabled == 0)) {
+		sim->sdhci_before_clocks = 1;
+	}
+}
+
 static uint8_t
 sim_read8(void *context, uint32_t space, uint32_t offset)
 {
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		sim_note_sdhci_access(sim);
 		if (!sim_sdhci_width_ok(offset, 1u)) {
 			sim->access_violation = 1;
 			return 0;
@@ -193,6 +269,7 @@ sim_read16(void *context, uint32_t space, uint32_t offset)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		sim_note_sdhci_access(sim);
 		if (!sim_sdhci_width_ok(offset, 2u)) {
 			sim->access_violation = 1;
 			return 0;
@@ -229,6 +306,7 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		sim_note_sdhci_access(sim);
 		if (!sim_sdhci_width_ok(offset, 4u)) {
 			sim->access_violation = 1;
 			return 0;
@@ -293,11 +371,30 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 		    ((uint32_t)sim->sdhci[offset + 3u] << 24);
 	}
 	if (space == GTA4L_EMMC_SPACE_GCC) {
+		uint32_t value;
+
 		if (!sim_region_ok(offset, 4u, SIM_GCC_WORDS * 4u)) {
 			sim->access_violation = 1;
 			return 0;
 		}
-		return sim->gcc[offset / 4u];
+		value = sim->gcc[offset / 4u];
+		/* The core establishes that a branch clock is running by
+		 * reading its CBCR after the block reset. Count only a
+		 * post-reset read that observes enable set and CLK_OFF
+		 * clear; a write alone is not a verification. */
+		if ((sim->trace_armed != 0) &&
+		    (sim->bcr_deasserted != 0) &&
+		    ((offset == SIM_GCC_APPS_CBCR) ||
+		    (offset == SIM_GCC_AHB_CBCR)) &&
+		    ((value & SIM_CBCR_CLOCK_ENABLE) != 0) &&
+		    ((value & SIM_CBCR_CLK_OFF) == 0)) {
+			if (offset == SIM_GCC_APPS_CBCR) {
+				sim->apps_branch_enabled = 1;
+			} else {
+				sim->ahb_branch_enabled = 1;
+			}
+		}
+		return value;
 	}
 	if (space == GTA4L_EMMC_SPACE_TLMM) {
 		if (!sim_region_ok(offset, 4u, SIM_TLMM_WORDS * 4u)) {
@@ -315,6 +412,7 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		sim_note_sdhci_access(sim);
 		if (!sim_sdhci_width_ok(offset, 1u)) {
 			sim->access_violation = 1;
 			return;
@@ -456,6 +554,7 @@ sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
     uint16_t flags)
 {
 	uint32_t response_type = flags & 0x3u;
+	uint32_t checks = flags & (SIM_CMD_CRC | SIM_CMD_INDEX);
 	int data = (flags & SIM_CMD_DATA) != 0;
 	int read = (sim->transfer_mode & SIM_TM_READ) != 0;
 	int block_count_en =
@@ -463,29 +562,37 @@ sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
 
 	switch (index) {
 	case GTA4L_EMMC_CMD0:
-		return response_type == 0u && data == 0;
+		return response_type == 0u && data == 0 && checks == 0u;
 	case GTA4L_EMMC_CMD1:
-		return response_type == 2u && data == 0;
+		/* R3 responses are not CRC checked. */
+		return response_type == 2u && data == 0 && checks == 0u;
 	case GTA4L_EMMC_CMD2:
-		return response_type == 1u && data == 0;
+		return response_type == 1u && data == 0 &&
+		    checks == SIM_CMD_CRC;
 	case GTA4L_EMMC_CMD3:
 		return response_type == 2u && data == 0 &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
 		    ((argument >> 16) != 0u);
 	case GTA4L_EMMC_CMD7:
 		return response_type == 3u && data == 0 &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
 		    ((argument >> 16) == sim->rca);
 	case GTA4L_EMMC_CMD9:
 		return response_type == 1u && data == 0 &&
+		    checks == SIM_CMD_CRC &&
 		    ((argument >> 16) == sim->rca);
 	case GTA4L_EMMC_CMD13:
 		return response_type == 2u && data == 0 &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
 		    ((argument >> 16) == sim->rca);
 	case GTA4L_EMMC_CMD8:
 		return response_type == 2u && data != 0 && read &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
 		    block_count_en && sim->block_size == 512u &&
 		    sim->block_count == 1u;
 	case GTA4L_EMMC_CMD17:
 		return response_type == 2u && data != 0 && read &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
 		    block_count_en && sim->block_size == 512u &&
 		    sim->block_count == 1u &&
 		    argument < sim->sector_count;
@@ -508,6 +615,13 @@ sim_command(struct sim *sim, uint16_t command)
 	sim->last_cmd_argument = argument;
 	sim->cmd_count++;
 	sim->buffer_index = 0;
+	if (index == GTA4L_EMMC_CMD0) {
+		sim->cmd0_time_us = sim->time_us;
+	}
+	if ((index == GTA4L_EMMC_CMD1) && (sim->cmd1_seen == 0)) {
+		sim->cmd1_time_us = sim->time_us;
+		sim->cmd1_seen = 1;
+	}
 
 	if (!sim_command_ok(sim, index, argument, (uint16_t)flags)) {
 		sim->command_error = 1;
@@ -517,8 +631,28 @@ sim_command(struct sim *sim, uint16_t command)
 	if ((sim->cmd_timeout != 0) && (index == GTA4L_EMMC_CMD0)) {
 		return;
 	}
-	if ((sim->cmd_crc != 0) && (index == GTA4L_EMMC_CMD2)) {
+	if ((index == GTA4L_EMMC_CMD1) &&
+	    (sim->cmd1_timeouts_remaining != 0)) {
+		sim->cmd1_timeouts_remaining--;
+		return;
+	}
+	if (index == GTA4L_EMMC_CMD2) {
+		/* Load the long response before an injected CRC error so the
+		 * snapshot ordering test has real words to capture. A real
+		 * controller may or may not load a bad response; the core must
+		 * still treat it as diagnostics only. */
+		words[0] = sim->bad_cid ? 0 : sim->cid[0];
+		words[1] = sim->bad_cid ? 0 : sim->cid[1];
+		words[2] = sim->bad_cid ? 0 : sim->cid[2];
+		words[3] = sim->bad_cid ? 0 : sim->cid[3];
+		sim_set_response(sim, words, 4);
+	}
+	if ((sim->cmd_crc_index != SIM_CMD_CRC_NONE) &&
+	    (index == sim->cmd_crc_index)) {
 		sim->error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
+		if (sim->cmd_crc_with_cc != 0) {
+			sim->normal_int |= GTA4L_EMMC_INT_CC;
+		}
 		return;
 	}
 	if ((sim->cmd_index != 0) && (index == GTA4L_EMMC_CMD3)) {
@@ -633,6 +767,7 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 		    (uint8_t)(value >> 8));
 		return;
 	}
+	sim_note_sdhci_access(sim);
 	if (!sim_sdhci_width_ok(offset, 2u)) {
 		sim->access_violation = 1;
 		return;
@@ -658,6 +793,19 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 	}
 	if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
 		sim->error_int &= (uint16_t)~value;
+		if ((sim->clear_response_on_w1c != 0) &&
+		    ((value & GTA4L_EMMC_INT_ERR_CMD_CRC) != 0)) {
+			/* A real controller may invalidate the response with
+			 * the latch clear. The snapshot must already exist. */
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + 0u, 0u);
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + 4u, 0u);
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + 8u, 0u);
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + 12u, 0u);
+		}
 		return;
 	}
 	if (offset == GTA4L_EMMC_REG_NORMAL_INT_ENABLE) {
@@ -736,9 +884,31 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 	struct sim *sim = (struct sim *)context;
 
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
+		sim_note_sdhci_access(sim);
 		if (!sim_sdhci_width_ok(offset, 4u)) {
 			sim->access_violation = 1;
 			return;
+		}
+		if (offset == GTA4L_EMMC_REG_CORE_DLL_CONFIG) {
+			uint32_t previous = (uint32_t)sim->sdhci[offset] |
+			    ((uint32_t)sim->sdhci[offset + 1u] << 8) |
+			    ((uint32_t)sim->sdhci[offset + 2u] << 16) |
+			    ((uint32_t)sim->sdhci[offset + 3u] << 24);
+
+			/* The reset must be requested before the DLL is powered
+			 * down; a combined or reordered write would hide a
+			 * sequence regression that the final bits cannot. */
+			if (((value & SIM_DLL_PDN) != 0) &&
+			    ((previous & SIM_DLL_PDN) == 0) &&
+			    (sim->dll_rst_written == 0)) {
+				sim->dll_pdn_before_rst = 1;
+			}
+			if ((value & SIM_DLL_RST) != 0) {
+				sim->dll_rst_written = 1;
+			}
+			if ((value & SIM_DLL_PDN) != 0) {
+				sim->dll_pdn_written = 1;
+			}
 		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR) {
 			sim->last_clear = value;
@@ -777,25 +947,70 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 			return;
 		}
 		sim->gcc[offset / 4u] = value;
-		if (offset == GTA4L_EMMC_GCC_SDCC1_BCR) {
-			if ((value & GTA4L_EMMC_BCR_BLOCK_RESET) != 0) {
-				sim->gcc[offset / 4u] &= ~GTA4L_EMMC_BCR_BLOCK_RESET;
+		if (offset == SIM_GCC_BCR) {
+			if ((value & SIM_BCR_BLOCK_RESET) != 0) {
+				if (sim->bcr_assert_pending != 0) {
+					sim->bcr_reasserted = 1;
+				}
+				if (sim->bcr_asserted == 0) {
+					sim->bcr_assert_time_us =
+					    sim->time_us;
+				}
+				sim->bcr_asserted = 1;
+				sim->bcr_assert_pending = 1;
+				sim->bcr_reset = 1;
+				/* The block is in reset until the core
+				 * re-enables both branches; the reset also
+				 * clears the branch enables in hardware. */
+				sim->apps_branch_enabled = 0;
+				sim->ahb_branch_enabled = 0;
+				sim->gcc[SIM_GCC_APPS_CBCR / 4u] =
+				    SIM_CBCR_CLK_OFF;
+				sim->gcc[SIM_GCC_AHB_CBCR / 4u] =
+				    SIM_CBCR_CLK_OFF;
+				sim->gcc[offset / 4u] &= ~SIM_BCR_BLOCK_RESET;
+			} else if (sim->bcr_assert_pending != 0) {
+				sim->bcr_assert_pending = 0;
+				sim->bcr_deasserted = 1;
+				sim->bcr_pulse_us =
+				    sim->time_us - sim->bcr_assert_time_us;
+				if (sim->bcr_pulse_us < SIM_BCR_DELAY_US) {
+					sim->bcr_short_pulse = 1;
+				}
 			}
 		}
-		if ((offset == GTA4L_EMMC_GCC_SDCC1_APPS_CBCR) ||
-		    (offset == GTA4L_EMMC_GCC_SDCC1_AHB_CBCR)) {
+		if ((offset == SIM_GCC_APPS_CBCR) ||
+		    (offset == SIM_GCC_AHB_CBCR)) {
 			sim->branch_writes++;
-			if ((value & GTA4L_EMMC_CBCR_CLOCK_ENABLE) != 0) {
-				sim->gcc[offset / 4u] &= ~GTA4L_EMMC_CBCR_CLK_OFF;
+			if ((value & SIM_CBCR_CLOCK_ENABLE) != 0) {
+				/* An injected branch failure keeps the clock
+				 * off no matter how often the core writes the
+				 * enable bit, so the bounded wait must expire
+				 * and the core must report ERR_CLOCK. */
+				if (((offset == SIM_GCC_APPS_CBCR) &&
+				    (sim->apps_branch_fail != 0)) ||
+				    ((offset == SIM_GCC_AHB_CBCR) &&
+				    (sim->ahb_branch_fail != 0))) {
+					sim->gcc[offset / 4u] |=
+					    SIM_CBCR_CLK_OFF;
+				} else {
+					sim->gcc[offset / 4u] &=
+					    ~SIM_CBCR_CLK_OFF;
+				}
 			} else {
-				sim->gcc[offset / 4u] |= GTA4L_EMMC_CBCR_CLK_OFF;
+				sim->gcc[offset / 4u] |= SIM_CBCR_CLK_OFF;
+				if (offset == SIM_GCC_APPS_CBCR) {
+					sim->apps_branch_enabled = 0;
+				} else {
+					sim->ahb_branch_enabled = 0;
+				}
 			}
 		}
-		if (offset == GTA4L_EMMC_GCC_SDCC1_APPS_CMD) {
-			if ((value & GTA4L_EMMC_RCG_CMD_UPDATE) != 0) {
+		if (offset == SIM_GCC_APPS_CMD) {
+			if ((value & SIM_RCG_CMD_UPDATE) != 0) {
 				if (sim->rcg_busy == 0) {
 					sim->gcc[offset / 4u] &=
-					    ~GTA4L_EMMC_RCG_CMD_UPDATE;
+					    ~SIM_RCG_CMD_UPDATE;
 				}
 			}
 		}
@@ -855,17 +1070,19 @@ sim_init(struct sim *sim)
 	memset(sim, 0, sizeof(*sim));
 	sim->sector_count = 61071360u;
 	sim->partition_config = 0u;
+	sim->cmd_crc_index = SIM_CMD_CRC_NONE;
 	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_MCI_VERSION,
 	    0x10000072u);
+	/* The observed stage-3 vendor value: MCLK default, HC_SELECT_IN=6
+	 * with the enable clear. The core must normalize the override bits. */
 	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
-	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, 0x00000A9Cu);
-	sim->gcc[GTA4L_EMMC_GCC_SDCC1_APPS_CBCR / 4u] =
-	    GTA4L_EMMC_CBCR_CLOCK_ENABLE;
-	sim->gcc[GTA4L_EMMC_GCC_SDCC1_AHB_CBCR / 4u] =
-	    GTA4L_EMMC_CBCR_CLOCK_ENABLE;
-	sim->gcc[GTA4L_EMMC_GCC_SDCC1_ICE_CBCR / 4u] =
-	    GTA4L_EMMC_CBCR_CLOCK_ENABLE;
-	sim->gcc[GTA4L_EMMC_GCC_SDCC1_APPS_CFG / 4u] = 0x00000401u;
+	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, SIM_VENDOR_INITIAL);
+	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC3, SIM_VENDOR3_PWRSAVE_DLL);
+	sim->gcc[SIM_GCC_APPS_CBCR / 4u] = SIM_CBCR_CLOCK_ENABLE;
+	sim->gcc[SIM_GCC_AHB_CBCR / 4u] = SIM_CBCR_CLOCK_ENABLE;
+	sim->gcc[SIM_GCC_ICE_CBCR / 4u] = SIM_CBCR_CLOCK_ENABLE;
+	sim->gcc[SIM_GCC_APPS_CFG / 4u] = 0x00000401u;
 	sim->cid[0] = 0x15010044u;
 	sim->cid[1] = 0x5836384Du;
 	sim->cid[2] = 0x42009005u;
@@ -938,6 +1155,10 @@ main(int argc, char **argv)
 		sim.reset_timeout = 1;
 	} else if (scenario_is(scenario, "clock-timeout")) {
 		sim.clock_timeout = 1;
+	} else if (scenario_is(scenario, "clock-branch-apps-fail")) {
+		sim.apps_branch_fail = 1;
+	} else if (scenario_is(scenario, "clock-branch-ahb-fail")) {
+		sim.ahb_branch_fail = 1;
 	} else if (scenario_is(scenario, "power-off")) {
 		sim.power_off = 1;
 	} else if (scenario_is(scenario, "power-no-request")) {
@@ -979,9 +1200,52 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario, "cmd-timeout")) {
 		sim.cmd_timeout = 1;
 	} else if (scenario_is(scenario, "cmd-crc")) {
-		sim.cmd_crc = 1;
+		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+	} else if (scenario_is(scenario, "cmd-crc-with-cc")) {
+		/* A controller may report command complete together with the
+		 * CRC error. The error must win and must not be masked. */
+		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+		sim.cmd_crc_with_cc = 1;
+	} else if (scenario_is(scenario, "cmd-crc-snapshot")) {
+		/* Clearing the error latch also invalidates RESPONSE0..3.
+		 * The failure record must already hold the raw words. */
+		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+		sim.clear_response_on_w1c = 1;
+	} else if (scenario_is(scenario, "cmd0-crc")) {
+		sim.cmd_crc_index = GTA4L_EMMC_CMD0;
+	} else if (scenario_is(scenario, "cmd1-crc")) {
+		sim.cmd_crc_index = GTA4L_EMMC_CMD1;
+	} else if (scenario_is(scenario, "cmd1-timeout-recovery-crc")) {
+		/* The first CMD1 attempt times out while the card is busy;
+		 * the retry succeeds, then CMD2 fails its CRC check. */
+		sim.cmd1_timeouts_remaining = 1;
+		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+	} else if (scenario_is(scenario, "cmd1-timeout-recover")) {
+		/* A single busy timeout is recovered by the retry; the run must
+		 * finish with no failure record at all. */
+		sim.cmd1_timeouts_remaining = 1;
+	} else if (scenario_is(scenario, "cmd1-timeout-exhausted")) {
+		/* Every CMD1 attempt times out: the final timeout must stay
+		 * recorded instead of being retired with the earlier ones. */
+		sim.cmd1_timeouts_remaining = 1000;
 	} else if (scenario_is(scenario, "cmd-index")) {
 		sim.cmd_index = 1;
+	} else if (scenario_is(scenario, "vendor-mclk-hs400")) {
+		uint32_t vendor = sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC);
+
+		vendor = (vendor & ~SIM_VENDOR_MCLK_SEL_MASK) |
+		    SIM_VENDOR_MCLK_SEL_HS400;
+		sim_write32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, vendor);
+	} else if (scenario_is(scenario, "vendor-hc-select-en")) {
+		uint32_t vendor = sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC);
+
+		vendor |= SIM_VENDOR_HC_SELECT_IN_EN |
+		    SIM_VENDOR_HC_SELECT_IN_MASK | SIM_VENDOR_CLK_PWRSAVE;
+		sim_write32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, vendor);
 	} else if (scenario_is(scenario, "data-timeout-init")) {
 		sim.data_timeout = 1;
 	} else if (scenario_is(scenario, "data-crc-init")) {
@@ -1014,6 +1278,7 @@ main(int argc, char **argv)
 		    GTA4L_EMMC_REG_MCI_VERSION, 0x20000000u);
 	}
 
+	sim.trace_armed = 1;
 	result = gta4l_emmc_init(&host);
 
 	if (scenario_is(scenario, "success") ||
@@ -1031,7 +1296,10 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "power-bus-then-io") ||
 	    scenario_is(scenario, "power-wrong-io-then-correct") ||
 	    scenario_is(scenario, "pad-switch-off") ||
-	    scenario_is(scenario, "signaling-3v3")) {
+	    scenario_is(scenario, "signaling-3v3") ||
+	    scenario_is(scenario, "vendor-mclk-hs400") ||
+	    scenario_is(scenario, "vendor-hc-select-en") ||
+	    scenario_is(scenario, "cmd1-timeout-recover")) {
 		check(result == GTA4L_EMMC_OK, "initialization failed");
 		if (result != GTA4L_EMMC_OK) {
 			fprintf(stderr, "init result %d\n", result);
@@ -1061,13 +1329,13 @@ main(int argc, char **argv)
 		    host.csd[2] == 0xF6DBFFEFu &&
 		    host.csd[3] == 0x8E404000u,
 		    "CSD long-response normalization mismatch");
-		check(sim.gcc[GTA4L_EMMC_GCC_SDCC1_APPS_CFG / 4u] ==
+		check(sim.gcc[SIM_GCC_APPS_CFG / 4u] ==
 		    0x00002017u, "RCG CFG is not 400 kHz");
-		check(sim.gcc[GTA4L_EMMC_GCC_SDCC1_APPS_M / 4u] == 0x00000001u,
+		check(sim.gcc[SIM_GCC_APPS_M / 4u] == 0x00000001u,
 		    "RCG M mismatch");
-		check(sim.gcc[GTA4L_EMMC_GCC_SDCC1_APPS_N / 4u] == 0x000000FCu,
+		check(sim.gcc[SIM_GCC_APPS_N / 4u] == 0x000000FCu,
 		    "RCG N mismatch");
-		check(sim.gcc[GTA4L_EMMC_GCC_SDCC1_APPS_D / 4u] == 0x000000FBu,
+		check(sim.gcc[SIM_GCC_APPS_D / 4u] == 0x000000FBu,
 		    "RCG D mismatch");
 		check(sim.tlmm[0] == 0x00009FE4u,
 		    "SDC1 pad config mismatch");
@@ -1098,6 +1366,72 @@ main(int argc, char **argv)
 		    (SIM_PAD_PWR_SWITCH_EN | SIM_PAD_PWR_SWITCH)) ==
 		    (SIM_PAD_PWR_SWITCH_EN | SIM_PAD_PWR_SWITCH),
 		    "fixed-1.8 V pad power switch is not selected");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_DLL_CONFIG) &
+		    (SIM_DLL_RST | SIM_DLL_PDN)) ==
+		    (SIM_DLL_RST | SIM_DLL_PDN),
+		    "low-speed DLL is not reset and powered down");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    SIM_VENDOR_MCLK_SEL_MASK) ==
+		    SIM_VENDOR_MCLK_SEL_DFLT,
+		    "vendor MCLK is not the low-speed default");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    (SIM_VENDOR_HC_SELECT_IN_EN |
+		    SIM_VENDOR_HC_SELECT_IN_MASK)) == 0,
+		    "HC_SELECT_IN override was not cleared");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    SIM_VENDOR_CLK_PWRSAVE) == 0,
+		    "clock power-save is still set");
+		check(sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) ==
+		    (SIM_VENDOR_SPEC_POR | SIM_PAD_PWR_SWITCH_EN |
+		    SIM_PAD_PWR_SWITCH),
+		    "vendor register is not the normalized POR value");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC3) &
+		    SIM_VENDOR3_PWRSAVE_DLL) == 0,
+		    "CDCLP533 DLL power-save bit is still set");
+		check(sim.bcr_reset == 1,
+		    "GCC SDCC1 block reset was not asserted");
+		check(sim.bcr_deasserted == 1,
+		    "GCC SDCC1 block reset was not deasserted");
+		check(sim.bcr_assert_pending == 0,
+		    "GCC SDCC1 block reset was left asserted");
+		check(sim.bcr_reasserted == 0,
+		    "GCC SDCC1 block reset was asserted twice");
+		check((sim.bcr_short_pulse == 0) &&
+		    (sim.bcr_pulse_us >= SIM_BCR_DELAY_US),
+		    "GCC SDCC1 reset pulse is shorter than 200 us");
+		check(sim.sdhci_before_bcr_deassert == 0,
+		    "SDHCI was accessed before the block reset deassert");
+		check(sim.sdhci_before_clocks == 0,
+		    "SDHCI was accessed before both branch clocks were verified");
+		check(sim.dll_rst_written == 1,
+		    "DLL reset was never requested");
+		check(sim.dll_pdn_written == 1,
+		    "DLL power-down was never requested");
+		check(sim.dll_pdn_before_rst == 0,
+		    "DLL power-down was requested before the DLL reset");
+		check(host.last_step == GTA4L_EMMC_STEP_READY,
+		    "protocol step did not reach READY");
+		check(host.fail_valid == 0,
+		    "successful init recorded a command failure");
+		check(host.cmd1_attempts == 1u,
+		    "successful init did not report one CMD1 attempt");
+		check(host.cmd1_timeouts == 0u,
+		    "successful init reported a CMD1 timeout");
+		check(host.ocr == (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+		    "successful init did not cache the ready OCR");
+		check(sim.cmd0_time_us >=
+		    sim.card_clock_time_us + SIM_CARD_CLOCK_SETTLE_US +
+		    SIM_CMD0_DELAY_US,
+		    "CMD0 was sent before the card-clock/CMD0 delays");
+		check(sim.cmd1_time_us >=
+		    sim.cmd0_time_us + SIM_CMD0_POST_DELAY_US,
+		    "CMD1 was sent before the CMD0 post delay");
 		check(sim.last_cmd == GTA4L_EMMC_CMD8,
 		    "initialization did not end with CMD8");
 		check(sim.last_cmd_argument == 0u,
@@ -1144,6 +1478,47 @@ main(int argc, char **argv)
 		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
 		    (SIM_PAD_PWR_SWITCH_EN | SIM_PAD_PWR_SWITCH)) == 0,
 		    "pad power switch is set with the policy disabled");
+	} else if (scenario_is(scenario, "vendor-mclk-hs400")) {
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    SIM_VENDOR_MCLK_SEL_MASK) ==
+		    SIM_VENDOR_MCLK_SEL_DFLT,
+		    "HS400 MCLK selection was not restored to the default");
+		check(sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) ==
+		    (SIM_VENDOR_SPEC_POR | SIM_PAD_PWR_SWITCH_EN |
+		    SIM_PAD_PWR_SWITCH),
+		    "vendor register is not the normalized POR value");
+	} else if (scenario_is(scenario, "vendor-hc-select-en")) {
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    (SIM_VENDOR_HC_SELECT_IN_EN |
+		    SIM_VENDOR_HC_SELECT_IN_MASK)) == 0,
+		    "enabled HC_SELECT_IN override was not cleared");
+		check((sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) &
+		    SIM_VENDOR_CLK_PWRSAVE) == 0,
+		    "clock power-save was not cleared");
+		check(sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC) ==
+		    (SIM_VENDOR_SPEC_POR | SIM_PAD_PWR_SWITCH_EN |
+		    SIM_PAD_PWR_SWITCH),
+		    "vendor register is not the normalized POR value");
+	} else if (scenario_is(scenario, "cmd1-timeout-recover")) {
+		check(sim.cmd1_timeouts_remaining == 0u,
+		    "the injected CMD1 timeout was never consumed");
+		check(host.fail_valid == 0,
+		    "a recovered CMD1 timeout left a failure record");
+		check(host.cmd1_attempts == 2u,
+		    "recovered CMD1 run did not report two attempts");
+		check(host.cmd1_timeouts == 1u,
+		    "recovered CMD1 run did not report one timeout");
+		check(host.ocr == (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+		    "recovered CMD1 run did not cache the ready OCR");
+		check(host.last_step == GTA4L_EMMC_STEP_READY,
+		    "recovered CMD1 run did not reach READY");
+		check(host.capacity_blocks == 61071360u,
+		    "recovered CMD1 run did not enumerate the card");
 	} else if (scenario_is(scenario, "power-delayed-bus") ||
 	    scenario_is(scenario, "power-bus-then-io")) {
 		check(sim.bus_acked == 1,
@@ -1236,21 +1611,53 @@ main(int argc, char **argv)
 		result = gta4l_emmc_read_block(&host, 0, block0);
 		check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
 		    "data timeout not reported");
+		check(host.fail_valid == 1, "read timeout was not captured");
+		check(host.fail_index == GTA4L_EMMC_CMD17,
+		    "read timeout did not capture CMD17");
+		check(host.fail_command == 0x113Au,
+		    "timed-out CMD17 encoding mismatch");
+		check(host.fail_step == GTA4L_EMMC_STEP_READY,
+		    "CMD17 timeout step is not READY");
 	} else if (scenario_is(scenario, "read-data-crc")) {
 		sim.data_crc = 1;
 		result = gta4l_emmc_read_block(&host, 0, block0);
 		check(result == GTA4L_EMMC_ERR_DATA_CRC,
 		    "data CRC not reported");
+		check(host.fail_valid == 1,
+		    "read data CRC failure was not captured");
+		check(host.fail_index == GTA4L_EMMC_CMD17,
+		    "read data CRC failure did not capture CMD17");
+		check(host.fail_command == 0x113Au,
+		    "CMD17 encoded command mismatch");
+		check((host.fail_error &
+		    GTA4L_EMMC_INT_ERR_DATA_CRC) != 0,
+		    "captured error is not DATA_CRC");
+		check(host.fail_step == GTA4L_EMMC_STEP_READY,
+		    "CMD17 failure step is not READY");
 	} else if (scenario_is(scenario, "read-no-tc")) {
 		sim.no_tc = 1;
 		result = gta4l_emmc_read_block(&host, 0, block0);
 		check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
 		    "missing TC not reported");
+		check(host.fail_valid == 1, "missing TC was not captured");
+		check(host.fail_index == GTA4L_EMMC_CMD17,
+		    "missing TC did not capture CMD17");
+		check(host.fail_command == 0x113Au,
+		    "missing-TC CMD17 encoding mismatch");
+		check(host.fail_step == GTA4L_EMMC_STEP_READY,
+		    "CMD17 missing-TC step is not READY");
 	} else if (scenario_is(scenario, "read-no-brr")) {
 		sim.no_brr = 1;
 		result = gta4l_emmc_read_block(&host, 0, block0);
 		check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
 		    "missing BRR not reported");
+		check(host.fail_valid == 1, "missing BRR was not captured");
+		check(host.fail_index == GTA4L_EMMC_CMD17,
+		    "missing BRR did not capture CMD17");
+		check(host.fail_command == 0x113Au,
+		    "missing-BRR CMD17 encoding mismatch");
+		check(host.fail_step == GTA4L_EMMC_STEP_READY,
+		    "CMD17 missing-BRR step is not READY");
 	} else if (scenario_is(scenario, "read-repeat")) {
 		result = gta4l_emmc_read_block(&host, 5, block5);
 		check(result == GTA4L_EMMC_OK, "first read failed");
@@ -1278,7 +1685,9 @@ main(int argc, char **argv)
 			break;
 		case GTA4L_EMMC_ERR_CLOCK:
 			expected = scenario_is(scenario, "clock-timeout") ||
-			    scenario_is(scenario, "rcg-busy");
+			    scenario_is(scenario, "rcg-busy") ||
+			    scenario_is(scenario, "clock-branch-apps-fail") ||
+			    scenario_is(scenario, "clock-branch-ahb-fail");
 			break;
 		case GTA4L_EMMC_ERR_POWER:
 			expected = scenario_is(scenario, "power-off") ||
@@ -1291,7 +1700,13 @@ main(int argc, char **argv)
 			expected = scenario_is(scenario, "cmd-timeout");
 			break;
 		case GTA4L_EMMC_ERR_CMD_CRC:
-			expected = scenario_is(scenario, "cmd-crc");
+			expected = scenario_is(scenario, "cmd-crc") ||
+			    scenario_is(scenario, "cmd-crc-with-cc") ||
+			    scenario_is(scenario, "cmd-crc-snapshot") ||
+			    scenario_is(scenario, "cmd0-crc") ||
+			    scenario_is(scenario, "cmd1-crc") ||
+			    scenario_is(scenario,
+			    "cmd1-timeout-recovery-crc");
 			break;
 		case GTA4L_EMMC_ERR_CMD_INDEX:
 			expected = scenario_is(scenario, "cmd-index");
@@ -1305,7 +1720,8 @@ main(int argc, char **argv)
 			expected = scenario_is(scenario, "data-crc-init");
 			break;
 		case GTA4L_EMMC_ERR_CARD_NOT_READY:
-			expected = scenario_is(scenario, "card-not-ready");
+			expected = scenario_is(scenario, "card-not-ready") ||
+			    scenario_is(scenario, "cmd1-timeout-exhausted");
 			break;
 		case GTA4L_EMMC_ERR_CARD_STATUS:
 			expected = scenario_is(scenario, "cmd3-error");
@@ -1326,6 +1742,197 @@ main(int argc, char **argv)
 		if (!expected) {
 			fprintf(stderr, "FAIL: %s returned %d\n", scenario, result);
 			failures++;
+		}
+		if (scenario_is(scenario, "cmd-crc") ||
+		    scenario_is(scenario, "cmd-crc-with-cc") ||
+		    scenario_is(scenario, "cmd-crc-snapshot") ||
+		    scenario_is(scenario, "cmd0-crc") ||
+		    scenario_is(scenario, "cmd1-crc") ||
+		    scenario_is(scenario, "cmd1-timeout-recovery-crc")) {
+			check(host.fail_valid == 1,
+			    "CRC failure was not captured");
+			check((host.fail_error &
+			    GTA4L_EMMC_INT_ERR_CMD_CRC) != 0,
+			    "captured error is not CMD_CRC");
+		}
+		if (scenario_is(scenario, "cmd-crc") ||
+		    scenario_is(scenario, "cmd-crc-with-cc") ||
+		    scenario_is(scenario, "cmd-crc-snapshot") ||
+		    scenario_is(scenario, "cmd1-timeout-recovery-crc")) {
+			check(sim.last_cmd == GTA4L_EMMC_CMD2,
+			    "a later command was sent after the CMD2 CRC failure");
+		}
+		if (scenario_is(scenario, "cmd-crc-with-cc")) {
+			check(host.fail_index == GTA4L_EMMC_CMD2,
+			    "CC+CRC failure did not capture CMD2");
+			check(host.fail_command == 0x0209u,
+			    "CC+CRC CMD2 encoding mismatch");
+			check((host.fail_normal & GTA4L_EMMC_INT_CC) != 0,
+			    "CC bit was not captured with the CRC error");
+			check(host.cid[0] == 0u && host.cid[1] == 0u &&
+			    host.cid[2] == 0u && host.cid[3] == 0u,
+			    "CRC-failed CID was promoted to the host CID");
+		}
+		if (scenario_is(scenario, "cmd-crc-snapshot")) {
+			uint32_t expected[4];
+
+			/* Mirror sim_set_response(): raw RESPONSE0..3 carry
+			 * the normalized CID shifted left by the stripped CRC
+			 * byte, so compare the snapshot in that layout. */
+			expected[3] = sim.cid[0] >> 8;
+			expected[2] = (sim.cid[1] >> 8) |
+			    ((sim.cid[0] & 0xFFu) << 24);
+			expected[1] = (sim.cid[2] >> 8) |
+			    ((sim.cid[1] & 0xFFu) << 24);
+			expected[0] = (sim.cid[3] >> 8) |
+			    ((sim.cid[2] & 0xFFu) << 24);
+			check(host.fail_index == GTA4L_EMMC_CMD2,
+			    "snapshot failure did not capture CMD2");
+			check(host.fail_response[0] == expected[0] &&
+			    host.fail_response[1] == expected[1] &&
+			    host.fail_response[2] == expected[2] &&
+			    host.fail_response[3] == expected[3],
+			    "raw CMD2 response was not snapshotted before clear");
+			check(sim_read32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE) == 0u,
+			    "simulator did not invalidate the response");
+			check(host.cid[0] == 0u && host.cid[1] == 0u &&
+			    host.cid[2] == 0u && host.cid[3] == 0u,
+			    "snapshotted CRC-failed CID became the host CID");
+		}
+		if (scenario_is(scenario, "cmd1-timeout-recovery-crc")) {
+			check(host.fail_index == GTA4L_EMMC_CMD2,
+			    "recovered CMD1 timeout masked the CMD2 failure");
+			check(host.fail_command == 0x0209u,
+			    "CMD2 encoded command mismatch after CMD1 retry");
+			check(host.fail_step == GTA4L_EMMC_STEP_CMD1,
+			    "terminal failure step is not CMD1");
+			check(host.cmd1_attempts == 2u,
+			    "CMD2 failure run did not report two CMD1 attempts");
+			check(host.cmd1_timeouts == 1u,
+			    "CMD2 failure run did not report one CMD1 timeout");
+			check(host.ocr ==
+			    (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+			    "CMD2 failure run did not cache the ready OCR");
+		}
+		if (scenario_is(scenario, "cmd1-timeout-exhausted")) {
+			check(host.fail_valid == 1,
+			    "the final CMD1 timeout was not recorded");
+			check(host.fail_index == GTA4L_EMMC_CMD1,
+			    "exhausted CMD1 run did not capture CMD1");
+			check(host.fail_command == 0x0102u,
+			    "CMD1 encoded command mismatch");
+			check(host.fail_error == 0u,
+			    "timed-out CMD1 has a spurious error status");
+			check(host.fail_step == GTA4L_EMMC_STEP_CMD0,
+			    "CMD1 timeout step is not CMD0");
+			check(host.cmd1_attempts ==
+			    GTA4L_EMMC_CMD1_TIMEOUT_US /
+			    GTA4L_EMMC_CMD1_ATTEMPT_US,
+			    "exhausted CMD1 run did not use every attempt");
+			check(host.cmd1_timeouts == host.cmd1_attempts,
+			    "exhausted CMD1 run did not record every timeout");
+			check(host.ocr == 0u,
+			    "an unready card cached an OCR value");
+		}
+		if (scenario_is(scenario, "clock-branch-apps-fail") ||
+		    scenario_is(scenario, "clock-branch-ahb-fail")) {
+			check(host.clocks_enabled == 0,
+			    "a failed branch enable was reported as enabled");
+			check(host.fail_valid == 0,
+			    "a clock failure recorded a command failure");
+			check(sim.card_clock_enabled == 0,
+			    "card clock enabled after a failed branch enable");
+			check(sim.sdhci_before_clocks == 0,
+			    "SDHCI was accessed after a failed branch enable");
+			if (scenario_is(scenario, "clock-branch-apps-fail")) {
+				check(sim.apps_branch_enabled == 0,
+				    "failed APPS branch was marked running");
+			} else {
+				check(sim.ahb_branch_enabled == 0,
+				    "failed AHB branch was marked running");
+			}
+		}
+		if (scenario_is(scenario, "cmd-crc")) {
+			check(host.fail_index == GTA4L_EMMC_CMD2,
+			    "CRC failure did not capture CMD2");
+			check(host.fail_command == 0x0209u,
+			    "CMD2 encoded command mismatch");
+			check(host.fail_step == GTA4L_EMMC_STEP_CMD1,
+			    "CMD2 failure step is not CMD1");
+		}
+		if (scenario_is(scenario, "cmd0-crc")) {
+			check(host.fail_index == GTA4L_EMMC_CMD0,
+			    "CRC failure did not capture CMD0");
+			check(host.fail_command == 0x0000u,
+			    "CMD0 encoded command mismatch");
+			check(host.fail_step == GTA4L_EMMC_STEP_CARD_CLOCK,
+			    "CMD0 failure step is not CARD_CLOCK");
+		}
+		if (scenario_is(scenario, "cmd1-crc")) {
+			check(host.fail_index == GTA4L_EMMC_CMD1,
+			    "CRC failure did not capture CMD1");
+			check(host.fail_command == 0x0102u,
+			    "CMD1 encoded command mismatch");
+			check(host.fail_step == GTA4L_EMMC_STEP_CMD0,
+			    "CMD1 failure step is not CMD0");
+		}
+		if (scenario_is(scenario, "cmd-index")) {
+			check(host.fail_valid == 1,
+			    "command-index failure was not captured");
+			check(host.fail_index == GTA4L_EMMC_CMD3,
+			    "command-index failure did not capture CMD3");
+			check(host.fail_command == 0x031Au,
+			    "CMD3 encoded command mismatch");
+			check((host.fail_error &
+			    GTA4L_EMMC_INT_ERR_CMD_INDEX) != 0,
+			    "captured error is not CMD_INDEX");
+			check(host.fail_step == GTA4L_EMMC_STEP_CMD2,
+			    "CMD3 failure step is not CMD2");
+		}
+		if (scenario_is(scenario, "cmd-timeout")) {
+			check(host.fail_valid == 1,
+			    "command timeout was not captured");
+			check(host.fail_index == GTA4L_EMMC_CMD0,
+			    "timeout failure did not capture CMD0");
+			check(host.fail_command == 0x0000u,
+			    "timed-out CMD0 encoding mismatch");
+			check(host.fail_error == 0u,
+			    "timed-out CMD0 has a spurious error status");
+			check(host.fail_step == GTA4L_EMMC_STEP_CARD_CLOCK,
+			    "CMD0 timeout step is not CARD_CLOCK");
+		}
+		if (scenario_is(scenario, "data-crc-init")) {
+			check(host.fail_valid == 1,
+			    "data CRC failure was not captured");
+			check(host.fail_index == GTA4L_EMMC_CMD8,
+			    "data CRC failure did not capture CMD8");
+			check(host.fail_command == 0x083Au,
+			    "CMD8 encoded command mismatch");
+			check((host.fail_error &
+			    GTA4L_EMMC_INT_ERR_DATA_CRC) != 0,
+			    "captured error is not DATA_CRC");
+			check(host.fail_step == GTA4L_EMMC_STEP_TRAN,
+			    "CMD8 failure step is not TRAN");
+		}
+		if (scenario_is(scenario, "data-timeout-init") ||
+		    scenario_is(scenario, "no-tc-init") ||
+		    scenario_is(scenario, "no-brr-init")) {
+			check(host.fail_valid == 1,
+			    "data timeout was not captured");
+			check(host.fail_index == GTA4L_EMMC_CMD8,
+			    "data timeout did not capture CMD8");
+			check(host.fail_command == 0x083Au,
+			    "timed-out CMD8 encoding mismatch");
+			check(host.fail_error == 0u,
+			    "timed-out CMD8 has a spurious error status");
+			check(host.fail_step == GTA4L_EMMC_STEP_TRAN,
+			    "CMD8 timeout step is not TRAN");
+		}
+		if (scenario_is(scenario, "card-not-ready") ||
+		    scenario_is(scenario, "cmd3-error")) {
+			check(host.fail_valid == 0,
+			    "non-command failure recorded a command failure");
 		}
 	}
 

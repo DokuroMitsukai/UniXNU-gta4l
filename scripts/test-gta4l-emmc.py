@@ -38,9 +38,13 @@ SCENARIOS = [
     'read-ext-csd',
     'signaling-3v3',
     'pad-switch-off',
+    'vendor-mclk-hs400',
+    'vendor-hc-select-en',
     'version',
     'reset-timeout',
     'clock-timeout',
+    'clock-branch-apps-fail',
+    'clock-branch-ahb-fail',
     'rcg-busy',
     'power-off',
     'power-no-request',
@@ -59,6 +63,13 @@ SCENARIOS = [
     'data-sector-4k',
     'cmd-timeout',
     'cmd-crc',
+    'cmd-crc-with-cc',
+    'cmd-crc-snapshot',
+    'cmd0-crc',
+    'cmd1-crc',
+    'cmd1-timeout-recovery-crc',
+    'cmd1-timeout-recover',
+    'cmd1-timeout-exhausted',
     'cmd-index',
     'data-timeout-init',
     'data-crc-init',
@@ -99,7 +110,14 @@ def check_source() -> None:
         'HOST_CONTROL2_VDD_180': '0x0008u',
         'VENDOR_PAD_PWR_SWITCH_EN': '0x00008000u',
         'VENDOR_PAD_PWR_SWITCH': '0x00010000u',
-        'POWER_SETTLE_US': '5000u',
+        'POWER_SETTLE_US': '10000u',
+        'CARD_CLOCK_SETTLE_US': '1000u',
+        'CMD0_DELAY_US': '1000u',
+        'CMD0_POST_DELAY_US': '2000u',
+        'BCR_DELAY_US': '200u',
+        'BCR_BLOCK_RESET': '0x00000001u',
+        'VENDOR_SPEC_POR': '0x00000A9Cu',
+        'VENDOR3_PWRSAVE_DLL': '0x00000008u',
         'RCG_400K_CFG': '0x00002017u',
         'RCG_400K_M': '0x00000001u',
         'RCG_400K_N': '0x000000FCu',
@@ -183,6 +201,11 @@ def check_source() -> None:
         'probe must abort on a stalled timing source'
     assert 'host.pad_pwr_switch = 1;' in probe, \
         'probe fixed-1.8 V pad policy missing'
+    assert 'host->clocks_enabled = 1;' in core, \
+        'core must record the verified branch-clock state'
+    assert 'if (host.clocks_enabled != 0) {' in probe, \
+        'failure diagnostics must be gated on the active branch clocks'
+    assert 'clocks=%u' in probe, 'probe must report the clock-gate state'
     for name, width in (
             ('gta4l_emmc_probe_read8', 'uint8_t'),
             ('gta4l_emmc_probe_read16', 'uint16_t'),
@@ -207,7 +230,20 @@ def check_source() -> None:
                   'last_clear', 'power_wrong_io',
                   'power_io_wrong_then_correct', 'power_late_bus_only',
                   'power_io_then_wrong', 'power_opposite_io',
-                  'power_io_on_ack', 'ack_io_injected'):
+                  'power_io_on_ack', 'ack_io_injected', 'bcr_reset',
+                  'SIM_VENDOR_SPEC_POR', 'SIM_VENDOR3_PWRSAVE_DLL',
+                  'SIM_VENDOR_MCLK_SEL_DFLT', 'SIM_VENDOR_HC_SELECT_IN_MASK',
+                  'SIM_CMD_CRC', 'SIM_CMD_INDEX', 'cmd_crc_index',
+                  'cmd_crc_with_cc', 'clear_response_on_w1c',
+                  'cmd1_attempts', 'cmd1_timeouts', 'fail_response',
+                  'cmd0_time_us', 'cmd1_time_us', 'SIM_GCC_BCR',
+                  'SIM_BCR_BLOCK_RESET', 'SIM_BCR_DELAY_US',
+                  'bcr_assert_pending', 'bcr_pulse_us',
+                  'sdhci_before_bcr_deassert', 'sdhci_before_clocks',
+                  'dll_pdn_before_rst', 'dll_rst_written',
+                  'dll_pdn_written', 'cmd1_timeouts_remaining',
+                  'apps_branch_fail', 'ahb_branch_fail',
+                  'sim_note_sdhci_access', 'branch_writes'):
         assert token in harness, f'harness missing {token}'
     assert 'previous & SIM_CTRL_VDD_180' in harness, \
         'simulator does not model the VDD_180 transition'
@@ -319,9 +355,96 @@ def main() -> int:
              'GTA4L_EMMC_HOST_CONTROL2_VDD_180   0x0000u',
              'Gta4lEmmc.h', (), 'success'),
             ('settle',
-             'GTA4L_EMMC_POWER_SETTLE_US         5000u',
+             'GTA4L_EMMC_POWER_SETTLE_US         10000u',
              'GTA4L_EMMC_POWER_SETTLE_US         0u',
              'Gta4lEmmc.h', (), 'success'),
+            ('card-clock-settle',
+             'GTA4L_EMMC_CARD_CLOCK_SETTLE_US    1000u',
+             'GTA4L_EMMC_CARD_CLOCK_SETTLE_US       0u',
+             'Gta4lEmmc.h', (), 'success'),
+            ('cmd0-post-delay',
+             'GTA4L_EMMC_CMD0_POST_DELAY_US      2000u',
+             'GTA4L_EMMC_CMD0_POST_DELAY_US         0u',
+             'Gta4lEmmc.h', (), 'success'),
+            ('bcr-reset',
+             'GTA4L_EMMC_BCR_BLOCK_RESET         0x00000001u',
+             'GTA4L_EMMC_BCR_BLOCK_RESET         0x00000000u',
+             'Gta4lEmmc.h', (), 'success'),
+            ('bcr-pulse',
+             'GTA4L_EMMC_BCR_DELAY_US             200u',
+             'GTA4L_EMMC_BCR_DELAY_US               0u',
+             'Gta4lEmmc.h', (), 'success'),
+            ('bcr-no-deassert',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_GCC,\n'
+             '\t    GTA4L_EMMC_GCC_SDCC1_BCR, 0);\n',
+             '\t/* BCR deassert removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'success'),
+            ('sdhci-before-clocks',
+             '\tresult = gta4l_emmc_reset_block(host);\n'
+             '\tif (result != GTA4L_EMMC_OK) {\n'
+             '\t\treturn result;\n'
+             '\t}\n'
+             '\tresult = gta4l_emmc_enable_clocks(host);\n',
+             '\tresult = gta4l_emmc_reset_block(host);\n'
+             '\tif (result != GTA4L_EMMC_OK) {\n'
+             '\t\treturn result;\n'
+             '\t}\n'
+             '\t(void)gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_MCI_VERSION);\n'
+             '\tresult = gta4l_emmc_enable_clocks(host);\n',
+             'Gta4lEmmc.c', (), 'success'),
+            ('dll-pdn-first',
+             '\tconfig = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_CORE_DLL_CONFIG);\n'
+             '\tconfig |= GTA4L_EMMC_DLL_RST;\n'
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_CORE_DLL_CONFIG, config);\n'
+             '\tconfig = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_CORE_DLL_CONFIG);\n'
+             '\tconfig |= GTA4L_EMMC_DLL_PDN;\n',
+             '\tconfig = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_CORE_DLL_CONFIG);\n'
+             '\tconfig |= GTA4L_EMMC_DLL_PDN;\n'
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_CORE_DLL_CONFIG, config);\n'
+             '\tconfig = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_CORE_DLL_CONFIG);\n'
+             '\tconfig |= GTA4L_EMMC_DLL_RST;\n',
+             'Gta4lEmmc.c', (), 'success'),
+            ('cmd1-retire-missing',
+             '\t\tgta4l_emmc_clear_failure(host);\n',
+             '\t\t/* recovered CMD1 timeout retained by mutation */\n',
+             'Gta4lEmmc.c', ('-Wno-unused-function',),
+             'cmd1-timeout-recovery-crc'),
+            ('crc-response-snapshot-missing',
+             '\tgta4l_emmc_read_raw_response(host, host->fail_response);\n',
+             '\t/* raw response snapshot removed by mutation */\n',
+             'Gta4lEmmc.c', ('-Wno-unused-function',),
+             'cmd-crc-snapshot'),
+            ('clocks-flag-unset',
+             '\thost->clocks_enabled = 0;\n',
+             '\thost->clocks_enabled = 1;\n',
+             'Gta4lEmmc.c', (), 'clock-branch-apps-fail'),
+            ('vendor-por',
+             'GTA4L_EMMC_VENDOR_SPEC_POR          0x00000A9Cu',
+             'GTA4L_EMMC_VENDOR_SPEC_POR          0x00000000u',
+             'Gta4lEmmc.h', (), 'success'),
+            ('vendor3-pwrsave',
+             'GTA4L_EMMC_VENDOR3_PWRSAVE_DLL      0x00000008u',
+             'GTA4L_EMMC_VENDOR3_PWRSAVE_DLL      0x00000000u',
+             'Gta4lEmmc.h', (), 'success'),
+            ('vendor-mclk',
+             'GTA4L_EMMC_VENDOR_HC_MCLK_SEL_DFLT  0x00000200u',
+             'GTA4L_EMMC_VENDOR_HC_MCLK_SEL_DFLT  0x00000300u',
+             'Gta4lEmmc.h', (), 'success'),
+            ('dll-width',
+             '\tconfig = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_CORE_DLL_CONFIG);\n'
+             '\tconfig |= GTA4L_EMMC_DLL_RST;',
+             '\tconfig = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_CORE_DLL_CONFIG);\n'
+             '\tconfig |= GTA4L_EMMC_DLL_RST;',
+             'Gta4lEmmc.c', (), 'success'),
             ('unaligned-reset',
              'if ((gta4l_emmc_read8(host, space, offset) & mask) == value) {',
              'if ((gta4l_emmc_read16(host, space, offset) & mask) == value) {',
