@@ -1,5 +1,5 @@
 [[source]]
 name = "sm6115"
 kind = "soc"
-git = "https://github.com/DokuroMitsukai/UniXNU-sm6115-common"
+git = "https://github.com/gta4lunix/UniXNU-sm6115-common"
 commit = "4137c1c1fbe2b3693e5a61985fd01bbacc8fdabc"
