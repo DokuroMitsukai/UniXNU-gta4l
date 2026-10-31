@@ -285,12 +285,23 @@ gta4l_emmc_probe_run(void)
 	vm_offset_t tlmm_mapping;
 	uint32_t version;
 	uint8_t power;
+	uint8_t host_control;
 	uint16_t clock;
 	uint16_t host_control2;
 	uint32_t vendor_spec;
+	uint32_t vendor_spec3;
+	uint32_t dll_config;
+	uint32_t dll_status;
+	uint32_t ddr_config;
 	uint32_t pwr_status;
 	uint32_t cfg;
 	uint32_t cmd;
+	uint32_t bcr;
+	uint32_t apps_cbcr;
+	uint32_t ahb_cbcr;
+	uint32_t gcc_m;
+	uint32_t gcc_n;
+	uint32_t gcc_d;
 	int stage;
 	int result;
 
@@ -346,31 +357,94 @@ gta4l_emmc_probe_run(void)
 		result = gta4l_emmc_init(&host);
 	}
 	if (result != GTA4L_EMMC_OK) {
-		version = gta4l_emmc_probe_read32(&probe,
-		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_MCI_VERSION);
-		power = gta4l_emmc_probe_read8(&probe,
-		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_POWER_CONTROL);
-		clock = gta4l_emmc_probe_read16(&probe,
-		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CLOCK_CONTROL);
-		host_control2 = gta4l_emmc_probe_read16(&probe,
-		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL2);
-		vendor_spec = gta4l_emmc_probe_read32(&probe,
-		    GTA4L_EMMC_SPACE_SDHCI,
-		    GTA4L_EMMC_REG_CORE_VENDOR_SPEC);
-		pwr_status = gta4l_emmc_probe_read32(&probe,
-		    GTA4L_EMMC_SPACE_SDHCI,
-		    GTA4L_EMMC_REG_CORE_PWRCTL_STATUS);
+		if (host.clocks_enabled != 0) {
+			version = gta4l_emmc_probe_read32(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_MCI_VERSION);
+			power = gta4l_emmc_probe_read8(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_POWER_CONTROL);
+			host_control = gta4l_emmc_probe_read8(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_HOST_CONTROL);
+			clock = gta4l_emmc_probe_read16(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CLOCK_CONTROL);
+			host_control2 = gta4l_emmc_probe_read16(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_HOST_CONTROL2);
+			vendor_spec = gta4l_emmc_probe_read32(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CORE_VENDOR_SPEC);
+			vendor_spec3 = gta4l_emmc_probe_read32(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CORE_VENDOR_SPEC3);
+			dll_config = gta4l_emmc_probe_read32(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+			dll_status = gta4l_emmc_probe_read32(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CORE_DLL_STATUS);
+			ddr_config = gta4l_emmc_probe_read32(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CORE_DDR_CONFIG);
+			pwr_status = gta4l_emmc_probe_read32(&probe,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_CORE_PWRCTL_STATUS);
+		} else {
+			/* Without the AHB/APPS branches the SDHCI window may not
+			 * respond; report the cached result and GCC state only. */
+			version = 0;
+			power = 0;
+			host_control = 0;
+			clock = 0;
+			host_control2 = 0;
+			vendor_spec = 0;
+			vendor_spec3 = 0;
+			dll_config = 0;
+			dll_status = 0;
+			ddr_config = 0;
+			pwr_status = 0;
+		}
 		cfg = gta4l_emmc_probe_read32(&probe, GTA4L_EMMC_SPACE_GCC,
 		    GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
+		gcc_m = gta4l_emmc_probe_read32(&probe, GTA4L_EMMC_SPACE_GCC,
+		    GTA4L_EMMC_GCC_SDCC1_APPS_M);
+		gcc_n = gta4l_emmc_probe_read32(&probe, GTA4L_EMMC_SPACE_GCC,
+		    GTA4L_EMMC_GCC_SDCC1_APPS_N);
+		gcc_d = gta4l_emmc_probe_read32(&probe, GTA4L_EMMC_SPACE_GCC,
+		    GTA4L_EMMC_GCC_SDCC1_APPS_D);
 		cmd = gta4l_emmc_probe_read32(&probe, GTA4L_EMMC_SPACE_GCC,
 		    GTA4L_EMMC_GCC_SDCC1_APPS_CMD);
-		panic("GTA4L-EMMC PROBE FAILED: stage=%d rc=%d mci=%08x "
-		    "pwr=%02x clk=%04x hc2=%04x ven=%08x pst=%08x "
-		    "cfg=%08x cmd=%08x log=%u/%u/%u",
-		    stage, result, version, (unsigned int)power,
-		    (unsigned int)clock, (unsigned int)host_control2,
-		    vendor_spec, pwr_status, cfg, cmd,
-		    probe.log_count, probe.last_event, probe.last_a);
+		bcr = gta4l_emmc_probe_read32(&probe, GTA4L_EMMC_SPACE_GCC,
+		    GTA4L_EMMC_GCC_SDCC1_BCR);
+		apps_cbcr = gta4l_emmc_probe_read32(&probe,
+		    GTA4L_EMMC_SPACE_GCC, GTA4L_EMMC_GCC_SDCC1_APPS_CBCR);
+		ahb_cbcr = gta4l_emmc_probe_read32(&probe,
+		    GTA4L_EMMC_SPACE_GCC, GTA4L_EMMC_GCC_SDCC1_AHB_CBCR);
+		panic("GTA4L-EMMC PROBE FAILED: stage=%d rc=%d "
+		    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u "
+		    "rsp=%08x,%08x,%08x,%08x cmd1=%u/%u/%08x "
+		    "clocks=%u mci=%08x pwr=%02x clk=%04x hc=%02x "
+		    "hc2=%04x ven=%08x v3=%08x dll=%08x dst=%08x "
+		    "ddr=%08x pst=%08x cfg=%08x mnd=%08x/%08x/%08x "
+		    "cmd=%08x bcr=%08x apps=%08x ahb=%08x step=%u "
+		    "log=%u/%u/%u/%u",
+		    stage, result, (unsigned int)host.fail_valid,
+		    host.fail_index, host.fail_argument, host.fail_command,
+		    (unsigned int)host.fail_error,
+		    (unsigned int)host.fail_normal, host.fail_present,
+		    host.fail_step, host.fail_response[0],
+		    host.fail_response[1], host.fail_response[2],
+		    host.fail_response[3], host.cmd1_attempts,
+		    host.cmd1_timeouts, host.ocr,
+		    (unsigned int)host.clocks_enabled, version,
+		    (unsigned int)power, (unsigned int)clock,
+		    (unsigned int)host_control, (unsigned int)host_control2,
+		    vendor_spec, vendor_spec3, dll_config, dll_status,
+		    ddr_config, pwr_status, cfg, gcc_m, gcc_n, gcc_d, cmd,
+		    bcr, apps_cbcr, ahb_cbcr, host.last_step, probe.log_count,
+		    probe.last_event, probe.last_a, probe.last_b);
 	}
 
 	version = gta4l_emmc_probe_read32(&probe, GTA4L_EMMC_SPACE_SDHCI,
@@ -383,38 +457,58 @@ gta4l_emmc_probe_run(void)
 	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL2);
 	vendor_spec = gta4l_emmc_probe_read32(&probe,
 	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_VENDOR_SPEC);
+	dll_config = gta4l_emmc_probe_read32(&probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	dll_status = gta4l_emmc_probe_read32(&probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
 	pwr_status = gta4l_emmc_probe_read32(&probe,
 	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_PWRCTL_STATUS);
 
 	if (stage == 2) {
 		panic("GTA4L-EMMC HOST REPORT: rc=0 mci=%08x pwr=%02x "
-		    "clk=%04x hc2=%04x ven=%08x pst=%08x log=%u/%u/%u",
+		    "clk=%04x hc2=%04x ven=%08x dll=%08x dst=%08x "
+		    "pst=%08x step=%u log=%u/%u/%u/%u",
 		    version, (unsigned int)power, (unsigned int)clock,
-		    (unsigned int)host_control2, vendor_spec, pwr_status,
-		    probe.log_count, probe.last_event, probe.last_a);
+		    (unsigned int)host_control2, vendor_spec, dll_config,
+		    dll_status, pwr_status, host.last_step, probe.log_count,
+		    probe.last_event, probe.last_a, probe.last_b);
 	}
 	if (stage == 3) {
 		panic("GTA4L-EMMC IDENT REPORT: rc=0 mci=%08x rca=%u cap=%u "
 		    "rev=%u bw=%u ocr=%08x ext=%08x hc2=%04x ven=%08x "
-		    "pst=%08x log=%u",
+		    "dll=%08x dst=%08x pst=%08x step=%u log=%u",
 		    host.mci_version, host.rca, host.capacity_blocks,
 		    (unsigned int)host.ext_csd_rev,
 		    (unsigned int)host.bus_width, host.ocr,
 		    host.ext_csd_sum, (unsigned int)host_control2,
-		    vendor_spec, pwr_status, probe.log_count);
+		    vendor_spec, dll_config, dll_status, pwr_status,
+		    host.last_step, probe.log_count);
 	}
 
 	result = gta4l_emmc_read_block(&host, 0, block0);
 	if (result != GTA4L_EMMC_OK) {
-		panic("GTA4L-EMMC PROBE FAILED: block 0 read rc=%d", result);
+		panic("GTA4L-EMMC PROBE FAILED: block 0 read rc=%d step=%u "
+		    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u", result,
+		    host.last_step, (unsigned int)host.fail_valid,
+		    host.fail_index, host.fail_argument, host.fail_command,
+		    (unsigned int)host.fail_error,
+		    (unsigned int)host.fail_normal, host.fail_present,
+		    host.fail_step);
 	}
 	result = gta4l_emmc_read_block(&host, 1, block1);
 	if (result != GTA4L_EMMC_OK) {
-		panic("GTA4L-EMMC PROBE FAILED: block 1 read rc=%d", result);
+		panic("GTA4L-EMMC PROBE FAILED: block 1 read rc=%d step=%u "
+		    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u", result,
+		    host.last_step, (unsigned int)host.fail_valid,
+		    host.fail_index, host.fail_argument, host.fail_command,
+		    (unsigned int)host.fail_error,
+		    (unsigned int)host.fail_normal, host.fail_present,
+		    host.fail_step);
 	}
 
 	panic("GTA4L-EMMC PROBE REPORT: rc=0 mci=%08x rca=%u cap=%u rev=%u "
-	    "bw=%u ocr=%08x ext=%08x hc2=%04x ven=%08x pst=%08x log=%u\n"
+	    "bw=%u ocr=%08x ext=%08x hc2=%04x ven=%08x dll=%08x "
+	    "dst=%08x pst=%08x step=%u log=%u\n"
 	    "GTA4L-EMMC PROBE CID %08x %08x %08x %08x\n"
 	    "GTA4L-EMMC PROBE CSD %08x %08x %08x %08x\n"
 	    "GTA4L-EMMC PROBE BLOCK0 sum=%08x words=%08x %08x %08x %08x\n"
@@ -422,7 +516,8 @@ gta4l_emmc_probe_run(void)
 	    host.mci_version, host.rca, host.capacity_blocks,
 	    (unsigned int)host.ext_csd_rev, (unsigned int)host.bus_width,
 	    host.ocr, host.ext_csd_sum, (unsigned int)host_control2,
-	    vendor_spec, pwr_status, probe.log_count,
+	    vendor_spec, dll_config, dll_status, pwr_status,
+	    host.last_step, probe.log_count,
 	    host.cid[0], host.cid[1], host.cid[2], host.cid[3],
 	    host.csd[0], host.csd[1], host.csd[2], host.csd[3],
 	    gta4l_emmc_probe_sum(block0, GTA4L_EMMC_BLOCK_BYTES),

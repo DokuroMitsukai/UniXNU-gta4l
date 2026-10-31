@@ -44,7 +44,13 @@
 
 /* Qualcomm v5 vendor registers. */
 #define GTA4L_EMMC_REG_MCI_VERSION         0x318u
+#define GTA4L_EMMC_REG_CORE_DLL_CONFIG     0x200u
+#define GTA4L_EMMC_REG_CORE_DLL_STATUS     0x208u
 #define GTA4L_EMMC_REG_CORE_VENDOR_SPEC    0x20Cu
+#define GTA4L_EMMC_REG_CORE_VENDOR_SPEC3   0x250u
+/* The v5 offset table uses 0x25c for controllers with minor >= 0x49
+ * (updated_ddr_cfg in Linux sdhci-msm). gta4l reports minor 0x72. */
+#define GTA4L_EMMC_REG_CORE_DDR_CONFIG     0x25Cu
 #define GTA4L_EMMC_REG_CORE_PWRCTL_STATUS  0x240u
 #define GTA4L_EMMC_REG_CORE_PWRCTL_MASK    0x244u
 #define GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR   0x248u
@@ -81,13 +87,39 @@
 #define GTA4L_EMMC_HOST_CONTROL2_VDD_180   0x0008u
 #define GTA4L_EMMC_HOST_CONTROL2_TUNING    0x0040u
 
+/* Qualcomm v5 CORE_DLL_CONFIG bits (Linux sdhci-msm). At 100 MHz and below
+ * the reference resets and powers down the DLL so the feedback clock is used
+ * and tuning can be skipped. */
+#define GTA4L_EMMC_DLL_PDN                  0x20000000u
+#define GTA4L_EMMC_DLL_RST                  0x40000000u
+
 /* Qualcomm vendor-spec pad power switch (CORE_VENDOR_SPEC, 0x20C). */
 #define GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH_EN 0x00008000u
 #define GTA4L_EMMC_VENDOR_PAD_PWR_SWITCH    0x00010000u
 
-/* Power-on to card-clock settle time (Linux waits 5 ms after a 3.3 V
- * regulator transition; the retained 1.8 V rail uses the same bound). */
-#define GTA4L_EMMC_POWER_SETTLE_US         5000u
+/* CORE_VENDOR_SPEC power-on value used by Linux and the vendor UEFI. */
+#define GTA4L_EMMC_VENDOR_SPEC_POR          0x00000A9Cu
+#define GTA4L_EMMC_VENDOR3_PWRSAVE_DLL      0x00000008u
+
+/* CORE_VENDOR_SPEC timing fields. Linux msm_hc_select_default() selects the
+ * free-running MCLK, clears the HC_SELECT_IN override so HOST_CONTROL2
+ * controls the mode, and keeps the card clock running (no clock power-save)
+ * while the feedback clock is in use. */
+#define GTA4L_EMMC_VENDOR_HC_MCLK_SEL_MASK  0x00000300u
+#define GTA4L_EMMC_VENDOR_HC_MCLK_SEL_DFLT  0x00000200u
+#define GTA4L_EMMC_VENDOR_HC_SELECT_IN_EN   0x00040000u
+#define GTA4L_EMMC_VENDOR_HC_SELECT_IN_MASK 0x00380000u
+#define GTA4L_EMMC_VENDOR_CLK_PWRSAVE       0x00000002u
+
+/* Linux mmc_power_up() waits power_delay_ms (10 ms default) before enabling
+ * the card clock; the post-clock requirement is at least 74 clocks or 1 ms,
+ * and this core keeps 1 ms. Linux mmc_go_idle() delays 1 ms before CMD0,
+ * 1 ms after it and another 1 ms after chip-select release. */
+#define GTA4L_EMMC_POWER_SETTLE_US         10000u
+#define GTA4L_EMMC_CARD_CLOCK_SETTLE_US    1000u
+#define GTA4L_EMMC_CMD0_DELAY_US           1000u
+#define GTA4L_EMMC_CMD0_POST_DELAY_US      2000u
+#define GTA4L_EMMC_BCR_DELAY_US             200u
 
 #define GTA4L_EMMC_INT_CC                  0x0001u
 #define GTA4L_EMMC_INT_TC                  0x0002u
@@ -144,8 +176,8 @@
 #define GTA4L_EMMC_RCG_MODE_MASK           0x00003000u
 #define GTA4L_EMMC_RCG_MODE_DUAL_EDGE      0x00002000u
 
-/* 400 kHz: BI_TCXO / 24 * 1 / 4. The source select is 0, the divider field
- * 23, M=1, N=0xFC and D=0xFB (see the pinned gcc-sm6115.c frequency table). */
+/* 400 kHz: BI_TCXO * 2 / 24 * 1 / 4 (= BI_TCXO / 48). Source select 0,
+ * divider field 23, M=1, N=0xFC, D=0xFB (pinned gcc-sm6115.c table). */
 #define GTA4L_EMMC_RCG_400K_CFG            0x00002017u
 #define GTA4L_EMMC_RCG_400K_M              0x00000001u
 #define GTA4L_EMMC_RCG_400K_N              0x000000FCu
@@ -154,9 +186,11 @@
 /* The UEFI-derived active SDC1 pad configuration. */
 #define GTA4L_EMMC_SDC1_PAD_ACTIVE         0x00009FE4u
 
-/* Poll bounds. */
+/* Poll bounds. The clock bounds follow Linux sdhci_enable_clk() (150 ms) and
+ * sdhci_reset() (100 ms); the command and data bounds cover the slowest
+ * legacy-timing response plus retries. */
 #define GTA4L_EMMC_RESET_TIMEOUT_US        100000u
-#define GTA4L_EMMC_CLOCK_TIMEOUT_US        100000u
+#define GTA4L_EMMC_CLOCK_TIMEOUT_US        150000u
 #define GTA4L_EMMC_POWER_TIMEOUT_US        500000u
 #define GTA4L_EMMC_CMD_TIMEOUT_US          1000000u
 #define GTA4L_EMMC_CMD1_ATTEMPT_US         100000u
@@ -227,6 +261,25 @@
 #define GTA4L_EMMC_LOG_CARD               7u
 #define GTA4L_EMMC_LOG_ERROR              8u
 
+/* Protocol progress recorded for diagnostics. The value is the last step
+ * that completed successfully, not the step that was in progress. */
+#define GTA4L_EMMC_STEP_NONE               0u
+#define GTA4L_EMMC_STEP_CONTROLLER_RESET   1u
+#define GTA4L_EMMC_STEP_VENDOR_CONFIG      2u
+#define GTA4L_EMMC_STEP_CLOCK              3u
+#define GTA4L_EMMC_STEP_POWER              4u
+#define GTA4L_EMMC_STEP_PADS               5u
+#define GTA4L_EMMC_STEP_CARD_CLOCK         6u
+#define GTA4L_EMMC_STEP_CMD0               7u
+#define GTA4L_EMMC_STEP_CMD1               8u
+#define GTA4L_EMMC_STEP_CMD2               9u
+#define GTA4L_EMMC_STEP_CMD3              10u
+#define GTA4L_EMMC_STEP_CMD9              11u
+#define GTA4L_EMMC_STEP_CMD7              12u
+#define GTA4L_EMMC_STEP_TRAN              13u
+#define GTA4L_EMMC_STEP_EXT_CSD           14u
+#define GTA4L_EMMC_STEP_READY             15u
+
 struct gta4l_emmc_ops {
 	uint8_t  (*read8)(void *context, uint32_t space, uint32_t offset);
 	uint16_t (*read16)(void *context, uint32_t space, uint32_t offset);
@@ -260,6 +313,19 @@ struct gta4l_emmc_host {
 	uint8_t  fixed_1v8;      /* caller: board VCCQ is a fixed 1.8 V rail */
 	uint8_t  pad_pwr_switch; /* caller: select the 1.8 V pad supply */
 	uint8_t  initialized;
+	uint8_t  clocks_enabled; /* AHB/APPS branches enabled after reset */
+	uint32_t last_step;      /* last protocol step that completed */
+	uint32_t fail_index;     /* terminal failing command, diagnostics only */
+	uint32_t fail_argument;
+	uint32_t fail_command;   /* encoded SDHCI command register value */
+	uint32_t fail_error;     /* raw error interrupt status before clear */
+	uint32_t fail_normal;    /* raw normal interrupt status before clear */
+	uint32_t fail_present;   /* raw present state before clear */
+	uint32_t fail_response[4]; /* raw RESPONSE0..3 before clear */
+	uint32_t fail_step;      /* last_step when the failure was recorded */
+	uint32_t cmd1_attempts;  /* CMD1 attempts in the last card_ready call */
+	uint32_t cmd1_timeouts;  /* CMD1 attempts that returned a timeout */
+	uint8_t  fail_valid;
 };
 
 /* Controller reset, GCC 400 kHz setup, retained-rail power handshake, pads. */

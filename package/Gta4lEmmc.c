@@ -75,6 +75,63 @@ gta4l_emmc_log(struct gta4l_emmc_host *host, uint32_t event, uint32_t a,
 	}
 }
 
+/* Keep the terminal command failure intact before the status latches are
+ * cleared. The probe reports these fields, so a hardware panic identifies the
+ * command instead of only the final reset log. Recovered CMD1 busy timeouts are
+ * retired explicitly so they cannot mask the command that ends initialization.
+ * The raw RESPONSE0..3 words are captured as diagnostics only; a CRC-failed R2
+ * response is never promoted to a valid CID. */
+static void
+gta4l_emmc_read_raw_response(struct gta4l_emmc_host *host,
+    uint32_t response[4])
+{
+	uint32_t index;
+
+	for (index = 0; index < 4; index++) {
+		response[index] = gta4l_emmc_read32(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_RESPONSE + index * 4u);
+	}
+}
+
+static void
+gta4l_emmc_record_failure(struct gta4l_emmc_host *host, uint32_t index,
+    uint32_t argument, uint16_t command, uint16_t error, uint16_t normal,
+    uint32_t present)
+{
+	if (host->fail_valid != 0) {
+		return;
+	}
+	host->fail_index = index;
+	host->fail_argument = argument;
+	host->fail_command = command;
+	host->fail_error = error;
+	host->fail_normal = normal;
+	host->fail_present = present;
+	gta4l_emmc_read_raw_response(host, host->fail_response);
+	host->fail_step = host->last_step;
+	host->fail_valid = 1;
+	gta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, index,
+	    ((uint32_t)error << 16) | normal);
+}
+
+static void
+gta4l_emmc_clear_failure(struct gta4l_emmc_host *host)
+{
+	host->fail_index = 0;
+	host->fail_argument = 0;
+	host->fail_command = 0;
+	host->fail_error = 0;
+	host->fail_normal = 0;
+	host->fail_present = 0;
+	host->fail_response[0] = 0;
+	host->fail_response[1] = 0;
+	host->fail_response[2] = 0;
+	host->fail_response[3] = 0;
+	host->fail_step = 0;
+	host->fail_valid = 0;
+}
+
 static uint32_t
 gta4l_emmc_poll_iterations(uint32_t timeout_us)
 {
@@ -137,10 +194,10 @@ gta4l_emmc_wait32(struct gta4l_emmc_host *host, uint32_t space,
 	return GTA4L_EMMC_ERR_IO;
 }
 
-/* SDHCI stores a 128-bit R2 response in RESPONSE3..RESPONSE0, least
- * significant word first, with the CRC byte in the low byte of RESPONSE0.
- * Normalize to the MMC big-endian word order: response[0] is bits 127:96,
- * matching Linux's sdhci_read_rsp_136() shift. */
+/* SDHCI stores the 120 R2 response bits in RESPONSE3..0, least significant
+ * word first; the controller strips CRC7, so RESPONSE0's low byte is not
+ * the CRC byte. Normalize to MMC big-endian word order: response[0] is bits
+ * 127:96, matching Linux's sdhci_read_rsp_136() shift. */
 static void
 gta4l_emmc_read_long_response(struct gta4l_emmc_host *host,
     uint32_t response[4])
@@ -233,29 +290,42 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 {
 	uint16_t command;
 	uint16_t normal = 0;
+	uint16_t error = 0;
+	uint32_t present;
 	uint32_t iterations;
 	uint32_t step;
 	int result;
 
+	command = (uint16_t)((index << 8) | flags);
 	result = gta4l_emmc_wait_inhibit(host);
 	if (result != GTA4L_EMMC_OK) {
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		gta4l_emmc_record_failure(host, index, argument, command, 0, 0,
+		    present);
 		return result;
 	}
 	gta4l_emmc_clear_interrupts(host);
 	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_ARGUMENT, argument);
 	gta4l_emmc_barrier(host);
-	command = (uint16_t)((index << 8) | flags);
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_COMMAND, command);
 	gta4l_emmc_barrier(host);
 
 	iterations = gta4l_emmc_poll_iterations(timeout_us);
 	for (step = 0; step < iterations; step++) {
-		uint16_t error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
 
 		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			gta4l_emmc_record_failure(host, index, argument,
+			    command, error, normal, present);
 			gta4l_emmc_clear_interrupts(host);
 			return gta4l_emmc_map_error(error, 0);
 		}
@@ -267,6 +337,12 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 	}
 	if ((normal & GTA4L_EMMC_INT_CC) == 0) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		gta4l_emmc_record_failure(host, index, argument, command,
+		    error, normal, present);
 		gta4l_emmc_clear_interrupts(host);
 		return GTA4L_EMMC_ERR_CMD_TIMEOUT;
 	}
@@ -291,7 +367,9 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
     uint32_t *response)
 {
 	uint16_t command;
-	uint16_t normal;
+	uint16_t normal = 0;
+	uint16_t error = 0;
+	uint32_t present;
 	uint32_t iterations;
 	uint32_t step;
 	uint32_t byte;
@@ -303,7 +381,12 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
 	    (length == 0) || (length > 0xFFFFu)) {
 		return GTA4L_EMMC_ERR_ARG;
 	}
+	command = (uint16_t)((index << 8) | flags | GTA4L_EMMC_CMD_DATA);
 	if (gta4l_emmc_wait_inhibit(host) != GTA4L_EMMC_OK) {
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		gta4l_emmc_record_failure(host, index, argument, command, 0, 0,
+		    present);
 		return GTA4L_EMMC_ERR_INHIBIT;
 	}
 	gta4l_emmc_clear_interrupts(host);
@@ -317,17 +400,23 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
 	    GTA4L_EMMC_REG_TRANSFER_MODE,
 	    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN);
 	gta4l_emmc_barrier(host);
-	command = (uint16_t)((index << 8) | flags | GTA4L_EMMC_CMD_DATA);
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_COMMAND, command);
 	gta4l_emmc_barrier(host);
 
 	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
 	for (step = 0; step < iterations; step++) {
-		uint16_t error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
 
 		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			gta4l_emmc_record_failure(host, index, argument,
+			    command, error, normal, present);
 			gta4l_emmc_clear_interrupts(host);
 			return gta4l_emmc_map_error(error, 1);
 		}
@@ -362,8 +451,13 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
 		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 	}
 
+	error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+	present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_PRESENT_STATE);
+	gta4l_emmc_record_failure(host, index, argument, command, error,
+	    normal, present);
 	gta4l_emmc_clear_interrupts(host);
-	(void)normal;
 	return GTA4L_EMMC_ERR_DATA_TIMEOUT;
 }
 
@@ -382,16 +476,23 @@ gta4l_emmc_enable_branch(struct gta4l_emmc_host *host, uint32_t offset)
 }
 
 static int
-gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
+gta4l_emmc_reset_block(struct gta4l_emmc_host *host)
 {
-	uint32_t command;
-	uint32_t config;
-	int result;
-
-	/* Stop the card clock before touching the RCG. */
-	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
-	    GTA4L_EMMC_REG_CLOCK_CONTROL, 0);
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_GCC,
+	    GTA4L_EMMC_GCC_SDCC1_BCR, GTA4L_EMMC_BCR_BLOCK_RESET);
 	gta4l_emmc_barrier(host);
+	gta4l_emmc_delay(host, GTA4L_EMMC_BCR_DELAY_US);
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_GCC,
+	    GTA4L_EMMC_GCC_SDCC1_BCR, 0);
+	gta4l_emmc_barrier(host);
+	gta4l_emmc_delay(host, GTA4L_EMMC_BCR_DELAY_US);
+	return GTA4L_EMMC_OK;
+}
+
+static int
+gta4l_emmc_enable_clocks(struct gta4l_emmc_host *host)
+{
+	int result;
 
 	result = gta4l_emmc_enable_branch(host,
 	    GTA4L_EMMC_GCC_SDCC1_AHB_CBCR);
@@ -403,6 +504,20 @@ gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
 	if (result != GTA4L_EMMC_OK) {
 		return GTA4L_EMMC_ERR_CLOCK;
 	}
+	return GTA4L_EMMC_OK;
+}
+
+static int
+gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
+{
+	uint32_t command;
+	uint32_t config;
+	int result;
+
+	/* Stop the card clock before touching the RCG. */
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL, 0);
+	gta4l_emmc_barrier(host);
 
 	config = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_GCC,
 	    GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
@@ -579,6 +694,46 @@ gta4l_emmc_configure_pads(struct gta4l_emmc_host *host)
 	return GTA4L_EMMC_OK;
 }
 
+/* Linux sdhci-msm at 100 MHz and below uses the feedback clock: the DLL is
+ * reset and powered down, the CDCLP533 power-save bit is cleared, and
+ * CORE_VENDOR_SPEC selects the free-running MCLK without the HC_SELECT_IN
+ * override. The vendor UEFI writes the same DLL_RST|DLL_PDN pair. */
+static void
+gta4l_emmc_configure_low_speed(struct gta4l_emmc_host *host)
+{
+	uint32_t config;
+
+	config = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC3);
+	config &= ~GTA4L_EMMC_VENDOR3_PWRSAVE_DLL;
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC3, config);
+	gta4l_emmc_barrier(host);
+
+	config = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	config |= GTA4L_EMMC_DLL_RST;
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_DLL_CONFIG, config);
+	config = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	config |= GTA4L_EMMC_DLL_PDN;
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_DLL_CONFIG, config);
+	gta4l_emmc_barrier(host);
+
+	config = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC);
+	config &= ~(GTA4L_EMMC_VENDOR_HC_MCLK_SEL_MASK |
+	    GTA4L_EMMC_VENDOR_HC_SELECT_IN_EN |
+	    GTA4L_EMMC_VENDOR_HC_SELECT_IN_MASK |
+	    GTA4L_EMMC_VENDOR_CLK_PWRSAVE);
+	config |= GTA4L_EMMC_VENDOR_HC_MCLK_SEL_DFLT;
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, config);
+	gta4l_emmc_barrier(host);
+}
+
 static int
 gta4l_emmc_enable_card_clock(struct gta4l_emmc_host *host)
 {
@@ -589,7 +744,7 @@ gta4l_emmc_enable_card_clock(struct gta4l_emmc_host *host)
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_CLOCK_CONTROL, clock);
 	gta4l_emmc_barrier(host);
-	gta4l_emmc_delay(host, 1000);
+	gta4l_emmc_delay(host, GTA4L_EMMC_CARD_CLOCK_SETTLE_US);
 	return GTA4L_EMMC_OK;
 }
 
@@ -607,6 +762,20 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 		return GTA4L_EMMC_ERR_ARG;
 	}
 
+	host->last_step = GTA4L_EMMC_STEP_NONE;
+	gta4l_emmc_clear_failure(host);
+	host->cmd1_attempts = 0;
+	host->cmd1_timeouts = 0;
+	host->clocks_enabled = 0;
+	result = gta4l_emmc_reset_block(host);
+	if (result != GTA4L_EMMC_OK) {
+		return result;
+	}
+	result = gta4l_emmc_enable_clocks(host);
+	if (result != GTA4L_EMMC_OK) {
+		return result;
+	}
+	host->clocks_enabled = 1;
 	version = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_MCI_VERSION);
 	if ((version >> 28) != 1u) {
@@ -634,12 +803,19 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 	    GTA4L_EMMC_RESET_TIMEOUT_US) != GTA4L_EMMC_OK) {
 		return GTA4L_EMMC_ERR_RESET;
 	}
+	host->last_step = GTA4L_EMMC_STEP_CONTROLLER_RESET;
 
 	version = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_MCI_VERSION);
 	if ((version >> 28) != 1u) {
 		return GTA4L_EMMC_ERR_VERSION;
 	}
+
+	/* Linux and the vendor UEFI restore the documented vendor POR value
+	 * after reset, then apply the pad policy and low-speed fields. */
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, GTA4L_EMMC_VENDOR_SPEC_POR);
+	gta4l_emmc_barrier(host);
 
 	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_TIMEOUT_CONTROL, GTA4L_EMMC_TIMEOUT_MAX);
@@ -687,6 +863,9 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 	    GTA4L_EMMC_REG_CORE_VENDOR_SPEC, vendor);
 	gta4l_emmc_barrier(host);
 
+	gta4l_emmc_configure_low_speed(host);
+	host->last_step = GTA4L_EMMC_STEP_VENDOR_CONFIG;
+
 	gta4l_emmc_clear_interrupts(host);
 	gta4l_emmc_enable_status(host);
 
@@ -694,11 +873,14 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
+	host->last_step = GTA4L_EMMC_STEP_CLOCK;
 	result = gta4l_emmc_power_on(host, io_request, io_desired);
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
+	host->last_step = GTA4L_EMMC_STEP_POWER;
 	gta4l_emmc_configure_pads(host);
+	host->last_step = GTA4L_EMMC_STEP_PADS;
 
 	/* Let power and pads settle before the card sees a clock. */
 	gta4l_emmc_delay(host, GTA4L_EMMC_POWER_SETTLE_US);
@@ -706,6 +888,7 @@ gta4l_emmc_controller_init(struct gta4l_emmc_host *host)
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
+	host->last_step = GTA4L_EMMC_STEP_CARD_CLOCK;
 
 	gta4l_emmc_log(host, GTA4L_EMMC_LOG_RESET, version,
 	    gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
@@ -722,7 +905,15 @@ gta4l_emmc_card_ready(struct gta4l_emmc_host *host)
 	uint32_t index;
 	int result;
 
+	host->cmd1_attempts = 0;
+	host->cmd1_timeouts = 0;
 	for (index = 0; index < iterations; index++) {
+		/* A busy CMD1 timeout is expected and retried. Retire it before
+		 * the next attempt so it cannot mask the command that finally
+		 * ends initialization. If every attempt times out, the last
+		 * timeout remains recorded. */
+		gta4l_emmc_clear_failure(host);
+		host->cmd1_attempts++;
 		result = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD1,
 		    GTA4L_EMMC_OCR_VALUE, GTA4L_EMMC_CMD_RESP_SHORT,
 		    GTA4L_EMMC_CMD1_ATTEMPT_US, response);
@@ -733,6 +924,8 @@ gta4l_emmc_card_ready(struct gta4l_emmc_host *host)
 			}
 		} else if (result != GTA4L_EMMC_ERR_CMD_TIMEOUT) {
 			return result;
+		} else {
+			host->cmd1_timeouts++;
 		}
 		gta4l_emmc_delay(host, 1000);
 	}
@@ -859,15 +1052,23 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 		return result;
 	}
 
+	/* Linux mmc_go_idle(): chip-select high, 1 ms, CMD0, 1 ms, then
+	 * chip-select release and 1 ms. eMMC has no chip-select line, so the
+	 * pre-delay and the combined post-delay preserve the reference timing. */
+	gta4l_emmc_delay(host, GTA4L_EMMC_CMD0_DELAY_US);
 	result = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD0, 0,
 	    GTA4L_EMMC_CMD_RESP_NONE, GTA4L_EMMC_CMD_TIMEOUT_US, 0);
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
+	gta4l_emmc_delay(host, GTA4L_EMMC_CMD0_POST_DELAY_US);
+	host->last_step = GTA4L_EMMC_STEP_CMD0;
+
 	result = gta4l_emmc_card_ready(host);
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
+	host->last_step = GTA4L_EMMC_STEP_CMD1;
 
 	result = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD2, 0,
 	    GTA4L_EMMC_CMD_RESP_LONG | GTA4L_EMMC_CMD_CRC,
@@ -882,6 +1083,7 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 	host->cid[1] = response[1];
 	host->cid[2] = response[2];
 	host->cid[3] = response[3];
+	host->last_step = GTA4L_EMMC_STEP_CMD2;
 
 	result = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD3,
 	    GTA4L_EMMC_DEFAULT_RCA << 16, GTA4L_EMMC_CMD_RESP_SHORT |
@@ -896,6 +1098,7 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 	/* eMMC CMD3 is SET_RELATIVE_ADDR: the host assigns the RCA in the
 	 * argument and the response is R1 status, not a returned RCA. */
 	host->rca = GTA4L_EMMC_DEFAULT_RCA;
+	host->last_step = GTA4L_EMMC_STEP_CMD3;
 
 	result = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD9,
 	    host->rca << 16, GTA4L_EMMC_CMD_RESP_LONG | GTA4L_EMMC_CMD_CRC,
@@ -910,6 +1113,7 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 	host->csd[1] = response[1];
 	host->csd[2] = response[2];
 	host->csd[3] = response[3];
+	host->last_step = GTA4L_EMMC_STEP_CMD9;
 
 	result = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD7,
 	    host->rca << 16, GTA4L_EMMC_CMD_RESP_SHORT_BUSY |
@@ -921,10 +1125,12 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
 		return GTA4L_EMMC_ERR_CARD_STATUS;
 	}
+	host->last_step = GTA4L_EMMC_STEP_CMD7;
 	result = gta4l_emmc_wait_tran(host);
 	if (result != GTA4L_EMMC_OK) {
 		return result;
 	}
+	host->last_step = GTA4L_EMMC_STEP_TRAN;
 
 	result = gta4l_emmc_read_ext_csd(host, ext_csd);
 	if (result != GTA4L_EMMC_OK) {
@@ -948,7 +1154,9 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 		    host->partition_config);
 		return GTA4L_EMMC_ERR_UNSUPPORTED;
 	}
+	host->last_step = GTA4L_EMMC_STEP_EXT_CSD;
 	host->initialized = 1;
+	host->last_step = GTA4L_EMMC_STEP_READY;
 	gta4l_emmc_log(host, GTA4L_EMMC_LOG_CARD, host->capacity_blocks,
 	    ((uint32_t)host->ext_csd_rev << 8) | host->bus_width);
 	return GTA4L_EMMC_OK;
