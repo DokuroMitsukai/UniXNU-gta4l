@@ -14,10 +14,14 @@ refuses the probe without touching either window, and that a failure after the
 clocks were verified still samples the SDHCI diagnostics (the instrumentation
 control). The clock-timeout scenario programs the 400 kHz RCG and asserts the
 formatted GCC config/M/N/D/command values and the per-offset diagnostic read
-counts. Four mutations insert an unguarded SDHCI read, replace the guard with an
-unconditional branch, suppress a GCC report read and suppress an SDHCI report
-read; each must be rejected for the expected reported reason, not merely by a
-nonzero exit.
+counts. The cmd2-crc scenario runs the stage-3 identification sequence through
+CMD0 and CMD1, fails CMD2 with a synthetic CRC error and R2 response, and checks
+the captured failure fields, the exact command order and arguments, the response
+snapshot and report read counts. Six
+mutations insert an unguarded SDHCI read, replace the guard with an
+unconditional branch, suppress a GCC report read, suppress an SDHCI report read,
+suppress the raw R2 snapshot and suppress the captured CMD2 error; each must be
+rejected for the expected reported reason, not merely by a nonzero exit.
 
 Nothing here touches a device, maps real MMIO or executes firmware.
 """
@@ -42,6 +46,8 @@ SCENARIOS = [
     'branch-ahb',
     'version-fail',
     'clock-timeout',
+    'clock-stable-timeout',
+    'cmd2-crc',
 ]
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'
@@ -227,6 +233,20 @@ MUTATIONS = [
      '\t\t\tpower = 0;\n',
      'version-fail',
      'the report did not sample the power control'),
+    ('cmd2-response-suppressed',
+     '\t\t    host.fail_step, host.fail_response[0],\n',
+     '\t\t    host.fail_step, 0u,\n',
+     'cmd2-crc',
+     'the report did not capture the raw R2 response'),
+    ('cmd2-error-suppressed',
+     '\t\t    stage, result, (unsigned int)host.fail_valid,\n'
+     '\t\t    host.fail_index, host.fail_argument, host.fail_command,\n'
+     '\t\t    (unsigned int)host.fail_error,\n',
+     '\t\t    stage, result, (unsigned int)host.fail_valid,\n'
+     '\t\t    host.fail_index, host.fail_argument, host.fail_command,\n'
+     '\t\t    0u,\n',
+     'cmd2-crc',
+     'the report does not name the failed CMD2'),
 ]
 
 
