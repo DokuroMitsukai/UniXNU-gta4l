@@ -12,7 +12,7 @@ These are development integration pins, not hardware-qualified releases.
 | Mu-Silicium | `DokuroMitsukai/Mu-Silicium` | `—` | `e14626a3757007a2dbc902d3db323620d5568923` |
 | DarwinBoot | `DokuroMitsukai/DarwinBoot` | `bringup/shared-video` | `3f2f304784f8fbfbf2ebfdc8eba3af3577d92967` |
 | ArmCpu | `DokuroMitsukai/ArmCpu` | `main` | `c9c4bd87cabc1fe6736e171cd2540313ac4b7883` |
-| SM6115 SoC tree | `DokuroMitsukai/UniXNU-sm6115-common` | `main` | `4137c1c1fbe2b3693e5a61985fd01bbacc8fdabc` |
+| SM6115 SoC tree | `gta4lunix/UniXNU-sm6115-common` | `main` | `4137c1c1fbe2b3693e5a61985fd01bbacc8fdabc` |
 | Tab A7 device | `DokuroMitsukai/UniXNU-gta4l` | `bringup/tab-a7-qemu-fixture` | this repository; use the branch head |
 
 The UniXNU and Mu-Silicium integration commits are pinned by SHA and are not on
