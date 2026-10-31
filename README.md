@@ -31,12 +31,16 @@ partition layout, payload policy and packaging.
   [docs/ram-root-fixture-reproducibility.md](docs/ram-root-fixture-reproducibility.md).
 - Display, input, power, GPU and network drivers remain unimplemented or
   unvalidated.
-- A native SDHCI v5/eMMC core is implemented and host-verified in
+- A native SDHCI v5/eMMC core is implemented and host-tested in
   `package/Gta4lEmmc.c`: controller reset, GCC 400 kHz, retained-rail power
-  handshake, enumeration and single-block PIO reads. The opt-in
-  `gta4l-emmc-probe=1` XNU probe is built into the kernel archive list but has
-  not been booted on the tablet. See
-  [docs/emmc-driver.md](docs/emmc-driver.md).
+  handshake, CMD3 RCA assignment, enumeration, capacity/partition validation
+  and single-block PIO reads. The opt-in `gta4l-emmc-probe=1/2/3` XNU probe is
+  built into the kernel archive list. Stage 2 (controller and host init)
+  completed on the tablet; stage 3 (identification) fails at CMD2 with a
+  response CRC error, so no block device, filesystem, DMA, CQE, ICE or write
+  path exists and CRC checking remains enabled. See
+  [docs/emmc-driver.md](docs/emmc-driver.md) and
+  [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md).
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
   input requirements, not gta4l hardware evidence.
 
