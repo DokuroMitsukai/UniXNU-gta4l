@@ -7,7 +7,8 @@ permission to activate bus power or the card clock; the decision remains
 
 Hashes were first taken at `2026-10-30T21:06:39Z` and refreshed on
 `2026-10-31` after the porting-approach reassessment, the native eMMC
-implementation and the eMMC audit fixes. This document's own hash is not
+implementation, the eMMC audit fixes and the stage-2/stage-3 hardware runs.
+This document's own hash is not
 listed. Hashes describe the working tree at the snapshot and change with later
 edits; re-run the commands in §6 before reusing them. The snapshot is intended
 to be committed without further content changes; if the committed content
@@ -19,7 +20,7 @@ differs, re-run §6 and update the table.
 | --- | --- |
 | Repository | `src/UniXNU-gta4l` (device repository) |
 | Branch | `bringup/sdhc-evidence` |
-| HEAD at the hash snapshot | `cd2e509` (fifth eMMC audit-fix and stage-2 image commit) |
+| HEAD at the hash snapshot | `cde1d22` (stage-2 hardware run and serial redaction) |
 | Parent of the fourteenth evidence batch | `95ff0a1293194b2108f4041068c77f18e708c1fd` (same commit) |
 | Correction commit paths | 8: 7 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-memo.md`, `docs/sdhc-dependency-trace.md`, `docs/sdhc-electrical-contract.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`docs/sdhc-decision-update-2026-10-30.md`) |
 | First follow-up commit paths | 6: 5 modified (`docs/evidence-baseline.md`, `docs/firmware-handoff.md`, `docs/sdhc-decision-update-2026-10-30.md`, `docs/sdhc-power-pad-dependency-report.md`, `porting.toml`) and 1 added (`scripts/test-gta4l-sdccdxe-decode.py`) |
@@ -46,8 +47,9 @@ differs, re-run §6 and update the table.
 | Twentieth audit-fix paths at this snapshot | 7 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `porting.toml`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py`) |
 | Twenty-first audit-fix paths at this snapshot | 7 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `porting.toml`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py`) |
 | Twenty-second hardware-run paths at this snapshot | 5 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `docs/sdhc-evidence-gap-checklist.md`, `porting.toml`) |
-| Dirty entries at the hash snapshot | 5, exactly the twenty-second hardware-run paths above |
-| Staging and commits | None at the snapshot; this twenty-second batch lands as one commit on top of `cd2e509` |
+| Twenty-third hardware-run paths at this snapshot | 4 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
+| Dirty entries at the hash snapshot | 4, exactly the twenty-third hardware-run paths above |
+| Staging and commits | None at the snapshot; this twenty-third batch lands as one commit on top of `cde1d22` |
 
 The hash table describes the fourteenth evidence-batch working tree: the
 checker-fix commit `95ff0a1` plus the then-uncommitted official-source,
@@ -245,6 +247,21 @@ remain unproven. The build manifest keeps `hardware_tested=false` as built; the
 hardware run is recorded separately. Photo sha256
 `d049547e8fd6135aafe6fb8aff13c9e8295cb9e2012b3944cdb66ac364882a2c`.
 
+The twenty-third batch records the stage-3 identification run. The stage-3
+payload, boot image and BOOT-only write are recorded on the unchanged kernel.
+The tablet booted the image and panicked before the identification report with
+`GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967288 mci=10000072 pwr=0f clk=0007
+hc2=0008 ven=00318a0c pst=00000000 cfg=00002017 cmd=00000000
+log=4/1/268435570`. `rc=4294967288` is `-8`, `GTA4L_EMMC_ERR_CMD_CRC`; the
+registers repeat the stage-2 host-init state and the last log event is the
+completed controller reset, so host init completed and a card command failed a
+response CRC check. The probe does not record the failing command or the SDHCI
+interrupt status; no RCA, capacity, EXT_CSD, OCR, CID, CSD or sector data was
+obtained and no sector read was issued. This is a failing state: it establishes
+the repeated host state and the failed identification attempt, not card
+absence, incompatibility or any storage capability. Photo sha256
+`0014db219d5d3dd1b1db572845d81c8a6fb966d0912c0c23aae02c9d70a082c9`.
+
 The second batch derived the status/clear/reset loop bounds from the pinned
 MOVZ instructions, added last-read and delayed-completion boundary cases and
 wrong-bound negative controls, and corrected the reset-argument and SDC2 field
@@ -371,10 +388,10 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `0f124426c44734d5669d626d87b99c16f0653870860e8f40c0200aa51c083d9c` |
 | eMMC reference | `docs/emmc-reference.md` | `0d605ec482d5b77ae428dead608543cb157e331d90ec0a68a31457dcf0ec44e9` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `dfb2e603591c32605b7fe4201686f772149d3c7c1da17875504a0ec9dc72d888` |
+| Porting record | `porting.toml` | `8cd3d7105d6a58a16683ad051ceb3784a638e25b3849651f72f3e00db26f23d4` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `38f56a8b725c27dc43ba615d2d7bf68a0d330e87af76d3d6abb493823a86fafc` |
+| eMMC driver record | `docs/emmc-driver.md` | `532053e7cf824edf4ed4216d9d5bc32174953be7c382087aa963f226f034acea` |
 | eMMC core header | `package/Gta4lEmmc.h` | `09b58ad583aeca6a7adaec940412fdaab0e084936cefbaf6862fc7616105d1ff` |
 | eMMC core source | `package/Gta4lEmmc.c` | `c1956495e1b0fbf9a82817f8cd629fa0b37b8f905b1540917d10f6e45b68eec5` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `9593c75855a7349d4b33cd0d36486c515ec68388e775bd485577e5d7e66daaec` |
@@ -383,7 +400,7 @@ bytes of the previously booted image `[S]`.
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `c0d742df56cbf69c499537e077be6b590ea1e89e33f656b21c3215561dae0157` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `c817376125a4880e784238dcd13c0a6d1324b9ec8d1b029d096fa368fb175b3f` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `eb5d638031745e35d80dd02f916a24eb4ed733217c268a13e022b0429e2f18fe` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
 | Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `f293bee964bdd3bebbf40e4c8099a426780679065f3d65abceb9999255480558` |
@@ -603,6 +620,10 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | eMMC stage-2 boot image | PASS: 85,688,320-byte image sha256 `4f2252df6bbd5d9c7f05ef97c0041da9acdc47212debf31a10334aefa45a12e5`, boot-image gate 18/18; build manifest retains `hardware_tested=false` |
 | eMMC stage-2 BOOT write and readback | PASS: BOOT-only write on SM-T505N; the first 85,688,320 bytes read back identical to the image; recovery stayed byte-identical TWRP `14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae`; previous boot saved as `dcfe6852035edbb4109231cd41dc5e618e1b8755f47188c1a01bf22e36fcce7b` |
 | eMMC stage-2 hardware report | PASS: `GTA4L-EMMC HOST REPORT rc=0 mci=10000072 pwr=0f clk=0007 hc2=0008 ven=00318a0c pst=00000000 log=4/1/268435570`; photo sha256 `d049547e8fd6135aafe6fb8aff13c9e8295cb9e2012b3944cdb66ac364882a2c`. Controller-local host-init result only; no card identification or sector read. |
+| eMMC stage-3 payload | PASS: 80 MiB raw payload sha256 `4028e432f200dc1069a50f1baa6786d2f4861b187f2c5a0bd126bb20f5a9cd41`, kernel args include `gta4l-emmc-probe=3`, payload contract 7/7 |
+| eMMC stage-3 boot image | PASS: 85,688,320-byte image sha256 `88b4d28607b371fe008922131c6ee51f27f73da30249fd4a07969f770fa90d87`, boot-image gate 18/18; build manifest retains `hardware_tested=false` |
+| eMMC stage-3 BOOT write and readback | PASS: BOOT-only write on SM-T505N; the first 85,688,320 bytes read back identical to the image; recovery stayed byte-identical TWRP `14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae`; previous stage-2 boot saved as partition sha256 `545b57ebc3d451cae0ab87b8020fa28619c144023300833892481b529abf8475` |
+| eMMC stage-3 hardware report | FAIL: `GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967288 mci=10000072 pwr=0f clk=0007 hc2=0008 ven=00318a0c pst=00000000 cfg=00002017 cmd=00000000 log=4/1/268435570`; `rc` is `-8`, `GTA4L_EMMC_ERR_CMD_CRC`. Identification did not complete; no RCA, capacity, EXT_CSD, OCR, CID, CSD or sector data was obtained. Photo sha256 `0014db219d5d3dd1b1db572845d81c8a6fb966d0912c0c23aae02c9d70a082c9`. |
 | XNU probe compile | PASS: `Gta4lEmmc.c` and `Gta4lEmmcProbe.c` compile against the pinned XNU headers with `-Wall -Wextra`; the archive exports `gta4l_emmc_probe_preflight`, `gta4l_emmc_probe_run`, `gta4l_emmc_init` and `gta4l_emmc_read_block` |
 | Patch-series apply | PASS: `sheng-platform-power`, `gta4l-sdhci-snapshot`, `gta4l-sdhci-handoff-audit` and `gta4l-emmc-probe` apply in order to the clean `bsd_init.c` |
 | Reassessment re-run 2026-10-31 | PASS: `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-sdccdxe-decode.py`, `test-gta4l-spmidxe-descriptor-base.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py` and `check-gta4l.py` all exited 0; `git diff --check` clean |

@@ -249,6 +249,18 @@ image was subsequently written to BOOT only for the stage-2 host run on
 2026-10-31 (readback matched and recovery stayed byte-identical); see
 `docs/emmc-driver.md` §5.2.
 
+The stage-3 image built the same day is
+`out/gta4l/ram-root-emmc-probe-stage3-evidence/boot-ram-root-emmc-probe-stage3.img`
+(85,688,320 bytes, SHA-256
+`88b4d28607b371fe008922131c6ee51f27f73da30249fd4a07969f770fa90d87`) on the
+unchanged kernel; its payload is SHA-256
+`4028e432f200dc1069a50f1baa6786d2f4861b187f2c5a0bd126bb20f5a9cd41`, with
+`gta4l-emmc-probe=3`, payload contract 7/7 and boot-image gate 18/18. It was
+written to BOOT only for the stage-3 identification run on 2026-10-31
+(readback matched and recovery stayed byte-identical); that run stopped at a
+command CRC error before the identification report. See
+`docs/emmc-driver.md` §5.3.
+
 This establishes the packaging step only. The inputs are existing artifacts;
 the replay does not reproduce the kernel or firmware.
 
