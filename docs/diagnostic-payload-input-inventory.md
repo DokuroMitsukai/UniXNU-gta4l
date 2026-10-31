@@ -243,8 +243,11 @@ The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2` and
 (85,688,320 bytes, SHA-256
 `4f2252df6bbd5d9c7f05ef97c0041da9acdc47212debf31a10334aefa45a12e5`). Its payload
 is SHA-256 `2953e90220f1e2d9341fc154f3f2eb6523ab2539be68404a3beffa8ee4702633`;
-the payload contract is 7/7 and the boot-image gate is 18/18. It is a host-built
-artifact with `hardware_tested=false` and has not been flashed.
+the payload contract is 7/7 and the boot-image gate is 18/18. It was built with
+`hardware_tested=false`; that manifest is retained as build provenance. The
+image was subsequently written to BOOT only for the stage-2 host run on
+2026-10-31 (readback matched and recovery stayed byte-identical); see
+`docs/emmc-driver.md` §5.2.
 
 This establishes the packaging step only. The inputs are existing artifacts;
 the replay does not reproduce the kernel or firmware.
