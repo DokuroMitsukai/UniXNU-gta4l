@@ -1,9 +1,12 @@
 # gta4l native SDHCI v5 / eMMC core
 
-Status: host-tested implementation `[S]`; no device run `[U]`. The core is
-opt-in and has not been booted on the tablet. The on-device probe is a device
-action and requires the owner's written approval plus a verified EFS/CPEFS
-backup; the `sdhc-bus-power-activation` NO-GO remains for that operation.
+Status: host-tested implementation `[S]`; stage 2 (controller/host init only)
+ran on the tablet and reported success `[C]`; card identification, sector reads
+and the later stages remain `[U]`. The core is opt-in. The stage-2 run was made
+under the owner's approval for that exact procedure, with verified EFS/SEC_EFS
+backups and a known-good BOOT restoration image. The
+`sdhc-bus-power-activation` NO-GO still applies to any operation not separately
+approved.
 
 This document records the native eMMC implementation. It is deliberately small:
 one-bit bus, legacy timing, polling, single 512-byte PIO reads and no card
@@ -272,11 +275,46 @@ python3.11 -B scripts/package-gta4l-diagnostic.py \
 | `boot-ram-root-emmc-probe-stage2.img` | 85,688,320 | `4f2252df6bbd5d9c7f05ef97c0041da9acdc47212debf31a10334aefa45a12e5` |
 
 The payload contract is 7/7 and the boot-image gate is 18/18. The payload's
-kernel arguments include `gta4l-emmc-probe=2`. The image has not been flashed;
-`hardware_tested` is false. Stage 2 still enables bus power and the card clock,
-so a run requires the owner's written approval, a verified EFS/CPEFS backup, a
-known-good BOOT restoration image and the exact procedure; TWRP on `RECOVERY`
-stays untouched.
+kernel arguments include `gta4l-emmc-probe=2`. The build manifest keeps
+`hardware_tested=false` as built; the image was subsequently flashed to BOOT
+only for the stage-2 run in §5.2. TWRP on `RECOVERY` was not touched.
+
+### 5.2 Hardware stage-2 result (2026-10-31)
+
+The owner connected the tablet (SM-T505N, TWRP 3.7.1) and
+approved the BOOT-only stage-2 procedure. The image was written to `boot` only.
+Readback of the first 85,688,320 bytes matched the image, and `recovery`
+remained byte-identical to the recorded TWRP partition
+(`14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae`). The
+previous boot content was saved as
+`dcfe6852035edbb4109231cd41dc5e618e1b8755f47188c1a01bf22e36fcce7b` before the
+write.
+
+The tablet booted the image and panicked with:
+
+```text
+GTA4L-EMMC HOST REPORT: rc=0 mci=10000072 pwr=0f clk=0007 hc2=0008
+ven=00318a0c pst=00000000 log=4/1/268435570 @Gta4lEmmcProbe.c:394
+```
+
+- `rc=0` and `mci=10000072`: the v5 controller initialized.
+- `pwr=0f` and `pst=00000000`: the bus-power write left no pending power/IO
+  request.
+- `clk=0007`: the internal clock is stable and the card clock is enabled.
+- `hc2=0008` and `ven=00318a0c`: the 1.8 V signalling and pad-switch policy
+  were applied.
+- `log=4/1/268435570` (`0x10000072`): four log events; the last is RESET with
+  the controller version.
+
+This image contains the strict latest-level completion rule, so `rc=0` also
+means the controller raised the requested IO-low level; a missing or wrong
+level would have returned `GTA4L_EMMC_ERR_POWER`.
+
+This is controller-local host-init evidence. It does not establish card
+identification, CID/CSD/EXT_CSD, sector reads, rail voltages or retention.
+Photo: `out/gta4l/ram-root-emmc-probe-evidence/host-report-stage2.jpg`
+(sha256 `d049547e8fd6135aafe6fb8aff13c9e8295cb9e2012b3944cdb66ac364882a2c`);
+transcript: `host-report-stage2.txt` in the same directory.
 
 ## 6. Expected report
 
@@ -296,7 +334,8 @@ storage or filesystem result.
 
 ## 7. Limits and residual risks
 
-- No device run exists; the probe has not been booted on the tablet `[U]`.
+- Stage 2 ran on the tablet `[C]`; stage 3 and the full sector read have not
+  run `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
   levels, and it does not prove retention across suspend or shutdown `[U]`.
 - The 1.8 V signalling and pad-switch selection is a documented board policy
@@ -322,7 +361,7 @@ storage or filesystem result.
 - The exact vendor source/binary correspondence and the firmware runtime slot
   table remain `[U]`.
 
-The next device step is the approved staged probe run: stage 2 first, then
-stage 3, then the full read. The next software step is a read-only
-`IOBlockStorageDevice` publication over the same core, followed by multi-block
-reads and a documented stop/recovery policy.
+Stage 2 is complete; the next device step is stage 3 (identification), then the
+full read, each under a separately approved BOOT-only procedure. The next
+software step is a read-only `IOBlockStorageDevice` publication over the same
+core, followed by multi-block reads and a documented stop/recovery policy.
