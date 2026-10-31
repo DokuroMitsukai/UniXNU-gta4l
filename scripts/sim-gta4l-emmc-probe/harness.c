@@ -8,9 +8,10 @@
  * panic strings remain the production code. Every hooked access is counted so
  * the tests can reject an SDHCI read while the branch clocks are off.
  *
- * Only the failure-report path is modelled: the GCC block reset, the branch
- * enable/CLK_OFF handshake, a configurable MCI version and MMIO-map failure.
- * No card command or data transfer is issued by any scenario.
+ * The controller/host path and a minimal card-command engine are modelled: the
+ * GCC block reset, the branch enable/CLK_OFF handshake, a configurable MCI
+ * version, MMIO-map failure, and CMD0/CMD1/CMD2 with a CMD2 CRC error. No data
+ * transfer is issued by any scenario.
  */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -50,6 +51,53 @@ void gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset,
 #define SIM_BRANCH_APPS   1
 #define SIM_BRANCH_AHB    2
 
+/* Independent expectations for the offsets the failure report samples. The
+ * production constants are also checked here so a wrong constant cannot make
+ * a read-count assertion agree with itself. */
+_Static_assert(GTA4L_EMMC_REG_ARGUMENT == 0x08u, "ARGUMENT offset");
+_Static_assert(GTA4L_EMMC_REG_COMMAND == 0x0Eu, "COMMAND offset");
+_Static_assert(GTA4L_EMMC_REG_RESPONSE == 0x10u, "RESPONSE offset");
+_Static_assert(GTA4L_EMMC_REG_PRESENT_STATE == 0x24u, "PRESENT_STATE offset");
+_Static_assert(GTA4L_EMMC_REG_HOST_CONTROL == 0x28u, "HOST_CONTROL offset");
+_Static_assert(GTA4L_EMMC_REG_POWER_CONTROL == 0x29u, "POWER_CONTROL offset");
+_Static_assert(GTA4L_EMMC_REG_CLOCK_CONTROL == 0x2Cu, "CLOCK_CONTROL offset");
+_Static_assert(GTA4L_EMMC_REG_SOFTWARE_RESET == 0x2Fu,
+    "SOFTWARE_RESET offset");
+_Static_assert(GTA4L_EMMC_REG_NORMAL_INT_STATUS == 0x30u,
+    "NORMAL_INT_STATUS offset");
+_Static_assert(GTA4L_EMMC_REG_ERROR_INT_STATUS == 0x32u,
+    "ERROR_INT_STATUS offset");
+_Static_assert(GTA4L_EMMC_REG_HOST_CONTROL2 == 0x3Eu, "HOST_CONTROL2 offset");
+_Static_assert(GTA4L_EMMC_REG_CORE_DLL_CONFIG == 0x200u,
+    "CORE_DLL_CONFIG offset");
+_Static_assert(GTA4L_EMMC_REG_CORE_DLL_STATUS == 0x208u,
+    "CORE_DLL_STATUS offset");
+_Static_assert(GTA4L_EMMC_REG_CORE_VENDOR_SPEC == 0x20Cu,
+    "CORE_VENDOR_SPEC offset");
+_Static_assert(GTA4L_EMMC_REG_CORE_VENDOR_SPEC3 == 0x250u,
+    "CORE_VENDOR_SPEC3 offset");
+_Static_assert(GTA4L_EMMC_REG_CORE_DDR_CONFIG == 0x25Cu,
+    "CORE_DDR_CONFIG offset");
+_Static_assert(GTA4L_EMMC_REG_CORE_PWRCTL_STATUS == 0x240u,
+    "CORE_PWRCTL_STATUS offset");
+_Static_assert(GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR == 0x248u,
+    "CORE_PWRCTL_CLEAR offset");
+_Static_assert(GTA4L_EMMC_REG_CORE_PWRCTL_CTL == 0x24Cu,
+    "CORE_PWRCTL_CTL offset");
+_Static_assert(GTA4L_EMMC_REG_MCI_VERSION == 0x318u, "MCI_VERSION offset");
+_Static_assert(GTA4L_EMMC_GCC_SDCC1_BCR == 0x00u, "SDCC1 BCR offset");
+_Static_assert(GTA4L_EMMC_GCC_SDCC1_APPS_CBCR == 0x04u,
+    "SDCC1 APPS CBCR offset");
+_Static_assert(GTA4L_EMMC_GCC_SDCC1_AHB_CBCR == 0x08u,
+    "SDCC1 AHB CBCR offset");
+_Static_assert(GTA4L_EMMC_GCC_SDCC1_APPS_CMD == 0x28u,
+    "SDCC1 APPS CMD offset");
+_Static_assert(GTA4L_EMMC_GCC_SDCC1_APPS_CFG == 0x2Cu,
+    "SDCC1 APPS CFG offset");
+_Static_assert(GTA4L_EMMC_GCC_SDCC1_APPS_M == 0x30u, "SDCC1 APPS M offset");
+_Static_assert(GTA4L_EMMC_GCC_SDCC1_APPS_N == 0x34u, "SDCC1 APPS N offset");
+_Static_assert(GTA4L_EMMC_GCC_SDCC1_APPS_D == 0x38u, "SDCC1 APPS D offset");
+
 static unsigned char sdhci[SIM_WINDOW];
 static unsigned char gcc[SIM_WINDOW];
 static unsigned char tlmm[SIM_WINDOW];
@@ -60,6 +108,8 @@ static int stage;
 static int conflict;
 static int map_fail;
 static int branch_stuck;
+static int rcg_stuck;
+static int clock_timeout;
 static int bad_access;
 static unsigned long sdhci_accesses;
 static unsigned long sdhci_writes;
@@ -67,6 +117,14 @@ static unsigned long gcc_accesses;
 static unsigned int sdhci_read_count[SIM_WINDOW];
 static unsigned int gcc_read_count[SIM_WINDOW];
 static uint64_t counter_value;
+static uint16_t normal_int;
+static uint16_t error_int;
+static uint32_t pwr_status;
+static uint16_t last_command;
+static uint32_t last_argument;
+static unsigned int cmd_count;
+static int bad_command_format;
+static int bad_command_order;
 
 static uint32_t
 sim_load(const unsigned char *window, uint32_t offset, uint32_t width)
@@ -106,15 +164,23 @@ sim_store(unsigned char *window, uint32_t offset, uint32_t width,
 static void
 sim_gcc_write32(uint32_t offset, uint32_t value)
 {
+	if ((offset == GTA4L_EMMC_GCC_SDCC1_APPS_CMD) && (rcg_stuck == 0)) {
+		/* The RCG update bit is self-clearing. */
+		value &= ~GTA4L_EMMC_RCG_CMD_UPDATE;
+	}
 	sim_store(gcc, offset, 4u, value);
 	if (offset == GTA4L_EMMC_GCC_SDCC1_BCR) {
 		if ((value & SIM_BCR_RESET) == 0) {
 			return;
 		}
 		sim_store(gcc, GTA4L_EMMC_GCC_SDCC1_BCR, 4u, 0);
+		/* Reset asserts CLK_OFF but preserves the other CBCR fields,
+		 * so a seeded handoff value survives the reset. */
 		sim_store(gcc, GTA4L_EMMC_GCC_SDCC1_APPS_CBCR, 4u,
+		    sim_load(gcc, GTA4L_EMMC_GCC_SDCC1_APPS_CBCR, 4u) |
 		    SIM_CBCR_CLK_OFF);
 		sim_store(gcc, GTA4L_EMMC_GCC_SDCC1_AHB_CBCR, 4u,
+		    sim_load(gcc, GTA4L_EMMC_GCC_SDCC1_AHB_CBCR, 4u) |
 		    SIM_CBCR_CLK_OFF);
 		return;
 	}
@@ -144,6 +210,86 @@ sim_window(uint32_t space)
 	return tlmm;
 }
 
+static void
+sim_clear_response(void)
+{
+	uint32_t index;
+
+	for (index = 0; index < 4u; index++) {
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE + index * 4u, 4u, 0);
+	}
+}
+
+/* Minimal command engine for the stage-3 CMD2 CRC scenario. CMD0 and CMD1
+ * complete normally; CMD2 raises CMD_CRC and loads synthetic R2 words so the
+ * production failure report has something to format. */
+static void
+sim_command(uint16_t command)
+{
+	uint32_t index = ((uint32_t)command >> 8) & 0x3Fu;
+	uint32_t flags = (uint32_t)command & 0xFFu;
+	uint32_t words[4];
+	uint32_t word;
+
+	last_command = command;
+	cmd_count++;
+	if (cmd_count == 1u) {
+		if ((index != 0u) || (last_argument != 0u)) {
+			bad_command_order = 1;
+		}
+	} else if (cmd_count == 2u) {
+		if ((index != 1u) ||
+		    (last_argument != GTA4L_EMMC_OCR_VALUE)) {
+			bad_command_order = 1;
+		}
+	} else if (cmd_count == 3u) {
+		if ((index != 2u) || (last_argument != 0u)) {
+			bad_command_order = 1;
+		}
+	} else {
+		bad_command_order = 1;
+	}
+	if (index == 0u) {
+		if (flags != GTA4L_EMMC_CMD_RESP_NONE) {
+			bad_command_format = 1;
+		}
+		normal_int |= GTA4L_EMMC_INT_CC;
+		return;
+	}
+	if (index == 1u) {
+		if (flags != GTA4L_EMMC_CMD_RESP_SHORT) {
+			bad_command_format = 1;
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+		    GTA4L_EMMC_OCR_VALUE | 0x80000000u);
+		normal_int |= GTA4L_EMMC_INT_CC;
+		return;
+	}
+	if (index == 2u) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_LONG | GTA4L_EMMC_CMD_CRC)) {
+			bad_command_format = 1;
+		}
+		/* Synthetic R2 words: this is a formatting/capture test, not a
+		 * real CID. */
+		words[0] = 0x11111111u;
+		words[1] = 0x22222222u;
+		words[2] = 0x33333333u;
+		words[3] = 0x44444444u;
+		for (word = 0; word < 4u; word++) {
+			sim_store(sdhci,
+			    GTA4L_EMMC_REG_RESPONSE + word * 4u, 4u,
+			    words[word]);
+		}
+		error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
+		normal_int |= 0x8000u;
+		return;
+	}
+	/* No later command is expected. Report a CRC error so an unexpected
+	 * command fails the scenario instead of hanging. */
+	error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
+	normal_int |= 0x8000u;
+}
+
 uint8_t
 gta4l_emmc_probe_test_read8(uint32_t space, uint32_t offset)
 {
@@ -169,6 +315,12 @@ gta4l_emmc_probe_test_read16(uint32_t space, uint32_t offset)
 		if (offset < SIM_WINDOW) {
 			sdhci_read_count[offset]++;
 		}
+		if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
+			return normal_int;
+		}
+		if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
+			return error_int;
+		}
 	} else if (space == GTA4L_EMMC_SPACE_GCC) {
 		gcc_accesses++;
 		if (offset < SIM_WINDOW) {
@@ -185,6 +337,9 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 		sdhci_accesses++;
 		if (offset < SIM_WINDOW) {
 			sdhci_read_count[offset]++;
+		}
+		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) {
+			return pwr_status;
 		}
 	} else if (space == GTA4L_EMMC_SPACE_GCC) {
 		gcc_accesses++;
@@ -206,6 +361,10 @@ gta4l_emmc_probe_test_write8(uint32_t space, uint32_t offset, uint8_t value)
 		if (offset == GTA4L_EMMC_REG_SOFTWARE_RESET) {
 			value = 0;
 		}
+		if ((offset == GTA4L_EMMC_REG_POWER_CONTROL) &&
+		    ((value & GTA4L_EMMC_POWER_BUS_POWER) != 0)) {
+			pwr_status |= GTA4L_EMMC_PWRCTL_BUS_ON;
+		}
 	} else if (space == GTA4L_EMMC_SPACE_GCC) {
 		gcc_accesses++;
 	}
@@ -218,6 +377,52 @@ gta4l_emmc_probe_test_write16(uint32_t space, uint32_t offset, uint16_t value)
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
 		sdhci_accesses++;
 		sdhci_writes++;
+		if (offset == GTA4L_EMMC_REG_COMMAND) {
+			sim_store(sdhci, offset, 2u, value);
+			sim_command(value);
+			return;
+		}
+		if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
+			normal_int &= (uint16_t)~value;
+			sim_store(sdhci, offset, 2u, 0);
+			return;
+		}
+		if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
+			error_int &= (uint16_t)~value;
+			if ((value & GTA4L_EMMC_INT_ERR_CMD_CRC) != 0) {
+				sim_clear_response();
+			}
+			sim_store(sdhci, offset, 2u, 0);
+			return;
+		}
+		if (offset == GTA4L_EMMC_REG_CLOCK_CONTROL) {
+			sim_store(sdhci, offset, 2u, value);
+			if (((value & GTA4L_EMMC_CLOCK_INT_EN) != 0) &&
+			    (clock_timeout == 0)) {
+				value |= GTA4L_EMMC_CLOCK_INT_STABLE;
+				sim_store(sdhci, offset, 2u, value);
+			}
+			return;
+		}
+		if (offset == GTA4L_EMMC_REG_HOST_CONTROL2) {
+			uint16_t previous = (uint16_t)sim_load(sdhci, offset,
+			    2u);
+
+			sim_store(sdhci, offset, 2u, value);
+			if (((value & GTA4L_EMMC_HOST_CONTROL2_VDD_180) != 0) !=
+			    ((previous &
+			    GTA4L_EMMC_HOST_CONTROL2_VDD_180) != 0)) {
+				if ((value &
+				    GTA4L_EMMC_HOST_CONTROL2_VDD_180) != 0) {
+					pwr_status |=
+					    GTA4L_EMMC_PWRCTL_IO_LOW;
+				} else {
+					pwr_status |=
+					    GTA4L_EMMC_PWRCTL_IO_HIGH;
+				}
+			}
+			return;
+		}
 	} else if (space == GTA4L_EMMC_SPACE_GCC) {
 		gcc_accesses++;
 	}
@@ -230,6 +435,18 @@ gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset, uint32_t value)
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
 		sdhci_accesses++;
 		sdhci_writes++;
+		if (offset == GTA4L_EMMC_REG_ARGUMENT) {
+			last_argument = value;
+		}
+		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR) {
+			pwr_status &= ~value;
+			sim_store(sdhci, offset, 4u, 0);
+			return;
+		}
+		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_CTL) {
+			sim_store(sdhci, offset, 4u, value);
+			return;
+		}
 	} else if (space == GTA4L_EMMC_SPACE_GCC) {
 		gcc_accesses++;
 		sim_gcc_write32(offset, value);
@@ -348,9 +565,19 @@ main(int argc, char **argv)
 		sim_store(sdhci, GTA4L_EMMC_REG_MCI_VERSION, 4u,
 		    SIM_VERSION_BAD);
 	} else if (strcmp(scenario, "clock-timeout") == 0) {
-		/* Leave CLOCK_CONTROL without INT_STABLE so configure_clock()
-		 * fails after programming the 400 kHz RCG. */
+		/* Keep the RCG update bit set so configure_clock() fails after
+		 * programming the 400 kHz RCG. */
 		stage = 2;
+		rcg_stuck = 1;
+	} else if (strcmp(scenario, "clock-stable-timeout") == 0) {
+		/* Leave CLOCK_CONTROL without INT_STABLE so configure_clock()
+		 * fails after the RCG update completed. */
+		stage = 2;
+		clock_timeout = 1;
+	} else if (strcmp(scenario, "cmd2-crc") == 0) {
+		/* Run the full identification sequence and fail the first
+		 * CRC-checked command with a synthetic R2 response. */
+		stage = 3;
 	} else {
 		fprintf(stderr, "unknown scenario %s\n", scenario);
 		return 2;
@@ -396,16 +623,22 @@ main(int argc, char **argv)
 		    "the report did not sample the MCI version");
 		check(sdhci_read_count[GTA4L_EMMC_REG_POWER_CONTROL] == 1u,
 		    "the report did not sample the power control");
+		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_CONTROL] == 1u,
+		    "the report did not sample HOST_CONTROL");
 		check(sdhci_read_count[GTA4L_EMMC_REG_CLOCK_CONTROL] == 1u,
 		    "the report did not sample the clock control");
 		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_CONTROL2] == 1u,
 		    "the report did not sample HOST_CONTROL2");
 		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_VENDOR_SPEC] == 1u,
 		    "the report did not sample the vendor spec");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_VENDOR_SPEC3] == 1u,
+		    "the report did not sample the vendor spec 3");
 		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DLL_CONFIG] == 1u,
 		    "the report did not sample the DLL config");
 		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DLL_STATUS] == 1u,
 		    "the report did not sample the DLL status");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DDR_CONFIG] == 1u,
+		    "the report did not sample the DDR config");
 		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_PWRCTL_STATUS] == 1u,
 		    "the report did not sample the power status");
 	} else if (strcmp(scenario, "clock-timeout") == 0) {
@@ -431,6 +664,26 @@ main(int argc, char **argv)
 		    "the report does not show the running AHB branch");
 		check(sdhci_read_count[GTA4L_EMMC_REG_MCI_VERSION] == 3u,
 		    "the report did not sample the MCI version");
+		check(sdhci_read_count[GTA4L_EMMC_REG_POWER_CONTROL] == 1u,
+		    "the report did not sample the power control");
+		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_CONTROL] == 1u,
+		    "the report did not sample HOST_CONTROL");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CLOCK_CONTROL] == 1u,
+		    "the report did not sample the clock control");
+		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_CONTROL2] == 2u,
+		    "the report did not sample HOST_CONTROL2");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_VENDOR_SPEC] == 3u,
+		    "the report did not sample the vendor spec");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_VENDOR_SPEC3] == 2u,
+		    "the report did not sample the vendor spec 3");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DLL_CONFIG] == 3u,
+		    "the report did not sample the DLL config");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DLL_STATUS] == 1u,
+		    "the report did not sample the DLL status");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DDR_CONFIG] == 1u,
+		    "the report did not sample the DDR config");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_PWRCTL_STATUS] == 1u,
+		    "the report did not sample the power status");
 		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_CFG] == 2u,
 		    "the report did not sample the RCG config");
 		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_M] == 1u,
@@ -441,6 +694,138 @@ main(int argc, char **argv)
 		    "the report did not sample the RCG D value");
 		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_BCR] == 1u,
 		    "the report did not sample the block reset");
+	} else if (strcmp(scenario, "clock-stable-timeout") == 0) {
+		check(panicked == 1, "a clock-stability timeout did not panic");
+		check(strstr(panic_message, "stage=2") != NULL,
+		    "the clock-stability report does not name the stage");
+		check(strstr(panic_message, "rc=-5") != NULL,
+		    "the clock-stability report does not name the clock error");
+		check(strstr(panic_message, "cfg=00002017") != NULL,
+		    "the report does not show the 400 kHz RCG config");
+		check(strstr(panic_message,
+		    "mnd=00000001/000000fc/000000fb") != NULL,
+		    "the report does not show the 400 kHz RCG M/N/D values");
+		check(strstr(panic_message, "cmd=00000000") != NULL,
+		    "the report does not show the released RCG update bit");
+		check(strstr(panic_message, "clk=0001") != NULL,
+		    "the report does not show the missing clock stability");
+		check(strstr(panic_message, "bcr=00000000") != NULL,
+		    "the report does not show the released block reset");
+		check(sdhci_read_count[GTA4L_EMMC_REG_MCI_VERSION] == 3u,
+		    "the report did not sample the MCI version");
+		check(sdhci_read_count[GTA4L_EMMC_REG_POWER_CONTROL] == 1u,
+		    "the report did not sample the power control");
+		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_CONTROL] == 1u,
+		    "the report did not sample HOST_CONTROL");
+		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_CONTROL2] == 2u,
+		    "the report did not sample HOST_CONTROL2");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_VENDOR_SPEC] == 3u,
+		    "the report did not sample the vendor spec");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_VENDOR_SPEC3] == 2u,
+		    "the report did not sample the vendor spec 3");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DLL_CONFIG] == 3u,
+		    "the report did not sample the DLL config");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DLL_STATUS] == 1u,
+		    "the report did not sample the DLL status");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DDR_CONFIG] == 1u,
+		    "the report did not sample the DDR config");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_PWRCTL_STATUS] == 1u,
+		    "the report did not sample the power status");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_CFG] == 2u,
+		    "the report did not sample the RCG config");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_M] == 1u,
+		    "the report did not sample the RCG M value");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_N] == 1u,
+		    "the report did not sample the RCG N value");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_D] == 1u,
+		    "the report did not sample the RCG D value");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_CMD] == 3u,
+		    "the report did not sample the RCG command");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_BCR] == 1u,
+		    "the report did not sample the block reset");
+	} else if (strcmp(scenario, "cmd2-crc") == 0) {
+		check(panicked == 1, "a CMD2 CRC error did not panic");
+		check(strstr(panic_message, "stage=3") != NULL,
+		    "the CMD2 CRC report does not name the stage");
+		check(strstr(panic_message, "rc=-8") != NULL,
+		    "the CMD2 CRC report does not name the CRC error");
+		check(strstr(panic_message,
+		    "fail=1/2/0/00000209/0002/8000/00000000/8") != NULL,
+		    "the report does not name the failed CMD2");
+		check(strstr(panic_message,
+		    "rsp=11111111,22222222,33333333,44444444") != NULL,
+		    "the report did not capture the raw R2 response");
+		check(strstr(panic_message, "cmd1=1/0/c0ff8080") != NULL,
+		    "the report does not show the accepted CMD1 OCR");
+		check(strstr(panic_message, "clocks=1") != NULL,
+		    "the report does not show the verified branch clocks");
+		check(bad_command_format == 0,
+		    "the init sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the init sent commands in the wrong order or with the "
+		    "wrong argument");
+		check(cmd_count == 3u,
+		    "the init did not send exactly CMD0/CMD1/CMD2");
+		check(last_command == (uint16_t)((GTA4L_EMMC_CMD2 << 8) |
+		    GTA4L_EMMC_CMD_RESP_LONG | GTA4L_EMMC_CMD_CRC),
+		    "the failing command was not CMD2 with CRC checking");
+		check(strstr(panic_message, "pwr=0f") != NULL,
+		    "the report does not show the powered bus");
+		check(strstr(panic_message, "clk=0007") != NULL,
+		    "the report does not show the enabled card clock");
+		check(strstr(panic_message, "hc2=0008") != NULL,
+		    "the report does not show the 1.8 V signalling bit");
+		/* MCI_VERSION: two core reads plus the report; POWER_CONTROL:
+		 * the completed-init log plus the report; HOST_CONTROL: report
+		 * only; CLOCK_CONTROL: two configure-clock reads, the card-clock
+		 * enable read and the report; HOST_CONTROL2 and VENDOR_SPEC3:
+		 * one core read plus the report; VENDOR_SPEC and DLL_CONFIG:
+		 * two core reads plus the report; DLL_STATUS and DDR_CONFIG:
+		 * report only; PWRCTL_STATUS: the status read, the clear
+		 * verify, the acknowledge verify, the settling read and the
+		 * report. */
+		check(sdhci_read_count[GTA4L_EMMC_REG_MCI_VERSION] == 3u,
+		    "the report did not sample the MCI version");
+		check(sdhci_read_count[GTA4L_EMMC_REG_POWER_CONTROL] == 2u,
+		    "the report did not sample the power control");
+		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_CONTROL] == 1u,
+		    "the report did not sample HOST_CONTROL");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CLOCK_CONTROL] == 4u,
+		    "the report did not sample the clock control");
+		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_CONTROL2] == 2u,
+		    "the report did not sample HOST_CONTROL2");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_VENDOR_SPEC] == 3u,
+		    "the report did not sample the vendor spec");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_VENDOR_SPEC3] == 2u,
+		    "the report did not sample the vendor spec 3");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DLL_CONFIG] == 3u,
+		    "the report did not sample the DLL config");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DLL_STATUS] == 1u,
+		    "the report did not sample the DLL status");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_DDR_CONFIG] == 1u,
+		    "the report did not sample the DDR config");
+		check(sdhci_read_count[GTA4L_EMMC_REG_CORE_PWRCTL_STATUS] == 5u,
+		    "the report did not sample the power status");
+		/* The RCG config is read once by configure_clock(); M/N/D are
+		 * report-only; APPS_CMD is read twice by the update handshake
+		 * and once by the report; each branch CBCR is read by the
+		 * enable handshake and once by the report. */
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_CFG] == 2u,
+		    "the report did not sample the RCG config");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_M] == 1u,
+		    "the report did not sample the RCG M value");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_N] == 1u,
+		    "the report did not sample the RCG N value");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_D] == 1u,
+		    "the report did not sample the RCG D value");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_CMD] == 3u,
+		    "the report did not sample the RCG command");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_BCR] == 1u,
+		    "the report did not sample the block reset");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_APPS_CBCR] == 3u,
+		    "the report did not sample the APPS branch");
+		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_AHB_CBCR] == 3u,
+		    "the report did not sample the AHB branch");
 	} else {
 		check(panicked == 1, "a branch-clock failure did not panic");
 		check(strstr(panic_message, "GTA4L-EMMC PROBE FAILED") != NULL,

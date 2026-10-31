@@ -25,7 +25,7 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
 | `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 56 scenarios and 33 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows and kernel stubs for the probe failure-report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe failure report, seven scenarios and four mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe failure report, nine scenarios and six mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -256,21 +256,28 @@ source.
 copies `package/Gta4lEmmcProbe.c` and replaces only the generic-counter and
 barrier instructions and the six MMIO helpers with recording hooks; the stage
 selection, conflict check, clock guard, register offsets and panic strings are
-the production code. Seven scenarios cover a disabled probe, an MMIO-map
+the production code. Nine scenarios cover a disabled probe, an MMIO-map
 failure, a conflicting diagnostic argument, a stuck AHB branch, a stuck APPS
-branch, a verified-clock version failure and a verified-clock RCG/clock timeout.
-A stuck branch must panic with `clocks=0` and the GCC state while issuing no
-SDHCI read or write; the version-failure control must report `clocks=1` and read
-each diagnostic SDHCI register (MCI version, power, clock, `HOST_CONTROL2`,
-vendor, DLL config/status and power status) exactly once, which proves the
-access counter detects real reads. The clock-timeout run must panic with
-`rc=-5`, `clocks=1` and the formatted `cfg=00002017`,
-`mnd=00000001/000000fc/000000fb`, `cmd=00000001` and branch/reset values, and
-must read the diagnostic-only GCC M/N/D/BCR offsets exactly once each. Four
-mutations insert an unguarded SDHCI read before the guard, replace the guard
-with an unconditional branch, suppress a GCC report read and suppress an SDHCI
-report read; each must be rejected for the expected reported reason, not merely
-by a nonzero exit.
+branch, a verified-clock version failure, a stuck RCG update, a missing clock
+stability bit and a stage-3 CMD2 CRC failure. A stuck branch must panic with
+`clocks=0` and the GCC state while issuing no SDHCI read or write; the
+version-failure control must report `clocks=1` and sample each diagnostic SDHCI
+register in the report (MCI version, power, clock, `HOST_CONTROL`,
+`HOST_CONTROL2`, vendor, vendor spec 3, DLL config/status, DDR config and power
+status), with MCI version read twice in total (init plus report) and the others
+once, which proves the access counter detects real reads. The clock-timeout run must panic with `rc=-5`, `clocks=1` and the
+formatted `cfg=00002017`, `mnd=00000001/000000fc/000000fb`,
+`cmd=00000001` and branch/reset values, and must read the diagnostic-only GCC
+M/N/D/BCR offsets exactly once each. The clock-stability run keeps the RCG
+update released and must report `cmd=00000000` and `clk=0001`. The CMD2 CRC run
+drives CMD0 and CMD1 to completion, fails CMD2 with a synthetic R2 response,
+and checks the `fail=`, `rsp=` and `cmd1=` fields, the exact CMD0/CMD1/CMD2
+order and arguments, the report read counts and the exact CMD2 encoding. Six
+mutations insert an unguarded SDHCI read before
+the guard, replace the guard with an unconditional branch, suppress a GCC
+report read, suppress an SDHCI report read, suppress the raw R2 snapshot and
+suppress the captured CMD2 error; each must be rejected for the expected
+reported reason, not merely by a nonzero exit.
 
 ## 5. XNU integration
 

@@ -6,7 +6,8 @@ changes were made by the audit itself. Comment-only corrections to
 line anchors below are unchanged. TWRP on `RECOVERY` remains
 `14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae`.
 
-**Audit baseline (working tree after the comment corrections):**
+**Audit baseline (current working tree after the comment corrections and the
+host-side probe instrumentation below):**
 
 | Artifact | SHA-256 |
 | --- | --- |
@@ -14,7 +15,13 @@ line anchors below are unchanged. TWRP on `RECOVERY` remains
 | `src/UniXNU-gta4l/package/Gta4lEmmc.h` | `7abc7d878f75f83cdc71cdd55dbcc6036c44b181a48e861c4a791cd24d05ca09` |
 | `src/UniXNU-gta4l/package/Gta4lEmmcProbe.c` | `d541514b08176f296e026cf4d2492952eecaa0be319e7757088423e54576326b` |
 | `src/UniXNU-gta4l/package/Gta4lSdhciHostInit.c` | `3f8f45316cff8b3ad19266f901dba69475d7dd0816ce9b6040f2bee37eaebafb` |
-| `src/UniXNU-gta4l/scripts/sim-gta4l-emmc/harness.c` | `379430c1fb0e73b2ca0964e450908b1e56e75f4413f96f34c43bbc205ff23e89` |
+| `src/UniXNU-gta4l/scripts/sim-gta4l-emmc/harness.c` | `5262362d1cdc86c725109c428ce150ba2901f839b3f0fb5aa574b90aecf95b09` |
+| `src/UniXNU-gta4l/scripts/sim-gta4l-emmc-probe/harness.c` | `18f2637a84330b4eaac216a362e2b847596beb90245af5dd3f2dd74e65747690` |
+| `src/UniXNU-gta4l/scripts/test-gta4l-emmc-probe.py` | `52c94ccb606de0fbfc9f09d8142fc3700d6d8575b3b15245dc2c7d9520de5cf3` |
+
+The host probe simulator runs a stage-3 CMD0/CMD1/CMD2 scenario that fails CMD2
+with a synthetic CRC error and R2 response, and it rejects six mutation controls
+for the failure-report reads and snapshot.
 
 **Hardware artifacts:**
 
@@ -467,7 +474,7 @@ been unsuitable for the CRC-checked 136-bit R2 response.
 
 1. Boot the already-flashed failure-record image (`be30e9f4…`) with owner
    approval. It captures `fail=` but not `rsp=`/`cmd1=`.
-2. Build current source (`722110a5…`, `d541514b…`, `379430c1…`) into a new
+2. Build current source (`722110a5…`, `d541514b…`, `5262362d…`) into a new
    failure-record image; with separate owner approval, write it to BOOT only and
    boot it.
 3. Compare `ven`, `v3`, `dll`, `dst`, `ddr`, and `mnd` at failure. If
