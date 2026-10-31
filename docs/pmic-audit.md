@@ -242,6 +242,34 @@ probe does not refuse either condition.
 The historical photograph shows the expected values for that run. It does not
 turn the reporting path into a general safety guarantee.
 
+### EBS-callback inventory (Stage 2)
+
+An earlier pass traced only `SdccDxe` and `PmicDxe` and left the other
+`ExitBootServices` registrants `[U]`. The Stage-2 pass disassembled every
+registration in the shipping set and followed each notification body. The
+inventory is recorded in `firmware-handoff.md`; the result is:
+
+- `DxeCore` carries the event GUID for its own core handling and registers no
+  callback.
+- `SdccDxe`, `EnvDxe`, `CapsuleRuntimeDxe`, `UsbConfigDxe`, `UsbMsdDxe`,
+  `UsbfnDwc3Dxe` and `XhciDxe` set flags, do status-code lookups or tear down
+  their own controllers; none locates the PMIC or SPMI protocol.
+- The `SdccDxe` and `EnvDxe` status-code `LocateProtocol` targets are
+  `gEfiStatusCodeRuntimeProtocolGuid` (`D2B2B828-0826-48A7-B3DF-983C006024F0`),
+  so those two callbacks are benign `[S]`.
+- `PmicDxe` is the only EBS body that reaches SPMI. The path is
+  `0x14dc → 0x4220 → LocateProtocol(PMIC) → interface +0x08 = 0x41ec →
+  0x120a8`/`0x11cd4`, i.e. the already-recorded `0x14`/`0x16` and `0xd1`
+  writes. No direct L11/L24 control-register write `[S]`.
+- `GlinkDxe` registers a GLINK RPM port (`"rpm"`, `"glink_ssr"`) and `NpaDxe`
+  calls the NPA protocol and uninstalls its interfaces. Neither builds an
+  L11/L24 resource request in the traced body `[S]`; their remote RPM/NPA
+  effect is not established `[U]`.
+
+This closes the earlier "other modules are not traced" gap for the local
+shipping volume. It does not close the runtime arbiter bitmap, the `0xd1`
+target, the PM6125 `QPNPINT` applicability, or the remote RPM/NPA behaviour.
+
 ## 3C source verification
 
 The newly fetched pinned `qcom_spmi-regulator.c` and `qcom-spmi-pmic.c` were read
@@ -296,6 +324,7 @@ test.
 | Static checker | Reordered-qualifier MMIO access now rejected; self-test case added |
 | Simulation | Deterministic counter-serviced reset model; full MMIO event trace with a transient-write rejection test; vendor-change report case |
 | Completion label | `HOST INIT OK` changed to `HOST INIT REPORT` with an explicit "vendor state reported, not enforced" qualifier |
+| EBS-callback inventory | All ten registering modules traced; `SdccDxe`/`EnvDxe` status-code targets resolved; `GlinkDxe`/`NpaDxe` transport effects left `[U]` |
 | Decision | "Defer" raised to "blocked" pending identity, semantics and the electrical contract |
 
 ## Findings ledger
@@ -311,18 +340,19 @@ test.
 | 7 | `0xd1` value misstated | Corrected — `u16 >> 14`, range `0`–`3` |
 | 8 | Absence of a register definition treated as hardware knowledge | Corrected — claims narrowed to "the examined driver supplies none" |
 | 9 | Board-level electrical contract absent | Unresolved — no source in this repository |
-| 10 | Evidence chain has three layers | Partially addressed — chain established for the three analysed drivers in the recorded v2 image; stock authentication and the other modules remain open |
+| 10 | Evidence chain has three layers | Partially addressed — chain established for the three analysed drivers in the recorded v2 image; stock authentication and the other modules' provenance remain open |
 | 11 | Static checker not a proof | Corrected as a regression fix — reordered qualifiers rejected and tested; still not a proof of the write allowlist |
 | 12 | Simulation limits | Partially addressed — the thread race is removed and a full event trace with a transient-write rejection test is added; electrical, bus-fault and asynchronous models still missing |
 | 13 | Completion line is not an invariant check | Partially addressed — label narrowed to `REPORT` and vendor-change reporting tested; the probe still does not enforce unexpected vendor state |
 | 14 | Lifecycle reconstruction overclaimed | Corrected — seven statements narrowed in `linux-regulator-lifecycle.md`, including the pad-switch inheritance claim; remaining gaps tagged `[U]` |
+| 15 | Other EBS registrants untraced | Corrected — all ten registering modules traced in the shipping volume; only `PmicDxe` reaches SPMI; `GlinkDxe`/`NpaDxe` transport effects remain `[U]` |
 
 ### Ledger counts
 
-Recomputed from the table above: **14 entries — 9 corrected, 4 partially
+Recomputed from the table above: **15 entries — 10 corrected, 4 partially
 addressed, 1 unresolved.**
 
-- Corrected: 2, 3, 4, 5, 6, 7, 8, 11, 14.
+- Corrected: 2, 3, 4, 5, 6, 7, 8, 11, 14, 15.
 - Partially addressed: 1, 10, 12, 13.
 - Unresolved: 9.
 
@@ -340,7 +370,7 @@ Three later corrections are outside the numbered ledger because they came from
 the Step 3 follow-up audit: the initialization access-enable direction, the
 recovery path's arbiter owner/APID writes, and the non-returning configuration
 error path in the exit callback. They are recorded in the sections above and do
-not change the 14-entry counts.
+not change the 15-entry counts.
 
 ## Consolidated blocker ledger
 
@@ -357,15 +387,16 @@ rail/handoff and retention rows to `E1`/`E7`, and the board-contract row to
 | L11/L24 SPMI subtype and getter | `supported_regulators[]` spans `ldo` and `ftsmps426`/`hfs430`/`hfsmps`; `force_type=0` | Which `TYPE`/`SUBTYPE`/`DIG_MAJOR_REV` the silicon reports | One hardware read of `0x01`–`0x05` at `0x4a00`/`0x5700` (blocked) |
 | `+0x28` runtime APID set | `.data` config: channel 0, one descriptor, 16-word bitmap | Which owner-status bits are set at callback time | A runtime `intr` bitmap dump or a pinned owner-bit statement (blocked) |
 | `+0x28` clear read-back | `0x2e84`–`0x2e8c`: read `irq_clear`, replace bits 7:0, write whole word | What bits 31:8 read as, and whether writing them back is safe | Arbiter register documentation defining read-back and write semantics; a hardware read would only observe values |
-| Descriptor base override | `0x38b0` stores `[0x8878]` into the base field when non-zero; `[0x8878]=0`; no direct `.text` reference stores to `0x8878` | Whether anything populates `0x8878` at run time | A write analysis covering indirect and computed stores (the current pass covers direct references only) |
+| Descriptor base override | `0x38b0` stores `[0x8878]` into the base field when non-zero; `[0x8878]=0`; a bounded scan finds one read at `0x38b4` and no write intersecting `[0x8878,0x8880)`; it resolves the caller stores at `0x38bc`/`0x38f4` to `0x8140`/`0x8868` and the event-handle stores at `0x210c`/`0x2188` to `0x8870` | Whether an internal indirect/computed/aliased store, an unmodeled addressing mode or an external runtime writer populates `0x8878` | A whole-program alias analysis or a runtime writer/trace; the current pass models direct page-relative, immediate-offset and pre/post-index GPR accesses, initial `.data` pointers, direct branches and bounded direct `BL` recursion (depth 2); it stops at instructions outside its register-only whitelist, invalidates overwritten `.data` pointer slots, and conservatively invalidates all such slots after indirect or truncated calls and on revisited states; it is static and image-local |
 | Rail voltage and enable at handoff | No measurement; only controller-local register captures | Actual L11/L24 state | A qualified physical measurement |
 | Board electrical contract | No datasheet, schematic or netlist in the repository | Absmax, transient behaviour, back-powering, sequencing, recovery | Vendor documentation or measurement |
 | RPM retention across suspend/shutdown/reboot | `qcom_smd-regulator.c`; no suspend ops; no `regulator-state-mem` | RPM firmware behaviour for L11/L24 | RPM firmware documentation or measurement |
+| `GlinkDxe`/`NpaDxe` EBS transport effect | `GlinkDxe` `0x4a04` registers a GLINK RPM port; `NpaDxe` `0x149c` tears down NPA interfaces; neither builds an L11/L24 request | What the remote RPM/NPA side does with the port/teardown | RPM/NPA firmware documentation or a transport trace |
 
-The first five rows are the SPMI/firmware side; the last three are electrical
-and firmware-retention. Closing the first five requires evidence that is not in
-the current pinned set: register documentation, an owner/APID table, or runtime
-state. Closing the last three requires vendor documentation or a qualified
+The first five rows are the SPMI/firmware side; the last four are electrical,
+firmware-retention and transport. Closing the first five requires evidence that
+is not in the current pinned set: register documentation, an owner/APID table, or
+runtime state. Closing the last four requires vendor documentation or a qualified
 measurement. No further static pass over the current pinned files is known to
 supply any of these; that is a judgement about the present evidence, not a proof
 of exhaustion.
@@ -401,6 +432,9 @@ as the result or wording of the current tests.
 - The PM6125 USID and L11/L24 variant remain unresolved after direct re-read of the pinned SPMI driver.
 - The driver's software-enable field is `base+0x46`, mask `0x80`.
 - The recovered PMIC and SPMI GUIDs and interface pairings are supported.
+- All ten modules that register an `ExitBootServices` notification were traced; only `PmicDxe` reaches SPMI, and only with register bytes `0x14`/`0x16`/`0xd1`.
+- The `SdccDxe` and `EnvDxe` status-code `LocateProtocol` targets are `gEfiStatusCodeRuntimeProtocolGuid`.
+- The `GlinkDxe` and `NpaDxe` EBS bodies are GLINK/NPA transport setup and teardown; neither builds an L11/L24 resource request in the traced instructions.
 - RPM regulator getters return software cache state.
 - The Linux observer read path writes an arbiter command register.
 - The mainline no-supply arrangement supports a retained-state hypothesis.
@@ -416,7 +450,7 @@ None of these establishes a safe PMIC probe.
 | SPMIDxe `+0x28` instruction trace | Recorded; register names remain conditional on the v5 interpretation |
 | PM6125 L11/L24 bases and common offsets | Recorded |
 | PM6125 USID and regulator variant | Deferred; requires pinned evidence or a hardware read |
-| Mu-Silicium exit path and booted provenance | Recorded for the three analysed drivers |
+| Mu-Silicium exit path and booted provenance | Recorded for the three analysed drivers; all ten EBS registrants traced in the shipping volume |
 | RPM/regulator lifecycle | Recorded for the traced paths |
 | Board electrical contract | Deferred; no source in this repository |
 | Rail state at handoff | Deferred; no measurement |

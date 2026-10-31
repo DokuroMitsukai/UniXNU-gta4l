@@ -23,8 +23,12 @@ partition layout, payload policy and packaging.
   with `sheng-pmgr=2` and no AMFI bypass reaches `_bsd_init`,
   `_sheng_pmgr_run` and `_IOKitBSDInit`, then stalls at `_ml_get_timebase`
   before `_vfs_mountroot`. This is host evidence, not a tablet boot.
-- The firmware builds with `ENABLE_SECUREBOOT=1`. No boot image or payload has
-  been produced from this kernel yet.
+- The firmware builds with `ENABLE_SECUREBOOT=1`. The PMGR-linked kernel was
+  packaged into the RAM-root fs/timer diagnostic image
+  (`c12e601e…`, 85,688,320 bytes), flashed and passed on the tablet as a
+  bounded fixture; this is not a normal-userspace boot. The fixture artifacts
+  reproduce byte-for-byte on Linux; see
+  [docs/ram-root-fixture-reproducibility.md](docs/ram-root-fixture-reproducibility.md).
 - Display, input, storage, power, GPU and network drivers remain unimplemented
   or unvalidated.
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
@@ -39,6 +43,18 @@ PPI list, PAN constraint and Adreno 610. Its timer, IPI and original-PMGR
 findings are compared at pinned revisions in
 [docs/tb128fu-comparison.md](docs/tb128fu-comparison.md), with the upstream
 BSD-2-Clause-Patent credit. No TB128FU source is imported here.
+
+## NativeEmmc reference
+
+The Redmi Note 9 (merlinx) NativeEmmc driver by
+[Dracen](https://github.com/Dracen-W) is a read-only XNU block-device
+reference, pinned at `4980f1070b0c822dedb9eb350df710a57df28590`
+([catalog](https://unixnu.com/drivers/community-native-emmc)). It targets the
+MediaTek MT6768 MSDC controller, not the SM6115 SDHCI v5 controller, so its
+register and command code is not transferable. The host-only static audit in
+[docs/native-emmc-reference-audit.md](docs/native-emmc-reference-audit.md)
+records the reusable publication patterns, the MediaTek-specific parts and the
+completion/error-path findings. No code is imported.
 
 ## Inputs
 

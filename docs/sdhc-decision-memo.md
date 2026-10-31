@@ -41,10 +41,10 @@ activation `[S]`.
 | Board and controller | `SM-T505N`/`gta4l`; `sdhci@4744000`; `README.md`, `dts/gta4l.dts`, `board.toml` | Identified `[S]`; board revision and UFS population `[U]` |
 | Pinned source revision | `limonabisi/linux-gta4l`, branch `gta4l-7.2`, commit `cf5f763f0ef8a5b4d8bb4163833cba1160c51894` | Pinned `[S]` |
 | Captured vendor FDT | `device-dump/private/gta4l-dump/live-fdt.dtb` SHA-256 `da1cb76fcf9031de8ee2f1152456994220d3d01a2a2b73b211b684e92a0b6ebc`; decompiled `live.dts` SHA-256 `81c1865589df632ae76b77edd44eb9326b317f8abef471465504618636a9b629` | Captured, post-unlock, not authenticated stock `[S]` |
-| Booted host-init image | v2 boot image SHA-256 `d4aee57a9d1874d23dc010b7de43384ace6ab29241f5ee18cb10f0a561bab133`; payload `0afaae8d...`; artifact absent from this checkout | Prior controller-local result, not a power result `[S]` |
+| Booted host-init image | v2 boot image SHA-256 `d4aee57a9d1874d23dc010b7de43384ace6ab29241f5ee18cb10f0a561bab133`; payload `0afaae8d...`; present locally in the gitignored output tree, not tracked by git | Prior controller-local result, not a power result `[S]` |
 | Firmware provenance | `SdccDxe` `4084bbc7...`, `PmicDxeLa` `db541f63...`, `SPMIDxe` `50be2e1a...`; `firmware-handoff.md` | The traced driver bytes are the booted bytes `[S]`; the current checkout may not reproduce that exact boot `[S]` |
 | Step 3 findings | `rpm-power-interface.md`, `power-retention-evidence.md`, `pm6125-identity-evidence.md`, `pmic-audit.md`, `spmi-0x28-analysis.md`, `firmware-handoff.md` | Bounded source/firmware findings, not measurements `[S]` |
-| Supplied stock-firmware analysis | `stock-firmware-analysis-audit.md`; analysis credited to dmaccess | Package manifest matches internally; XBL bytes and DT overlays differ from the captured state; several supplied claims corrected; no measurement `[S]/[U]` |
+| Supplied stock-firmware analysis | `stock-firmware-analysis-audit.md`; analysis credited to https://github.com/NoNameBuilder | Package manifest matches internally; XBL bytes and DT overlays differ from the captured state; several supplied claims corrected; no measurement `[S]/[U]` |
 | Evidence baseline | `evidence-baseline.md` | Current-tree revision, dirty state, file hashes, pinned-source cache provenance and booted-image relationship recorded `[S]` |
 | Step 4 contract | `sdhc-electrical-contract.md` | `E1`–`E9` safety-critical areas blocking `[S]` |
 | Step 5 software evidence | `sdhci-host-init.md` §Host access-policy verification; `scripts/test-gta4l-sdhci-host-init-sim.py`; `scripts/oracle-gta4l-sdhci-host-init.py` | 33 scenarios pass, ten source mutations and forty-one synthetic trace controls rejected, an initially-zero interrupt baseline accepted, separate-implementation oracle (same author) passes `[S]` |
@@ -79,12 +79,12 @@ blocker `[S]`.
 | ID | Requirement | Existing evidence | Classification | Remaining gap |
 | --- | --- | --- | --- | --- |
 | `E1` | Recommended operating ranges and absolute maxima for eMMC VCC, VCCQ2 and every shared L24/L11 consumer | Vendor DT ranges and requested levels; no PM6125 or eMMC datasheet | Ranges `[S]`; absolute maxima and per-component limits `[U]` | Exact PM6125/eMMC absolute maxima, shared-consumer limits and the values that apply to this board revision |
-| `E2` | SDC1 pad domain, signalling levels, pull-up source and permitted powered/unpowered combinations | Vendor and pinned `sdc1_*` states; L11 1.8 V request; UEFI TLMM writes | Declared settings `[S]`; actual pad domain/state and UEFI encoding `[U]` | Actual pad domain at handoff, pull-up source, unpowered-drive limits and the UEFI-write-to-pad mapping |
+| `E2` | SDC1 pad domain, signalling levels, pull-up source and permitted powered/unpowered combinations | Vendor and pinned `sdc1_*` states; L11 1.8 V request; UEFI TLMM writes; the `0x9fe4` write decodes to the vendor `sdc1_*_on` fields | Declared settings and write-to-pad mapping `[S]`; actual pad domain/state `[U]` | Actual pad domain at handoff, pull-up source, unpowered-drive and back-power limits |
 | `E3` | Shared loads, regulator capability and operating conditions for L24/L11 and their parents | Vendor declared currents (570 mA VCC, 325 mA VDD-IO; UFS 600 mA each); recovery sees eMMC only | Declarations `[S]`; capability, load and UFS population `[U]` | Physical UFS population, actual shared loading, regulator capability and parent loading |
 | `E4` | Ramp, settling, inrush, overshoot/undershoot and brownout requirements | SPMI `SOFT_START` register and regulator-core `soft_start` hook exist; no board values | Hooks `[S]`; behaviour and limits `[U]` | Required slew, inrush, overshoot/undershoot and brownout limits; measured behaviour |
 | `E5` | Electrical supply, pad, reset and clock ordering, including minimum delays | Linux power-IRQ software order `set_vmmc` → `set_vqmmc` → `set_pincfg` → acknowledge; controller reset and internal-clock stages are separate | Software order `[S]`; electrical order and delays `[U]` | Required electrical order and minimum delays; whether the no-ack scope leaves a safe pending request |
 | `E6` | Restrictions on driving CMD/DAT/CLK/reset while a supply is absent; pad leakage | Vendor `vccq2-pwr-collapse-sup` and `qcom,vdd-io-lpm-sup`; no pad leakage data | Properties `[S]`; requirement `[U]` | Which pins may be driven unpowered and whether the card or SoC can back-power a rail |
-| `E7` | L24/L11 and pad state across handoff, suspend, shutdown and reboot | Mainline sends no L11/L24 vote; UEFI exit path is not passive; `pwr=00` is controller-local; a bounded RPM/XBL trace finds LDOA tables for both rails but no traced L11/L24 voltage/mode/enable write or runtime policy `[S]/[U]` | No vote and exit trace `[S]`; firmware tables identified `[S]`; retention `[U]` | Actual rail state across each transition; runtime RPM consumer/policy for the LDOA tables; PBS semantics; indirect UEFI effects |
+| `E7` | L24/L11 and pad state across handoff, suspend, shutdown and reboot | Mainline sends no L11/L24 vote; UEFI exit path is not passive; `pwr=00` is controller-local; a bounded RPM/XBL trace finds LDOA tables for both rails but the bounded scan finds no referenced static RPM table or stored pointer/resolvable PC-relative literal that selects either rail, and no traced L11/L24 voltage/mode/enable write; runtime policy `[S]/[U]` | No vote and exit trace `[S]`; firmware tables identified `[S]`; static reference not found `[S]`; retention `[U]` | Actual rail state across each transition; runtime LDOA request path (parser/aggregator), latched per-id state, and runtime-built LDOA descriptors; PBS instruction semantics; indirect UEFI effects |
 | `E8` | Relevant PM6125/controller interrupt and status semantics; consequence of clearing or masking; documented acknowledge-or-not decision | SDHCI power-status semantics `[S]`; arbiter `+0x28` interpretation `[S]/[C]`; PM6125 `QPNPINT` applicability `[U]` | SDHCI `[S]`; PM6125 applicability and decision `[U]` | Whether PM6125 uses the `0x14`/`0x16` `QPNPINT` layout, its USID/subtype, and safe pending-request behaviour |
 | `E9` | Qualified rail-recovery procedure and acceptance criteria | BOOT-partition backup/rollback and payload gates | Software rollback `[S]`; rail recovery `[U]` | Safe-stop, discharge/power-cycle procedure, verification measurement and independent review |
 | `S1` | Bus-power implementation, explicit access policy, bounded waits, trace oracle and negative tests | Host-local diagnostic policy and tests; no bus-power artifact in this tree | Tree-bounded `[S]`; candidate design `[U]` | Approved design and tests for the bus-power candidate |
@@ -116,9 +116,18 @@ does not establish electrical recovery. No blocker above is resolved, and no
 disposition improves because its wording changed `[S]`.
 
 The bounded trace in `power-retention-evidence.md` §7 narrows `E7` by
-identifying the RPM LDOA tables for both rails and finding no direct L11/L24
-voltage, mode or enable write in the traced paths. It does not establish a
-retention result, so `E7` stays blocking `[S]/[U]`.
+identifying the RPM LDOA tables for both rails, finding no referenced static
+table or stored pointer/resolvable PC-relative literal that selects either rail
+in the bounded scan, and finding no direct L11/L24 voltage, mode or enable
+write in the traced paths. The LDOA parser and aggregator at
+`0x46151f8`/`0x46153b8` are registered per instance at runtime, and the
+aggregator keeps a latched per-id state and applies through `0x4615906` →
+`0x4614920`; the separately traced `0x46166c8`/`0x46168dc` pair is the `smpa`
+class, and its bridge at `0x4616e10` reaches the class/ID setter at
+`0x4615d08` → `0x4617b48` for class byte `0xb`, but whether that class is LDOA
+is `[U]`. The class object and per-id array are built at runtime, so the scan
+does not prove that any request exists or the runtime bounds `[C]/[U]`. It does
+not establish a retention result, so `E7` stays blocking `[S]/[U]`.
 
 ## 5. Decision record
 
@@ -201,3 +210,55 @@ No device action is authorized by this memo `[S]`. Keep SDHCI bus power and the
 card clock off, do not acknowledge `CORE_PWRCTL_STATUS`, do not access PMIC/SPMI
 or send RPM votes, and do not scan candidate slaves `[S]`. The working RAM-root
 path stays unchanged `[S]`.
+
+## 8. Addendum 2026-10-30: consolidated power/pad report
+
+`docs/sdhc-power-pad-dependency-report.md` consolidates the remaining VCC/VCCQ,
+SDC1 pad, firmware-handoff, power-request/ack and sequencing/recovery
+dependencies. It records the booted `SdccDxe` controller-local handshake: the
+handler sets the bus-power bit, resets the controller, and writes the
+`IO_SUCCESS` or `BUS_SUCCESS` result bit after bounded polling, with no
+PMIC/LDO/RPM action. That is not a bus-power-on regulator sequence and does not
+close `E5` or `E8`. The report also decodes the SDC1 pad write as the vendor
+active drive/pull configuration, closing only the write-to-pad mapping part of
+`E2`. No electrical `E*` or `S*` gate is closed; the decision remains **NO-GO**
+`[S]`.
+
+## 9. Decision update 2026-10-30
+
+The short update is `docs/sdhc-decision-update-2026-10-30.md`. In summary: the
+corrected UEFI trace proves a controller-local reset plus a result-only power
+status write, not a regulator sequence; the pad decode proves the SDC1 write is
+the vendor active configuration; the remaining blockers are the PM6125/eMMC
+electrical limits, board schematic/test points, actual rail and pad
+measurements, RPM runtime policy, and a qualified `E9` recovery procedure.
+**NO-GO remains** `[S]`.
+
+## 10. Evidence-gap checklist 2026-10-30
+
+`docs/sdhc-evidence-gap-checklist.md` links every canonical `E*`/`S*` gate to
+its established evidence, missing input, acquisition route, responsible role,
+closure criterion and dependencies. It is a host-only inventory: it adds no
+measurement, closes no gate and does not change any disposition. The decision
+remains **NO-GO** `[S]`.
+
+## 11. Porting-approach reassessment 2026-10-31
+
+`docs/porting-approach-reassessment-2026-10-31.md` records the owner-directed
+reassessment. Its scope statement is now canonical:
+
+- **Software porting may proceed** using the mainline Linux, vendor/LineageOS
+  and captured-firmware stack as the reference. Electrical characterization is
+  not a prerequisite for writing, porting or host-testing software `[S]`.
+- **The `NO-GO` above applies only to the on-device
+  `sdhc-bus-power-activation` operation.** It is not a finding that the
+  controller cannot be ported, and it does not make Linux an invalid reference
+  `[S]`.
+- Any device action still requires the owner's separate written approval for
+  the exact procedure and a verified EFS/CPEFS backup, per `AGENTS.md` `[S]`.
+- No `E*` or `S*` gate is marked closed. The evidence gaps remain open for the
+  activation operation; they no longer block software work `[S]`.
+
+This addendum does not authorize bus-power activation, card-clock activation,
+card commands, DMA, PMIC/SPMI access, RPM votes or storage access. It changes
+the scope of the existing decision, not the evidence tags `[S]`.

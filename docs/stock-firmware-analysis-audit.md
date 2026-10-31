@@ -4,7 +4,7 @@ Status: host-only audit of an externally supplied static analysis. It adds no
 measurement and closes no SDHC power, electrical or retention requirement; the
 decision remains **NO-GO** (`sdhc-decision-memo.md`) `[S]`.
 
-The analysis archive and its findings are credited to **dmaccess**. This
+The analysis archive and its findings are credited to **https://github.com/NoNameBuilder**. This
 document records what this repository verified, what it corrected, and what it
 did not adopt. It does not reproduce the supplied text or binaries.
 
@@ -12,7 +12,7 @@ did not adopt. It does not reproduce the supplied text or binaries.
 
 | Item | Value |
 | --- | --- |
-| Supplied by | dmaccess |
+| Supplied by | https://github.com/NoNameBuilder |
 | URL | `https://temp.sh/FNeBq/SM-T505-firmware-analysis.zip` (temporary link) |
 | Archive SHA-256 | `6d750114c4465e894a043ce190ea3a776d25a3bf862d5b50df3d95d73f2368e9` |
 | Size | 256,395,350 bytes; 227 entries; 464,205,248 bytes uncompressed |
@@ -196,3 +196,67 @@ and document counts; they do not cover the voltage, interrupt-specifier,
 XBL-address or disassembly-coverage claims corrected in §4 `[S]`. The audit did
 not authenticate the package, reproduce the RPM disassembly, boot the supplied
 working-port image, or measure any rail, pad or power state `[U]`.
+
+## 7. Exact-build vendor package
+
+`[S]` A Samsung FUS package for the captured build `T505NDXS6CXB1` was
+downloaded on the host with `samloader` 2.2.0. The archive is 4,385,869,977
+bytes with SHA-256
+`e575de6bde656dc7c99e23070906caab9d571b3f369b70e1b579cd74b135fd9c`.
+The CSC/region code and the package filename are withheld at the owner's
+request; they are not needed for the comparison below and must not be inferred
+from the build identifier `[S]`.
+
+`[S]` The BL members are LZ4 frames. Four decompressed members are exactly the
+size of their captured partitions and match byte-for-byte. The other six are
+smaller than their partitions; their captured images match the stock member on
+the decompressed prefix, but the remaining partition bytes are not zero and are
+not explained by this audit. The comparison therefore establishes the stock
+payload prefix, not full-partition equality:
+
+| Stock member | Stock bytes | Captured partition | Result |
+| --- | --- | --- | --- |
+| `xbl.elf` | 4,194,304 | `partitions/xbl.img` | Full SHA-256 match |
+| `abl.elf` | 4,194,304 | `abl.img` | Full SHA-256 match |
+| `tz.mbn` | 4,194,304 | `partitions/tz.img` | Full SHA-256 match |
+| `hyp.mbn` | 1,048,576 | `partitions/hyp.img` | Full SHA-256 match |
+| `xbl_config.elf` | 43,628 | `partitions/xbl_config.img` | Prefix match; 4,150,676 trailing bytes, 32 nonzero |
+| `rpm.mbn` | 226,528 | `partitions/rpm.img` | Prefix match; 297,760 trailing bytes, 48 nonzero |
+| `devcfg.mbn` | 43,436 | `partitions/devcfg.img` | Prefix match; 87,636 trailing bytes, 52 nonzero |
+| `uefi_sec.mbn` | 126,051 | `partitions/uefisecapp.img` | Prefix match; 1,971,101 trailing bytes, 125 nonzero |
+| `apdp.mbn` | 14,020 | `partitions/apdp.img` | Prefix match; 510,268 trailing bytes, 92 nonzero |
+| `msadp.mbn` | 14,020 | `partitions/msadp.img` | Prefix match; 510,268 trailing bytes, 109 nonzero |
+
+`[U]` For each of the six prefix matches, the first byte after the stock member
+is nonzero and the trailing region contains 32–125 nonzero bytes. This audit
+does not establish whether those bytes are padding, stale content, a second
+stage or something else; they are recorded as unexplained. Do not describe
+these partitions as full matches.
+
+`[S]` In the AP member, `boot.img` (100,663,296 bytes,
+`1f42eb045ba8eba194c7eb4c944fe6391c068b491003be78a3814ac07d2061c6`) and
+`dtbo.img` (25,165,824 bytes,
+`67546984d6be0d7bf44295dcd9a66745a4a0929993223375a403c537baf39d02`) are
+byte-identical to the captured partitions. The
+captured pre-test backup `boot-before-unixnu-test-20261027.img` is also
+byte-identical to the stock `boot.img` `[S]`.
+
+`[S]` The captured `recovery.img` is TWRP and therefore differs from the stock
+recovery image; that is expected and is not a provenance failure `[S]`.
+
+`[U]` The captured `vbmeta.img` does not match the AP `vbmeta.img.lz4` member,
+including as a prefix. The reason is unresolved: the capture is post-unlock and
+the vbmeta partition may have been rewritten, while the AP member may also be
+matched with a different BL `vbmeta` image. This audit does not conclude that
+the captured vbmeta is modified or that it is stock `[U]`.
+
+`[S]` This comparison establishes that the captured BL payloads and the
+boot/dtbo images correspond to the `T505NDXS6CXB1` package: four BL images and
+both AP images match in full, and six BL images match on their decompressed
+prefixes with unexplained trailing bytes. It does not authenticate the package
+beyond the FUS download and TLS, does not cover userdata or every partition, and
+adds no rail, pad or power measurement `[S]/[U]`.
+
+`[S]` The firmware archive and all extracted images remain outside the
+repository. Do not commit them, the region code, device-unique identifiers or
+the capture's private partition images.
