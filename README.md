@@ -61,7 +61,7 @@ completion/error-path findings. No code is imported.
 | Item | Value |
 | --- | --- |
 | SoC | Qualcomm SM6115 (Bengal) |
-| SoC source | `DokuroMitsukai/UniXNU-sm6115-common` |
+| SoC source | `gta4lunix/UniXNU-sm6115-common` |
 | OS profile | `ipados-17.7.11-21H461` |
 | DRAM | 3 GiB in three live banks (`0x40000000+0x3e580000`, `0x80000000+0x20000000`, `0xa0000000+0x60000000`); ADT span `0x40000000+0xC0000000`; 2 GiB DarwinBoot window at `0x80000000` |
 | Framebuffer | `0x5C000000`, 1200x2000, stride 4800 |
