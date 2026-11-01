@@ -82,7 +82,7 @@ Run from the UniXNU checkout:
 
 ```sh
 python3.11 -m py_compile scripts/unixnu/*.py
-python3.11 -m unittest scripts.unixnu.test_profiles scripts.unixnu.test_pipeline scripts.unixnu.test_kernel
+python3.11 -B -m unittest discover -s scripts/unixnu -t .
 python3.11 scripts/porting-record.py check --device ../UniXNU-gta4l
 ```
 
@@ -90,6 +90,7 @@ Run from this repository:
 
 ```sh
 python3.11 -B scripts/test-gta4l-packaging.py
+python3.11 -B scripts/test-gta4l-inventory.py
 python3.11 -B scripts/test-gta4l-boot-image.py
 python3.11 -B scripts/test-gta4l-diagnostic-package.py
 python3.11 -B scripts/test-gta4l-diagnostic-payload.py
@@ -105,14 +106,21 @@ Host results for the adopted tree (2026-11-01):
   kernelcache, the local component pins, the canonical script hash and
   template equality, the preflight's success and failure controls, stale
   output truncation, and the launcher's argument and interpreter propagation.
+- `scripts/test-gta4l-inventory.py` passes over synthetic device, UniXNU and
+  firmware Git repositories. It covers the declared/effective/cached split,
+  module-in-parent-checkout, revision mismatch, redaction of tokens, URL
+  credentials, signed parameters and the platform seed, malformed or
+  reordered XNU reports, missing caches and deterministic output.
 - `scripts/test-gta4l-boot-image.py`, `scripts/test-gta4l-diagnostic-package.py`
   and `scripts/test-gta4l-diagnostic-payload.py` pass.
-- The UniXNU profile, pipeline and kernel unit tests pass (27 tests); profile
-  resolution accepts `17` and the full name and rejects `26`, `27`, an absent
-  profile, a missing defconfig mapping and an `arm64e` profile. The release
-  command's step order, `--check`, `--no-deps` and failure-stop behavior at
-  every step are covered with mocks. Per-OS overrides cannot change the
-  package contract or the resolved profile identity.
+- The UniXNU unit suite passes (72 tests, 1 skipped). It covers the production
+  context, argument parsing, profile validation, feed precedence, saved-state
+  and environment handling, the offline inspection resolver, redaction and
+  IPSW cleanup. Profile resolution accepts `17` and the full name and rejects
+  `26`, `27`, an absent profile, a missing defconfig mapping and an `arm64e`
+  profile. The release command's step order, `--check`, `--no-deps` and
+  failure-stop behavior at every step are covered with mocks. Per-OS overrides
+  cannot change the package contract or the resolved profile identity.
 - The preflight stages 316,095 bytes with SHA-256
   `5c4c0599ff430bec71de6bb75663eb857c30ae368823d55054fd9a90e8eb77f8` from the
   4,619,189-byte Mu-Silicium source in an isolated tree, rejects a missing
