@@ -76,6 +76,27 @@ the packaging path for on-device diagnostics. A future release artifact needs
 either a documented payload size that fits BOOT or an upstream interface for
 the diagnostic payload contract; neither is invented here.
 
+## Workflow publication gate
+
+`.github/workflows/package-gta4l.yml` is manual-only, read-only and pinned to
+the published UniXNU commit and the recorded Mu-Silicium integration commit.
+It runs `scripts/test-gta4l-workflow.py`, the packaging contract, the
+boot-image self-test and the diagnostic-payload builder test before the
+dependency/preflight step.
+
+Image publication is disabled: the workflow has no upload step and no
+`if: success()` upload gate. A future run that somehow passes verification
+still retains no artifact. Do not restore an upload step, or treat an expected
+verify failure as a release, without an owner-approved allowlisted publication
+gate.
+
+The workflow has not run on a runner, so the macOS image, Xcode 26.6 and
+Homebrew tool versions remain unverified. The pinned UniXNU commit predates
+`scripts/unixnu/inspection.py`, so `scripts/test-gta4l-inventory.py` is not in
+the runner step yet; it joins when the pin advances. The contract test parses
+the YAML with Python `yaml` or Ruby Psych and normalizes their YAML 1.1 `on`
+key.
+
 ## Host verification
 
 Run from the UniXNU checkout:
@@ -89,6 +110,7 @@ python3.11 scripts/porting-record.py check --device ../UniXNU-gta4l
 Run from this repository:
 
 ```sh
+python3.11 -B scripts/test-gta4l-workflow.py
 python3.11 -B scripts/test-gta4l-packaging.py
 python3.11 -B scripts/test-gta4l-inventory.py
 python3.11 -B scripts/test-gta4l-boot-image.py
@@ -101,6 +123,11 @@ UNIXNU_UEFI=../Mu-Silicium python3.11 -B scripts/prepare-gta4l-boot-dtb.py
 Host results for the adopted tree (2026-11-01):
 
 - `scripts/check-gta4l.py` passes.
+- `scripts/test-gta4l-workflow.py` passes. It statically checks the workflow
+  trigger, read-only permissions, immutable action and source pins, the exact
+  profile, host tests before release construction, checkout paths, tool and
+  interpreter assertions, seed redaction, shell syntax and disabled
+  publication.
 - `scripts/test-gta4l-packaging.py` passes. It checks the board package
   values, the resolved iPadOS 17 profile and IPSW identity, the cached
   kernelcache, the local component pins, the canonical script hash and

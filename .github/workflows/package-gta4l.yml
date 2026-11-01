@@ -5,8 +5,9 @@ name: package-gta4l
 # Status: static and host-tested only; this workflow has not run on a runner.
 # The tracked 192 MiB payload makes boot.img larger than the captured
 # 100,663,296-byte BOOT partition, so the verify step is expected to stop the
-# run and no artifact is uploaded. Do not dispatch it without owner approval,
-# and do not treat its output as a flashable release.
+# run. Image publication is disabled: there is no upload step, and an expected
+# verify failure is not a successful release. Do not dispatch it without owner
+# approval, and do not treat its output as a flashable release.
 #
 # Pins: UniXNU f50d5bd5093ede81f8c1897b8ce5c93473c0fb7b is the tip of the
 # published gta4l-release-pipeline branch in DokuroMitsukai/UniXNU. The device
@@ -107,6 +108,16 @@ jobs:
             exit 1
           fi
 
+      # The pinned UniXNU commit predates scripts/unixnu/inspection.py, so
+      # scripts/test-gta4l-inventory.py joins this step when the pin advances.
+      - name: Run the host contract tests
+        working-directory: device
+        run: |
+          python3 -B scripts/test-gta4l-workflow.py
+          python3 -B scripts/test-gta4l-packaging.py
+          python3 -B scripts/test-gta4l-boot-image.py
+          python3 -B scripts/test-gta4l-diagnostic-payload.py
+
       - name: Check the profile, sources and patch order
         working-directory: device
         env:
@@ -121,15 +132,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: scripts/package.sh --os ipados-17.7.11-21H461 --uefi ../Mu-Silicium --no-deps
 
-      - name: Upload the package outputs
-        if: success()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: gta4l-ipados-17.7.11-21H461-${{ github.run_attempt }}
-          retention-days: 1
-          if-no-files-found: error
-          path: |
-            UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/boot/boot.img
-            UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/payload/payload.img
-            UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho
-            UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/package.manifest.json
+      # Image publication is disabled on purpose while the BOOT-size artifact
+      # contract is unresolved. Do not add an upload step back without an
+      # owner-approved, allowlisted publication gate.
+
