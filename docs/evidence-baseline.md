@@ -22,7 +22,11 @@ while the correction refreshes the `README.md`, `docs/emmc-reference.md` and
 release-packaging adoption and the firmware-dependency decision; that change
 refreshes the `porting.toml` row. The new packaging documents, workflow and
 audit script are outside this bounded manifest and are recorded by their own
-files. This document's own hash is not listed. Hashes describe
+files. It was refreshed once more on `2026-11-01` after the LinuxForGta4l
+organization source audit: that change refreshes the `docs/emmc-reference.md`
+and `porting.toml` rows, adds no manifest row, and records the new audit
+document and retrieval TSV outside this bounded manifest. This document's own
+hash is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
 without further content changes; if the committed content differs, re-run §6
@@ -64,14 +68,18 @@ and update the table.
 | Twenty-third hardware-run paths at this snapshot | 4 modified (`docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Twenty-fourth CMD7-diagnostics paths at this snapshot | 17: 14 modified (`README.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/include/kern/debug.h`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc-probe.py`, `scripts/test-gta4l-emmc.py`) and 3 added (`docs/emmc-cmd7-timeout-finding.md`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/test-gta4l-emmc-evidence-counts.py`) |
 | Twenty-fifth PixelExperience-provenance paths at this snapshot | 4: 3 modified (`README.md`, `docs/emmc-reference.md`, `porting.toml`) and 1 added (`docs/pe-storage-stack-provenance.md`) |
-| Dirty entries at the hash snapshot | 19, exactly the twenty-fourth and twenty-fifth paths above |
+| Twenty-sixth LinuxForGta4l-source-audit paths at this snapshot | 5: 3 modified (`docs/emmc-reference.md`, `docs/evidence-baseline.md`, `porting.toml`) and 2 added (`docs/linuxforgta4l-org-audit.md`, `docs/linuxforgta4l-org-audit-manifest.tsv`) |
+| Dirty entries at the hash snapshot | 5, exactly the twenty-sixth paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
-The hash table describes the twenty-fifth working-tree snapshot: the `60817c3`
+The hash table describes the twenty-sixth working-tree snapshot: the `60817c3`
 base, the twenty-fourth CMD7-diagnostics batch, the twenty-fifth
-PixelExperience-provenance paths and the provenance closeout correction. The
-`README.md`, `docs/emmc-reference.md` and `porting.toml` rows were refreshed for
-the corrected wording and counts. Historical batch rows remain as recorded. The eleventh correction commit `4c447b9`
+PixelExperience-provenance paths, the provenance closeout correction and the
+LinuxForGta4l organization source audit. The `docs/emmc-reference.md` and
+`porting.toml` rows were refreshed for the corrected wording and the audit
+link. Historical batch rows remain as recorded. The current snapshot is taken
+on top of `d23d5fb`; the `60817c3` base row is retained as the historical base
+for the batches below. The eleventh correction commit `4c447b9`
 contains exactly the five paths in its row. The
 tenth correction commit `07a36e6`
 contains exactly the six paths in its row. The ninth correction commit
@@ -427,9 +435,9 @@ bytes of the previously booted image `[S]`.
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
 | Repository README | `README.md` | `b80d989e7155cec7f114dfe1b3ba914bd78fe90c33fe01ad1273256424e44829` |
-| eMMC reference | `docs/emmc-reference.md` | `29381c1059ff6202f86257c5dee6b369b011028e3cf9f644758d2581ad8de37b` |
+| eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `2828f83ba455ba06b6bedc7d71105f5b5667863deb43ea5c905aa10e0335b7db` |
+| Porting record | `porting.toml` | `7f448a6c946082069d5ae0a094d5103cd637461517c213d838359aa724f9f466` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
 | eMMC driver record | `docs/emmc-driver.md` | `47af4a1c605e543899d1b6482a7963f280cc22d971ad8dce7dfa77bf5939e29c` |
@@ -457,9 +465,10 @@ this batch. In particular, it has no row for
 `scripts/sim-gta4l-emmc-probe/harness.c`,
 `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`,
 `scripts/test-gta4l-emmc-probe.py`, `docs/emmc-cmd7-timeout-finding.md`,
-`scripts/test-gta4l-emmc-evidence-counts.py` or
-`docs/pe-storage-stack-provenance.md`; those files are outside the manifest
-scope and no hash is claimed for them here. The row count stays 45.
+`scripts/test-gta4l-emmc-evidence-counts.py`,
+`docs/pe-storage-stack-provenance.md`, `docs/linuxforgta4l-org-audit.md` or
+`docs/linuxforgta4l-org-audit-manifest.tsv`; those files are outside the
+manifest scope and no hash is claimed for them here. The row count stays 45.
 
 The active tree carries the committed `bf2e7d4` source (`3f8f4531...`, the
 qualified `HOST INIT REPORT` wording). The historical `bc228be7...` source
@@ -518,6 +527,14 @@ The cache has no git metadata, so the revision is a documented fetch provenance,
 not a property that can be independently verified from the cache alone. If the
 cache is lost, re-fetch the listed files from the pinned commit and compare the
 manifest digest `[S]/[U]`.
+
+The 2026-11-01 LinuxForGta4l comparison used a separate host cache,
+`/tmp/opencode/lfg4l-audit/`, and did not alter the limonabisi cache or its
+digest. That cache has no git metadata either; its durable retrieval inventory
+is `docs/linuxforgta4l-org-audit-manifest.tsv`, which records the repository,
+immutable SHA, path, computed blob hash, size, SHA-256, license note and
+variant for 69 files. The audit document is `docs/linuxforgta4l-org-audit.md`.
+Neither file is a row in the 45-row table `[S]`.
 
 ## 4. Firmware and boot artifacts
 

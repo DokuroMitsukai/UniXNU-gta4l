@@ -111,6 +111,13 @@ write clears them and `caps == 0` prevents re-enable. See
 line ranges at commit `cf5f763f0ef8a5b4d8bb4163833cba1160c51894`,
 `linux-regulator-lifecycle.md`.
 
+The revision-pinned comparison of the organization's Linux 7.2, downstream
+Android and U-Boot trees, including the byte identity of this MMC stack with
+the organization's Linux 7.2 tree, is in `docs/linuxforgta4l-org-audit.md`;
+its retrieval inventory is `docs/linuxforgta4l-org-audit-manifest.tsv`. Those
+are reference findings only and do not change this document's rail or pad
+statements.
+
 ## guamp reference
 
 Repository:
