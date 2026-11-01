@@ -308,6 +308,24 @@ extracted payload). The photo is
 `fmt=4` CMD7 capture was not exercised; see §2.9 and `docs/emmc-driver.md`
 §5.3.3.
 
+The 2026-11-01 `cmd1gap` candidate adds only an 8-us delay after an accepted
+ready CMD1. It is
+`out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/boot-ram-root-emmc-probe-cmd1gap.img`
+(85,688,320 bytes, SHA-256
+`8a463dae3ff120213046558d89374316e0a51fadb845247a60f822fad9e227ee`); its
+payload is SHA-256 `6b6f5212…`, kernel `ee33719e…`, source hashes `874e6878…`,
+`5dd223f7…` and `932552a2…`, with `gta4l-emmc-probe=3`, payload contract 7/7
+and boot-image gate 18/18 against the v5 baseline. The flash record is
+`out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/flash-record.json`: BOOT only,
+pre-flash partition `b53f31fe…` (the fail-closed image plus its unchanged tail),
+post-flash `92f4000e…`, image-byte readback `8a463dae…`, tail `a28b4ea2…`
+unchanged, `RECOVERY` `14e11370…` unchanged, pulled gate 18/18 and pulled
+payload contract 7/7. The owner then ran it on three units; all three reached
+`GTA4L-EMMC IDENT REPORT: rc=0`. See `docs/emmc-cmd2-crc-audit.md` §2.11,
+`docs/emmc-driver.md` §5.3.4 and `docs/emmc-cmd1-gap-candidate.md`. The run
+results are owner-supplied text; no photo file or hash from this run is in the
+tree.
+
 This establishes the packaging step only. The inputs are existing artifacts;
 the replay does not reproduce the kernel or firmware.
 

@@ -12,7 +12,10 @@ moved from the CMD2 `CMD_CRC` record to a CMD3 completion timeout. The later
 see section 2.8 and `docs/emmc-cmd7-timeout-finding.md`. The `fmt=4` fail-closed
 image was run on 2026-11-01 and stopped at CMD2 with the same `-8` (`CMD_CRC`)
 record and response window as the section 2.6 image (sections 2.9 and 2.10); the
-CMD7 capture was not exercised. TWRP on `RECOVERY` was unchanged at
+CMD7 capture was not exercised. A later candidate added only an 8-us delay
+after an accepted ready CMD1. On 2026-11-01 it completed the full identification
+sequence (`rc=0`) on the owner's SM-T505N and on two owner-reported SM-T505
+units, which exercised the CMD7 capture (section 2.11). TWRP on `RECOVERY` was unchanged at
 `14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae` in the
 recorded flash records. The owner reports the first `fmt=4` run on an SM-T505
 and a later BOOT-only run on the owner's SM-T505N; the results agree 1:1 per the
@@ -35,6 +38,11 @@ owner, and the second run's flash record, readback and photo are in section
 | `src/UniXNU-gta4l/scripts/sim-gta4l-emmc-probe/harness.c` | `fca9409a9c77a009e97f92004a33854153db02f69fcb098d1d5b48d0e0f6ca73` |
 | `src/UniXNU-gta4l/scripts/test-gta4l-emmc.py` | `97811c8b767b58986e5b5b6bddc29d0cf627b508fb25bddcb15d3f2c33b88507` |
 | `src/UniXNU-gta4l/scripts/test-gta4l-emmc-probe.py` | `da8dc01328d6fcac51a23420da363d7d79923168e0f93ab91e3b56f2a2532262` |
+
+The 2026-11-01 `cmd1gap` candidate source is the same tree with only the delay
+added: `Gta4lEmmc.c 874e6878…`, `Gta4lEmmc.h 5dd223f7…` and
+`Gta4lEmmcProbe.c 932552a2…`. Its image and three-unit result are in section
+2.11.
 
 The section 2.6 image (`33311a32…`) predates the `cmd1rsp=`/`pre2rsp=` capture.
 The section 2.7 `cmd2window` image is the later diagnostics-only build and is
@@ -112,10 +120,16 @@ completion path (H8) applies only when CMD2 completes and was not reached in
 2.9. No cause of the across-build outcome difference is established. The failed
 R2 snapshot is never promoted to a CID, and no CRC checking may be disabled.
 
-A host-only timing candidate is specified in
-`docs/emmc-cmd1-gap-candidate.md`: one 8-us post-ready-CMD1 delay, with a
-simulator model that is explicitly hypothetical. It is not built, flashed or
-run; the existing `fmt=4` image remains the unchanged baseline.
+A timing candidate is specified in `docs/emmc-cmd1-gap-candidate.md`: one
+8-us post-ready-CMD1 delay, with a simulator model that is explicitly
+hypothetical. It was built, flashed and run on 2026-11-01. The candidate
+completed CMD2 and the full identification sequence on the owner's SM-T505N and
+two owner-reported SM-T505 units (section 2.11). On the owner's unit the
+fail-closed image had failed CMD2, and the delay is the only source delta
+between the two images. That supports a timing-sensitive contribution for these
+runs; it does not establish the root cause, does not prove the delay necessary
+(the earlier `cmd2window`/`fmt=2` builds passed CMD2 without it) and is not a
+reliability claim. No general fix is adopted and CRC checking remains enabled.
 
 ---
 
@@ -574,6 +588,156 @@ and 7/7 payload checks, written to
 `out/gta4l/ram-root-emmc-probe-failclosed-rerun-evidence/readback-gate-report-pulled.json`
 and `readback-payload-check-pulled.json`. The original reports remain in place.
 
+### 2.11 cmd1gap candidate stage-3 result (2026-11-01)
+
+The `cmd1-crc-retire-8us` candidate descends from the section 2.9 source. Its
+parent `aaaae41` carries the same three source hashes as the fail-closed build
+(`e493b3eb…`, `e0a2830c…`, `932552a2…`), and commit `2a3268c7` adds only the
+8-us post-ready-CMD1 delay and its constant to the core. The built image is
+`out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/boot-ram-root-emmc-probe-cmd1gap.img`,
+85,688,320 bytes, SHA-256
+`8a463dae3ff120213046558d89374316e0a51fadb845247a60f822fad9e227ee`;
+source hashes `874e6878…` (`Gta4lEmmc.c`), `5dd223f7…` (`Gta4lEmmc.h`) and
+`932552a2…` (`Gta4lEmmcProbe.c`); archive `22e6186f…`; payload kernel
+`ee33719e…`; payload `6b6f5212…`, 83,886,080 bytes, `gta4l-emmc-probe=3`,
+contract 7/7; boot-image gate 18/18 against the pinned v5 baseline
+`ce4d76e8…`. Only the ramdisk differs from that baseline. The flash record is
+`out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/flash-record.json`: BOOT only
+(`/dev/block/mmcblk0p69`), pre-flash partition `b53f31fe…` (the section 2.9
+image plus its unchanged tail), post-flash `92f4000e…`, image-byte readback
+`8a463dae…`, tail `a28b4ea2…` unchanged, `RECOVERY` `14e11370…` unchanged,
+pulled-image gate 18/18 and pulled payload contract 7/7. The record was written
+after the BOOT write, records no reboot or boot at that time and names the
+fail-closed result as the matched baseline for the owner's unit. The owner then
+rebooted and ran the candidate.
+
+All three run results are owner-supplied text transcriptions. No photo file or
+photo hash from this run is in the tree, so the transcriptions are not
+independently authenticated; the unit identities and the SM-T505/SM-T505N
+attribution are owner-reported. All three runs reached
+`GTA4L-EMMC IDENT REPORT: rc=0` and stopped at the probe's intentional report
+panic (`Gta4lEmmcProbe.c:497`). `rc=0` is the success report's literal header:
+the report is emitted only after `gta4l_emmc_init()` returns
+`GTA4L_EMMC_OK`, and before any sector read (`Gta4lEmmcProbe.c:784-788`). The
+owner's SM-T505N transcription, with the extraction's line folding and hex-width
+artifacts rejoined as in section 2.9 (`c31=` is the format's `c3l=`, `Gta41` is
+`Gta4l`, and the 17-digit frame/page forms are reduced to the renderer's
+16-digit width), is:
+
+```text
+GTA4L-EMMC IDENT REPORT: rc=0 mci=10000072 rca=1 cap=61071360 rev=8 bw=0
+ocr=c0ff8080 ext=000009cb hc2=0008 ven=00018a9c dll=6000642c
+dst=00000000 pst=00000000 step=15 log=5
+GTA4L-EMMC IDENT CAPTURE fmt=4 hv=7202
+c2=1/0001/0000/05f46619,4d420090,44583638,00150100
+c3p=1/0000/0000/03f800f0/0023/07ff
+c3t=0/0/0000/00000000/0/00000000,00000000,00000000,00000000
+c3l=1/3/0000/0001/26/0000000000001560/19200000
+cid=15010044,5836384d,42009005,f4661900
+c7p=1/0000/0000/03f800f0/0023/07ff/ef8e4040,fff6dbff,320f5903,00d02701
+c7q=1/0003/0000/0000/0003/26/0000000000001582
+c7c=1/25/000000000001573/1/25/0000000000001573
+c7t=1/0003/0000/03f800f0/0000071b/00010000/00000700,0f5903ff,f6dbffef,8e40400c
+c7x=2/0/0:0000:0000,25:0003:0000,0:0000:0000,0:0000:0000 @Gta4lEmmcProbe.c:497
+frames fffffff0079eaefc fffffff0079d6bb0 fffffff0076e7eb0 fffffff0072c8864 fffffff00741a4a4
+pages=0x0000000000079eae
+free=0x0000000000079472
+```
+
+The fields that differ across the three units are:
+
+| Field | Owner's SM-T505N | SM-T505 (first) | SM-T505 (second) |
+| --- | --- | --- | --- |
+| `ext=` (plain EXT_CSD byte sum) | `000009cb` | `000009c7` | `000009cb` |
+| `c2` raw window | `05f46619,4d420090,44583638,00150100` | `3cce1e18,4d420005,44583638,00150100` | `ddca77a7,4d42001f,44583638,00150100` |
+| `cid` | `15010044,5836384d,42009005,f4661900` | `15010044,5836384d,4200053c,ce1e1800` | `15010044,5836384d,42001fdd,ca77a700` |
+| `c3l` ticks | `…1560` | `…155c` | `…155f` |
+| `c7q` ticks | `…1582` | `…1580` | `…1585` |
+| `c7c` CC/TC ticks | `…1573`/`…1573` | `…1572`/`…1572` | `…1576`/`…1577` |
+| `pages` | `0x0000000000079eae` | `0x0000000000079eac` | `0x0000000000079ead` |
+| `free` | `0x0000000000079472` | `0x0000000000079450` | `0x0000000000079471` |
+
+Every field not listed is identical in the three transcriptions, including
+`mci=10000072`, `rca=1`, `cap=61071360`, `rev=8`, `bw=0`, `ocr=c0ff8080`,
+`hc2=0008`, `ven=00018a9c`, `dll=6000642c`, `dst=00000000`, `pst=00000000`,
+`step=15`, `log=5`, the `c3p` and `c7p` status/enable/present captures, the
+`c7p` raw CSD window, the `c7t` terminal state and window, the `c7x` trace, all
+frame addresses and the report location.
+
+Decoding:
+
+- `step=15` is `GTA4L_EMMC_STEP_READY` (`Gta4lEmmc.h:295`). The last completed
+  step is set only after the EXT_CSD read, `data_sector_size_code` 0
+  (512-byte sectors), the capacity floor and the partition-access check pass
+  (`Gta4lEmmc.c:1570-1604`). The report is therefore a successful
+  identification, not a partial one.
+- `cap=61071360` is `capacity_blocks`, read from EXT_CSD `SEC_COUNT`
+  (`Gta4lEmmc.c:1470-1474`): 61,071,360 × 512-byte sectors, the same user
+  capacity as the recovery inventory. `rev=8` is the EXT_CSD revision byte
+  (1.8) and `bw=0` is the decoded bus-width field; the port does not change
+  bus width.
+- `c2=1/0001/0000/…` is a valid CMD2 capture: normal status `0x0001` (CC),
+  error 0, and four raw response words. The normalized `cid` is separate from
+  that raw window. All three CIDs share manufacturer `0x15` (Samsung), OEM
+  `0x0100`, product-name bytes `DX68M` and revision `0x42`; the serial and
+  date bytes differ by unit. The report does not include the CSD words
+  directly, but the `c7p` raw window is identical across the three units and is
+  CSD-shaped; the report does not decode it, so it is not treated here as a
+  second CSD source.
+- `c3p` is a valid pre-CMD3 sample with no error; `c3t` is invalid, so no
+  timeout was captured. `c3l=1/3/0000/0001/26/…` is the CMD3 poll history:
+  first normal 0, last normal `0x0001` (CC), 38 iterations, and a short tick
+  count at the reported 19,200,000 Hz counter.
+- `c7p` is a valid pre-CMD7 sample with no error; present state
+  `0x03F800F0` and enables `0x0023`/`0x07FF` match the CMD3 sample. `c7q`
+  records OR normal `0x0003` (CC and TC both observed), OR error 0, 38
+  iterations; `c7c` records CC and TC valid at iteration `0x25` (37) with
+  essentially the same tick count; `c7t` records terminal normal `0x0003`,
+  error 0, command `0x071B` (CMD7 with CRC, index and R1b flags), argument
+  `0x00010000` (RCA 1) and the same CSD-shaped window. `c7x=2/0/…` is a
+  two-entry trace with no overflow: the first sample has normal 0 and the
+  observed change at iteration 37 already carries both CC and TC. This is the
+  first hardware exercise of the committed CMD7 R1b CC+TC lifecycle on this
+  board; it succeeded on all three units.
+- `ext=` is the plain 512-byte sum of the EXT_CSD (`Gta4lEmmc.c:1458-1461`), not
+  a checksum. A one-bit-sum difference of `0x9CB` versus `0x9C7` is consistent
+  with unit-specific EXT_CSD bytes and is not evidence of corruption. The
+  `pages`/`free` and frame values are XNU VM/stack counters from the panic
+  renderer and are not eMMC evidence.
+- `dll=6000642c`, `ven=00018a9c`, `hc2=0008`, `dst=0` and `pst=0` repeat the
+  section 2.9 register state. They are register state, not measured clock or
+  rail values.
+
+The owner states that the three units are the owner's SM-T505N and two
+SM-T505s, and that experts confirmed SM-T505, SM-T505N and SM-T500 are
+identical for eMMC with only LTE/Wi-Fi/regional differences. That statement is
+owner/expert-provided, not an independent part-number or board-revision
+identity. The three transcripts are consistent with it: the capacity, CID
+product name, CSD-shaped window, register state and CMD7 timing agree, while
+the serial/date and EXT_CSD byte sum differ as expected for different units.
+The three full CIDs in the transcription and table are unique device
+identifiers. They are reproduced verbatim from the owner-supplied transcripts
+with the owner's explicit approval for this record; the repository privacy rule
+otherwise treats device identifiers as private.
+
+Attribution: on the owner's unit the fail-closed image failed CMD2 (section
+2.9) and the candidate completed identification. The two images are built from
+the same parent source with only the 8-us post-ready-CMD1 delay added, so this
+is a same-unit, cross-session comparison with a single source delta. It
+supports a timing-sensitive contribution at the CMD1-to-CMD2 boundary for these
+runs. It does not establish the CMD2 CRC cause: the earlier `cmd2window` and
+`fmt=2` builds also passed CMD2 on the same unit without the delay, so the
+delay is not proven necessary, and the fail-closed extra success-path samples
+remain a possible timing contributor. The result is not a repeatability or
+reliability test, no general fix is adopted, and CRC checking remains enabled.
+
+Bounds: identification only. No sector read (`CMD17`), block-device
+publication, bus-width change, high-speed mode, DMA, CQE, ICE, write, mount or
+root switch was issued. The image was written to BOOT only; the flash record
+shows `RECOVERY` unchanged and no other partition written. The report panic is
+intentional and stops the boot. No rail voltage, pad level or clock frequency
+was measured.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
@@ -652,6 +816,26 @@ failure values as section 2.6. CMD3, CMD9 and CMD7 were not submitted, so the
 section 2.7 CMD3 path and the section 2.8 CMD7 path were not exercised. The
 outcome therefore differs from `cmd2window` and `fmt=2` without an established
 cause; the runs do not select among H2/H4/H5/H6/H7.
+
+### 3.7 cmd1gap candidate attribution (2026-11-01)
+
+The section 2.11 candidate is the fail-closed source plus one 8-us delay after
+an accepted ready CMD1. On the owner's unit the fail-closed image failed CMD2
+and the candidate completed CMD2, CMD3, CMD9, CMD7 (CC and TC observed) and the
+EXT_CSD read, then validated capacity, sector size and partition access. The
+same candidate also completed identification on two owner-reported SM-T505
+units. Because the delay is the only source delta, the comparison supports a
+timing-sensitive contribution at the CMD1-to-CMD2 boundary for these runs.
+
+It does not establish the cause of the CMD2 CRC. The `cmd2window` and `fmt=2`
+builds passed CMD2 on the same owner's unit without the delay, so the delay is
+not proven necessary, and the fail-closed success-path error re-reads remain a
+possible timing contributor. H2, H4, H5, H6 and H7 remain open; H8 applies
+only when CMD2 completes, and the candidate shows the current CMD3 and CMD7
+completion paths do work on this card. The historical `fmt=2` missing-CC CMD7
+timeout did not reproduce. No cause is established for either the earlier CMD2
+failure or the earlier CMD7 timeout, and the candidate is not a reliability
+result or a general fix.
 
 ---
 
@@ -1370,10 +1554,11 @@ differences (H2, H6, H7). If Linux also fails, focus on card/electrical
 D1 and D2 are recorded (D2 completed 2026-10-31). The `cmd2window` run (2.7)
 completed D3's freshness check: the pre-CMD2 window held the CMD1 OCR, and the
 post-CMD2 window held real CID words. D4 and D5 remain. The D7 capture is
-implemented and host-tested in the working tree; a D7 hardware run is separately
-gated on owner approval. Do not make a code change from the `cmd2window` run
-alone. Any code change requires owner approval and must not disable CRC
-checking.
+implemented and host-tested in the working tree, ran on hardware in the section
+2.8 `fmt=2` image, and its expanded CMD7 pre-command/poll/terminal/trace form
+was exercised by the 2026-11-01 `cmd1gap` candidate on three units (2.11). Do
+not make a code change from the `cmd2window` run alone. Any code change requires
+owner approval and must not disable CRC checking.
 
 ### D7 — Capture the CMD3 completion state
 
@@ -1395,9 +1580,12 @@ capture, so identification that advances past CMD3 does not lose the evidence.
 The hardware run passed CMD2, CMD3 and CMD9 and stopped at CMD7; the D7 capture
 shows TC set and CC absent at the CMD7 timeout (2.8). The capture did not record
 CMD7 poll history because `c3l` is deliberately CMD3-only, and it did not
-record a pre-CMD7 response window; those remain open diagnostic gaps. Simulator
-agreement does not prove hardware register behavior. D4 and D5 remain, and any
-further CMD7 diagnostic run needs explicit owner approval.
+record a pre-CMD7 response window. Those gaps were closed by the later
+`c7p`/`c7q`/`c7t`/`c7x` capture: the 2026-11-01 `cmd1gap` candidate recorded a
+pre-CMD7 sample, the poll OR mask (CC and TC observed), the first CC/TC
+iteration and the terminal window on three units (2.11). Simulator agreement
+does not prove hardware register behavior. D4 and D5 remain, and any further
+CMD7 diagnostic run needs explicit owner approval.
 
 ---
 
@@ -1485,6 +1673,15 @@ result remain historical for the `cmd2window` image. The new report does not
 change the non-supported statements about CMD2 or CMD3, and it does not
 establish a CMD7 root cause. See section 2.8 and
 `docs/emmc-cmd7-timeout-finding.md`.
+
+**2026-11-01 cmd1gap update:** the candidate completed identification on the
+owner's SM-T505N and two owner-reported SM-T505 units (section 2.11). The
+statements above that describe identification as incomplete remain historical
+for the fail-closed image. The candidate result is owner-supplied text without
+a photo file or hash in this tree; it establishes a successful identification
+run sequence, not the CMD2 or CMD7 root cause, reliability, or a sector read.
+The 8-us delay is not proven necessary because earlier builds passed CMD2
+without it. CRC checking stays enabled and no snapshot is promoted to a CID.
 
 ---
 
@@ -1683,7 +1880,9 @@ the success-report CID or poll history, or the timeout command index; six CMD7
 mutations suppress the pre-command validity, poll OR mask, TC validity, CC
 validity, trace overflow count or terminal response window. Each is
 rejected for its expected reason. Simulator agreement does not prove hardware
-register behavior; the D7 capture is still host-only.
+register behavior; the D7 capture was host-only at this audit snapshot. The
+later 2026-11-01 `cmd1gap` candidate exercised it on hardware: CMD7 completed
+with CC and TC on three units (§2.11).
 
 ### 10.3 Interpretation (unchanged policy)
 
@@ -1835,6 +2034,12 @@ working-tree counts are in section 10.
 - `out/gta4l/ram-root-emmc-probe-cmd2window-evidence/flash-record.json`: `cmd2window` BOOT flash and run (2.7)
 - `out/gta4l/ram-root-emmc-probe-cmd2window-evidence/stage3-cmd2window-report.txt`: 2026-10-31 CMD3-timeout report transcribed from the photo
 - `out/gta4l/ram-root-emmc-probe-cmd2window-evidence/stage3-cmd2window-photo-2026-10-31.jpg`: photo SHA-256 `a9656fc9…`
+- `out/gta4l/ram-root-emmc-probe-failclosed-evidence/flash-record.json`: `fmt=4` fail-closed BOOT flash (2.9)
+- `out/gta4l/ram-root-emmc-probe-failclosed-rerun-evidence/flash-record.json`: SM-T505N fail-closed rerun and matched baseline (2.9-2.10)
+- `out/gta4l/ram-root-emmc-probe-failclosed-rerun-evidence/stage3-failure-report.txt`: transcribed CMD2 failure
+- `out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/flash-record.json`: candidate BOOT flash, unchanged recovery and pulled readback (2.11)
+- `out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/build-provenance.json`: candidate source/archive/kernel/payload/image identity (2.11)
+- `src/UniXNU-gta4l/docs/emmc-cmd1-gap-candidate.md`: candidate definition, build and three-unit result
 - `src/UniXNU-gta4l/docs/emmc-driver.md:328,360`: stage-2/3 kernel hash
 - `src/UniXNU-gta4l/docs/emmc-driver.md:383`: older failure-record kernel hash
 - `src/UniXNU-gta4l/docs/emmc-driver.md:395`: older failure-record image not booted; current-source run complete (2.6)

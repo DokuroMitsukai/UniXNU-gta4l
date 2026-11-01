@@ -12,10 +12,13 @@ chosen response policy for CMD7, not a protocol requirement; the inspected
 Linux stacks select CMD7 as R1 (`docs/pe-storage-stack-provenance.md` §8.1).
 That lifecycle change does not by itself explain the historical missing-CC
 timeout. The `fmt=4` report ran on hardware on 2026-11-01; a verified BOOT-only
-rerun reproduced the same CMD2 failure before CMD7, so the CMD7 capture remains
-unexercised (`docs/emmc-cmd2-crc-audit.md` §2.9). The earlier
-CMD2 CRC and CMD3 timeout results remain in `docs/emmc-cmd2-crc-audit.md`; the
-driver record is `docs/emmc-driver.md`.
+rerun reproduced the same CMD2 failure before CMD7
+(`docs/emmc-cmd2-crc-audit.md` §2.9). A later 2026-11-01 candidate added only an
+8-us post-ready-CMD1 delay and completed full identification, including CMD7
+with CC and TC observed, on three units (section 9). The historical missing-CC
+timeout did not reproduce, so the CMD7 capture is now exercised but the earlier
+cause remains unexplained. The earlier CMD2 CRC and CMD3 timeout results remain
+in `docs/emmc-cmd2-crc-audit.md`; the driver record is `docs/emmc-driver.md`.
 
 **Scope:** identification only. No sector I/O was issued. CRC checking remains
 enabled. The image was written to BOOT only; TWRP on `RECOVERY` was unchanged.
@@ -368,7 +371,9 @@ missing; a core mutation that restores CC-only success is rejected.
 Host counts are 98 core scenarios with 55 mutation controls and 31 probe
 scenarios with 21 mutation controls; the `fmt=4` report ran on 2026-11-01 on two
 units (an SM-T505 and the owner's SM-T505N, per the owner); both reproduced the
-CMD2 failure before the CMD7 capture, so these CMD7 scenarios remain host-only.
+CMD2 failure before the CMD7 capture. The later `cmd1gap` candidate reached CMD7
+and observed CC and TC on three units (section 9), so the CMD7 capture is now
+hardware-exercised; the simulator scenarios remain host checks.
 
 ---
 
@@ -551,9 +556,9 @@ was issued.
    CC/TC with separate validity flags. These samples can show whether CC or TC
    was observed at any sample, but they cannot distinguish "CC never appeared"
    from "CC appeared and cleared between samples"; only an observed change is
-   evidence. The 2026-11-01 `fmt=4` runs failed at CMD2 before CMD7, so the CMD7
-   poll history is still unexercised; a further owner-approved run is needed
-   after the CMD2 result is understood.
+   evidence. The 2026-11-01 `fmt=4` runs failed at CMD2 before CMD7, so those
+   runs did not exercise the CMD7 poll history. The later `cmd1gap` candidate
+   reached CMD7 and observed CC and TC on three units (section 9).
 2. **Pre-CMD7 response window.** The committed core's `c7p` captures raw
    `RESPONSE0..3` immediately before CMD7, so a later run can compare it with
    the terminal window. Equality alone does not prove staleness, and a
@@ -579,9 +584,11 @@ was issued.
    the equivalent pre-CMD7 capture. The historical `fmt=2` report alone cannot
    fully exclude a stale or late status transition around CMD7.
 
-The next discriminating evidence is a `fmt=4` CMD7 capture from a run that
-reaches CMD7, plus a reference-level explanation of this
-controller's R1b completion behavior. The committed shared-budget CC+TC
+The `fmt=4` CMD7 capture from a run that reaches CMD7 now exists: the `cmd1gap`
+candidate completed CMD7 with CC and TC on three units (section 9). It closes
+the capture gap but does not explain the historical timeout, so a
+reference-level explanation of this controller's R1b completion behavior is
+still the next discriminating evidence. The committed shared-budget CC+TC
 requirement is the port's chosen R1b completion policy; the inspected Linux
 stacks select R1 for CMD7, so this is a host policy choice rather than a
 universal protocol mandate. It is not a workaround derived from this report;
@@ -595,10 +602,13 @@ enabled.
 
 - `docs/emmc-cmd2-crc-audit.md` §2.6 (CMD2 CRC record), §2.7 (CMD3 timeout),
   §2.8 (this result), §2.9 (the 2026-11-01 `fmt=4` runs, which failed at CMD2),
-  H8 (completion-path hypothesis), D7 (capture plan) and §10 (capture fields).
+  §2.11 (the `cmd1gap` candidate runs that reached CMD7), H8
+  (completion-path hypothesis), D7 (capture plan) and §10 (capture fields).
 - `docs/emmc-driver.md` §4 (simulator coverage), §5.3.1 (CMD3 timeout),
   §5.3.2 (this result and the `fmt=4` fields), §5.3.3 (the 2026-11-01 `fmt=4`
-  runs) and §7 (limits).
+  runs), §5.3.4 (the `cmd1gap` candidate runs) and §7 (limits).
+- `docs/emmc-cmd1-gap-candidate.md` for the candidate definition, build and
+  three-unit result.
 - `docs/evidence-baseline.md` and `docs/diagnostic-payload-input-inventory.md`
   for the artifact batch.
 - `scripts/test-gta4l-emmc.py` and `scripts/sim-gta4l-emmc/harness.c` for the
@@ -606,3 +616,41 @@ enabled.
 - `scripts/test-gta4l-emmc-probe.py` and
   `scripts/sim-gta4l-emmc-probe/harness.c` for the `fmt=4` report text and
   mutation controls.
+
+---
+
+## 9. 2026-11-01 cmd1gap candidate update
+
+The `cmd1-crc-retire-8us` candidate (`docs/emmc-cmd1-gap-candidate.md`) is the
+`fmt=4` fail-closed source plus one 8-us delay after an accepted ready CMD1.
+The image is
+`out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/boot-ram-root-emmc-probe-cmd1gap.img`,
+85,688,320 bytes, SHA-256 `8a463dae…`; source `874e6878…`, `5dd223f7…` and
+`932552a2…`; payload `6b6f5212…`; gate 18/18 and contract 7/7. It was written
+to BOOT only, with the tail and `RECOVERY` unchanged; the full flash
+provenance is in `docs/emmc-cmd2-crc-audit.md` §2.11.
+
+The owner ran it on the owner's SM-T505N and two SM-T505s and supplied text
+transcriptions. All three reached the `GTA4L-EMMC IDENT REPORT: rc=0` success
+report and stopped at the intentional panic. On the owner's unit the CMD7
+fields were `c7p=1/0000/0000/03f800f0/0023/07ff/…`,
+`c7q=1/0003/0000/0000/0003/26/…1582`,
+`c7c=1/25/…1573/1/25/…1573`,
+`c7t=1/0003/0000/03f800f0/0000071b/00010000/…` and
+`c7x=2/0/0:0000:0000,25:0003:0000,0:0000:0000,0:0000:0000
+@Gta4lEmmcProbe.c:497`. The two SM-T505 transcriptions differ only in the
+fields listed in `docs/emmc-cmd2-crc-audit.md` §2.11: CID serial/date, the
+EXT_CSD byte sum, a few poll ticks and VM counters. On all three the CMD7 poll
+OR mask contains both CC (`0x0001`) and TC (`0x0002`), error is 0, the first
+observed change at iteration 37 already carries both, and the terminal command
+is `0x071B` with argument `0x00010000` (RCA 1).
+
+This is positive evidence that the committed CC+TC busy lifecycle completes on
+this controller and card for CMD7, and that the historical `fmt=2` TC-only
+timeout is not reproduced by the current policy on these units. It does not
+explain the historical missing-CC sample: the `fmt=2` build is not retained, its
+exact source differs from the current tree, and the CMD7 capture is a sequence
+of samples, not a continuous trace. No workaround, timeout change or R1 policy
+change is adopted from this result. CRC checking remains enabled. The remaining
+open questions in section 7 stand, except that the CMD7 poll history is now
+exercised.
