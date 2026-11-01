@@ -60,6 +60,10 @@ partition layout, payload policy and packaging.
   flash record in the tree and its image identity is owner-reported/shared.
   This is first sector-read content evidence, not a filesystem, block-device,
   multi-block, DMA, CQE, ICE or write result, and CRC checking remains enabled.
+  An owner-authorized read-only recovery-side readback of blocks 0 and 1 on
+  the owner's SM-T505N independently reproduces the MBR signature and GPT
+  header CRC (`docs/emmc-cmd2-crc-audit.md` §2.12; sector hashes stay in
+  `out/`).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

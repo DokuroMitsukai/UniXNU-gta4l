@@ -51,7 +51,12 @@ refreshes the `README.md`, `docs/emmc-driver.md`,
 manifest row, and records the run in `docs/emmc-cmd2-crc-audit.md` §2.12,
 `docs/emmc-driver.md` §5.3.5 and §6.1; the same batch closes the §2.10
 fold-width caveat with the pinned panic-screen renderer provenance; the
-table stays at 45 rows. This document's own hash is not listed. Hashes describe
+table stays at 45 rows. One further refresh on `2026-11-02` records the
+owner-authorized read-only recovery-side readback of eMMC blocks 0 and 1 on the
+owner's SM-T505N: it independently reproduces the MBR signature and GPT header
+CRC, refreshes the `README.md`, `docs/emmc-driver.md` and `porting.toml` rows,
+adds no manifest row, and keeps the table at 45 rows. This document's own hash
+is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
 without further content changes; if the committed content differs, re-run §6
@@ -515,13 +520,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `d3ce2770ee781aafd091007b7a9eb254b801cae26e23161d83ebfb784d9f121f` |
+| Repository README | `README.md` | `b45b04d3e23fc3f0dd1083c891abcec33ae360c3b9047d8fb6f113c5a0e5aeb2` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `8a1d133e014bd26318237d273cd942166997e04305ac580c0ee5d36e0364800b` |
+| Porting record | `porting.toml` | `fdeeb95616ed581519cc2c6af622d12d9a928c23f32657f44149c39ef315efa8` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `a8b2581633db09204b4d174b7902177a20a9a0c9fe65403e9a35651483660162` |
+| eMMC driver record | `docs/emmc-driver.md` | `d992b0ce4e0299b880687641f90b46d931e40cfdd9060b73b624b270d83955fe` |
 | eMMC core header | `package/Gta4lEmmc.h` | `5dd223f787f7d7da532920bdc518ce0589af2a74cb5928df9231bbcae7dcc1af` |
 | eMMC core source | `package/Gta4lEmmc.c` | `874e687813bf9a8bbd8aeefa6533ba3edd35f74cd5126add85647f480fbd9def` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `932552a2b79297a14bce2fb40ab0702f8696d995bafd55cdeddc2b4bc6397f4a` |
@@ -964,7 +969,8 @@ GPT header) with sums `84d0543e` and `425cd1ab`. The sum is the probe's
 `sum*31 + byte` content fingerprint, not a CRC; the identical block 0 and
 different block 1 fingerprints are consistent with a shared protective MBR and
 a per-device GPT header (disk GUID/header CRC). The selected words do not
-include the `0x55AA` MBR signature or the GPT header CRC.
+include the `0x55AA` MBR signature or the GPT header CRC; the owner-authorized
+recovery-side readback records both directly.
 
 The two reports are owner-supplied photographs; no photo file or hash from
 either run is in the tree. The SM-T505 flash procedure and unit attribution are
@@ -972,10 +978,12 @@ owner-reported and its image identity rests on the shared `bf73a39b…` copy. Th
 run is read-only (`CMD0`/`CMD1`/`CMD2`/`CMD3`/`CMD9`/`CMD7`/`CMD13`/`CMD8`/
 `CMD17`, CRC enabled, no writes, DMA, CQE, ICE, bus-width change, high-speed
 mode, mount or publication). It establishes sector-read and MBR/GPT content
-evidence for blocks 0 and 1, not a filesystem, multi-block reliability or
-independent MBR/GPT CRC verification. The full transcription and field
-comparison are in `docs/emmc-cmd2-crc-audit.md` §2.12 and
-`docs/emmc-driver.md` §5.3.5.
+evidence for blocks 0 and 1, not a filesystem or multi-block reliability; an
+owner-authorized read-only recovery-side readback independently reproduces the
+MBR signature and the GPT header CRC (images and sector hashes stay in the
+gitignored `out/gta4l/ram-root-emmc-probe-stage1-evidence/recovery-readback/`
+record). The full transcription and field comparison are in
+`docs/emmc-cmd2-crc-audit.md` §2.12 and `docs/emmc-driver.md` §5.3.5.
 
 | Check | Result |
 | --- | --- |

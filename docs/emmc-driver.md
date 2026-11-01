@@ -1021,16 +1021,19 @@ and the `BLOCK0` sum does not (`62084b66`); the sum is the probe's
 header CRC and related fields) explains the difference without implying
 corruption. The selected words do not include the `0x55AA` MBR signature or
 the GPT header CRC, so those fields are covered by the full-sector fingerprint
-but are not independently printed.
+but are not printed by the probe report; the recovery-side readback in
+`docs/emmc-cmd2-crc-audit.md` §2.12 reads both directly.
 
 The reports are owner-supplied screen photographs without a photo file or hash
 in the tree; the SM-T505 unit has no flash record, and its attribution and
 image identity are owner-reported/shared. The run is read-only: no write,
 bus-width change, high-speed mode, DMA, CQE, ICE, mount, root switch or
 block-device publication. It establishes the first sector-read and MBR/GPT
-content evidence for blocks 0 and 1, not a filesystem, broader media
-reliability, or independent validation of the MBR/GPT CRC fields. The full
-transcription and field comparison are in `docs/emmc-cmd2-crc-audit.md` §2.12.
+content evidence for blocks 0 and 1, not a filesystem or broader media
+reliability; the separate recovery-side readback in
+`docs/emmc-cmd2-crc-audit.md` §2.12 validates the MBR signature and GPT header
+CRC. The full transcription and field comparison are in
+`docs/emmc-cmd2-crc-audit.md` §2.12.
 
 ## 6. Expected report
 

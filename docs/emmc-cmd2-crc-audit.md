@@ -881,7 +881,8 @@ Decoding:
   protective-MBR partition type `0xEE` at offset 450 and a partition start LBA
   of 1 at offset 454. The selected words do not include the `0x55AA` MBR
   signature at offset 510, so that signature is covered by the full-sector sum
-  but not independently printed by the report.
+  but not printed by the report itself; the recovery-side readback below reads
+  it directly.
 - `BLOCK1 words=20494645 54524150 00010000 0000005c` are the words at offsets
   0, 4, 8 and 12: ASCII `EFI `, ASCII `PART`, GPT revision 1.0 and a 92-byte
   GPT header. The selected words do not include the GPT header CRC at offset
@@ -892,7 +893,8 @@ Decoding:
   shared layout artifact; `BLOCK1` differs because the GPT header contains a
   per-device disk GUID, header CRC and related fields. A differing `BLOCK1`
   sum is therefore expected and is not evidence of corruption. The two sums are
-  content fingerprints, not independent verification of the MBR/GPT CRC fields.
+  content fingerprints, not themselves verification of the MBR/GPT CRC fields;
+  the recovery-side readback below performs that check.
 - The `c3l`/`c7q`/`c7c`/`c7t` captures repeat section 2.11's CMD3 and CMD7
   poll/completion evidence: 38 iterations, CC and TC both observed at
   iteration `0x25` (37), terminal normal `0x0003`, command `0x071B`, argument
@@ -913,7 +915,27 @@ mount, root switch, block-device publication or repeated-read reliability test
 was issued. The two reads establish sector-read and MBR/GPT content evidence
 for blocks 0 and 1; they do not establish a filesystem, partition-table
 integrity beyond those selected words and sums, broader media reliability or
-the correctness of the GPT CRC fields.
+the correctness of the GPT CRC fields; the separate recovery-side readback
+below checks the MBR signature and GPT header CRC.
+
+**Recovery-side readback (2026-11-02, read-only):** with owner approval, the
+owner's SM-T505N in TWRP read `/dev/block/mmcblk0` sectors 0 and 1
+(`dd bs=512 count=1`, LBA 0 and LBA 1; no write, operator-issued register
+access or partition change was issued) and hashed each sector on the device. Both captured sectors
+matched their on-device SHA-256 values. Offline, block 0 reproduces the
+report's probe sum `62084b66`, the `0x55AA` MBR signature at offset 510, the
+`0xEE` partition type at offset 450 and start LBA 1 at offset 454; block 1
+reproduces the report's probe sum `84d0543e`, the `EFI PART` signature, the
+92-byte header size and the GPT header CRC at offset 16 (computed over the
+header with its CRC field zeroed). The readback therefore independently
+prints the MBR signature and GPT header CRC that the stage-1 reports cover
+only through their full-sector sums, and, on the owner-attested session, ties
+the two block contents to the owner's unit. It is a single read-only pass on one unit, not a reliability
+test, and the SM-T505 run is not re-verified this way. The sector images and
+both SHA-256 values remain in the gitignored
+`out/gta4l/ram-root-emmc-probe-stage1-evidence/recovery-readback/` record and
+are not published; the disk GUID and partition GUIDs were not extracted or
+printed.
 
 The two full CIDs and `c2` windows are the same identifiers already reproduced
 with the owner's explicit approval in section 2.11; they are repeated here for
