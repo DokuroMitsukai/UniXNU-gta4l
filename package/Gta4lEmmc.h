@@ -122,6 +122,12 @@
 #define GTA4L_EMMC_CMD0_POST_DELAY_US      2000u
 #define GTA4L_EMMC_BCR_DELAY_US             200u
 
+/* Named timing candidate: downstream mmc_send_op_cond() waits 8 us after a
+ * successful ready response before the next command because the internal CRC
+ * status can take three MCLK cycles (7.5 us at 400 kHz) to clear. This is a
+ * hypothesis for the CMD2 CRC failure, not a confirmed hardware requirement. */
+#define GTA4L_EMMC_CMD1_CRC_RETIRE_US          8u
+
 #define GTA4L_EMMC_INT_CC                  0x0001u
 #define GTA4L_EMMC_INT_TC                  0x0002u
 #define GTA4L_EMMC_INT_BRR                 0x0020u

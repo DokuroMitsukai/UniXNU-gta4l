@@ -3,6 +3,20 @@
 This repository owns the gta4l board DTS, peripheral wiring, component
 selections, firmware inputs, partition layout and packaging.
 
+## Privacy (strict, always applies)
+
+This repository is public. Never commit or push device serial numbers, unique
+device identifiers, usernames, account names, hostnames, SSH targets, e-mail
+addresses, IP addresses, VPN names or absolute home paths. Use `$HOME`, a
+relative path or a neutral placeholder. Raw evidence that needs an identifier
+stays outside the tracked tree and is referred to by path/hash, never by the
+private value. The same rule applies to commit messages, tags, branch names,
+code comments, test fixtures and generated records. Before every commit, run
+the checks in `.opencode/rules/privacy.md` and require no unexplained hits. If
+private data is already in published history, stop and report it; rewriting
+published history requires explicit owner approval, a backup bundle and a
+coordinated force-push.
+
 ## Read first
 
 Read this README and the following UniXNU documentation before changing the port:

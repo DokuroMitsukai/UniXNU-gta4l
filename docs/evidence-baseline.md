@@ -298,8 +298,9 @@ log=4/1/268435570`. `rc=4294967288` is `-8`, `GTA4L_EMMC_ERR_CMD_CRC`; the
 registers repeat the stage-2 host-init state and the last log event is the
 completed controller reset, so host init completed and a card command failed a
 response CRC check. The probe does not record the failing command or the SDHCI
-interrupt status; no RCA, capacity, EXT_CSD, OCR, CID, CSD or sector data was
-obtained and no sector read was issued. This is a failing state: it establishes
+interrupt status; that older report records no RCA, capacity, EXT_CSD, OCR, CID,
+CSD or sector data and no sector read was issued. Later current-source reports
+do record the CMD1 OCR value. This is a failing state: it establishes
 the repeated host state and the failed identification attempt, not card
 absence, incompatibility or any storage capability. Photo sha256
 `0014db219d5d3dd1b1db572845d81c8a6fb966d0912c0c23aae02c9d70a082c9`.
@@ -356,6 +357,12 @@ capacity or sector result was obtained and no sector read was issued. See
 `docs/emmc-cmd2-crc-audit.md` §2.9-2.10 and
 `docs/emmc-driver.md` §5.3.3. This is still a failing identification state; the
 terminal command is CMD2.
+
+A host-only CMD1-to-CMD2 timing candidate is recorded in
+`docs/emmc-cmd1-gap-candidate.md`: one 8-us delay after an accepted ready CMD1,
+a simulator model that is explicitly hypothetical, and 98 core scenarios with
+55 mutation controls. The existing `fmt=4` image remains the unchanged
+baseline; the candidate is not built, flashed or run.
 
 The second batch derived the status/clear/reset loop bounds from the pinned
 MOVZ instructions, added last-read and delayed-completion boundary cases and
@@ -463,7 +470,7 @@ bytes of the previously booted image `[S]`.
 | Count-consistency test | `scripts/test-gta4l-sdhci-evidence-counts.py` | `f219e3cd281040e3d0c5731f626275ab8a943d119c4bfd141d8660079fed7f59` |
 | Host-init policy document | `docs/sdhci-host-init.md` | `a50d093c379c10604291bcb135399878a96e83b24141d58ec6171411f7b206af` |
 | Decision memo | `docs/sdhc-decision-memo.md` | `9dd6b5fcaf6eaa4f543d3140fc946ccd9d9ff27f33919b5e3e9000e704369bba` |
-| Evidence-gap checklist | `docs/sdhc-evidence-gap-checklist.md` | `2285d8586f9b830030c8c46cd965dccbbfd369acf8be6e63cccc533f25ddba36` |
+| Evidence-gap checklist | `docs/sdhc-evidence-gap-checklist.md` | `1ed307e26070f8a0a041aef32be4cc6db5d6de022c01350449d9588163fee76d` |
 | Electrical contract | `docs/sdhc-electrical-contract.md` | `88cd9d6a4ac15ea5e9d738f947db0127d4b929a0c24a3713873e927c29907593` |
 | Retention evidence | `docs/power-retention-evidence.md` | `eb91725bd6a63acded9e63ca0673670f36b43a3253da15d8ec17cb67f0387e07` |
 | RPM interface | `docs/rpm-power-interface.md` | `4f3fe2e8527a9c334de0478f4a250a49d443b6e552eb4845f75e0cfc44a35e49` |
@@ -480,22 +487,22 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `8cd9bce9c5fd85b4d4349f1a25a99491b3e8d74ab4eb248fce001f5e34eb375a` |
+| Repository README | `README.md` | `c526e8bc9e1961d302838ae5e9fe423b6d25b4642954aeeaca76c0e92b0edee1` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `f2301bea15d5b85a5c43e2d44f76614a3624439538ae64559b75f45b3d506c32` |
+| Porting record | `porting.toml` | `bfa1d879a47cdcd18e046fca18ad6ff96ff26116e7090c123cb7eb2ef0b59969` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `6503ed120abf2b1a030abb6fa07376a809add3ab88a4fb9f3044ae18cc30a353` |
-| eMMC core header | `package/Gta4lEmmc.h` | `e0a2830cc18ec2faba2e60faa0f17e13eb2b24162e060e5f75328791c0f1e199` |
-| eMMC core source | `package/Gta4lEmmc.c` | `e493b3eb6db421e81436ace4e3d81f0aded33e42c1713330359ab2b39b895d5e` |
+| eMMC driver record | `docs/emmc-driver.md` | `8b48b09aec7ebd49efac07cd317e144930e81a1a362682b4a1b97ad56920d436` |
+| eMMC core header | `package/Gta4lEmmc.h` | `5dd223f787f7d7da532920bdc518ce0589af2a74cb5928df9231bbcae7dcc1af` |
+| eMMC core source | `package/Gta4lEmmc.c` | `874e687813bf9a8bbd8aeefa6533ba3edd35f74cd5126add85647f480fbd9def` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `932552a2b79297a14bce2fb40ab0702f8696d995bafd55cdeddc2b4bc6397f4a` |
-| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `fd585d4973a7708bf8ff13ac66bcde66162092dc019104eaff46fb261a9f129e` |
-| eMMC host test | `scripts/test-gta4l-emmc.py` | `97811c8b767b58986e5b5b6bddc29d0cf627b508fb25bddcb15d3f2c33b88507` |
+| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `7fa4b57ca270c0cb72121d4e1d2096d406cbd9453aee6346a1154f016115ee94` |
+| eMMC host test | `scripts/test-gta4l-emmc.py` | `12169faa63af21071b66e2ebe2610bf9ab45dfebd20169bb6f4ec415380b2734` |
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `c0d742df56cbf69c499537e077be6b590ea1e89e33f656b21c3215561dae0157` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `21310d2198a356182f874137b99c967306f49e52fc6078f42d56a155abbcd893` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `84d08d48048d68ce0c1714458116e3020d2702299e240c2dcd46791155240692` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
 | Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `f293bee964bdd3bebbf40e4c8099a426780679065f3d65abceb9999255480558` |
@@ -746,7 +753,7 @@ After the final edits, the host checks were run from `src/UniXNU-gta4l/` with
 | eMMC stage-3 payload | PASS: 80 MiB raw payload sha256 `4028e432f200dc1069a50f1baa6786d2f4861b187f2c5a0bd126bb20f5a9cd41`, kernel args include `gta4l-emmc-probe=3`, payload contract 7/7 |
 | eMMC stage-3 boot image | PASS: 85,688,320-byte image sha256 `88b4d28607b371fe008922131c6ee51f27f73da30249fd4a07969f770fa90d87`, boot-image gate 18/18; build was not marked hardware-tested |
 | eMMC stage-3 BOOT write and readback | PASS: BOOT-only write on SM-T505N; the first 85,688,320 bytes read back identical to the image; recovery stayed byte-identical TWRP `14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae`; previous stage-2 boot saved as partition sha256 `545b57ebc3d451cae0ab87b8020fa28619c144023300833892481b529abf8475` |
-| eMMC stage-3 hardware report | FAIL: `GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967288 mci=10000072 pwr=0f clk=0007 hc2=0008 ven=00318a0c pst=00000000 cfg=00002017 cmd=00000000 log=4/1/268435570`; `rc` is `-8`, `GTA4L_EMMC_ERR_CMD_CRC`. Identification did not complete; no RCA, capacity, EXT_CSD, OCR, CID, CSD or sector data was obtained. Photo sha256 `0014db219d5d3dd1b1db572845d81c8a6fb966d0912c0c23aae02c9d70a082c9`. |
+| eMMC stage-3 hardware report | FAIL: `GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967288 mci=10000072 pwr=0f clk=0007 hc2=0008 ven=00318a0c pst=00000000 cfg=00002017 cmd=00000000 log=4/1/268435570`; `rc` is `-8`, `GTA4L_EMMC_ERR_CMD_CRC`. Identification did not complete; that older report records no RCA, capacity, EXT_CSD, OCR, CID, CSD or sector data. Later current-source reports record CMD1 OCR `0xC0FF8080` and no validated CID/CSD/EXT_CSD/capacity or sector result. Photo sha256 `0014db219d5d3dd1b1db572845d81c8a6fb966d0912c0c23aae02c9d70a082c9`. |
 | XNU probe compile | PASS: `Gta4lEmmc.c` and `Gta4lEmmcProbe.c` compile against the pinned XNU headers with `-Wall -Wextra`; the archive exports `gta4l_emmc_probe_preflight`, `gta4l_emmc_probe_run`, `gta4l_emmc_init` and `gta4l_emmc_read_block` |
 | Patch-series apply | PASS: `sheng-platform-power`, `gta4l-sdhci-snapshot`, `gta4l-sdhci-handoff-audit` and `gta4l-emmc-probe` apply in order to the clean `bsd_init.c` |
 | Reassessment re-run 2026-10-31 | PASS: `test-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-host-init-sim.py`, `oracle-gta4l-sdhci-host-init.py`, `test-gta4l-sdhci-evidence-counts.py`, `test-gta4l-sdccdxe-decode.py`, `test-gta4l-spmidxe-descriptor-base.py`, `test-gta4l-ram-root-fixture-recipe.py`, `test-gta4l-rpm-ldoa-analysis.py` and `check-gta4l.py` all exited 0; `git diff --check` clean |
@@ -765,7 +772,7 @@ width-closure and terminal-read observation-boundary edits, run from
 
 | Check | Result |
 | --- | --- |
-| Current native eMMC core test | PASS: 95 simulator scenarios and 54 mutation controls |
+| Current native eMMC core test | PASS: 98 simulator scenarios and 55 mutation controls |
 | Current eMMC probe report test | PASS: 31 scenarios and 21 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1060 bytes), three width-bound materializations, two width-fixture narrowing controls and the oversized-report rejection control |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
@@ -783,7 +790,7 @@ row; the table stays at 45 rows and its self-check passes after the `README.md`,
 
 | Check | Result |
 | --- | --- |
-| `scripts/test-gta4l-emmc.py` | PASS: 95 simulator scenarios and 54 mutation controls |
+| `scripts/test-gta4l-emmc.py` | PASS: 98 simulator scenarios and 55 mutation controls |
 | `scripts/test-gta4l-emmc-probe.py` | PASS: 31 scenarios, 21 mutation controls, 3 width-bound materializations and the oversized-report rejection control |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
@@ -819,7 +826,7 @@ The following host checks were re-run after the documentation edits, from
 
 | Check | Result |
 | --- | --- |
-| `scripts/test-gta4l-emmc.py` | PASS: 95 simulator scenarios and 54 mutation controls |
+| `scripts/test-gta4l-emmc.py` | PASS: 98 simulator scenarios and 55 mutation controls |
 | `scripts/test-gta4l-emmc-probe.py` | PASS: 31 scenarios, 21 mutation controls, 3 width-bound materializations and the oversized-report rejection control |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |

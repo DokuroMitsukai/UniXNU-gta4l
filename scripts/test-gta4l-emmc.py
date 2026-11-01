@@ -72,6 +72,9 @@ SCENARIOS = [
     'cmd1-timeout-recovery-crc',
     'cmd1-not-ready-then-ready',
     'cmd1-not-ready-then-ready-crc',
+    'cmd1-crc-retire',
+    'cmd1-crc-retire-not-ready',
+    'cmd1-crc-retire-short',
     'cmd1-clear-invalidates-window',
     'reinit-clears-windows',
     'cmd2-crc-distinct',
@@ -154,6 +157,7 @@ def check_source() -> None:
         'CMD0_DELAY_US': '1000u',
         'CMD0_POST_DELAY_US': '2000u',
         'BCR_DELAY_US': '200u',
+        'CMD1_CRC_RETIRE_US': '8u',
         'BCR_BLOCK_RESET': '0x00000001u',
         'VENDOR_SPEC_POR': '0x00000A9Cu',
         'VENDOR3_PWRSAVE_DLL': '0x00000008u',
@@ -195,6 +199,12 @@ def check_source() -> None:
         'capacity-bounded read check missing'
     assert 'block > 0xFFFFFFFFu' in core, 'block-address overflow check missing'
     assert 'GTA4L_EMMC_CMD1_TIMEOUT_US' in core
+    assert re.search(
+        r'host->cmd1_response_valid = 1;[\s\S]{0,400}?'
+        r'gta4l_emmc_delay\(host,\s*\n\s*'
+        r'GTA4L_EMMC_CMD1_CRC_RETIRE_US\);\s*\n\s*'
+        r'return GTA4L_EMMC_OK;', core), \
+        'CMD1 CRC-retire delay must follow ready success only'
     assert 'GTA4L_EMMC_PWRCTL_BUS_OFF' in core
     assert 'GTA4L_EMMC_PWRCTL_ACK_BUS' in core
     assert 'GTA4L_EMMC_SDC1_PAD_ACTIVE' in core
@@ -491,6 +501,21 @@ def main() -> int:
              '\t\t\t\thost->cmd1_response_valid = 1;\n',
              '\t\t\t\t/* CMD1 window validity removed by mutation */\n',
              'Gta4lEmmc.c', (), 'cmd1-not-ready-then-ready'),
+            ('cmd1-crc-retire-delay-removed',
+             '\t\t\t\thost->cmd1_response_valid = 1;\n'
+             '\t\t\t\t/* Timing candidate only: give the controller\'s\n'
+             '\t\t\t\t * internal CRC source the downstream 8 us\n'
+             '\t\t\t\t * retirement window after a successful CMD1,\n'
+             '\t\t\t\t * before the next command. No retry, timeout,\n'
+             '\t\t\t\t * clock, rail, command-flag or MMIO-width\n'
+             '\t\t\t\t * change is part of this candidate. */\n'
+             '\t\t\t\tgta4l_emmc_delay(host,\n'
+             '\t\t\t\t    GTA4L_EMMC_CMD1_CRC_RETIRE_US);\n'
+             '\t\t\t\treturn GTA4L_EMMC_OK;\n',
+             '\t\t\t\thost->cmd1_response_valid = 1;\n'
+             '\t\t\t\t/* CMD1 CRC-retire delay removed by mutation */\n'
+             '\t\t\t\treturn GTA4L_EMMC_OK;\n',
+             'Gta4lEmmc.c', (), 'cmd1-crc-retire'),
             ('cmd1-response-wrong-field',
              '\t\tgta4l_emmc_read_raw_response(host, host->cmd1_response);\n',
              '\t\tgta4l_emmc_read_raw_response(host, host->fail_response);\n',

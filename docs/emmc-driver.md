@@ -29,7 +29,7 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 95 scenarios and 54 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 98 scenarios and 55 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 31 scenarios and 21 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
@@ -990,6 +990,9 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   has no interrupt path `[U]`.
 - No DMA, SMMU programming, CQE, ICE, tuning, high-speed mode, multi-block read
   or write path exists `[U]`.
+- A host-only 8-us CMD1-to-CMD2 timing candidate is specified in
+  `docs/emmc-cmd1-gap-candidate.md`; it is not built, flashed or run, and the
+  existing `fmt=4` image remains the unchanged baseline `[S]`.
 - No block-device publication, mount, root switch or persistent Data path
   exists `[U]`.
 - microSD/SDHC2 is not implemented; only SDHC1/eMMC is in scope `[U]`.

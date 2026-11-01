@@ -100,6 +100,10 @@ struct sim {
 	uint64_t power_ack_time_us;
 	uint64_t cmd0_time_us;
 	uint64_t cmd1_time_us;
+	uint64_t cmd1_ready_time_us;
+	uint64_t cmd1_attempt_time_us[4];
+	uint64_t cmd2_time_us;
+	uint32_t cmd1_attempt_count;
 	int cmd1_seen;
 	uint32_t log_event[SIM_MAX_LOG];
 	uint32_t log_a[SIM_MAX_LOG];
@@ -172,6 +176,13 @@ struct sim {
 	uint64_t bcr_pulse_us;
 	uint32_t cmd1_timeouts_remaining;
 	uint32_t cmd1_not_ready_remaining;
+	/* Hypothetical timing model: after a ready CMD1 the controller's
+	 * internal CRC source remains busy for cmd1_crc_retire_us; a CMD2
+	 * inside that window latches CMD_CRC without loading a CID. This is
+	 * an explicit experiment model, not hardware confirmation. The
+	 * pre-CMD2 status clears do not reset the modeled timer. */
+	int cmd1_crc_retire_us;
+	int cmd1_crc_retire_pending;
 	int cmd2_keep_response;
 	int cmd2_ocr_like_response;
 	int cmd2_normalized_layout;
@@ -944,6 +955,16 @@ sim_command(struct sim *sim, uint16_t command)
 		sim->cmd1_time_us = sim->time_us;
 		sim->cmd1_seen = 1;
 	}
+	if (index == GTA4L_EMMC_CMD1) {
+		if (sim->cmd1_attempt_count < 4u) {
+			sim->cmd1_attempt_time_us[sim->cmd1_attempt_count] =
+			    sim->time_us;
+		}
+		sim->cmd1_attempt_count++;
+	}
+	if (index == GTA4L_EMMC_CMD2) {
+		sim->cmd2_time_us = sim->time_us;
+	}
 
 	if (!sim_command_ok(sim, index, argument, (uint16_t)flags)) {
 		sim->command_error = 1;
@@ -959,6 +980,20 @@ sim_command(struct sim *sim, uint16_t command)
 		return;
 	}
 	if (index == GTA4L_EMMC_CMD2) {
+		/* Hypothetical timing model: if the configured CRC-retire
+		 * interval has not elapsed since the ready CMD1 response,
+		 * latch CMD_CRC without loading a CID. The interval is
+		 * measured from that response and is not reset by the
+		 * pre-command status clears. */
+		if ((sim->cmd1_crc_retire_us != 0) &&
+		    (sim->cmd1_crc_retire_pending != 0)) {
+			if (sim->time_us < sim->cmd1_ready_time_us +
+			    (uint64_t)sim->cmd1_crc_retire_us) {
+				sim->error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
+				return;
+			}
+			sim->cmd1_crc_retire_pending = 0;
+		}
 		/* Load the response before an injected CRC error so the
 		 * snapshot ordering tests have words to capture. A real
 		 * controller may or may not update a bad response; the core
@@ -989,6 +1024,12 @@ sim_command(struct sim *sim, uint16_t command)
 			sim->cmd1_not_ready_remaining--;
 		} else if (sim->card_never_ready == 0) {
 			response |= 0x80000000u;
+		}
+		if ((response & 0x80000000u) != 0) {
+			/* Start the hypothetical CRC-retire timer only for
+			 * the ready reply; a not-ready reply never arms it. */
+			sim->cmd1_ready_time_us = sim->time_us;
+			sim->cmd1_crc_retire_pending = 1;
 		}
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		sim_set_response(sim, &response, 1);
@@ -1722,6 +1763,21 @@ main(int argc, char **argv)
 		 * a ready CMD1, then a CMD2 CRC failure. */
 		sim.cmd1_not_ready_remaining = 2;
 		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+	} else if (scenario_is(scenario, "cmd1-crc-retire")) {
+		/* Hypothetical controller model: the internal CRC source
+		 * needs the full 8 us after the ready CMD1. The candidate
+		 * delay must make this run pass. */
+		sim.cmd1_crc_retire_us = (int)GTA4L_EMMC_CMD1_CRC_RETIRE_US;
+	} else if (scenario_is(scenario, "cmd1-crc-retire-not-ready")) {
+		/* Same model after two not-ready replies: only the final
+		 * ready attempt must be followed by the 8 us delay. */
+		sim.cmd1_not_ready_remaining = 2;
+		sim.cmd1_crc_retire_us = (int)GTA4L_EMMC_CMD1_CRC_RETIRE_US;
+	} else if (scenario_is(scenario, "cmd1-crc-retire-short")) {
+		/* Negative control: the model needs one microsecond more
+		 * than the candidate delay, so CMD2 must fail CMD_CRC. */
+		sim.cmd1_crc_retire_us =
+		    (int)(GTA4L_EMMC_CMD1_CRC_RETIRE_US + 1u);
 	} else if (scenario_is(scenario, "cmd1-clear-invalidates-window")) {
 		/* A controller may drop RESPONSE0..3 when the normal-status
 		 * latch is cleared. The CMD1 window must already be captured;
@@ -2007,6 +2063,8 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "vendor-mclk-hs400") ||
 	    scenario_is(scenario, "vendor-hc-select-en") ||
 	    scenario_is(scenario, "cmd1-not-ready-then-ready") ||
+	    scenario_is(scenario, "cmd1-crc-retire") ||
+	    scenario_is(scenario, "cmd1-crc-retire-not-ready") ||
 	    scenario_is(scenario, "cmd1-clear-invalidates-window") ||
 	    scenario_is(scenario, "reinit-clears-windows") ||
 	    scenario_is(scenario, "cmd2-normalized") ||
@@ -2313,6 +2371,48 @@ main(int argc, char **argv)
 		    host.fail_response[3] !=
 		    host.pre_cmd2_response[3],
 		    "not-ready+CRC failed window equals the pre-CMD2 window");
+	} else if (scenario_is(scenario, "cmd1-crc-retire")) {
+		check(sim.cmd1_crc_retire_us ==
+		    (int)GTA4L_EMMC_CMD1_CRC_RETIRE_US,
+		    "CRC-retire timing model was not active");
+		check(host.cmd1_attempts == 1u,
+		    "CRC-retire run did not use one CMD1 attempt");
+		check(host.cmd1_timeouts == 0u,
+		    "CRC-retire run reported a CMD1 timeout");
+		check(host.ocr == (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+		    "CRC-retire run did not cache the ready OCR");
+		check(host.last_step == GTA4L_EMMC_STEP_READY,
+		    "CRC-retire run did not reach READY");
+		check(host.capacity_blocks == 61071360u,
+		    "CRC-retire run did not enumerate the card");
+		check(sim.cmd1_crc_retire_pending == 0,
+		    "CRC-retire model did not arm and retire");
+		check(sim.cmd2_time_us >= sim.cmd1_ready_time_us +
+		    GTA4L_EMMC_CMD1_CRC_RETIRE_US,
+		    "CMD2 was issued before the CRC-retire interval");
+	} else if (scenario_is(scenario, "cmd1-crc-retire-not-ready")) {
+		check(sim.cmd1_crc_retire_us ==
+		    (int)GTA4L_EMMC_CMD1_CRC_RETIRE_US,
+		    "not-ready CRC-retire timing model was not active");
+		check(sim.cmd1_not_ready_remaining == 0u,
+		    "not-ready CRC-retire run did not consume the replies");
+		check(host.cmd1_attempts == 3u,
+		    "not-ready CRC-retire run did not use three attempts");
+		check(sim.cmd1_attempt_count == 3u,
+		    "not-ready CRC-retire command count is not three");
+		check(sim.cmd1_attempt_time_us[1] -
+		    sim.cmd1_attempt_time_us[0] == 1000u,
+		    "first not-ready CMD1 gap was not 1000 us");
+		check(sim.cmd1_attempt_time_us[2] -
+		    sim.cmd1_attempt_time_us[1] == 1000u,
+		    "second not-ready CMD1 gap was not 1000 us");
+		check(sim.cmd2_time_us >= sim.cmd1_ready_time_us +
+		    GTA4L_EMMC_CMD1_CRC_RETIRE_US,
+		    "CMD2 was issued before the CRC-retire interval");
+		check(host.capacity_blocks == 61071360u,
+		    "not-ready CRC-retire run did not enumerate the card");
+		check(sim.cmd1_crc_retire_pending == 0,
+		    "not-ready CRC-retire model did not arm and retire");
 	} else if (scenario_is(scenario, "cmd1-clear-invalidates-window")) {
 		check(host.cmd1_response_valid == 1u,
 		    "CMD1 window was not marked valid before the clear");
@@ -2835,6 +2935,7 @@ main(int argc, char **argv)
 			    scenario_is(scenario, "cmd1-not-ready-then-ready-crc") ||
 			    scenario_is(scenario,
 			    "cmd1-timeout-recovery-crc") ||
+			    scenario_is(scenario, "cmd1-crc-retire-short") ||
 			    scenario_is(scenario, "cmd9-late-error");
 			break;
 		case GTA4L_EMMC_ERR_CMD_INDEX:
@@ -2885,6 +2986,7 @@ main(int argc, char **argv)
 		    scenario_is(scenario, "cmd2-crc-ocr-like") ||
 		    scenario_is(scenario, "cmd1-not-ready-then-ready-crc") ||
 		    scenario_is(scenario, "cmd1-timeout-recovery-crc") ||
+		    scenario_is(scenario, "cmd1-crc-retire-short") ||
 		    scenario_is(scenario, "cmd9-late-error")) {
 			check(host.fail_valid == 1,
 			    "CRC failure was not captured");
@@ -2906,6 +3008,30 @@ main(int argc, char **argv)
 		if (scenario_is(scenario, "cmd9-late-error")) {
 			check(host.fail_index == GTA4L_EMMC_CMD9,
 			    "late CMD9 error did not capture CMD9");
+		}
+		if (scenario_is(scenario, "cmd1-crc-retire-short")) {
+			check(sim.cmd1_crc_retire_us ==
+			    (int)(GTA4L_EMMC_CMD1_CRC_RETIRE_US + 1u),
+			    "short CRC-retire model is not one microsecond "
+			    "longer than the candidate");
+			check(sim.cmd1_crc_retire_pending == 1,
+			    "short CRC-retire model was not armed");
+			check(host.fail_index == GTA4L_EMMC_CMD2,
+			    "short CRC-retire failure did not capture CMD2");
+			check(host.fail_step == GTA4L_EMMC_STEP_CMD1,
+			    "short CRC-retire failure step is not CMD1");
+			check(sim.last_cmd == GTA4L_EMMC_CMD2,
+			    "a later command followed the short CRC-retire "
+			    "failure");
+			check(sim.cmd_count == 3u,
+			    "short CRC-retire run issued extra commands");
+			check(sim.cmd2_time_us - sim.cmd1_ready_time_us ==
+			    GTA4L_EMMC_CMD1_CRC_RETIRE_US,
+			    "short CRC-retire CMD2 delay is not the candidate "
+			    "8 us");
+			check(host.cid[0] == 0u && host.cid[1] == 0u &&
+			    host.cid[2] == 0u && host.cid[3] == 0u,
+			    "short CRC-retire failure promoted a CID");
 		}
 		if (scenario_is(scenario, "cmd-crc-with-cc")) {
 			check(host.fail_index == GTA4L_EMMC_CMD2,

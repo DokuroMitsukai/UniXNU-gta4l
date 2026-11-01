@@ -1347,6 +1347,14 @@ gta4l_emmc_card_ready(struct gta4l_emmc_host *host)
 			if ((response[0] & 0x80000000u) != 0) {
 				host->ocr = response[0];
 				host->cmd1_response_valid = 1;
+				/* Timing candidate only: give the controller's
+				 * internal CRC source the downstream 8 us
+				 * retirement window after a successful CMD1,
+				 * before the next command. No retry, timeout,
+				 * clock, rail, command-flag or MMIO-width
+				 * change is part of this candidate. */
+				gta4l_emmc_delay(host,
+				    GTA4L_EMMC_CMD1_CRC_RETIRE_US);
 				return GTA4L_EMMC_OK;
 			}
 		} else if (result != GTA4L_EMMC_ERR_CMD_TIMEOUT) {

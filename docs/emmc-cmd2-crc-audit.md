@@ -112,6 +112,11 @@ completion path (H8) applies only when CMD2 completes and was not reached in
 2.9. No cause of the across-build outcome difference is established. The failed
 R2 snapshot is never promoted to a CID, and no CRC checking may be disabled.
 
+A host-only timing candidate is specified in
+`docs/emmc-cmd1-gap-candidate.md`: one 8-us post-ready-CMD1 delay, with a
+simulator model that is explicitly hypothetical. It is not built, flashed or
+run; the existing `fmt=4` image remains the unchanged baseline.
+
 ---
 
 ## 2. Evidence inventory
