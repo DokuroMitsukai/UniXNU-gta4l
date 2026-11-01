@@ -102,7 +102,7 @@ the 2026-11-01 `fmt=4` fail-closed hardware runs on two units and the
 `docs/diagnostic-payload-input-inventory.md` and `porting.toml` rows were
 refreshed for the candidate record and the corrected `README` status. Historical
 batch rows remain as recorded. The current snapshot is taken on top of
-`669abc9`; the `60817c3` base row is retained as the historical base for the
+`bb98c61`; the `60817c3` base row is retained as the historical base for the
 batches below. The eleventh correction commit `4c447b9`
 contains exactly the five paths in its row. The
 tenth correction commit `07a36e6`
@@ -509,10 +509,10 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `5314a1dc686e7fbfd2599dcb13081cb0f9b945bb3d8ff27d51439682e158c661` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `00145fafe4eb5db4197a4e1dff93475ad4b6ff77ac3bb565e1d4314d733d3e10` |
+| Porting record | `porting.toml` | `a3bc3a225d1106e4f7e539ded3aff682586dd0730109b55ad7807e1812146a5c` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `1a5ac4df006d00db05e2a6bbeab95e9e6ce0f7e765571f92b1e0c39d70ca504e` |
+| eMMC driver record | `docs/emmc-driver.md` | `3052172d2c4555f56432d98c48be37f1cb8754e883c7a9ead3d59da3e267fcd9` |
 | eMMC core header | `package/Gta4lEmmc.h` | `5dd223f787f7d7da532920bdc518ce0589af2a74cb5928df9231bbcae7dcc1af` |
 | eMMC core source | `package/Gta4lEmmc.c` | `874e687813bf9a8bbd8aeefa6533ba3edd35f74cd5126add85647f480fbd9def` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `932552a2b79297a14bce2fb40ab0702f8696d995bafd55cdeddc2b4bc6397f4a` |
@@ -792,7 +792,7 @@ width-closure and terminal-read observation-boundary edits, run from
 | Check | Result |
 | --- | --- |
 | Current native eMMC core test | PASS: 98 simulator scenarios and 55 mutation controls |
-| Current eMMC probe report test | PASS: 31 scenarios and 21 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1060 bytes), three width-bound materializations, two width-fixture narrowing controls and the oversized-report rejection control |
+| Current eMMC probe report test | PASS: 33 scenarios and 22 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1060 bytes), three width-bound materializations, two width-fixture narrowing controls, two full-probe block-read failure controls and the oversized-report rejection control |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |

@@ -10,8 +10,10 @@
  *
  * The controller/host path and a minimal card-command engine are modelled: the
  * GCC block reset, the branch enable/CLK_OFF handshake, a configurable MCI
- * version, MMIO-map failure, and CMD0/CMD1/CMD2 with a CMD2 CRC error. No data
- * transfer is issued by any scenario.
+ * version, MMIO-map failure, CMD0/CMD1/CMD2 with a CMD2 CRC error, and the
+ * identification sequence through CMD17 block reads. The full-probe failure
+ * scenarios fail a single CMD17 with a data CRC or data timeout and check the
+ * block-read failure report.
  */
 #include <setjmp.h>
 #include <stdarg.h>
@@ -141,6 +143,9 @@ static int cmd3_late_cc;
 static int cmd3_cc_delay;
 static int cmd3_identify_status;
 static int cmd9_timeout;
+static unsigned int cmd17_fail_on;
+static uint16_t cmd17_fail_error;
+static unsigned int cmd17_count;
 static unsigned int cmd3_normal_reads;
 static uint32_t ext_csd_count = 0x01000000u;
 /* CMD7 R1b modeling. Event times are microseconds from command issue against
@@ -519,6 +524,11 @@ sim_command(uint16_t command)
 		if (index == GTA4L_EMMC_CMD8) {
 			sim_fill_buffer_words(ext_csd);
 		} else {
+			cmd17_count++;
+			if (cmd17_count == cmd17_fail_on) {
+				error_int |= cmd17_fail_error;
+				return;
+			}
 			sim_fill_block(last_argument);
 		}
 		normal_int |= GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_BRR |
@@ -916,6 +926,11 @@ static const uint8_t order_probe[] = {
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17
 };
+static const uint8_t order_probe_block0[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17
+};
 static const uint8_t order_cmd7[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7
@@ -1134,6 +1149,24 @@ main(int argc, char **argv)
 		cmd7_tc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
 		    GTA4L_EMMC_POLL_STEP_US);
 		cmd7_toggle_status = 1;
+		set_expected_order(order_probe,
+		    (unsigned int)(sizeof(order_probe) / sizeof(order_probe[0])));
+	} else if (strcmp(scenario, "probe-read-crc") == 0) {
+		/* Identification succeeds; the first sector read fails its
+		 * data CRC check. */
+		stage = 1;
+		cmd7_tc_immediate = 1;
+		cmd17_fail_on = 1;
+		cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		set_expected_order(order_probe_block0,
+		    (unsigned int)(sizeof(order_probe_block0) /
+		    sizeof(order_probe_block0[0])));
+	} else if (strcmp(scenario, "probe-read-timeout") == 0) {
+		/* Block 0 is read; block 1 fails its data timeout. */
+		stage = 1;
+		cmd7_tc_immediate = 1;
+		cmd17_fail_on = 2;
+		cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_TIMEOUT;
 		set_expected_order(order_probe,
 		    (unsigned int)(sizeof(order_probe) / sizeof(order_probe[0])));
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
@@ -1516,6 +1549,38 @@ main(int argc, char **argv)
 		check(bad_command_order == 0,
 		    "the init sent commands in the wrong order");
 		check(cmd_count == 5u, "the init did not stop after CMD9");
+	} else if (strcmp(scenario, "probe-read-crc") == 0) {
+		check(panicked == 1, "a block 0 data CRC did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: block 0 read rc=-12 step=15 "
+		    "fail=1/17/0/0000113a/0020/0000/00000000/15") != NULL,
+		    "the block 0 data-CRC report lost the failure record");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a failed block 0 read still emitted the success report");
+		check(bad_command_format == 0,
+		    "the probe sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the probe sent commands in the wrong order");
+		check(cmd_count == 9u,
+		    "the probe did not stop after the failed block 0 read");
+		check(last_index == GTA4L_EMMC_CMD17,
+		    "the failed command was not the block read");
+	} else if (strcmp(scenario, "probe-read-timeout") == 0) {
+		check(panicked == 1, "a block 1 data timeout did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: block 1 read rc=-11 step=15 "
+		    "fail=1/17/1/0000113a/0010/0000/00000000/15") != NULL,
+		    "the block 1 data-timeout report lost the failure record");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a failed block 1 read still emitted the success report");
+		check(bad_command_format == 0,
+		    "the probe sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the probe sent commands in the wrong order");
+		check(cmd_count == 10u,
+		    "the probe did not stop after the failed block 1 read");
+		check(last_index == GTA4L_EMMC_CMD17,
+		    "the failed command was not the block read");
 	} else if (strcmp(scenario, "report-max-width-failure") == 0) {
 		check(panicked == 1, "the maximum-width failure did not panic");
 		check(strstr(panic_message, "stage=3") != NULL,

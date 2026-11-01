@@ -35,7 +35,7 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
 | `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 98 scenarios and 55 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 31 scenarios and 21 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 33 scenarios and 22 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -309,7 +309,7 @@ source.
 copies `package/Gta4lEmmcProbe.c` and replaces only the generic-counter and
 barrier instructions and the six MMIO helpers with recording hooks; the stage
 selection, conflict check, clock guard, register offsets and panic strings are
-the production code. Thirty scenarios cover a disabled probe, an MMIO-map
+the production code. The scenarios cover a disabled probe, an MMIO-map
 failure, a conflicting diagnostic argument, a stuck AHB branch, a stuck APPS
 branch, a verified-clock version failure, a stuck RCG update, a missing clock
 stability bit, a stage-3 CMD2 CRC failure, CMD3 without a completion interrupt,
@@ -320,7 +320,9 @@ window, CC-then-TC, TC-then-CC, simultaneous completion, CC without a busy
 completion (a bounded timeout, because CC and TC are both required), a
 busy-phase error, a late
 busy-phase error, an error asserted during the terminal diagnostic reads after
-both completions, and a bounded-trace overflow. Three `report-max-width-*`
+both completions, and a bounded-trace overflow. Two full-probe scenarios fail
+the first or second CMD17 with a data CRC or a data timeout and check the
+block-read failure report and command stop. Three `report-max-width-*`
 end-to-end runs execute the failure, identification and full-probe success
 report forms with wide simulated values (a 10-digit capacity, both poll budgets
 at their limit, 16-hex-digit tick fields, a full four-entry CMD7 trace and its
@@ -362,7 +364,7 @@ terminal state and response window (`c7t=`) and the bounded transition trace
 with its overflow count (`c7x=`), including exact report strings for TC-then-CC
 and simultaneous completion. The successful identification run checks that the
 success report carries the CMD2, pre-CMD3, poll-history, CMD7, counter-frequency
-and CID fields and that no timeout capture is invented. Nineteen mutations
+and CID fields and that no timeout capture is invented. The mutations
 insert an unguarded SDHCI read before the guard, replace the guard with an
 unconditional branch, suppress a GCC report read, suppress an SDHCI report read,
 suppress the raw R2 snapshot, suppress the final-CMD1 window, suppress the
@@ -370,9 +372,9 @@ pre-CMD2 window, suppress the captured CMD2 error, change the capture-format
 identifier, remove the HOST_VERSION sample, suppress the success-report CID,
 suppress the success-report poll history, suppress the timeout command index,
 suppress the pre-CMD7 validity, poll OR mask, TC validity or CC validity,
-suppress the trace overflow count or suppress the terminal CMD7 response
-window; each must be rejected for the expected reported reason, not merely by a
-nonzero exit.
+suppress the trace overflow count, suppress the terminal CMD7 response
+window or suppress the block-read failure record; each must be rejected for the
+expected reported reason, not merely by a nonzero exit.
 
 ## 5. XNU integration
 

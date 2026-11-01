@@ -715,10 +715,10 @@ owner/expert-provided, not an independent part-number or board-revision
 identity. The three transcripts are consistent with it: the capacity, CID
 product name, CSD-shaped window, register state and CMD7 timing agree, while
 the serial/date and EXT_CSD byte sum differ as expected for different units.
-The three full CIDs in the transcription and table are unique device
-identifiers. They are reproduced verbatim from the owner-supplied transcripts
-with the owner's explicit approval for this record; the repository privacy rule
-otherwise treats device identifiers as private.
+The three full CIDs and their raw `c2` CMD2 windows in the transcription and
+table are unique device identifiers. They are reproduced verbatim from the
+owner-supplied transcripts with the owner's explicit approval for this record;
+the repository privacy rule otherwise treats device identifiers as private.
 
 Attribution: on the owner's unit the fail-closed image failed CMD2 (section
 2.9) and the candidate completed identification. The two images are built from

@@ -29,8 +29,10 @@ must be rejected for the expected reported reason, not merely by a nonzero exit.
 The report-max-width scenarios run the failure, identification and full-probe
 success report forms with the widest values the simulator can produce: a
 10-digit capacity, both poll budgets at their limit, 16-hex-digit tick fields,
-a full four-entry CMD7 trace and its overflow count. The report-width scenarios
-instead invoke the production formatters from
+a full four-entry CMD7 trace and its overflow count. Two full-probe failure
+scenarios fail the first and second CMD17 with a data CRC and a data timeout
+and require the block-read failure report and command stop. The report-width
+scenarios instead invoke the production formatters from
 scripts/sim-gta4l-emmc-probe/report-width-fixture.c with synthetic field-wise
 extremes, assert every bounded field and require the measured length plus margin
 to fit the 2048-byte buffer; a width-budget control checks the accept boundary
@@ -87,6 +89,8 @@ SCENARIOS = [
     'report-max-width-failure',
     'report-max-width-success',
     'report-max-width-probe',
+    'probe-read-crc',
+    'probe-read-timeout',
     'report-width-failure',
     'report-width-ident',
     'report-width-probe',
@@ -487,6 +491,19 @@ MUTATIONS = [
      'the synthetic width ident report lost the late stored trace '
      'index or the overflow bound',
      'fixture'),
+    ('block-read-error-suppressed',
+     '\t\tpanic("GTA4L-EMMC PROBE FAILED: block 0 read rc=%d step=%u "\n'
+     '\t\t    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u", result,\n'
+     '\t\t    host.last_step, (unsigned int)host.fail_valid,\n'
+     '\t\t    host.fail_index, host.fail_argument, host.fail_command,\n'
+     '\t\t    (unsigned int)host.fail_error,\n',
+     '\t\tpanic("GTA4L-EMMC PROBE FAILED: block 0 read rc=%d step=%u "\n'
+     '\t\t    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u", result,\n'
+     '\t\t    host.last_step, (unsigned int)host.fail_valid,\n'
+     '\t\t    host.fail_index, host.fail_argument, host.fail_command,\n'
+     '\t\t    0u,\n',
+     'probe-read-crc',
+     'the block 0 data-CRC report lost the failure record'),
 ]
 
 
