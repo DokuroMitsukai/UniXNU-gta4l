@@ -17,10 +17,42 @@ step and the firmware path to preflight scripts").
 | `scripts/package.sh` (this repository) | `f7b8e3ea043058b9c61d5b45c32b8e7669a85737c89d55d404957c3b43ec4aab` | Verbatim copy; no board edits |
 | `scripts/unixnu/pipeline.py` (UniXNU) | `88a3c93a2e71fc2f3e5c296e5ba5661defc4833ab2a337b6eff3de97e14f5233` | Byte-identical to upstream |
 | `scripts/unixnu/profiles.py` (UniXNU) | `d9fe24b030b4e89337e33e033b41aa35222fd93abdf4b3408ee5fc30cc4e08f1` | Retains the local arm64-only selection and adds the package-contract validation |
+| `scripts/unixnu/tree.py` (UniXNU) | `4d06a44b5f195e05335c10ce7a0e01cbf0da1b9f79f49dcafc3581978067e151` | Upstream `a4419c8`: script copies refresh by content, not size and mtime |
+| `scripts/unixnu/firmware.py` (UniXNU) | `69c30263d30da155a4f44d747d691847192891b889ff280c1ecc57bca0ce51ab` | Upstream `658f82f`+`66e43f1`: preflight entries carry arguments and `UNIXNU_DEVICE` |
 | `docs/porting/packaging.md` (UniXNU) | `6dff4a637664adbe1ed264bde66844497b60d3ed3a26efb0e00df19e12adb147` | Upstream text, "uefi-sheng" generalized |
 
 The script reads only `[package] unixnu` itself; every other value comes from
 `board.toml`, the profiles and the local build inputs.
+
+## Later upstream advance (2026-11-01)
+
+Official upstream advanced from the inspected anchor `6790e7ce` to
+`a4419c8af72999d97df6b18505326b60b06aeb00` by five commits. The range was
+reviewed commit by commit; the two shared-tooling fixes are ported, the
+example/docs-only firmware-archive contract is recorded but not adopted.
+
+| Upstream commit | Change | Disposition for gta4l |
+| --- | --- | --- |
+| `658f82fe0f822707609ace8b0056c93506120af8` | Firmware preflight scripts get the device checkout in `UNIXNU_DEVICE` | Ported into `scripts/unixnu/firmware.py` |
+| `66e43f1c168120154680871d26227cedc601ec3c` | Preflight entries carry arguments; `shlex` splits the entry, absolute paths are used as-is | Ported with the previous commit |
+| `76a2e1cb6e80d0f5bd6b2e313226cfd192174382` | Example device pins the official fastboot archive in `[firmware.image]` (url, SHA-256, MD5, bytes) and fetches it in preflight | Recorded as reference; **not adopted** |
+| `c96b29975645b711dc06bc435c3ad27321ce817c` | Packaging docs describe the official-archive inputs | Recorded as reference; **not adopted** |
+| `a4419c8af72999d97df6b18505326b60b06aeb00` | Assembled-tree script copies refresh by content, not size and mtime | Ported into `scripts/unixnu/tree.py` |
+
+The content-refresh port matters beyond packaging: the device build reuses the
+assembled tree under `src/UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/tree`
+across incremental kernel builds. A same-size script edit, or a checkout that
+makes the source look older than the tree copy, previously left the stale copy
+in place. The gta4l preflight entries in `board.toml` are arg-less and only
+read `UNIXNU_UEFI`, so the preflight port is behavior-neutral today; it makes
+the board contract match upstream for future scripts that need device-repo
+context or arguments.
+
+The `[firmware.image]` deferral is deliberate. gta4l's firmware inputs and
+their provenance are recorded in `firmware-dependency-decision.md` and
+`boot-dtb-provenance.md`; moving them onto an official-archive download is a
+firmware-provenance decision, not a tooling catch-up, and needs its own
+authorization. No extracted firmware is added to any repository either way.
 
 ## Board values
 
@@ -140,10 +172,13 @@ Host results for the adopted tree (2026-11-01):
   reordered XNU reports, missing caches and deterministic output.
 - `scripts/test-gta4l-boot-image.py`, `scripts/test-gta4l-diagnostic-package.py`
   and `scripts/test-gta4l-diagnostic-payload.py` pass.
-- The UniXNU unit suite passes (73 tests, 1 skipped). It covers the production
+- The UniXNU unit suite passes (80 tests, 1 skipped; 73 before the
+  tree-refresh and preflight fixtures). It covers the production
   context, argument parsing, profile validation, feed precedence, saved-state
   and environment handling, the offline inspection resolver, redaction of
-  tokens, signed URLs and the platform seed, and IPSW cleanup. Profile
+  tokens, signed URLs and the platform seed, IPSW cleanup, content-based
+  script refresh in the assembled tree, and preflight argument splitting with
+  `UNIXNU_UEFI`/`UNIXNU_DEVICE`. Profile
   resolution accepts `17` and the full name and rejects
   `26`, `27`, an absent profile, a missing defconfig mapping and an `arm64e`
   profile. The release command's step order, `--check`, `--no-deps` and
