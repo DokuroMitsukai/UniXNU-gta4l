@@ -1,0 +1,134 @@
+name: package-gta4l
+
+# Manual packaging check for the Tab A7 (gta4l).
+#
+# Status: static and host-tested only; this workflow has not run on a runner.
+# The tracked 192 MiB payload makes boot.img larger than the captured
+# 100,663,296-byte BOOT partition, so the verify step is expected to stop the
+# run and no artifact is uploaded. Do not dispatch it without owner approval,
+# and do not treat its output as a flashable release.
+#
+# Pins: UniXNU f50d5bd5093ede81f8c1897b8ce5c93473c0fb7b is the reviewed
+# gta4l-release-pipeline branch in DokuroMitsukai/UniXNU; push that branch to
+# the fork before dispatch. The device checkout is the ref that carries this
+# file. Mu-Silicium is the recorded integration commit and is checked out
+# without submodules: the firmware step initializes only the submodules
+# [firmware] lists in board.toml, and Mu_Basecore comes from the edk2 feed.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-gta4l-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: macos-26
+    timeout-minutes: 360
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the device repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: device
+          persist-credentials: false
+
+      - name: Check out UniXNU
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: DokuroMitsukai/UniXNU
+          ref: f50d5bd5093ede81f8c1897b8ce5c93473c0fb7b
+          path: UniXNU
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Check out Mu-Silicium
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: DokuroMitsukai/Mu-Silicium
+          ref: e14626a3757007a2dbc902d3db323620d5568923
+          path: Mu-Silicium
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+
+      - name: Assert the interpreter and Xcode
+        run: |
+          python3 --version
+          python3 - <<'PY'
+          import sys
+          assert sys.version_info >= (3, 11), sys.version
+          PY
+          test -d "$DEVELOPER_DIR" || {
+            echo "missing $DEVELOPER_DIR"
+            ls -d /Applications/Xcode_*.app 2>/dev/null || true
+            exit 1
+          }
+          xcodebuild -version
+          xcrun --find clang
+
+      - name: Install and assert tools
+        run: |
+          brew install dtc llvm lld cmake mtools ninja unifdef blacktop/tap/ipsw
+          ok=1
+          for tool in git make clang cmake ninja dtc fdtget fdtput aea compression_tool \
+                      mformat mcopy ipsw unifdef xcodebuild python3; do
+            command -v "$tool" >/dev/null || { echo "missing tool: $tool"; ok=0; }
+          done
+          llvm="$(brew --prefix llvm)"
+          lld="$(brew --prefix lld)"
+          "$llvm/bin/llvm-config" --version || ok=0
+          "$lld/bin/ld.lld" --version || ok=0
+          for tool in lld-link llvm-lib llvm-rc llvm-nm llvm-objcopy; do
+            [ -f "$llvm/bin/$tool" ] || [ -f "$lld/bin/$tool" ] || {
+              echo "missing tool: $tool"
+              ok=0
+            }
+          done
+          [ "$ok" = 1 ]
+
+      - name: Validate the platform seed
+        env:
+          seed: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+        run: |
+          if ! [[ "$seed" =~ ^[0-9a-fA-F]{8}$ ]]; then
+            echo 'Set the repository secret UNIXNU_UNIQUE_CHIP_ID: the platform seed of the device, 8 hex digits.' >&2
+            exit 1
+          fi
+
+      - name: Check the profile, sources and patch order
+        working-directory: device
+        env:
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/package.sh --os ipados-17.7.11-21H461 --uefi ../Mu-Silicium --check
+
+      - name: Package the iPadOS 17 profile
+        working-directory: device
+        env:
+          UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/package.sh --os ipados-17.7.11-21H461 --uefi ../Mu-Silicium --no-deps
+
+      - name: Upload the package outputs
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gta4l-ipados-17.7.11-21H461-${{ github.run_attempt }}
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/boot/boot.img
+            UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/payload/payload.img
+            UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho
+            UniXNU/out/gta4l/ipados-17.7.11-21H461/gta4l/package.manifest.json

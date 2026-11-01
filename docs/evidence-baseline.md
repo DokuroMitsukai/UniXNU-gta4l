@@ -18,7 +18,11 @@ late-trace width correction and the final CMD7 error re-read). It was refreshed
 again on `2026-11-01` after the PixelExperience storage-stack provenance review
 and its closeout correction; that review adds a document but no manifest row,
 while the correction refreshes the `README.md`, `docs/emmc-reference.md` and
-`porting.toml` rows. This document's own hash is not listed. Hashes describe
+`porting.toml` rows. It was refreshed once more on `2026-11-01` after the
+release-packaging adoption and the firmware-dependency decision; that change
+refreshes the `porting.toml` row. The new packaging documents, workflow and
+audit script are outside this bounded manifest and are recorded by their own
+files. This document's own hash is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
 without further content changes; if the committed content differs, re-run §6
@@ -425,7 +429,7 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `b80d989e7155cec7f114dfe1b3ba914bd78fe90c33fe01ad1273256424e44829` |
 | eMMC reference | `docs/emmc-reference.md` | `29381c1059ff6202f86257c5dee6b369b011028e3cf9f644758d2581ad8de37b` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `6a672dc763ffb79103571d98e44b61f7c706468f45b3bb3f805d230c70c525a2` |
+| Porting record | `porting.toml` | `253319bbfcee97d803bfd5a2c1b59efe90bd29ae6c3d1b70997be078aea09c98` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
 | eMMC driver record | `docs/emmc-driver.md` | `47af4a1c605e543899d1b6482a7963f280cc22d971ad8dce7dfa77bf5939e29c` |
