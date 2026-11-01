@@ -326,6 +326,7 @@ struct gta4l_emmc_host {
 	uint8_t  ext_csd_rev;
 	uint8_t  bus_width;
 	uint8_t  partition_config;
+	uint8_t  data_sector_size_code;
 	uint8_t  data_sector_size_4k;
 	uint8_t  fixed_1v8;      /* caller: board VCCQ is a fixed 1.8 V rail */
 	uint8_t  pad_pwr_switch; /* caller: select the 1.8 V pad supply */

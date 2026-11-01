@@ -357,7 +357,7 @@ scenario must reject it, while the plateau scenario checks that repeated
 unchanged samples do not advance the overflow count. The CC-only case now ends
 in a bounded timeout because CC alone is not success while the busy completion is
 missing; a core mutation that restores CC-only success is rejected.
-Host counts are 92 core scenarios with 51 mutation controls and 31 probe
+Host counts are 95 core scenarios with 54 mutation controls and 31 probe
 scenarios with 21 mutation controls; the `fmt=4` report has not run on hardware.
 
 ---

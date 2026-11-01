@@ -26,7 +26,7 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 92 scenarios and 51 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 95 scenarios and 54 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 31 scenarios and 21 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
@@ -152,7 +152,9 @@ The core parses `EXT_CSD_REV` at byte 192, `BUS_WIDTH` at byte 183,
 `PARTITION_CONFIG` at byte 179, `DATA_SECTOR_SIZE` at byte 61 and `SEC_COUNT` at
 bytes 212-215. Initialization requires 512-byte data sectors
 (`DATA_SECTOR_SIZE == 0`), a sector-addressed card (`SEC_COUNT > 2 GiB / 512`)
-and the user-area partition access bits. A card that does not meet any condition
+and the user-area partition access bits. The defined `DATA_SECTOR_SIZE`
+encodings are only `0` and `1`; a reserved value (2-255) is not treated as the
+512-byte default and is rejected. A card that does not meet any condition
 returns `GTA4L_EMMC_ERR_UNSUPPORTED` before any sector read.
 
 ## 3. Completion and error rules
@@ -176,6 +178,10 @@ returns `GTA4L_EMMC_ERR_UNSUPPORTED` before any sector read.
   in-loop error path returns the error it sampled, and the exhausted-poll path
   returns the software timeout from its pre-capture error sample without such a
   re-read.
+- The error status is also re-read once before a non-busy command's or a data
+  read's success clear, so an error that becomes visible while the response or
+  FIFO is being read is still recorded. An error asserted after that final sample
+  remains unobserved; the rule does not make the path race-free.
 - The host tracks whether the AHB/APPS branches were enabled. The probe reads
   SDHCI registers on the failure path only when they were, so a clock-enable
   failure cannot turn the diagnostic into an access to an unclocked controller;
@@ -244,12 +250,16 @@ It covers:
 - a bus-only request (no `VDD_180` change) whose acknowledgement must still be
   `BUS_SUCCESS | IO_SUCCESS`, matching Linux;
 - a 4 KiB `DATA_SECTOR_SIZE` card;
+- a reserved `DATA_SECTOR_SIZE` encoding that must not be read as 512-byte mode;
 - small-card and non-user-partition rejection;
 - 1.8 V and 3.3 V signalling, plus the explicit pad-switch-on and pad-switch-off
   policies;
 - vendor normalization from an HS400 MCLK selection or an enabled
   `HC_SELECT_IN` override, and the `PWRSAVE_DLL` clear;
 - EXT_CSD data read;
+- a data error that becomes visible on the last FIFO word read and a command
+  error that becomes visible while a non-busy response is read, both of which
+  must be caught by the final pre-clear error sample;
 - the CMD7 R1b busy lifecycle: CC-then-TC, TC-then-CC, simultaneous
   completion, CC only, TC only, neither completion, a delayed busy release, a
   late completion, stale pre-command status, busy-phase and late errors, a
@@ -275,9 +285,11 @@ It covers:
   recovered `CMD1` timeout, a missing raw-response snapshot, a retimed `CMD1`
   response snapshot, a missing response-window clear on reinitialization, a
   clock-gate flag set before the branch clocks are verified, a missing 4 KiB
-  sector check, a restored CC-only success, an accepted TC-only completion,
+  sector check, an accepted reserved sector-size encoding, restored CC-only
+  success, an accepted TC-only completion,
   cleared sticky completion evidence, a removed final terminal-read error
-  sample, an ignored final checked error, a response read before CC, a timeout
+  sample, a removed data/response final error sample, an ignored final checked
+  error, a response read before CC, a timeout
   budget rearmed after CC, a loose response-type match and an early downstream
   command.
 

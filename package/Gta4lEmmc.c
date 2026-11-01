@@ -723,6 +723,21 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 			 * only. */
 			gta4l_emmc_read_raw_response(host, host->cmd1_response);
 		}
+		/* The loop only observed the error latch before the response
+		 * reads. Evaluate it once more so an error asserted during
+		 * those reads is still recorded before the status clear. An
+		 * error after this sample remains unobserved. */
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			gta4l_emmc_record_failure(host, index, argument,
+			    command, error, normal, present);
+			gta4l_emmc_clear_interrupts(host);
+			return gta4l_emmc_map_error(error, 0);
+		}
 	} else {
 		if ((response != 0) && (response_snapshot != 0)) {
 			response[0] = busy_response;
@@ -841,6 +856,21 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
 		}
 		if ((command_done != 0) && (data_done != 0) &&
 		    ((normal & GTA4L_EMMC_INT_TC) != 0)) {
+			/* Re-evaluate the error latch after the response and
+			 * FIFO reads so an error that became visible during
+			 * them is still recorded before the status clear. An
+			 * error after this sample remains unobserved. */
+			error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+			if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+				present = gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_PRESENT_STATE);
+				gta4l_emmc_record_failure(host, index, argument,
+				    command, error, normal, present);
+				gta4l_emmc_clear_interrupts(host);
+				return gta4l_emmc_map_error(error, 1);
+			}
 			gta4l_emmc_clear_interrupts(host);
 			return GTA4L_EMMC_OK;
 		}
@@ -1424,8 +1454,10 @@ gta4l_emmc_parse_ext_csd(struct gta4l_emmc_host *host, const uint8_t *ext)
 	host->ext_csd_rev = ext[GTA4L_EMMC_EXT_CSD_REV_OFF];
 	host->bus_width = (uint8_t)(ext[183] & 0x0Fu);
 	host->partition_config = ext[GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF];
+	host->data_sector_size_code =
+	    ext[GTA4L_EMMC_EXT_CSD_DATA_SECTOR_SIZE_OFF];
 	host->data_sector_size_4k =
-	    (ext[GTA4L_EMMC_EXT_CSD_DATA_SECTOR_SIZE_OFF] == 1u) ? 1u : 0u;
+	    (host->data_sector_size_code == 1u) ? 1u : 0u;
 
 	count = (uint32_t)ext[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF] |
 	    ((uint32_t)ext[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 1] << 8) |
@@ -1534,6 +1566,13 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 		return result;
 	}
 	gta4l_emmc_parse_ext_csd(host, ext_csd);
+	if (host->data_sector_size_code > 1u) {
+		/* Only 0 (512-byte) and 1 (4 KiB) are defined. A reserved
+		 * encoding must not be read as 512-byte mode. */
+		gta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, 5,
+		    host->data_sector_size_code);
+		return GTA4L_EMMC_ERR_UNSUPPORTED;
+	}
 	if (host->data_sector_size_4k != 0) {
 		/* The read path is fixed at 512-byte sectors. */
 		gta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, 5,

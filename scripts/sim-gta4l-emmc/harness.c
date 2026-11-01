@@ -142,6 +142,11 @@ struct sim {
 	int bus_delayed_emitted;
 	int io_delayed_emitted;
 	int data_sector_4k;
+	int data_sector_size_code;
+	int data_late_error_words;
+	int data_late_error_emitted;
+	uint32_t cmd_late_error_index;
+	int cmd_late_error_emitted;
 	int power_written;
 	int card_clock_before_power;
 	int card_clock_enabled;
@@ -539,6 +544,16 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			uint32_t value = sim->buffer_data[
 			    sim->buffer_index % (GTA4L_EMMC_BLOCK_BYTES / 4u)];
 			sim->buffer_index++;
+			if ((sim->data_late_error_words > 0) &&
+			    (sim->data_late_error_emitted == 0) &&
+			    (sim->buffer_index >=
+			    (uint32_t)sim->data_late_error_words)) {
+				/* Model a data error that only becomes visible
+				 * after the FIFO drain has already started. */
+				sim->error_int |=
+				    GTA4L_EMMC_INT_ERR_DATA_CRC;
+				sim->data_late_error_emitted = 1;
+			}
 			return value;
 		}
 		if ((offset >= GTA4L_EMMC_REG_RESPONSE) &&
@@ -567,6 +582,15 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 				sim->response_read_offset[
 				    sim->response_read_count] = offset;
 				sim->response_read_count++;
+			}
+			if ((sim->cmd_late_error_index != SIM_CMD_CRC_NONE) &&
+			    (sim->last_cmd == sim->cmd_late_error_index) &&
+			    (sim->cmd_late_error_emitted == 0)) {
+				/* An error asserted while the response is
+				 * being read must still be evaluated before
+				 * the status clear. */
+				sim->error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
+				sim->cmd_late_error_emitted = 1;
 			}
 		}
 		if (offset == GTA4L_EMMC_REG_PRESENT_STATE) {
@@ -706,7 +730,7 @@ sim_fill_ext_csd(struct sim *sim)
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_REV_OFF] = 8;
 	sim->ext_csd[183] = 2;
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_DATA_SECTOR_SIZE_OFF] =
-	    (uint8_t)(sim->data_sector_4k ? 1 : 0);
+	    (uint8_t)(sim->data_sector_4k ? 1 : sim->data_sector_size_code);
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF] =
 	    (uint8_t)sim->partition_config;
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 0] =
@@ -1472,6 +1496,7 @@ sim_init(struct sim *sim)
 	sim->sector_count = 61071360u;
 	sim->partition_config = 0u;
 	sim->cmd_crc_index = SIM_CMD_CRC_NONE;
+	sim->cmd_late_error_index = SIM_CMD_CRC_NONE;
 	sim->cmd7_cc_immediate = 1;
 	sim->cmd7_tc_immediate = 1;
 	sim->cmd7_cc_delay = -1;
@@ -1656,6 +1681,11 @@ main(int argc, char **argv)
 		sim.power_churn = 1;
 	} else if (scenario_is(scenario, "data-sector-4k")) {
 		sim.data_sector_4k = 1;
+		sim_fill_ext_csd(&sim);
+	} else if (scenario_is(scenario, "data-sector-reserved")) {
+		/* A reserved DATA_SECTOR_SIZE encoding must not be treated
+		 * as the 512-byte default. */
+		sim.data_sector_size_code = 2;
 		sim_fill_ext_csd(&sim);
 	} else if (scenario_is(scenario, "rcg-busy")) {
 		sim.rcg_busy = 1;
@@ -1939,6 +1969,11 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario, "partition-access")) {
 		sim.partition_config = 1u;
 		sim_fill_ext_csd(&sim);
+	} else if (scenario_is(scenario, "cmd9-late-error")) {
+		/* CMD9's response is intact, but an error becomes visible
+		 * while it is being read. The non-busy path must evaluate the
+		 * latch again before the status clear. */
+		sim.cmd_late_error_index = GTA4L_EMMC_CMD9;
 	} else if (scenario_is(scenario, "signaling-3v3")) {
 		host.fixed_1v8 = 0;
 		host.pad_pwr_switch = 0;
@@ -1957,6 +1992,7 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "read-without-init") ||
 	    scenario_is(scenario, "read-data-timeout") ||
 	    scenario_is(scenario, "read-data-crc") ||
+	    scenario_is(scenario, "read-late-fifo-error") ||
 	    scenario_is(scenario, "read-no-tc") ||
 	    scenario_is(scenario, "read-no-brr") ||
 	    scenario_is(scenario, "read-repeat") ||
@@ -2452,6 +2488,21 @@ main(int argc, char **argv)
 		    "captured error is not DATA_CRC");
 		check(host.fail_step == GTA4L_EMMC_STEP_READY,
 		    "CMD17 failure step is not READY");
+	} else if (scenario_is(scenario, "read-late-fifo-error")) {
+		/* The error becomes visible on the last FIFO word read, after
+		 * the in-loop error sample. It must still be reported. */
+		sim.data_late_error_words =
+		    (int)(GTA4L_EMMC_BLOCK_BYTES / 4u);
+		result = gta4l_emmc_read_block(&host, 0, block0);
+		check(result == GTA4L_EMMC_ERR_DATA_CRC,
+		    "late FIFO error not reported");
+		check(host.fail_valid == 1,
+		    "late FIFO error was not captured");
+		check(host.fail_index == GTA4L_EMMC_CMD17,
+		    "late FIFO error did not capture CMD17");
+		check((host.fail_error &
+		    GTA4L_EMMC_INT_ERR_DATA_CRC) != 0,
+		    "captured late FIFO error is not DATA_CRC");
 	} else if (scenario_is(scenario, "read-no-tc")) {
 		sim.no_tc = 1;
 		result = gta4l_emmc_read_block(&host, 0, block0);
@@ -2783,7 +2834,8 @@ main(int argc, char **argv)
 			    scenario_is(scenario, "cmd2-crc-ocr-like") ||
 			    scenario_is(scenario, "cmd1-not-ready-then-ready-crc") ||
 			    scenario_is(scenario,
-			    "cmd1-timeout-recovery-crc");
+			    "cmd1-timeout-recovery-crc") ||
+			    scenario_is(scenario, "cmd9-late-error");
 			break;
 		case GTA4L_EMMC_ERR_CMD_INDEX:
 			expected = scenario_is(scenario, "cmd-index");
@@ -2808,7 +2860,8 @@ main(int argc, char **argv)
 		case GTA4L_EMMC_ERR_UNSUPPORTED:
 			expected = scenario_is(scenario, "small-card") ||
 			    scenario_is(scenario, "partition-access") ||
-			    scenario_is(scenario, "data-sector-4k");
+			    scenario_is(scenario, "data-sector-4k") ||
+			    scenario_is(scenario, "data-sector-reserved");
 			break;
 		case GTA4L_EMMC_ERR_RESPONSE:
 			expected = scenario_is(scenario, "bad-cid") ||
@@ -2831,7 +2884,8 @@ main(int argc, char **argv)
 		    scenario_is(scenario, "cmd2-crc-unchanged") ||
 		    scenario_is(scenario, "cmd2-crc-ocr-like") ||
 		    scenario_is(scenario, "cmd1-not-ready-then-ready-crc") ||
-		    scenario_is(scenario, "cmd1-timeout-recovery-crc")) {
+		    scenario_is(scenario, "cmd1-timeout-recovery-crc") ||
+		    scenario_is(scenario, "cmd9-late-error")) {
 			check(host.fail_valid == 1,
 			    "CRC failure was not captured");
 			check((host.fail_error &
@@ -2848,6 +2902,10 @@ main(int argc, char **argv)
 		    scenario_is(scenario, "cmd1-timeout-recovery-crc")) {
 			check(sim.last_cmd == GTA4L_EMMC_CMD2,
 			    "a later command was sent after the CMD2 CRC failure");
+		}
+		if (scenario_is(scenario, "cmd9-late-error")) {
+			check(host.fail_index == GTA4L_EMMC_CMD9,
+			    "late CMD9 error did not capture CMD9");
 		}
 		if (scenario_is(scenario, "cmd-crc-with-cc")) {
 			check(host.fail_index == GTA4L_EMMC_CMD2,

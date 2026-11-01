@@ -32,6 +32,7 @@ SCENARIOS = [
     'read-without-init',
     'read-data-timeout',
     'read-data-crc',
+    'read-late-fifo-error',
     'read-no-tc',
     'read-no-brr',
     'read-repeat',
@@ -61,6 +62,7 @@ SCENARIOS = [
     'power-wrong-io-on-ack',
     'power-churn',
     'data-sector-4k',
+    'data-sector-reserved',
     'cmd-timeout',
     'cmd-crc',
     'cmd-crc-with-cc',
@@ -92,6 +94,7 @@ SCENARIOS = [
     'cmd3-stale-cc',
     'cmd3-identify',
     'cmd3-enable-readback',
+    'cmd9-late-error',
     'cmd7-tc-only',
     'cmd7-fresh-window',
     'cmd7-cc-then-tc',
@@ -223,6 +226,8 @@ def check_source() -> None:
         'IO_HIGH must follow IO_LOW in the Linux handler order'
     assert 'data_sector_size_4k != 0' in core, \
         '4 KiB data-sector rejection missing'
+    assert 'data_sector_size_code > 1u' in core, \
+        'reserved data-sector-size rejection missing'
     assert 'host->pad_pwr_switch' in core, 'explicit pad policy missing'
     assert 'gta4l_emmc_delay(host, 1);' not in core, \
         'poll loops must use the documented 10 us step'
@@ -291,7 +296,10 @@ def check_source() -> None:
                   'clear_response_on_normal_w1c',
                   'preserve_host_control2',
                   'apps_branch_fail', 'ahb_branch_fail',
-                  'sim_note_sdhci_access', 'branch_writes'):
+                  'sim_note_sdhci_access', 'branch_writes',
+                  'data_sector_size_code', 'data_late_error_words',
+                  'data_late_error_emitted', 'cmd_late_error_index',
+                  'cmd_late_error_emitted'):
         assert token in harness, f'harness missing {token}'
     assert 'previous & SIM_CTRL_VDD_180' in harness, \
         'simulator does not model the VDD_180 transition'
@@ -807,6 +815,55 @@ def main() -> int:
              '\t    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);\n',
              '\tbusy = 0;\n',
              'Gta4lEmmc.c', (), 'cmd7-delayed-release'),
+            ('data-sector-reserved-accepted',
+             '\tif (host->data_sector_size_code > 1u) {\n'
+             '\t\t/* Only 0 (512-byte) and 1 (4 KiB) are defined. A reserved\n'
+             '\t\t * encoding must not be read as 512-byte mode. */\n'
+             '\t\tgta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, 5,\n'
+             '\t\t    host->data_sector_size_code);\n'
+             '\t\treturn GTA4L_EMMC_ERR_UNSUPPORTED;\n'
+             '\t}\n',
+             '\t/* reserved data-sector-size rejection removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'data-sector-reserved'),
+            ('data-final-error-sample-removed',
+             '\t\t\t/* Re-evaluate the error latch after the response and\n'
+             '\t\t\t * FIFO reads so an error that became visible during\n'
+             '\t\t\t * them is still recorded before the status clear. An\n'
+             '\t\t\t * error after this sample remains unobserved. */\n'
+             '\t\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
+             '\t\t\tif ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {\n'
+             '\t\t\t\tpresent = gta4l_emmc_read32(host,\n'
+             '\t\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
+             '\t\t\t\t    command, error, normal, present);\n'
+             '\t\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\t\treturn gta4l_emmc_map_error(error, 1);\n'
+             '\t\t\t}\n'
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn GTA4L_EMMC_OK;\n',
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn GTA4L_EMMC_OK;\n',
+             'Gta4lEmmc.c', (), 'read-late-fifo-error'),
+            ('nonbusy-final-error-sample-removed',
+             '\t\t/* The loop only observed the error latch before the response\n'
+             '\t\t * reads. Evaluate it once more so an error asserted during\n'
+             '\t\t * those reads is still recorded before the status clear. An\n'
+             '\t\t * error after this sample remains unobserved. */\n'
+             '\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
+             '\t\tif ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {\n'
+             '\t\t\tpresent = gta4l_emmc_read32(host,\n'
+             '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
+             '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn gta4l_emmc_map_error(error, 0);\n'
+             '\t\t}\n',
+             '\t\t/* non-busy final error sample removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'cmd9-late-error'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -847,6 +904,8 @@ def main() -> int:
                 'init result -14',
             'cmd7-early-command':
                 'a command was submitted before the busy release',
+            'data-final-error-sample-removed':
+                'late FIFO error not reported',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)

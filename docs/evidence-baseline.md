@@ -25,7 +25,12 @@ audit script are outside this bounded manifest and are recorded by their own
 files. It was refreshed once more on `2026-11-01` after the LinuxForGta4l
 organization source audit: that change refreshes the `docs/emmc-reference.md`
 and `porting.toml` rows, adds no manifest row, and records the new audit
-document and retrieval TSV outside this bounded manifest. This document's own
+document and retrieval TSV outside this bounded manifest. It was refreshed once
+more on `2026-11-01` after the host-only fail-closed batch: that change adds
+reserved-`DATA_SECTOR_SIZE` rejection plus final pre-clear error samples for
+non-busy command and data success paths, refreshes the `porting.toml`,
+`docs/emmc-driver.md`, core/header, simulator and host-test rows, and corrects
+the `dtbo-lk2nd` manifest license note. This document's own
 hash is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
@@ -437,15 +442,15 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `b80d989e7155cec7f114dfe1b3ba914bd78fe90c33fe01ad1273256424e44829` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `7f448a6c946082069d5ae0a094d5103cd637461517c213d838359aa724f9f466` |
+| Porting record | `porting.toml` | `604c9c3e20155b686ea35b23b06d0f501af398689d70e8105d1acc3d0eef354c` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `47af4a1c605e543899d1b6482a7963f280cc22d971ad8dce7dfa77bf5939e29c` |
-| eMMC core header | `package/Gta4lEmmc.h` | `82a8a4a109614ac90353b0849de43bbe87d8692c64b91ec4d463489241053cf2` |
-| eMMC core source | `package/Gta4lEmmc.c` | `1a2b4e2b8bbb13d99388d80b504795d4660b8f67d8df1d41798bff67886bb693` |
+| eMMC driver record | `docs/emmc-driver.md` | `dca49ed2f411f5742d01ca4fd9b8cb95c14ebd394fe79341093dba9c1dfed5c6` |
+| eMMC core header | `package/Gta4lEmmc.h` | `e0a2830cc18ec2faba2e60faa0f17e13eb2b24162e060e5f75328791c0f1e199` |
+| eMMC core source | `package/Gta4lEmmc.c` | `e493b3eb6db421e81436ace4e3d81f0aded33e42c1713330359ab2b39b895d5e` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `932552a2b79297a14bce2fb40ab0702f8696d995bafd55cdeddc2b4bc6397f4a` |
-| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `63303077dd57fac6179eb55c1e5031bf42fc74e66b7a9c21bf57ed945219d57c` |
-| eMMC host test | `scripts/test-gta4l-emmc.py` | `a6aaf148433861f5c6c2cfd4fe908deea759355b9d7f2f504a70b16436f44761` |
+| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `fd585d4973a7708bf8ff13ac66bcde66162092dc019104eaff46fb261a9f129e` |
+| eMMC host test | `scripts/test-gta4l-emmc.py` | `97811c8b767b58986e5b5b6bddc29d0cf627b508fb25bddcb15d3f2c33b88507` |
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `c0d742df56cbf69c499537e077be6b590ea1e89e33f656b21c3215561dae0157` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
@@ -719,7 +724,7 @@ width-closure and terminal-read observation-boundary edits, run from
 
 | Check | Result |
 | --- | --- |
-| Current native eMMC core test | PASS: 92 simulator scenarios and 51 mutation controls |
+| Current native eMMC core test | PASS: 95 simulator scenarios and 54 mutation controls |
 | Current eMMC probe report test | PASS: 31 scenarios and 21 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1060 bytes), three width-bound materializations, two width-fixture narrowing controls and the oversized-report rejection control |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
@@ -737,7 +742,7 @@ row; the table stays at 45 rows and its self-check passes after the `README.md`,
 
 | Check | Result |
 | --- | --- |
-| `scripts/test-gta4l-emmc.py` | PASS: 92 simulator scenarios and 51 mutation controls |
+| `scripts/test-gta4l-emmc.py` | PASS: 95 simulator scenarios and 54 mutation controls |
 | `scripts/test-gta4l-emmc-probe.py` | PASS: 31 scenarios, 21 mutation controls, 3 width-bound materializations and the oversized-report rejection control |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
