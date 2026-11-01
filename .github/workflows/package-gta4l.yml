@@ -8,10 +8,11 @@ name: package-gta4l
 # run and no artifact is uploaded. Do not dispatch it without owner approval,
 # and do not treat its output as a flashable release.
 #
-# Pins: UniXNU f50d5bd5093ede81f8c1897b8ce5c93473c0fb7b is the reviewed
-# gta4l-release-pipeline branch in DokuroMitsukai/UniXNU; push that branch to
-# the fork before dispatch. The device checkout is the ref that carries this
-# file. Mu-Silicium is the recorded integration commit and is checked out
+# Pins: UniXNU f50d5bd5093ede81f8c1897b8ce5c93473c0fb7b is the tip of the
+# published gta4l-release-pipeline branch in DokuroMitsukai/UniXNU. The device
+# checkout is the ref that carries this file; workflow_dispatch also requires
+# this file on the default branch. Mu-Silicium is the recorded integration
+# commit and is checked out
 # without submodules: the firmware step initializes only the submodules
 # [firmware] lists in board.toml, and Mu_Basecore comes from the edk2 feed.
 on:

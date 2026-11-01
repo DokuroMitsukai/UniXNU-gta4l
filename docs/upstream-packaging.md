@@ -138,9 +138,10 @@ artifact is uploaded; the upload step is limited to the four release outputs
 with one-day retention.
 
 The UniXNU pin is `f50d5bd5093ede81f8c1897b8ce5c93473c0fb7b` on
-`DokuroMitsukai/UniXNU`. That commit is on the local
-`gta4l-release-pipeline` branch and must be pushed to the fork before the
-workflow can check it out. The firmware pin is the recorded Mu-Silicium
+`DokuroMitsukai/UniXNU`, the tip of the published
+`gta4l-release-pipeline` branch, so the checkout resolves. A dispatch
+still requires this workflow file on the device default branch, which this
+branch does not change. The firmware pin is the recorded Mu-Silicium
 integration commit, checked out without submodules: the build initializes only
 the `[firmware]` submodules that `board.toml` lists, and `Mu_Basecore` comes
 from the edk2 feed.
