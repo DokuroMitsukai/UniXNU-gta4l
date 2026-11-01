@@ -6,8 +6,11 @@ stopped at a command CRC error with no identification report in the first run
 `[C]`; the later `cmd2window` run completed CMD2 and stopped at a CMD3
 completion timeout, still with no identification report `[C]`; the later
 `fmt=2` run completed CMD2, CMD3 and CMD9 and stopped at a CMD7 R1b completion
-timeout, still with no identification report `[C]`; card identification, sector
-reads and the later stages remain `[U]`. The core is
+timeout, still with no identification report `[C]`; the 2026-11-01 `fmt=4`
+fail-closed runs (first on an SM-T505, then on the owner's SM-T505N, per the
+owner) failed at CMD2 with the same `-8` record as the first current-source
+run, so the CMD7 capture was not exercised `[C]`; card
+identification, sector reads and the later stages remain `[U]`. The core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
 `sdhc-bus-power-activation` NO-GO still applies to any operation not separately
@@ -128,7 +131,7 @@ interrupts and higher-speed modes.
 | Step | Command | Notes |
 | --- | --- | --- |
 | 1 | `CMD0` | Reset the card; 1 ms before, 2 ms after |
-| 2 | `CMD1` | Poll OCR bit 31, 100 ms per attempt, 20 attempts |
+| 2 | `CMD1` | Poll OCR bit 31; up to 20 attempts, each with a nominal 100-ms per-command poll budget and a 1-ms gap after an unsuccessful attempt |
 | 3 | `CMD2` | Read the 128-bit CID; reject all-zero/all-ones |
 | 4 | `CMD3` | Assign RCA `1` in the argument; check the R1 status |
 | 5 | `CMD9` | Read the 128-bit CSD with the assigned RCA |
@@ -435,9 +438,9 @@ python3.11 -B scripts/package-gta4l-diagnostic.py \
 | `boot-ram-root-emmc-probe-stage2.img` | 85,688,320 | `4f2252df6bbd5d9c7f05ef97c0041da9acdc47212debf31a10334aefa45a12e5` |
 
 The payload contract is 7/7 and the boot-image gate is 18/18. The payload's
-kernel arguments include `gta4l-emmc-probe=2`. The build manifest keeps
-`hardware_tested=false` as built; the image was subsequently flashed to BOOT
-only for the stage-2 run in §5.2. TWRP on `RECOVERY` was not touched.
+kernel arguments include `gta4l-emmc-probe=2`. The build was not marked
+hardware-tested; the image was subsequently flashed to BOOT only for the
+stage-2 run in §5.2. TWRP on `RECOVERY` was not touched.
 
 The stage-3 image was built from the same kernel on 2026-10-31:
 
@@ -467,9 +470,9 @@ python3.11 -B scripts/package-gta4l-diagnostic.py \
 | `boot-ram-root-emmc-probe-stage3.img` | 85,688,320 | `88b4d28607b371fe008922131c6ee51f27f73da30249fd4a07969f770fa90d87` |
 
 The stage-3 payload contract is 7/7 and its boot-image gate is 18/18. The
-payload's kernel arguments include `gta4l-emmc-probe=3`, and the manifest keeps
-`hardware_tested=false` as built. The image was subsequently written to BOOT
-only for the stage-3 run in §5.3; TWRP on `RECOVERY` was not touched.
+payload's kernel arguments include `gta4l-emmc-probe=3`, and the build was not
+marked hardware-tested. The image was subsequently written to BOOT only for the
+stage-3 run in §5.3; TWRP on `RECOVERY` was not touched.
 
 ### 5.1.1 Failure-record rebuild (2026-10-31)
 
@@ -492,7 +495,7 @@ the failure-record kernel and a new output directory:
 | `boot-ram-root-emmc-probe-failrec.img` | 85,688,320 | `76745fe7e81ca68025ee428cc96c88f98a392b125ecd18c5cf5d0bbef57c7488` |
 
 The payload contract is 7/7 and the boot-image gate is 18/18; only the ramdisk
-differs from the pinned v5 baseline. The manifest keeps `hardware_tested=false`.
+differs from the pinned v5 baseline. The build was not marked hardware-tested.
 
 The image was then written to BOOT only. The pre-flash BOOT partition was saved
 and verified (`ef2fb96f...`, 100,663,296 bytes); the image bytes read back
@@ -548,7 +551,7 @@ python3.11 -B scripts/package-gta4l-diagnostic.py \
 The build report's source/header hashes match the checkout, the archive
 contains the real `Gta4lEmmc.o`/`Gta4lEmmcProbe.o` members, and the prelinked
 kernel contains `_gta4l_emmc_probe_run` and the `rsp=`/`cmd1=` failure format.
-The payload contract is 7/7 and the boot-image gate is 18/18. The manifest keeps
+The payload contract is 7/7 and the boot-image gate is 18/18. The build record keeps
 `hardware_tested=false`; the image has not been flashed, written or booted. See
 [`emmc-cmd2-crc-audit.md`](emmc-cmd2-crc-audit.md) for the hypotheses and
 the device-experiment preconditions.
@@ -625,9 +628,10 @@ fail=1/2/0/00000209/0002/8000/03f800f0/8
 log=5/8/2/163840
 ```
 
-That record attributes the failure to CMD2: `fail_command=0x0209` is argument 0
-with `RESP_LONG | CRC`, `fail_error=0x0002` is `CMD_CRC`, and `last_step=8` is
-CMD1 readiness completed. The older transcript above remains un-attributed and
+That record attributes the failure to CMD2: `fail_argument=0`,
+`fail_command=0x0209` is CMD2 (`0x0200`) with `RESP_LONG | CRC`,
+`fail_error=0x0002` is `CMD_CRC`, and `last_step=8` is CMD1 readiness
+completed. The older transcript above remains un-attributed and
 is not treated as an independent run. The later `cmd2window` run (5.3.1) did
 not reproduce this CMD2 failure; CMD2 completed and CMD3 timed out.
 
@@ -658,9 +662,10 @@ and no CRC check, `CMD1` is sent with `RESP_SHORT` only, and `CMD2` is the next
 command with `RESP_LONG | CRC`. The later current-source record above captures
 the index and error directly (`fail_index=2`, `fail_error=0x0002`). In this
 path the later CRC-checked commands are `CMD3`, `CMD7`, `CMD8`, `CMD9` and
-`CMD13`; they are reachable only after `CMD2` succeeds. No RCA, capacity,
-EXT_CSD revision, bus width, OCR, EXT_CSD checksum, CID, CSD or sector data was
-obtained. Stage 3 performs no sector read by design, so no card content was
+`CMD13`; they are reachable only after `CMD2` succeeds. The older transcript
+records no RCA, capacity, EXT_CSD revision, bus width, OCR, EXT_CSD checksum,
+CID, CSD or sector data; the later current-source reports do record the CMD1
+OCR value. Stage 3 performs no sector read by design, so no card content was
 touched `[C]`.
 
 Photo: `out/gta4l/ram-root-emmc-probe-stage3-evidence/host-report-stage3.jpg`
@@ -836,7 +841,97 @@ TC-only failure, changed and unchanged response windows, CC-then-TC, TC-then-CC,
 simultaneous completion, CC without a busy completion (a bounded timeout, not a
 premature success), busy-phase errors, late errors, an error asserted during
 the terminal diagnostic reads on the busy-completion success path and trace
-overflow. A hardware run of `fmt=4` needs separate owner approval.
+overflow. The later 2026-11-01 owner-approved `fmt=4` run and its verified
+rerun are recorded in
+§5.3.3.
+
+### 5.3.3 fmt=4 fail-closed stage-3 result (2026-11-01)
+
+The `fmt=4` fail-closed image was built from the current tree on 2026-11-01
+(11:15Z):
+`out/gta4l/ram-root-emmc-probe-failclosed-evidence/boot-ram-root-emmc-probe-failclosed.img`,
+85,688,320 bytes, sha256
+`4d2f7975d3bc2e26a1ab15fb4d60d765190fba2df0e6b4ee7c5226d41a63e5bf`;
+payload `954cc0dc…`; kernel `27cb1b54…`; source hashes `e493b3eb…`,
+`e0a2830c…`, `932552a2…`; archive `e9578564…`. The payload carries
+`gta4l-emmc-probe=3`, the payload contract is 7/7 and the boot-image gate is
+18/18. The build manifest does not record a hardware-tested flag.
+
+The owner reports two runs of the same image on two different units: an SM-T505
+first, then the owner's SM-T505N. The first run's owner-supplied text recorded
+the CMD2 failure below; it has no flash record or run ID in this tree. The later
+BOOT-only run on the SM-T505N reproduced the same eMMC failure record and
+response window, and the owner reports the two results are identical 1:1. The
+rerun flash record is
+`out/gta4l/ram-root-emmc-probe-failclosed-rerun-evidence/flash-record.json`:
+pre-flash BOOT partition `92e80609…`, post-flash full partition `b53f31fe…`,
+image-byte readback `4d2f7975…`, unchanged tail `a28b4ea2…`, unchanged
+`RECOVERY` `14e11370…`, readback gate 18/18 and payload contract 7/7. The
+photo is
+`out/gta4l/ram-root-emmc-probe-failclosed-rerun-evidence/stage3-fmt4-rerun-photo-2026-11-01.jpg`
+(2560x1920, sha256
+`c079952510039d236a705985a91d9e4a8b042a125afb81ef66bf1a4e6ddc8c76`).
+
+The owner-supplied panic (normalized; `docs/emmc-cmd2-crc-audit.md` §2.9
+records the extraction notes and the normalized block):
+
+```text
+GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967288
+fail=1/2/0/00000209/0002/8000/03f800f0/8
+rsp=00000000,00000000,80000000,00c0ff80
+cmd1rsp=1/c0ff8080,00000000,00000000,00000000
+pre2rsp=1/c0ff8080,00000000,00000000,00000000
+c2=0/0000/0000/00000000,00000000,00000000,00000000
+c3p=0/0000/0000/00000000/0000/0000
+c3t=0/0/0000/00000000/0/00000000,00000000,00000000,00000000
+c3l=0/0/0000/0000/0/0000000000000000/19200000
+cid=00000000,00000000,00000000,00000000 fmt=4 hv=7202
+cmd1=3/0/c0ff8080
+clocks=1 mci=10000072 pwr=0f clk=0007 hc=00 hc2=0008 ven=00018a9c
+v3=02626040 dll=6000642c dst=00000000 ddr=80040873 pst=00000000
+cfg=00002017 mnd=00000001/000000fc/000000fb cmd=00000000 bcr=00000000
+apps=00004221 ahb=00000001 step=8 log=5/8/2/163840
+c7p=0/0000/0000/00000000/0000/0000/00000000,00000000,00000000,00000000
+c7q=0/0000/0000/0000/0000/0/0000000000000000
+c7c=0/0/0000000000000000/0/0/0000000000000000
+c7t=0/0000/0000/00000000/00000000/00000000/00000000,00000000,00000000,00000000
+c7x=0/0/0:0000:0000,0:0000:0000,0:0000:0000,0:0000:0000 @Gta4lEmmcProbe.c:442
+```
+
+- `rc=4294967288` is `-8`, `GTA4L_EMMC_ERR_CMD_CRC` (`Gta4lEmmc.h:242`).
+- `fail=1/2/0/0x0209/0x0002/0x8000/0x03F800F0/8`: CMD2, argument 0, command
+  `0x0209` (CMD2 index `0x0200`, `RESP_LONG` `0x0001`, CRC `0x0008`), error
+  `0x0002` (`CMD_CRC`), normal `0x8000` (error-interrupt aggregate; `CC`
+  clear), present `0x03F800F0`, step 8.
+- `step=8` is `GTA4L_EMMC_STEP_CMD1`; CMD1 was the last completed step and
+  CMD3/CMD9/CMD7 were never submitted. `cmd1=3/0/0xC0FF8080`.
+- `c2`, `c3p`, `c3t`, `c3l` and `c7p`–`c7x` are invalid/zero: the CMD2
+  post-success capture and the later command captures were not reached. The
+  report prints the fields unconditionally.
+- `rsp=0x00000000,0x00000000,0x80000000,0x00C0FF80` is not CID-shaped. The
+  two nonzero words contain the bytes `80 00 00 00 00 C0 FF 80`, a one-byte
+  rotation of `00 00 00 00 C0 FF 80 80`, whose low 32 bits are the recorded
+  CMD1 word `0xC0FF8080`. It is consistent with a retained or rotated CMD1
+  window, not a plain logical shift, and it is not a CID.
+- `ven=0x00018A9C` and the rest of the register state repeat §5.3 and §5.3.2
+  (`mci=0x10000072`, `pwr=0x0F`, `clk=0x0007`, `v3=0x02626040`, DLL
+  `0x6000642C`, `ddr=0x80040873`, `cfg=0x2017`, MND `1/252/251`). This is a
+  register state, not a measured clock.
+- `log=5/8/2/163840` is the failure record: count 5, `ERROR` (8), index 2,
+  `(error << 16) | normal = 0x00028000`.
+
+The failure record, response window and register state are identical to the
+current-source CMD2 CRC record in §5.3 and to the earlier `fmt=4` run. The two
+`fmt=4` observations are on different units (SM-T505 and SM-T505N) per the
+owner and agree 1:1; they are not a same-unit repeatability test. This `[C]`
+records the CMD2 CRC outcome on the 2026-11-01 tree; it does not establish a
+new failure mode. `cmd2window` (§5.3.1) and `fmt=2` (§5.3.2) had passed CMD2 on
+the owner's SM-T505N, so the outcome varies across diagnostic builds on that
+unit. No cause is established; the runs do not select among H2/H4/H5/H6/H7 in
+`docs/emmc-cmd2-crc-audit.md` §6. CMD1 OCR `0xC0FF8080` was observed; no
+validated CID, CSD, EXT_CSD, capacity, partition or sector result was obtained,
+no sector read was issued and CRC checking remains enabled. The provenance note
+and pulled-prefix gate rerun are in `docs/emmc-cmd2-crc-audit.md` §2.10.
 
 ## 6. Expected report
 
@@ -872,8 +967,10 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
 - Stage 2 ran on the tablet `[C]`; stage 3 ran and stopped at a command CRC
   error in the first run `[C]`; the later `cmd2window` run completed CMD2 and
   stopped at a CMD3 completion timeout `[C]`; the later `fmt=2` run completed
-  CMD2, CMD3 and CMD9 and stopped at a CMD7 R1b completion timeout `[C]`; a
-  successful identification and the full sector read have not run `[U]`.
+  CMD2, CMD3 and CMD9 and stopped at a CMD7 R1b completion timeout `[C]`; the
+  2026-11-01 `fmt=4` runs failed at CMD2 with the same `-8` record, so they did
+  not exercise the CMD7 capture `[C]`; a successful identification and the
+  full sector read have not run `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
   levels, and it does not prove retention across suspend or shutdown `[U]`.
 - The 1.8 V signalling and pad-switch selection is a documented board policy

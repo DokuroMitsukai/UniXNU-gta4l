@@ -11,7 +11,9 @@ the short response is snapshotted only after CC. "R1b" here is the port's
 chosen response policy for CMD7, not a protocol requirement; the inspected
 Linux stacks select CMD7 as R1 (`docs/pe-storage-stack-provenance.md` §8.1).
 That lifecycle change does not by itself explain the historical missing-CC
-timeout. The earlier
+timeout. The `fmt=4` report ran on hardware on 2026-11-01; a verified BOOT-only
+rerun reproduced the same CMD2 failure before CMD7, so the CMD7 capture remains
+unexercised (`docs/emmc-cmd2-crc-audit.md` §2.9). The earlier
 CMD2 CRC and CMD3 timeout results remain in `docs/emmc-cmd2-crc-audit.md`; the
 driver record is `docs/emmc-driver.md`.
 
@@ -28,7 +30,7 @@ No original photo or hash was supplied in this turn, so this document cannot
 independently authenticate the transcription. The line wrapping is the
 extraction's; tokens split across lines are reassembled in the decode.
 
-Two OCR ambiguities are normalized explicitly:
+Three transcription points are normalized explicitly:
 
 - The extracted `c31=` is the actual `c3l=` field. The probe format string uses
   lowercase `l`; the historical image's `fmt=2` format string is the one that
@@ -38,6 +40,12 @@ Two OCR ambiguities are normalized explicitly:
   name. The trailing `:503` is part of the transcription; the historical image's
   source is not in this tree, so this finding does not verify that line. The
   current tree's failure report spans `Gta4lEmmcProbe.c:370-443`.
+- The extracted `frames`, `pages` and `free` lines show 17 hexadecimal digits.
+  The panic renderer prints 16; the extra leading `f` or `0` is a transcription
+  artifact, not an extra field. The 2026-11-01 `fmt=4` photo shows the same
+  16-digit layout. The normalized values are
+  `pages=0x0000000000079eb1` and `free=0x0000000000079455`. This does not
+  affect the CMD7 decode.
 
 Verbatim transcription as supplied:
 
@@ -358,7 +366,9 @@ unchanged samples do not advance the overflow count. The CC-only case now ends
 in a bounded timeout because CC alone is not success while the busy completion is
 missing; a core mutation that restores CC-only success is rejected.
 Host counts are 95 core scenarios with 54 mutation controls and 31 probe
-scenarios with 21 mutation controls; the `fmt=4` report has not run on hardware.
+scenarios with 21 mutation controls; the `fmt=4` report ran on 2026-11-01 and a
+verified rerun reproduced the CMD2 failure before the CMD7 capture, so these
+CMD7 scenarios remain host-only.
 
 ---
 
@@ -541,7 +551,9 @@ was issued.
    CC/TC with separate validity flags. These samples can show whether CC or TC
    was observed at any sample, but they cannot distinguish "CC never appeared"
    from "CC appeared and cleared between samples"; only an observed change is
-   evidence. The `fmt=4` report needs a new owner-approved run.
+   evidence. The 2026-11-01 `fmt=4` runs failed at CMD2 before CMD7, so the CMD7
+   poll history is still unexercised; a further owner-approved run is needed
+   after the CMD2 result is understood.
 2. **Pre-CMD7 response window.** The committed core's `c7p` captures raw
    `RESPONSE0..3` immediately before CMD7, so a later run can compare it with
    the terminal window. Equality alone does not prove staleness, and a
@@ -567,8 +579,8 @@ was issued.
    the equivalent pre-CMD7 capture. The historical `fmt=2` report alone cannot
    fully exclude a stale or late status transition around CMD7.
 
-The next discriminating evidence is the committed `fmt=4` CMD7 capture
-from a new owner-approved run, plus a reference-level explanation of this
+The next discriminating evidence is a `fmt=4` CMD7 capture from a run that
+reaches CMD7, plus a reference-level explanation of this
 controller's R1b completion behavior. The committed shared-budget CC+TC
 requirement is the port's chosen R1b completion policy; the inspected Linux
 stacks select R1 for CMD7, so this is a host policy choice rather than a
@@ -581,10 +593,12 @@ enabled.
 
 ## 8. Related records
 
-- `docs/emmc-cmd2-crc-audit.md` §2.7 (CMD3 timeout), §2.8 (this result),
+- `docs/emmc-cmd2-crc-audit.md` §2.6 (CMD2 CRC record), §2.7 (CMD3 timeout),
+  §2.8 (this result), §2.9 (the 2026-11-01 `fmt=4` runs, which failed at CMD2),
   H8 (completion-path hypothesis), D7 (capture plan) and §10 (capture fields).
 - `docs/emmc-driver.md` §4 (simulator coverage), §5.3.1 (CMD3 timeout),
-  §5.3.2 (this result and the `fmt=4` fields) and §7 (limits).
+  §5.3.2 (this result and the `fmt=4` fields), §5.3.3 (the 2026-11-01 `fmt=4`
+  runs) and §7 (limits).
 - `docs/evidence-baseline.md` and `docs/diagnostic-payload-input-inventory.md`
   for the artifact batch.
 - `scripts/test-gta4l-emmc.py` and `scripts/sim-gta4l-emmc/harness.c` for the

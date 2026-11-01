@@ -39,8 +39,10 @@ partition layout, payload policy and packaging.
   completed on the tablet. Stage 3 (identification) first failed at CMD2 with
   a response CRC error; a later `cmd2window` run passed CMD2 and stopped at a
   CMD3 completion timeout, and the `fmt=2` run passed CMD3 and CMD9 and stopped
-  at a CMD7 R1b completion timeout with TC set and CC absent. The working tree
-  adds diagnostics-only `fmt=4` CMD7 capture; it has not run on hardware. No
+  at a CMD7 R1b completion timeout with TC set and CC absent. The `fmt=4`
+  fail-closed image was run on 2026-11-01 on two units (an SM-T505 and the
+  owner's SM-T505N, per the owner); both failed at CMD2 with the same `-8`
+  record, so its CMD7 capture was not exercised. No
   block device, filesystem, DMA, CQE, ICE or write path exists and CRC checking
   remains enabled. See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md) and

@@ -243,11 +243,11 @@ The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2` and
 (85,688,320 bytes, SHA-256
 `4f2252df6bbd5d9c7f05ef97c0041da9acdc47212debf31a10334aefa45a12e5`). Its payload
 is SHA-256 `2953e90220f1e2d9341fc154f3f2eb6523ab2539be68404a3beffa8ee4702633`;
-the payload contract is 7/7 and the boot-image gate is 18/18. It was built with
-`hardware_tested=false`; that manifest is retained as build provenance. The
-image was subsequently written to BOOT only for the stage-2 host run on
-2026-10-31 (readback matched and recovery stayed byte-identical); see
-`docs/emmc-driver.md` §5.2.
+the payload contract is 7/7 and the boot-image gate is 18/18. It was built
+without a hardware-tested marking; the build manifest is retained as
+provenance. The image was subsequently written to BOOT only for the stage-2
+host run on 2026-10-31 (readback matched and recovery stayed byte-identical);
+see `docs/emmc-driver.md` §5.2.
 
 The stage-3 image built the same day is
 `out/gta4l/ram-root-emmc-probe-stage3-evidence/boot-ram-root-emmc-probe-stage3.img`
@@ -283,6 +283,30 @@ was written to BOOT only on 2026-10-31 (readback matched and recovery stayed
 byte-identical) and the owner booted it. The run completed CMD2, CMD3 and CMD9
 and stopped at a CMD7 R1b completion timeout; see
 `docs/emmc-driver.md` §5.3.2 and `docs/emmc-cmd7-timeout-finding.md`.
+
+A later `fmt=4` fail-closed rebuild, built on 2026-11-01, is
+`out/gta4l/ram-root-emmc-probe-failclosed-evidence/boot-ram-root-emmc-probe-failclosed.img`
+(85,688,320 bytes, SHA-256
+`4d2f7975d3bc2e26a1ab15fb4d60d765190fba2df0e6b4ee7c5226d41a63e5bf`); its
+payload is SHA-256
+`954cc0dcc2de0536c1944d73eb92aad9b45fdc67b9de494ed520cbcdf684e399`,
+kernel `27cb1b54…`, source hashes `e493b3eb…`, `e0a2830c…` and `932552a2…`,
+with `gta4l-emmc-probe=3`, payload contract 7/7 and boot-image gate 18/18. The
+owner reports two runs of the same image on two different units: an SM-T505
+first, then the owner's SM-T505N. Both failed at CMD2 with `rc=-8`
+(`GTA4L_EMMC_ERR_CMD_CRC`) and the same failure record and response window as
+`docs/emmc-cmd2-crc-audit.md` §2.6. The later BOOT-only run on the SM-T505N has
+a flash record at
+`out/gta4l/ram-root-emmc-probe-failclosed-rerun-evidence/flash-record.json`
+(pre-flash BOOT `92e80609…`, post-flash full partition `b53f31fe…`, image-byte
+readback `4d2f7975…`, `RECOVERY` `14e11370…` unchanged, gate 18/18 and payload
+contract 7/7; the gates were also rerun directly on the pulled image prefix and
+extracted payload). The photo is
+`out/gta4l/ram-root-emmc-probe-failclosed-rerun-evidence/stage3-fmt4-rerun-photo-2026-11-01.jpg`
+(SHA-256
+`c079952510039d236a705985a91d9e4a8b042a125afb81ef66bf1a4e6ddc8c76`). The
+`fmt=4` CMD7 capture was not exercised; see §2.9 and `docs/emmc-driver.md`
+§5.3.3.
 
 This establishes the packaging step only. The inputs are existing artifacts;
 the replay does not reproduce the kernel or firmware.
