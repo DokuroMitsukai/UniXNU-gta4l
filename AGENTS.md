@@ -43,6 +43,14 @@ Run from UniXNU:
 ./unixnu bootimg
 ```
 
+The canonical packaging entry point is `scripts/package.sh` (verbatim from
+UniXNU `templates/package.sh`). It reads `[package]` and `[bootimg] dtb` from
+`board.toml`; the boot DTB is staged by
+`scripts/prepare-gta4l-boot-dtb.py`. The default 192 MiB payload makes the
+release boot image exceed the 100,663,296-byte BOOT partition, so release
+verify fails by design; use the diagnostic builder for on-device images. See
+`docs/upstream-packaging.md`.
+
 For the Mu-Silicium payload, include `UniXNURamDiskDxe`, DiskIoDxe and FAT
 support in the firmware DSC and FDF. Follow
 [required firmware integration](https://unixnu.com/porting/uefi-firmware#required-integration)

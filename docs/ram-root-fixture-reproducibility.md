@@ -57,16 +57,23 @@ and `--test-size 12288`; only `--diagnostic fs-timer` is passed explicitly.
 | `rcodesign` release tarball | SHA-256 `dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002` |
 | `xcrun` | `scripts/linux/xcrun` shim |
 
-The shared UniXNU checkout used for the reproduction is commit
-`6ee4ada8a82f5bd2d9032b4d7cf033e878e0551f` (detached HEAD, clean tree). The
+The RAM-root fixture and its hashes were captured from the shared UniXNU
+checkout at commit `6ee4ada8a82f5bd2d9032b4d7cf033e878e0551f` with a clean tree.
+The packaging adoption adds one `UNIXNU_DEVICE` assignment to the archive-build
+environment in `scripts/unixnu/kernel.py` for upstream release parity. The
+fixture builder imports only `linux_env` and never calls `build_archives`, so
+the change is outside its build path and the recorded fixture bytes are
+unchanged. The row below records the current file; the historical hash was
+`b9b6e572f3ff9d7f62d7c10db9913b8993287ea41dbbb50011d13ee17f0f3271`. The
 device repository's `docs/build-revisions.md` retains a separate development
-integration pin; the hashes below identify the exact source bytes used here.
+integration pin; the hashes below identify the exact source bytes the recipe
+is checked against.
 
 | Input | SHA-256 |
 | --- | --- |
 | `scripts/build-ram-root-report-fixture.py` | `3dd4fa08576a20021569b0e1afc66e264f422827e33a25fe36d5e85cbd1c3c64` |
 | `scripts/qemu-entry/native-user.S` | `1e29e9405c670a7a65a222cf48a590497b10ba7f106b202909c2b99e179fe76f` |
-| `scripts/unixnu/kernel.py` | `b9b6e572f3ff9d7f62d7c10db9913b8993287ea41dbbb50011d13ee17f0f3271` |
+| `scripts/unixnu/kernel.py` | `2f07043b319767db67a8bd67a0515f5620fb036aa9453a160a3de1829d38ab4c` |
 | `scripts/linux/setup-toolchain.py` | `9334e7994a64a0a5f59b40b8f36e08fd9eac08684c7ae8bce8d4afedd279c963` |
 | `scripts/linux/xcrun` | `8da8a494abd47a6d484c217ac074c1759792732f048ffce3f65c114c5d641576` |
 

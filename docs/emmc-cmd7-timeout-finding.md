@@ -4,7 +4,7 @@
 decodes and bounds the owner-supplied historical `fmt=2` stage-3 panic. It is
 not a full audit. The exact `fmt=2` build tree is not retained; section 3 uses
 the nearest committed predecessor as a reconstruction anchor, not as recovered
-build source. The working tree now emits a `fmt=4` report with CMD7-specific
+build source. The committed probe now emits a `fmt=4` report with CMD7-specific
 diagnostics, adds simulator coverage and applies the port's R1b busy
 lifecycle: CC and TC are both required inside one shared completion budget, and
 the short response is snapshotted only after CC. "R1b" here is the port's
@@ -73,7 +73,7 @@ c3l=<valid>/<index>/<first-normal>/<last-normal>/<iterations>/<ticks>/<hz>
 cid=<w0>,<w1>,<w2>,<w3> fmt=2 hv=<HOST_VERSION>
 ```
 
-The historical report ends the capture at `fmt=2`. The working tree's `fmt=4`
+The historical report ends the capture at `fmt=2`. The committed `fmt=4`
 report keeps those fields and appends the CMD7 block described in §2.5; the
 transcription above remains a `fmt=2` record.
 
@@ -142,7 +142,7 @@ evidence about the CMD7 failure.
   valid, index 3, first normal status 0, last normal status 1 (CC), 26
   iterations, 5,463 ticks at 19,200,000 Hz (about 284.5 microseconds). **This
   is CMD3's poll history; the `c3l` fields remain CMD3-only**
-  (`Gta4lEmmc.c:546,614-619,649-653`), and the working tree records CMD7 history separately
+  (`Gta4lEmmc.c:546,614-619,649-653`), and the committed core records CMD7 history separately
   in `c7q`. It is not CMD7's timeout duration and does not say why
   CMD7 timed out.
 - `c3p=1/0000/0000/03F800F0/0023/07FF`: the pre-CMD3 capture is valid and
@@ -198,9 +198,9 @@ evidence about the CMD7 failure.
   timeout to those values.
 - `frames`, `pages` and `free` are panic metadata, not probe fields.
 
-### 2.5 CMD7-specific capture in the working tree (`fmt=4`)
+### 2.5 CMD7-specific capture in the committed core (`fmt=4`)
 
-The working tree adds CMD7-specific fields to both the failure and success
+The committed core adds CMD7-specific fields to both the failure and success
 reports. The capture is observational; the R1b decision path now also requires
 both completions (section 3). The poll history now spans the busy-completion wait
 instead of stopping at CC, so the capture format is version 4 and earlier
@@ -377,10 +377,10 @@ fields, but the lost build may differ. That revision is also the core source
 of the earlier `cmd2window` hardware image, so its shared command path was
 exercised on the tablet; that does not make it the `fmt=2` build. The
 CMD7-specific pre-command, poll-history, first-CC/TC, terminal and trace
-captures (`c7p`/`c7q`/`c7c`/`c7t`/`c7x`) were added later and exist only in the
-`fmt=4` working tree (section 2.5). The sequence below describes the
+captures (`c7p`/`c7q`/`c7c`/`c7t`/`c7x`) were added later and exist in the
+committed `fmt=4` core (section 2.5). The sequence below describes the
 predecessor; all line references are to `7c2ae09:package/Gta4lEmmc.c`, not to
-the current working tree.
+the current source tree.
 
 1. Waits for CMD/DAT inhibit clear (`:300-307`); an inhibit failure records the
    terminal command failure before returning.
@@ -404,13 +404,13 @@ The observed `error=0` means the error path was not taken. The transcribed
 `-7` establishes the explicit software-timeout result, not a mapped hardware
 `CMD_TIMEOUT` bit; in the predecessor that return is at `:347`, but the lost
 build's exact line is unknown. The predecessor records the timeout with its
-last in-loop normal sample; the working tree instead takes fresh post-timeout
+last in-loop normal sample; the committed core instead takes fresh post-timeout
 samples for the timeout record and keeps the loop value in `poll_last_normal`.
 The `fmt=2` report's `fail_normal=0x0002` (TC without CC) is therefore a
 recorded sample whose provenance depends on the unretained build. It does not
 distinguish a never-asserted CC from one cleared between samples; the build
 reported no CMD7 in-loop history, and a single recorded sample would not settle
-the question. The working tree's `c7q` is the first capture that records
+the question. The committed core's `c7q` is the first capture that records
 in-loop samples.
 
 The command readback `0x071B` in `c3t` confirms that the controller still held
@@ -418,13 +418,13 @@ the CMD7 command at the timeout sample. The argument readback matches RCA 1.
 The driver's CMD7 encoding and response type are therefore not obviously
 malformed.
 
-**Separate implementation gap (F1), fixed in the working tree.** The retained
+**Separate implementation gap (F1), fixed in the committed core.** The retained
 predecessor reached the success path on `CC` alone and did not wait for the R1b
 busy completion (`TC`) before clearing the status registers. The lost `fmt=2`
 build plausibly did the same, but that is inferred from its recorded fields and
 the nearest source, not verified against its bytes. A CC-only rule would return
 success for an R1b command whose busy phase had not finished and could discard
-a late busy-phase error at the next pre-command clear. The working tree now
+a late busy-phase error at the next pre-command clear. The committed core now
 accumulates CC and TC across one shared poll budget, requires both, and
 snapshots the short response only after CC. The gap is **not** the established
 cause of the transcribed missing-CC timeout: requiring `TC` in addition to `CC`
@@ -446,7 +446,7 @@ sequence. CMD0/CMD1/CMD2/CMD3/CMD9 are non-busy commands and all completed
 (or were recovered) before CMD7. The report does not establish why the mismatch
 occurred. Separately, the retained pre-instrumentation source accepted an R1b
 command on CC alone (F1 in section 3); the lost build's exact source is not
-retained, and the working tree now requires both CC and TC. That defect does not
+retained, and the committed core now requires both CC and TC. That defect does not
 explain why CC was absent here.
 
 Candidate interpretations, **none established**:
@@ -536,13 +536,13 @@ was issued.
 ## 7. Open questions for the full audit
 
 1. **CMD7 poll history.** The historical `c3l` capture is CMD3-only. The
-   working tree's `c7q` records a CMD7-specific OR mask, first/last normal
+   committed core's `c7q` records a CMD7-specific OR mask, first/last normal
    sample, iteration count and tick count, and `c7c` records the first observed
    CC/TC with separate validity flags. These samples can show whether CC or TC
    was observed at any sample, but they cannot distinguish "CC never appeared"
    from "CC appeared and cleared between samples"; only an observed change is
    evidence. The `fmt=4` report needs a new owner-approved run.
-2. **Pre-CMD7 response window.** The working tree's `c7p` captures raw
+2. **Pre-CMD7 response window.** The committed core's `c7p` captures raw
    `RESPONSE0..3` immediately before CMD7, so a later run can compare it with
    the terminal window. Equality alone does not prove staleness, and a
    difference does not prove a valid response.
@@ -563,15 +563,17 @@ was issued.
    vendor encoding or a stale data-path state.
 6. **Pre-command clear ordering for CMD7.** The driver clears both status
    registers before submitting each command and has a barrier after the clear.
-   The `c3p` capture shows a clean pre-CMD3 state; the working tree's `c7p` adds
+   The `c3p` capture shows a clean pre-CMD3 state; the committed core's `c7p` adds
    the equivalent pre-CMD7 capture. The historical `fmt=2` report alone cannot
    fully exclude a stale or late status transition around CMD7.
 
-The next discriminating evidence is the working tree's `fmt=4` CMD7 capture
+The next discriminating evidence is the committed `fmt=4` CMD7 capture
 from a new owner-approved run, plus a reference-level explanation of this
-controller's R1b completion behavior. The working tree's shared-budget CC+TC
-requirement follows the protocol and is not a workaround derived from this
-report; it is not claimed to fix the missing-CC timeout. No workaround for the
+controller's R1b completion behavior. The committed shared-budget CC+TC
+requirement is the port's chosen R1b completion policy; the inspected Linux
+stacks select R1 for CMD7, so this is a host policy choice rather than a
+universal protocol mandate. It is not a workaround derived from this report;
+it is not claimed to fix the missing-CC timeout. No workaround for the
 observed timeout should be made from this report alone. CRC checking must remain
 enabled.
 

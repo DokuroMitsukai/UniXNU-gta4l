@@ -115,6 +115,15 @@ From the shared UniXNU checkout:
 ./unixnu bootimg -D ../UniXNU-gta4l
 ```
 
+The canonical one-command flow is `scripts/package.sh` (a verbatim copy of
+UniXNU's `templates/package.sh`); it runs `unixnu release` with the board's
+`[package]` values and the boot DTB staged by the firmware preflight. The
+board's 192 MiB packed payload produces a boot image larger than the
+100,663,296-byte BOOT partition, so the release verify step refuses it. That is
+expected: the release artifact is not the current safe diagnostic image. See
+[docs/upstream-packaging.md](docs/upstream-packaging.md) and
+[docs/boot-dtb-provenance.md](docs/boot-dtb-provenance.md).
+
 For a raw RAM-root diagnostic payload, use the explicit builder instead of
 editing `board.toml`:
 

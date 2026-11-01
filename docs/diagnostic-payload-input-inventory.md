@@ -60,7 +60,7 @@ baseline path explicitly.
 | Booted outer FV / raw FD | 3,145,728 | `42f900a38e582026f5daabb70b19b340f0697f2f90b0248c53ecebc07f4186e9` | embedded, no standalone file | Recoverable from the v5 image; see §7 `[S]` |
 | Booted inner FV | 8,339,456 | `3bb7847a9f9abeec1bb70d812fe58ad014ae27a3254465e2da2a753cef99a8bd` | embedded | GUIDed LZMA section of the outer FV `[S]` |
 | Appended boot DTB | 316,317 | `dc4c719d06e408654680524af26052d609baa14dd57da9082fd9f35c6509de9e` | present-out | `out/gta4l/ram-root-sdhci-audit-evidence/boot-dtb-v5.bin`; patched from `e2ae2d67...` `[S]` |
-| Unpatched boot DTB | 316,317 | `e2ae2d671e28d9e295cc98ea3573ee6b41c46f5402e0769a417228d9fd8927fd` | present-sibling | `src/Mu-Silicium/Resources/DTBs/gta4l.dtb`; `board.toml` `[[bootimg.dtb_node]]` applies the framebuffer and touch-controller edits `[S]` |
+| Unpatched boot DTB | 4,619,189 | `e2ae2d671e28d9e295cc98ea3573ee6b41c46f5402e0769a417228d9fd8927fd` | present-sibling | `src/Mu-Silicium/Resources/DTBs/gta4l.dtb`; the first FDT has `totalsize` 316,095 and further FDT images follow. `[[bootimg.dtb_node]]` applies the framebuffer and touch-controller edits to the first image; `bootimg`/`fdtput` truncates it to 316,317 bytes. Provenance and reproduction: `docs/boot-dtb-provenance.md` `[S]` |
 | Ramdisk (payload) | 83,886,080 | `a390c68ae1d4650a83c49f72631970d829d8edfe1a0239ce347cfc27f646951c` | present-out | v5 payload image `[S]` |
 
 The raw FD and inner FV hashes are recorded again in

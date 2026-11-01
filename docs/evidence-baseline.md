@@ -422,10 +422,10 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `42714d772e72a45849d4bdb5f858348e86391073738106c0957172b06bf8c190` |
+| Repository README | `README.md` | `b80d989e7155cec7f114dfe1b3ba914bd78fe90c33fe01ad1273256424e44829` |
 | eMMC reference | `docs/emmc-reference.md` | `29381c1059ff6202f86257c5dee6b369b011028e3cf9f644758d2581ad8de37b` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `189af945e6e63dd3fc02d4fd490fc56c7d167a61b0e2a10c5cc0bbd9f056437d` |
+| Porting record | `porting.toml` | `6a672dc763ffb79103571d98e44b61f7c706468f45b3bb3f805d230c70c525a2` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
 | eMMC driver record | `docs/emmc-driver.md` | `47af4a1c605e543899d1b6482a7963f280cc22d971ad8dce7dfa77bf5939e29c` |
@@ -435,9 +435,9 @@ bytes of the previously booted image `[S]`.
 | eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `63303077dd57fac6179eb55c1e5031bf42fc74e66b7a9c21bf57ed945219d57c` |
 | eMMC host test | `scripts/test-gta4l-emmc.py` | `a6aaf148433861f5c6c2cfd4fe908deea759355b9d7f2f504a70b16436f44761` |
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `c0d742df56cbf69c499537e077be6b590ea1e89e33f656b21c3215561dae0157` |
-| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `1ed6e08627978c130e3810145cfd6c3f579b251514a3c03d024aa5cf9018a3b7` |
+| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `b05d678718c1ee3a17971682e9e910d523d2dd5a694a5800e490b4f8495ff99f` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `6b1a3bba1fd5d9f90f81b025bbd452f658bc6a72a5dc5bc3479193b3b0030796` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
 | Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `f293bee964bdd3bebbf40e4c8099a426780679065f3d65abceb9999255480558` |

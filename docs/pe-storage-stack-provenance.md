@@ -423,95 +423,62 @@ imported or proposed here `[S]`.
 
 ## 10. Reproduction
 
-Read-only commands; no device access.
+Read-only commands; no device access and no download. The bounded extractor
+`scripts/extract-gta4l-pe-artifact.py` reads only the release members needed
+for this record. It validates ZIP member names, sizes, the Android boot v2
+header, independent section alignment, recovery-DTBO fields, the FDT sequence
+and the DTBO table, then writes the selected outputs to a new directory. It
+refuses an existing output and never executes archive content.
 
 ```sh
-cd /tmp/opencode/pe-artifact
+cd $HOME/slopcode/taba7unixnu/src/UniXNU-gta4l
+rm -rf /tmp/opencode/pe-extract-run
+python3.11 -B scripts/extract-gta4l-pe-artifact.py \
+  --archive /tmp/opencode/pe-artifact/PixelExperience_Plus_gta4l-11.0-20261007-1420-UNOFFICIAL.zip \
+  --output /tmp/opencode/pe-extract-run --pinned
+cat /tmp/opencode/pe-extract-run/extraction.json
+```
 
-sha256sum PixelExperience_Plus_gta4l-11.0-20261007-1420-UNOFFICIAL.zip \
-  extracted/boot.img extracted/Image extracted/kernel.gz extracted/ramdisk \
-  extracted/dtb.img extracted/dtbo.img extracted/kernel.config
-md5sum PixelExperience_Plus_gta4l-11.0-20261007-1420-UNOFFICIAL.zip
+`--pinned` checks the archive SHA-256 and the selected output hashes recorded
+above. Without it the extractor still performs every structural check. The
+output contains `boot.img`, `dtbo.img`, `kernel.gz`, `Image`, `ramdisk`,
+`dtb.img`, `kernel.config`, the 12 `dtbs/NN.dtb` images, the 40
+`dtbos/NN-xxxxxxxx-xxxxxxxx.dtbo` images, the two partition lists, the OTA
+metadata and `extraction.json`. DTBO names come from the table's ID/revision
+fields, not from names inside the ZIP.
 
-# Boot header v2 fields with bounds checks (magic, sizes, name, cmdline, dtb).
-python3 - <<'PY'
-import struct, pathlib
-d = pathlib.Path('extracted/boot.img').read_bytes()
-assert d[:8] == b'ANDROID!', 'bad boot magic'
-kernel, _, ramdisk, _, second, _, _, page, header_version, _ = \
-    struct.unpack_from('<10I', d, 8)
-assert page >= 2048 and page & (page - 1) == 0, 'bad page size'
-dtb = struct.unpack_from('<I', d, 1648)[0]
-end = page + ((kernel + ramdisk + second + dtb + page - 1) // page) * page
-assert len(d) >= end, f'truncated boot image: {len(d)} < {end}'
-print(d[:8], kernel, ramdisk, second, dtb, page, header_version, end)
-print(d[48:64].rstrip(b'\0'), dtb)
-print(d[64:576].rstrip(b'\0'))
-PY
+The test `scripts/test-gta4l-pe-extract.py` covers the success path and rejects
+bad boot magic, truncated sections, unaligned pages, a recovery-DTBO offset
+without a recovery DTBO, FDT block and trailing-byte errors, DTBO table and
+entry overflows, overlapping entries, truncated gzip, missing IKCONFIG
+markers, a wrong device name, duplicate members, symlinks, traversal names and
+expectation mismatches. It runs the pinned release only when the archive is
+already in the host cache.
 
-# FDT sequence in the boot dtb section; validate every FDT header.
-python3 - <<'PY'
-import struct, pathlib
-d = pathlib.Path('extracted/dtb.img').read_bytes()
-off = count = 0
-while off < len(d):
-    magic, size, off_struct, off_strings = struct.unpack_from('>4I', d, off)
-    assert magic == 0xd00dfeed, f'bad FDT magic at {off}'
-    assert size >= 40 and off + size <= len(d), f'truncated FDT at {off}'
-    assert off_struct < size and off_strings < size
-    count += 1
-    off += size
-print(f'FDTs={count} bytes={off} file={len(d)}')
-PY
+The historical inline snippets that started from already-extracted files are
+superseded by the extractor. The merge and node comparison remain separate:
 
-# DTBO table; validate the header and every entry. The table is big-endian.
-python3 - <<'PY'
-import struct, pathlib
-d = pathlib.Path('extracted/dtbo.img').read_bytes()
-magic, total, header, entry, count, entries, page, version = \
-    struct.unpack_from('>8I', d, 0)
-assert magic == 0xd7b7ab1e, 'bad DTBO magic'
-assert header >= 32 and entry >= 32 and entries + count * entry <= len(d)
-assert total <= len(d)
-payload = 0
-for i in range(count):
-    size, off, _, _ = struct.unpack_from('>4I', d, entries + i * entry)
-    assert off + size <= len(d), f'truncated DTBO entry {i}'
-    payload += size
-print(f'entries={count} table={total} payload={payload} page={page}')
-PY
+```sh
+cd /tmp/opencode/pe-extract-run
+fdtoverlay -i dtbs/00.dtb -o merged.dtb dtbos/00-00000000-00000000.dtbo
+sha256sum dtbs/00.dtb dtbos/00-00000000-00000000.dtbo merged.dtb
+cmp merged.dtb /tmp/opencode/pe-artifact/merged.dtb
 
-# Base DTB and overlay entry 00; reproduce the merged blob and compare hashes.
-sha256sum extracted/dtbs/00.dtb \
-  extracted/dtbos/00-00000000-00000000.dtbo
-fdtoverlay -i extracted/dtbs/00.dtb -o merged-repro.dtb \
-  extracted/dtbos/00-00000000-00000000.dtbo
-sha256sum merged-repro.dtb
-cmp merged-repro.dtb merged.dtb
-
-# 41-property raw-value comparison (property names and values).
 LIVE=$HOME/slopcode/taba7unixnu/device-dump/private/gta4l-dump/live-fdt.dtb
-fdtget -p merged.dtb /soc/sdhci@4744000 | sort > merged-repro.props
-fdtget -p "$LIVE" /soc/sdhci@4744000 | sort > live-repro.props
-diff merged-repro.props live-repro.props
+fdtget -p merged.dtb /soc/sdhci@4744000 | sort > merged.props
+fdtget -p "$LIVE" /soc/sdhci@4744000 | sort > live.props
+diff merged.props live.props
 for p in $(fdtget -p merged.dtb /soc/sdhci@4744000 | sort); do
   test "$(fdtget -t bx merged.dtb /soc/sdhci@4744000 "$p")" = \
        "$(fdtget -t bx "$LIVE" /soc/sdhci@4744000 "$p")" || echo "diff: $p"
 done
-fdtget merged.dtb / model
-fdtget "$LIVE" / model
-fdtget extracted/dtbs/00.dtb /soc/sdhci@4744000 status
-fdtget "$LIVE" /soc/sdhci@4744000 status
 ```
 
-The boot, FDT and DTBO parsers use the public Android v2/DTBO offsets and
-reject bad magic, bad page/entry sizes and truncated sections. The
-`dtb.img`/`dtbo.img` extraction, `fdtoverlay` merge and live-node comparison
-run on the host; the merge is a comparison aid, not a bootable image `[S]`.
-The caches are not part of the repository. If `/tmp/opencode/pe-artifact` or
-`/tmp/opencode/pe-ref` is lost, re-fetch the release and the pinned source
-files, verify the hashes above, and do not continue from partial output
-`[S]/[U]`.
+The merge is a comparison aid, not a bootable image. The caches are not part of
+the repository. If `/tmp/opencode/pe-artifact` or `/tmp/opencode/pe-ref` is
+lost, stop and record the result as unavailable: do not silently re-fetch the
+1.4 GB release or the shallow source clones. A new download needs an explicit
+scope, and a partial extraction must not be used `[S]/[U]`.
 
 ## Limits
 

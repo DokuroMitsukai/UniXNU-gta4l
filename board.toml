@@ -52,7 +52,7 @@ windows = [
 config = "gta4l"
 dsc = "Platforms/Samsung/gta4lPkg/gta4l.dsc"
 fd = "Build/gta4lPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
-preflight = ["scripts/check-gta4l.py"]
+preflight = ["scripts/check-gta4l.py", "scripts/prepare-gta4l-boot-dtb.py"]
 submodules = [
     "Common/Mu",
     "Common/Mu_OEM_Sample",
@@ -78,6 +78,10 @@ DEVICE_MODEL = "gta4l"
 MEMORY_PROTECTION = "TRUE"
 SHIP_MODE = "FALSE"
 BUILDID_STRING = "gta4l-research"
+
+[bootimg]
+# The firmware preflight stages the compiled Mu-Silicium board FDT here.
+dtb = "build/gta4l/boot.dtb"
 
 [bootimg.image]
 base = 0x40000000
@@ -140,3 +144,15 @@ owned_memory_size = "0x7fe00000"
 root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"
 packed_data_ramdisk = true
 unique_chip_id = "required"
+
+[package]
+# The UniXNU checkout, relative to this repository: scripts/package.sh reads it.
+unixnu = "../UniXNU"
+# BOOT partition size of the captured SM-T505N layout. The diagnostic images and
+# both partition snapshots are exactly this size. A standard release with the
+# board's 192 MiB packed payload is larger and verify refuses it; see
+# docs/upstream-packaging.md.
+boot_partition_bytes = 100663296
+
+[package.defconfig]
+"ipados-17.7.11-21H461" = "gta4l_defconfig"
