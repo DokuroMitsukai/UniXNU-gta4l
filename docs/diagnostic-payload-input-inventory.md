@@ -261,6 +261,29 @@ written to BOOT only for the stage-3 identification run on 2026-10-31
 command CRC error before the identification report. See
 `docs/emmc-driver.md` §5.3.
 
+A later diagnostics-only rebuild, `cmd2window`, is
+`out/gta4l/ram-root-emmc-probe-cmd2window-evidence/boot-ram-root-emmc-probe-cmd2window.img`
+(85,688,320 bytes, SHA-256
+`b119f78010bb8e50f319d871f05d94c29b57010757b2a32176c0d9ff778ff19b`); its
+payload is SHA-256 `177e5179…`, kernel `4c1cd5e1…`, with
+`gta4l-emmc-probe=3`. It was written to BOOT only on 2026-10-31 (readback
+matched and recovery stayed byte-identical). That run completed CMD2 and
+stopped at a CMD3 completion timeout; see `docs/emmc-driver.md` §5.3.1 and
+`docs/emmc-cmd2-crc-audit.md` §2.7.
+
+A later diagnostics-only `fmt=2` rebuild is
+`out/gta4l/ram-root-emmc-probe-fmt2-evidence/boot-ram-root-emmc-probe-fmt2.img`
+(85,688,320 bytes, SHA-256
+`7bf3e71991f949f2da6fcff2ef388268904a512b1876062d04e9bb86b6f411b6`); its
+payload is SHA-256
+`ba4e88ba5597d28c4ed70917c6e710f9b35a8eb8e59193e4ed834b8ff5eef4a7`,
+kernel `f53860af…`, source hashes `b4461abc…`, `c50b6467…` and `60cff259…`,
+with `gta4l-emmc-probe=3`, payload contract 7/7 and boot-image gate 18/18. It
+was written to BOOT only on 2026-10-31 (readback matched and recovery stayed
+byte-identical) and the owner booted it. The run completed CMD2, CMD3 and CMD9
+and stopped at a CMD7 R1b completion timeout; see
+`docs/emmc-driver.md` §5.3.2 and `docs/emmc-cmd7-timeout-finding.md`.
+
 This establishes the packaging step only. The inputs are existing artifacts;
 the replay does not reproduce the kernel or firmware.
 

@@ -1,67 +1,103 @@
 # gta4l eMMC CMD2 CRC audit
 
-**Status:** read-only reference audit. No source, build, flash, or partition
-changes were made by the audit itself. Comment-only corrections to
-`package/Gta4lEmmc.c` and `package/Gta4lEmmc.h` were applied afterwards; the
-line anchors below are unchanged. TWRP on `RECOVERY` remains
+**Status:** read-only reference audit, updated with the 2026-10-31
+current-source hardware result and the two follow-up response-window captures.
+The audit itself made no source change; the diagnostic images were built,
+flashed and run separately. Comment-only corrections to `package/Gta4lEmmc.c`
+and `package/Gta4lEmmc.h`, followed by the diagnostics-only captures in
+sections 2.7 and 10, were applied afterwards. The `cmd2window` run reached
+CMD3: CMD2 completed and the failure moved from the CMD2 `CMD_CRC` record to a
+CMD3 completion timeout. The later `fmt=2` run passed CMD3 and CMD9 and
+stopped at a CMD7 R1b completion timeout; see section 2.8 and
+`docs/emmc-cmd7-timeout-finding.md`. TWRP on `RECOVERY` remains
 `14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae`.
 
-**Audit baseline (current working tree after the comment corrections and the
-host-side probe instrumentation below):**
+**Hardware-tested source (2026-10-31 image):** `Gta4lEmmc.c 722110a5…`,
+`Gta4lEmmc.h 7abc7d87…`, `Gta4lEmmcProbe.c d541514b…`, simulator
+`5262362d…`, probe simulator `18f2637a…`, probe test `52c94ccb…`.
+
+**Current working tree (after the response-window capture in section 10):**
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `src/UniXNU-gta4l/package/Gta4lEmmc.c` | `722110a5c98ca4ac5520f70ce8ca9aa7d8a9f679c861698eda0e568aa7fb01ca` |
-| `src/UniXNU-gta4l/package/Gta4lEmmc.h` | `7abc7d878f75f83cdc71cdd55dbcc6036c44b181a48e861c4a791cd24d05ca09` |
-| `src/UniXNU-gta4l/package/Gta4lEmmcProbe.c` | `d541514b08176f296e026cf4d2492952eecaa0be319e7757088423e54576326b` |
+| `src/UniXNU-gta4l/package/Gta4lEmmc.c` | `b4461abce2e6f61dffaa24a688d491b1f1adcbda0797d15d27375d16cbbcbf80` |
+| `src/UniXNU-gta4l/package/Gta4lEmmc.h` | `c50b6467a798570decdd46e0e68fc79b740c432b2581ce0be581641106fa80d4` |
+| `src/UniXNU-gta4l/package/Gta4lEmmcProbe.c` | `60cff259bbc6e960f63a794925090c82f5800909ee72e9a93e7ef9ced417a222` |
 | `src/UniXNU-gta4l/package/Gta4lSdhciHostInit.c` | `3f8f45316cff8b3ad19266f901dba69475d7dd0816ce9b6040f2bee37eaebafb` |
-| `src/UniXNU-gta4l/scripts/sim-gta4l-emmc/harness.c` | `5262362d1cdc86c725109c428ce150ba2901f839b3f0fb5aa574b90aecf95b09` |
-| `src/UniXNU-gta4l/scripts/sim-gta4l-emmc-probe/harness.c` | `18f2637a84330b4eaac216a362e2b847596beb90245af5dd3f2dd74e65747690` |
-| `src/UniXNU-gta4l/scripts/test-gta4l-emmc-probe.py` | `52c94ccb606de0fbfc9f09d8142fc3700d6d8575b3b15245dc2c7d9520de5cf3` |
+| `src/UniXNU-gta4l/scripts/sim-gta4l-emmc/harness.c` | `202807afba297de5e4e419c692c9bca5ae7ec95e54713c6493534a98a212f205` |
+| `src/UniXNU-gta4l/scripts/sim-gta4l-emmc-probe/harness.c` | `020380b1f1c7c5f45ffaa66328774b3c79a1f8c179dd4aa2812a4283e311ed27` |
+| `src/UniXNU-gta4l/scripts/test-gta4l-emmc.py` | `f41f40925c382c3706f5a429d8d93d6a8bf07446e8beb34b0bac7aad0f6f6137` |
+| `src/UniXNU-gta4l/scripts/test-gta4l-emmc-probe.py` | `c3fe5b0ca661839a55a072c5bba8d3aab0aa7ab17f8d1bb3b65d576ee6483aad` |
 
-The host probe simulator runs a stage-3 CMD0/CMD1/CMD2 scenario that fails CMD2
-with a synthetic CRC error and R2 response, and it rejects six mutation controls
-for the failure-report reads and snapshot.
+The section 2.6 image (`33311a32…`) predates the `cmd1rsp=`/`pre2rsp=` capture.
+The section 2.7 `cmd2window` image is the later diagnostics-only build and is
+the first hardware run of those fields. The host probe simulator runs the
+stage-3 identification sequence through CMD2 failure and CMD3/CMD9 timeouts,
+and the successful identification path, and it rejects nineteen mutation
+controls for the failure-report reads, response windows and success capture.
 
 **Hardware artifacts:**
 
 - Stage-2/3 hardware-tested kernel:
   `1a4710892e49fa96c053de8f33f1b4b5d89a36fc3d688febd6fa0f7e4a89003a`
   (`src/UniXNU-gta4l/docs/emmc-driver.md:328,360`).
-- Flashed failure-record kernel:
+- Older flashed failure-record kernel:
   `be30e9f4f5d88a87da2943a8e1c977d8b5c96151ed78051cdae35782eaed186e`
-  (`src/UniXNU-gta4l/docs/emmc-driver.md:383`); hardware run is pending
-  (`src/UniXNU-gta4l/docs/emmc-driver.md:395`,
-  `out/gta4l/ram-root-emmc-probe-failrec-evidence/flash-record.json:25`).
-- Current source changed after the failure-record image was built. The current
-  failure path now snapshots raw `RESPONSE0..3` (`Gta4lEmmc.c:84-95,97-116`) and
-  prints `rsp=` and `cmd1=` (`Gta4lEmmcProbe.c:425-447`). The flashed
-  failure-record image predates those fields. Do not attribute `rsp=` or
-  `cmd1=` values to the flashed image.
+  (`src/UniXNU-gta4l/docs/emmc-driver.md:383`); that image was not booted.
+- Current-source flashed and run kernel:
+  `12ebe94c75803579af4536c20233f92b75fb67fcc1b4ec73c5d728b100be6ec8`;
+  boot image `33311a32…` (85,688,320 bytes). The stage-3 report, transcript
+  and photo are in section 2.6.
+- `cmd2window` flashed and run kernel:
+  `4c1cd5e1b1d8faaad2fa5f98687c103228fca595be481f8014fc1913027ebbef`;
+  payload `177e5179…`; boot image `b119f780…` (85,688,320 bytes). The stage-3
+  CMD3-timeout report and photo are in section 2.7.
+- The current failure path snapshots raw `RESPONSE0..3`
+  (`Gta4lEmmc.c:84-116`) and prints `rsp=` and `cmd1=`
+  (`Gta4lEmmcProbe.c:425-456`). The older `be30e9f4` image predates those
+  fields; the current `33311a32` image contains them. The working tree also
+  captures `cmd1rsp=`/`pre2rsp=` (section 10); the `33311a32` image predates
+  that capture, while the `cmd2window` image contains it.
 
 ---
 
 ## 1. Executive conclusion
 
 The portable CMD2 path is semantically equivalent to mainline Linux and is
-covered by the simulator. The recorded stage-3 result is `-8`, which the core
-maps from the SDHCI command-CRC error bit `0x0002`. In this command sequence
-CMD2 is the only CRC-checked command that can produce that error: CMD0 has no
-response, CMD1 is sent without CRC checking, and CMD2 is the next command with
-`RESP_LONG | CRC`.
+covered by the simulator. The recorded result is `-8`, which the core maps from
+the SDHCI command-CRC error bit `0x0002`. CMD2 is the only CRC-checked command
+in this sequence: CMD0 has no response, CMD1 is sent without CRC checking, and
+CMD2 is the next command with `RESP_LONG | CRC`.
 
-The recorded failure is therefore attributable to CMD2 by code-path inference,
-not by a captured hardware index. The hardware-tested build (`1a471089…`)
-predates the current POR/vendor/DLL normalization and the current raw-response
-snapshot. Its `ven=00318a0c` is the pre-POR handoff value plus pad bits, not the
-value current code produces. The current failure-record image (`be30e9f4…`) is
-flashed but unrun.
+The 2026-10-31 current-source run confirms CMD2 for that image by captured
+fields: `fail_index=2`, `fail_argument=0`, `fail_command=0x0209`, and
+`fail_error=0x0002`. It applies the current POR/vendor/DLL normalization
+(`ven=0x18A9C`, `PWRSAVE_DLL` clear, `DLL_RST|DLL_PDN`, RCG programmed for a
+nominal 400 kHz), and CMD2 failed in that image. H1 (the old build's
+unnormalized state) is therefore excluded as a sufficient explanation for that
+run.
 
-The root cause is **not uniquely identified**. The leading explanation for the
-recorded failure is the old build's unnormalized host-init state; if the current
-build still fails at CMD2, the leading explanations become CMD-line
-electrical/signal integrity, rail/voltage state, or card-side CID/CRC behavior.
-No CRC checking may be disabled.
+The later `cmd2window` run (2.7) did not reproduce the CMD2 CRC. CMD2 completed
+(`step=9`; the CMD2 step is assigned only after a successful validated
+response), and the failure moved to CMD3: `fail_index=3`,
+`fail_command=0x031A`, `fail_argument=0x00010000`, `fail_error=0x0000`,
+`fail_normal=0x0000`, `rc=-7` (`ERR_CMD_TIMEOUT`). The failed-command window
+holds CID words 2..4 (`5836384d`, `42009005`, `f4661978`; CRC7 `0x3c` encoded
+as `0x78`) and a plausible CMD3 R1 status in `RESPONSE0` (`0x00000500`). The
+window is therefore real CMD2 data, not the stale CMD1 OCR, and the card
+apparently answered CMD3 while the host's completion poll never saw `CC`.
+
+The CMD2 CRC failure remains a real record for the section 2.6 image, but it
+did not reproduce in the diagnostics-only build. The only source difference is
+the added response-window reads around CMD1/CMD2, so a timing or state
+sensitivity is possible; the cause of the changed outcome is not established.
+For the current failure, H2 (CMD-line electrical/signal integrity), H4
+(card-side CID CRC) and H5 (controller R2 CRC engine) are not supported: CMD2
+delivered the CID and passed its CRC. H1 remains excluded as a sufficient
+explanation. H3 (rails) remains unmeasured but is not indicated. H6 (host
+software/timing) and H7 (actual clock) remain open, and the CMD3 completion
+path is the leading concrete suspect (H8). The failed R2 snapshot is never
+promoted to a CID, and no CRC checking may be disabled.
 
 ---
 
@@ -94,9 +130,10 @@ Path: `out/gta4l/ram-root-emmc-probe-stage3-evidence/host-report-stage3.txt:1-3`
 The transcript contains no `fail=`, `rsp=`, `cmd1=`, DLL, vendor-spec3, DDR, or
 MND fields. It bounds the error to a CRC-checked command but does not itself
 name the command. The current source's richer report is not the report that
-produced this transcript.
+produced this transcript. A later current-source run in 2.6 does capture those
+fields.
 
-### 2.3 Failure-record image (flashed, not run)
+### 2.3 Failure-record image (older, flashed, not run)
 
 Path: `out/gta4l/ram-root-emmc-probe-failrec-evidence/flash-record.json:1-26`
 
@@ -110,7 +147,8 @@ Path: `out/gta4l/ram-root-emmc-probe-failrec-evidence/flash-record.json:1-26`
 - `"hardware_run": "pending"`.
 
 This is flash evidence, not run evidence. It must not be cited as a captured
-CMD2 failure record.
+CMD2 failure record. The 2026-10-31 current-source image in 2.6 is the run
+evidence.
 
 ### 2.4 Handoff snapshot
 
@@ -132,9 +170,220 @@ Path: `src/UniXNU-gta4l/docs/sdhc-electrical-contract.md:48-52`
 - SDC1 pads: vendor pinctrl drive/pull values are source facts; actual handoff
   pad state and pad supply are `[U]`.
 
+### 2.6 Current-source hardware result (2026-10-31)
+
+Image: `out/gta4l/ram-root-emmc-probe-cmd2crc-build2-evidence/boot-ram-root-emmc-probe-cmd2crc-build2.img`,
+85,688,320 bytes, SHA-256
+`33311a329b38da1e0eda3736618d52b7d5922bc4b12a9b85b19316d58e148d65`.
+Kernel `12ebe94c75803579af4536c20233f92b75fb67fcc1b4ec73c5d728b100be6ec8`;
+probe source `Gta4lEmmcProbe.c d541514b…` and core `Gta4lEmmc.c 722110a5…`.
+
+Flash and report: `flash-record.json`, `stage3-failure-report.txt`; photo
+`stage3-cmd2-crc-failure-photo-2026-10-31.jpg` SHA-256
+`39f03d3f11b1dfa8a76ad88d944e75c6abdf2ad6f70dfecb2c5edf2d9a4397c6`.
+BOOT-only write; pre-flash BOOT backup `28e2e7db…`; RECOVERY unchanged at
+`14e11370…`.
+
+    GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967288 fail=1/2/0/00000209
+    /0002/8000/03F800f0/8 rsp=00000000,00000000,80000000,00c0ff80 cmd1
+    =3/0/c0ff8080 clocks=1 mci=10000072 pwr=0f clk=0007 hc=00 hc2=0008
+    ven=00018a9c v3=02626040 dll=6000642c dst=00000000 ddr=80040873 p
+    st=00000000 cfg=00002017 mnd=00000001/000000fc/000000fb cmd=000000
+    00 bcr=00000000 apps=00004221 ahb=00000001 step=8 log=5/8/2/163840
+
+Decoding:
+
+- `rc=4294967288` is `-8` (`GTA4L_EMMC_ERR_CMD_CRC`); `fail_error=0x0002` is
+  `CMD_CRC`.
+- `fail=1/2/0/0x0209/0x0002/0x8000/0x03F800F0/8`: valid=1, index=2,
+  argument=0, command=0x0209 (`RESP_LONG|CRC`), normal=0x8000,
+  present=0x03F800F0, step=8. `step=8` is the completed CMD1 readiness step.
+- `cmd1=3/0/0xC0FF8080`: three attempts, no timeouts, OCR `0xC0FF8080`.
+- `ven=0x00018A9C` is the current POR `0xA9C` plus pad bits; `v3=0x02626040`
+  has `PWRSAVE_DLL` (bit 3) clear; `dll=0x6000642C` has `DLL_RST|DLL_PDN` set;
+  `ddr=0x80040873` remains the POR value; the RCG is programmed for a nominal
+  400 kHz (`cfg=0x2017`, `mnd=1/252/251`). This is a register state, not a
+  measured clock.
+- `rsp=00000000,00000000,80000000,00C0FF80`: an OCR-like failed-command
+  snapshot; origin unconfirmed. The words are consistent with the CMD1 short
+  response left-aligned in the 128-bit window (`0x00C0FF80` is
+  `0xC0FF8080 >> 8`; `0x80000000` carries the rest of the shift). They do not
+  match the known CID (redacted here as `1501…1900`) or a byte/word rotation
+  of it. This correlation does not prove the window retained stale CMD1 data,
+  and it does not identify corrupted CID bits. A failed R2 register snapshot is
+  never a valid CID.
+
+**Update (cmd2window run):** the later diagnostics-only image in 2.7 did not
+reproduce this CMD2 CRC failure. CMD2 completed and the failure moved to a CMD3
+timeout, so the CMD2 attribution above applies to the section 2.6 image only.
+
+### 2.7 cmd2window stage-3 result (2026-10-31)
+
+A second diagnostics-only image added raw `RESPONSE0..3` captures after the
+final accepted CMD1 (`cmd1rsp=`) and immediately before CMD2 (`pre2rsp=`),
+without changing command semantics, retrying commands, writing response
+registers or disabling CRC checking (section 10). Image:
+`out/gta4l/ram-root-emmc-probe-cmd2window-evidence/boot-ram-root-emmc-probe-cmd2window.img`,
+85,688,320 bytes, SHA-256
+`b119f78010bb8e50f319d871f05d94c29b57010757b2a32176c0d9ff778ff19b`;
+payload `177e5179…`; kernel `4c1cd5e1…`. Flash and report:
+`flash-record.json` in the same directory. BOOT-only write; pre-flash BOOT
+backup `99a6cab4…` (the section 2.6 image); RECOVERY unchanged at
+`14e11370…` before and after. Photo
+`stage3-cmd2window-photo-2026-10-31.jpg` SHA-256
+`a9656fc934f1fec9417633054441e28d192d93be3864ee8bf83a377560634305`.
+
+The photographed panic:
+
+    GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967289 fail=1/3/65536/0000
+    031a/0000/0000/03f800f0/9 rsp=00000500,5836384d,42009005,f4661978
+    cmd1rsp=1/c0ff8080,00000000,00000000,00000000 pre2rsp=1/c0ff8080,0
+    0000000,00000000,00000000 cmd1=3/0/c0ff8080 clocks=1 mci=10000072
+    pwr=0f clk=0007 hc=00 hc2=0008 ven=00018a9c v3=02626040 dll=600064
+    2c dst=00000000 ddr=80040873 pst=00000000 cfg=00002017 mnd=00000000
+    1/000000fc/000000fb cmd=00000000 bcr=00000000 apps=00004221 ahb=00
+    000001 step=9 log=5/8/3/0 @Gta41EmmcProbe.c:456
+
+Decoding:
+
+- `rc=4294967289` is `-7` (`GTA4L_EMMC_ERR_CMD_TIMEOUT`), not the section
+  2.6 `-8` CRC error.
+- `fail=1/3/65536/0x031A/0x0000/0x0000/0x03F800F0/9`: valid=1, index=3
+  (CMD3), argument `0x00010000` (RCA 1 in bits 31:16), command `0x031A`
+  (`RESP_SHORT | CRC | INDEX | CMD3`), error status `0x0000`, normal status
+  `0x0000`, present state `0x03F800F0`, failure step 9.
+- `step=9` is `GTA4L_EMMC_STEP_CMD2`. That step is assigned only after CMD2
+  returns `GTA4L_EMMC_OK` and its response passes
+  `gta4l_emmc_validate_response()` (`Gta4lEmmc.c:1097-1111`), so CMD2
+  completed in this run.
+- CMD3 was issued with `GTA4L_EMMC_DEFAULT_RCA << 16` and
+  `RESP_SHORT | CRC | INDEX` (`Gta4lEmmc.c:1113-1116`). The driver's
+  completion poll expired with neither `CC` nor an enabled error bit; the
+  post-loop timeout path recorded the failure and returned
+  `GTA4L_EMMC_ERR_CMD_TIMEOUT` (`Gta4lEmmc.c:346-360`). The timeout is a
+  missing completion, not a latched CRC/index/timeout error bit.
+- `cmd1rsp=1/c0ff8080,0,0,0` and `pre2rsp=1/c0ff8080,0,0,0`: the final CMD1
+  OCR is valid and still present in `RESPONSE0` immediately before CMD2; the
+  pre-command interrupt clear did not clear the response window. The build-2
+  OCR-like failed window (`80000000,00c0ff80`) is not reproduced.
+- `rsp=00000500,5836384d,42009005,f4661978`: `RESPONSE1..3` are
+  `5836384d`, `42009005`, `f4661978`, matching the known CID words 2, 3 and 4
+  (the last word carries the CRC7 trailer). `RESPONSE0` is `00000500`, a
+  plausible CMD3 R1 status (CURRENT_STATE=2, Identify; READY_FOR_DATA=1),
+  not the known CID word 1 (`15010044`). This is consistent with CMD3
+  overwriting `RESPONSE0` after CMD2.
+- The known CID is `150100445836384d42009005f4661900` (TWRP
+  `out/gta4l/ram-root-fs-timer-evidence/twrp-sdhci-node.txt`). CRC7 over the
+  15-byte prefix is `0x3c`; the encoded trailer is `0x79`, and the observed
+  last byte `0x78` is `CRC7 << 1` with the end bit clear. The window therefore
+  contains real CID bits from CMD2, not the stale CMD1 OCR (`c0ff8080`).
+- The provenance caveat from section 2.6 still applies: the "known" CID came
+  from Linux sysfs, so it is already normalized by the same long-response
+  path; it is not an independent raw register dump. The CRC7 match and the
+  word-for-word agreement with three known CID words are still evidence that
+  the card transmitted the CID.
+
+Interpretation:
+
+- CMD2 now passes. The build-2 CMD2 `CMD_CRC` failure did not reproduce in
+  this diagnostics-only build. The only source difference is the added
+  response-window reads around CMD1/CMD2, so a timing or state sensitivity is
+  possible; the cause of the changed outcome is not established.
+- The failure moved to CMD3. `rc=-7` with `fail_error=0` and
+  `fail_normal=0` means the completion poll never saw `CC` and no error bit
+  was latched, while `RESPONSE0` contains a value matching an R1 card status.
+  The card appears to have answered CMD3; the host did not observe completion.
+- This is not evidence of CMD-line corruption, a card CID CRC fault, or a
+  controller R2 CRC-engine failure. Those were the leading CMD2 explanations;
+  the cmd2window run removes their premise for this boot. H2 (signal
+  integrity), H4 (card CID CRC) and H5 (R2 CRC engine) are not supported by
+  this result. H1 remains excluded as a sufficient explanation. H3 (rails)
+  remains unmeasured but is not indicated. H6 (host software/timing) and H7
+  (actual clock) remain open, with the CMD3 completion path now the leading
+  concrete suspect (H8).
+- The raw window is not a valid CID and is not promoted to one: `RESPONSE0`
+  was overwritten by CMD3's R1 status, the end bit is clear, and the first CID
+  word is absent. No card content was read.
+
+### 2.8 fmt=2 stage-3 result (2026-10-31)
+
+A third diagnostics-only image, `fmt=2`, added the expanded D7 capture to the
+failure report and to successful identification (section 10). The owner booted
+it and supplied this panic transcription (normalized to one field per line; the
+focused finding preserves the extraction verbatim). No original photo or hash
+was supplied in this turn.
+
+```text
+GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967289
+fail=1/7/65536/0000071b/0000/0002/03f800f0/11
+rsp=00000700,0f5903ff,f6dbffef,8e40400c
+cmd1rsp=1/c0ff8080,00000000,00000000,00000000
+pre2rsp=1/c0ff8080,00000000,00000000,00000000
+c2=1/0001/0000/05f46619,4d420090,44583638,00150100
+c3p=1/0000/0000/03f800f0/0023/07ff
+c3t=1/7/071b/00010000/1/00000700,0f5903ff,f6dbffef,8e40400c
+c3l=1/3/0000/0001/26/0000000000001557/19200000
+cid=15010044,5836384d,42009005,f4661900 fmt=2 hv=7202
+cmd1=3/0/c0ff8080
+clocks=1 mci=10000072 pwr=0f clk=0007 hc=00 hc2=0008 ven=00018a9c
+v3=02626040 dll=6000642c dst=00000000 ddr=80040873 pst=00000000
+cfg=00002017 mnd=00000001/000000fc/000000fb cmd=00000000 bcr=00000000
+apps=00004221 ahb=00000001 step=11 log=5/8/7/2 @Gta4lEmmcProbe.c:503
+```
+
+The extracted text renders `c3l=` as `c31=` and `Gta4lEmmcProbe.c` as
+`Gta41EmmcProbe.c`; the format string and source name use lowercase `l`. Image:
+`out/gta4l/ram-root-emmc-probe-fmt2-evidence/boot-ram-root-emmc-probe-fmt2.img`,
+85,688,320 bytes, SHA-256
+`7bf3e71991f949f2da6fcff2ef388268904a512b1876062d04e9bb86b6f411b6`;
+payload `ba4e88ba…`; kernel `f53860af…`; source hashes `b4461abc…`,
+`c50b6467…`, `60cff259…`. Flash and report: `flash-record.json` in the same
+directory. BOOT-only write; RECOVERY unchanged at `14e11370…`. The flashing
+procedure did not reboot; the owner booted the image.
+
+Decoding:
+
+- `rc=4294967289` is `-7`, `GTA4L_EMMC_ERR_CMD_TIMEOUT`.
+- `fail=1/7/65536/0x071B/0x0000/0x0002/0x03F800F0/11`: CMD7, argument
+  `0x00010000` (RCA 1), command `0x071B` (`RESP_SHORT_BUSY | CRC | INDEX`),
+  error `0x0000`, normal `0x0002` (TC), present `0x03F800F0`, failure step 11.
+- `step=11` is `GTA4L_EMMC_STEP_CMD9`; CMD9 completed and CMD7 success would
+  have set step 12. CMD2, CMD3 and CMD9 all completed in this run.
+- The recorded failure sample shows no error bit and `TC` without `CC`. The
+  `fmt=2` report kept no in-loop CMD7 history, so it cannot distinguish a
+  never-asserted `CC` from one cleared between samples. The returned `-7` is
+  the driver's software timeout, not a latched `CMD_TIMEOUT` bit.
+- `c3t` is the CMD7 timeout capture despite its legacy name: command readback
+  `0x071B`, argument `0x00010000`, response stable across two reads. `c3l` is
+  the CMD3-only poll capture (26 iterations, last normal `CC`, 5,463 ticks at
+  19.2 MHz, about 284.5 microseconds); it is not CMD7's timeout duration.
+- `rsp=0x00000700,0x0F5903FF,0xF6DBFFEF,0x8E40400C`: applying the driver's
+  32-bit long-response transformation gives
+  `40400CF6,DBFFEF0F,5903FF00,00070000`. That arithmetic does not recover a
+  coherent CMD9 CSD. The raw upper words match the recovery CSD apart from one
+  nibble, which is consistent with a retained CMD9 window, but that is
+  consistency only. The window is ambiguous between a plausible CMD7 R1
+  (STBY, ready, no errors) and a retained value; it is not a validated CMD7
+  response.
+- `log=5/8/7/2` is the last log event: count 5, `ERROR` (8), index 7,
+  `(error << 16) | normal = 0x0002`. It is the failure record, not a reset log.
+  The live `cmd=0`/`bcr=0` fields are GCC registers, not SDHCI command state;
+  the SDHCI command submission evidence is the `c3t` readback.
+
+This run `[C]` moves the terminal failure from CMD3 to CMD7 and establishes a
+completion-status mismatch on the first R1b command: TC is set while CC is
+absent. It does not establish why, whether the card accepted CMD7, or that the
+response window is fresh. The focused decode, candidate interpretations and
+open questions are in `docs/emmc-cmd7-timeout-finding.md`. No EXT_CSD or sector
+data was read; CRC checking remains enabled. Separately, the retained
+pre-instrumentation source accepted an R1b command on CC alone and returned
+without waiting for the busy completion; the lost `fmt=2` build's exact source
+is not retained. The working tree now requires both CC and TC. That
+implementation gap does not explain the absent CC in this run.
+
 ---
 
-## 3. Failure attribution: why CMD2
+## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 
 ### 3.1 Command sequence
 
@@ -165,13 +414,15 @@ CRC checking enabled. CMD0 has no response and no CRC. CMD1 has `RESP_SHORT`
 only and no CRC. The core returns immediately on the first error. Therefore,
 for the recorded build, `-8` uniquely implies CMD2.
 
-This is a code-path inference, not a captured hardware index. The stage-3
-transcript does not contain `fail_index`, `fail_command`, or `fail_error`. The
-failure-record build that would capture them has not been run.
+This is a code-path inference for the older stage-3 build, which did not capture
+a hardware index. The 2026-10-31 current-source run does capture it
+(`fail_index=2`, `fail_command=0x0209`, `fail_error=0x0002`) and confirms the
+CMD2 attribution for the section 2.6 image. The later `cmd2window` run (2.7)
+moves the attribution to CMD3; see 3.5.
 
 ### 3.4 Explicit non-supported statement
 
-The stage-3 transcript does **not** establish:
+The older stage-3 transcript does **not** establish:
 
 - the failing command index;
 - the exact `ERROR_INT_STATUS` value;
@@ -179,7 +430,22 @@ The stage-3 transcript does **not** establish:
 - whether `CC` was also set;
 - the DLL/vendor-spec3/DDR/MND state at the failure.
 
-The CMD2 attribution is valid only as an inference from the code path and `-8`.
+The current-source run in 2.6 does establish the command index, the error value
+and the raw response words for that image. The CMD2 attribution for the
+section 2.6 run is hardware-confirmed; the older transcript remains an
+inference. The `cmd2window` run in 2.7 establishes a different terminal command
+(CMD3) and is not a CMD2 attribution.
+
+### 3.5 cmd2window attribution (2026-10-31)
+
+The section 2.7 run changes the attribution. Its `fail_index=3`,
+`fail_command=0x031A`, `fail_argument=0x00010000`, `fail_error=0x0000`,
+`fail_normal=0x0000`, `rc=-7` and `step=9` show that CMD2 completed and CMD3
+was the terminal command. The timeout came from the completion poll, not from
+a latched error bit. The raw window retains CID words 2..4 and a plausible
+CMD3 R1 status, so the CMD3 response appears to have been present while `CC`
+was not observed. This is a CMD3 completion/status result, not a CMD2 CRC
+result.
 
 ---
 
@@ -300,11 +566,15 @@ Core policy: `Gta4lEmmcProbe.c:345-352` sets `fixed_1v8=1` and
 `pad_pwr_switch=1`; `Gta4lEmmc.c:825-864` selects `HOST_CONTROL2 VDD_180` and
 the pad power switch.
 
-POR divergence: mainline uses `CORE_VENDOR_SPEC_POR_VAL 0xa9c`
-(`sdhci-msm.c:76`); Samsung uses `0xA1C`
-(`/tmp/opencode/samsung-src/CXG1/drivers/mmc/host/sdhci-msm.c:101`). The core
-uses `0xA9C` (`Gta4lEmmc.h:101`, `Gta4lEmmc.c:814-818`). The divergence is
-documented but not proven irrelevant.
+POR sequence: mainline's `CORE_VENDOR_SPEC_POR_VAL` is `0xA9C`
+(`sdhci-msm.c:76`). Samsung and PE write `0xA1C` initially
+(`/tmp/opencode/samsung-src/CXG1/drivers/mmc/host/sdhci-msm.c:101`) and then
+immediately OR in `CORE_VNDR_SPEC_ADMA_ERR_SIZE_EN` (bit 7), producing `0xA9C`.
+The core writes `0xA9C` directly (`Gta4lEmmc.h:102`, `Gta4lEmmc.c:1213`). The
+earlier description of this as a `0xA1C` versus `0xA9C` divergence is
+corrected; the remaining difference is the later pad policy, not the POR
+value. Whether the ADMA-error-size enable is required for the port's non-ADMA
+path is not established.
 
 The power acknowledgement is controller-local. `BUS_SUCCESS` does not prove the
 rail voltage. `pwr=0f` and `pst=00000000` are not electrical measurements.
@@ -375,21 +645,27 @@ R2 `CMD_CRC` at 400 kHz.
 
 The stage-2/3 hardware images used kernel
 `1a4710892e49fa96c053de8f33f1b4b5d89a36fc3d688febd6fa0f7e4a89003a`
-(`src/UniXNU-gta4l/docs/emmc-driver.md:328,360`). Current source is
-`Gta4lEmmc.c 722110a5…`, `Gta4lEmmc.h 7abc7d87…`, `Gta4lEmmcProbe.c d541514b…`.
+(`src/UniXNU-gta4l/docs/emmc-driver.md:328,360`). The 2026-10-31 image
+(`33311a32…`) was built from `Gta4lEmmc.c 722110a5…`,
+`Gta4lEmmc.h 7abc7d87…`, `Gta4lEmmcProbe.c d541514b…`. The working tree has
+since gained the response-window capture in section 10 (`Gta4lEmmc.c 7aaf0018…`,
+`Gta4lEmmc.h b2df6b7d…`, `Gta4lEmmcProbe.c fc06b76c…`); that source has not
+been built or run on hardware.
 
-The current source adds:
+The `33311a32` source adds:
 
-- raw `RESPONSE0..3` snapshot before clearing the error latch
-  (`Gta4lEmmc.c:84-95,97-116`);
+- raw `RESPONSE0..3` failure snapshot before clearing the error latch
+  (`Gta4lEmmc.c:97-116`);
 - `cmd1_attempts` / `cmd1_timeouts` accounting (`Gta4lEmmc.h:326-327`,
-  `Gta4lEmmc.c:900-934`);
+  `Gta4lEmmc.c:923-958`);
 - a richer failure panic with `rsp=`, `cmd1=`, `v3=`, `ddr=`, `mnd=`, and
-  `hc=` fields (`Gta4lEmmcProbe.c:425-447`).
+  `hc=` fields (`Gta4lEmmcProbe.c:425-456`).
 
-The flashed failure-record image `be30e9f4…` was built before these additions.
-Its hardware run is pending (`docs/emmc-driver.md:395`, `flash-record.json:25`).
-The current source has not been hardware-tested.
+The older flashed failure-record image `be30e9f4…` was built before these
+additions and remains unrun. The later image built from `33311a32…` was flashed
+and run on 2026-10-31; it reproduces the CMD2 CRC failure with the normalized
+state (2.6). The working tree's additional `cmd1rsp=`/`pre2rsp=` capture is
+documented in section 10 and ran in the section 2.7 `cmd2window` image.
 
 ### 5.2 The `ven` value proves the tested build lacked current normalization
 
@@ -411,6 +687,12 @@ host-init state. The stage-3 transcript does not validate the current
 POR/vendor/DLL code. This is an inference from the register values and the
 documented build hashes, not a build-log correlation from the same run.
 
+The 2026-10-31 current-source run reports `ven=00018a9c`, so the normalized
+POR/pad policy is confirmed on hardware. CMD2 still failed in that image, so
+the old normalization gap no longer explains that failure. The later
+`cmd2window` run (2.7) also had the normalized state and did not reproduce the
+CMD2 CRC; CMD3 timed out instead.
+
 ### 5.3 Documentation was stale in places
 
 All items below were corrected in the working tree after the audit; the line
@@ -423,7 +705,9 @@ numbers refer to the audit baseline.
   host-init state and that the 1.8 V signalling and pad-switch policy were
   applied. The pad bits are set, but the value is not the current normalized
   value. The bullet is stale for current code.
-- `docs/emmc-driver.md:395` correctly says the failure-report run is pending.
+- `docs/emmc-driver.md:395` said the failure-report run was pending; the
+  current-source run has since completed (2.6) and the line now says the older
+  failure-record image was not booted.
 - `docs/emmc-driver.md:502-507,542` correctly says the recorded stage-3
   transcript predates the failure record and DLL fields.
 - `docs/emmc-driver.md:370-376` says the failure-record build matches the
@@ -438,23 +722,41 @@ numbers refer to the audit baseline.
 
 The following are **not** established:
 
-- that current source reproduces the stage-3 failure;
 - that current source fixes the stage-3 failure;
 - that the old build's missing POR/vendor/DLL normalization caused the CRC
   error;
-- that the flashed failure-record image contains the current raw-response and
-  CMD1 diagnostics;
+- that the older `be30e9f4` failure-record image contains the current
+  raw-response and CMD1 diagnostics;
+- that `rsp=` captures CMD2's CID bits rather than a stale CMD1 response;
 - that `ven=00318a0c` is equivalent to the current code's host-init state.
+
+The 2026-10-31 run establishes that current source reproduces the CMD2 CRC
+failure with the normalized state (2.6).
 
 ---
 
-## 6. Ranked hypotheses
+## 6. Hypotheses (unranked)
 
-Ranking is for the **recorded failure** first, then for a failure that persists
-on current source. The ranking is not a conclusion; each hypothesis has a
-discriminating diagnostic.
+The hypotheses apply to the **recorded failure** and to a failure that persists
+on current source. They are not ranked: the 2026-10-31 run does not provide
+discriminating evidence for an ordering. Each hypothesis has a discriminating
+diagnostic.
 
-### H1 — Rank 1: the recorded failure is an artifact of the old build's unnormalized host-init state
+**2026-10-31 update:** the current-source run (2.6) excludes H1 as a sufficient
+explanation for that failure: the normalized state still failed CMD2. The
+failed-command `rsp=` snapshot is OCR-like, but its origin is unconfirmed, so
+H2 cannot be selected from `rsp=` alone. H1 remains a candidate for the old
+stage-3 build only. H6 and H7 remain open. The other hypotheses are not ranked.
+
+**cmd2window update (2026-10-31):** the section 2.7 run did not reproduce the
+CMD2 CRC failure. CMD2 completed; CMD3 timed out with no error bit while the
+window held real CID words and a plausible CMD3 R1 status. H2, H4 and H5 lose
+their CMD2 premise for this boot. H1 remains excluded as a sufficient
+explanation. H3 remains unmeasured but is not indicated. H6 and H7 remain
+open, and the CMD3 completion path is the leading concrete suspect (H8). The
+hypotheses below keep their original CMD2 framing as the historical record.
+
+### H1 — the recorded failure is an artifact of the old build's unnormalized host-init state
 
 **Statement:** The hardware-tested build `1a471089…` did not apply the current
 POR/vendor/DLL low-speed normalization. The resulting controller state may have
@@ -480,14 +782,18 @@ been unsuitable for the CRC-checked 136-bit R2 response.
 3. Compare `ven`, `v3`, `dll`, `dst`, `ddr`, and `mnd` at failure. If
    `ven=0x18A9C` and the DLL bits are `DLL_RST|DLL_PDN`, current normalization
    was applied. If CMD2 then passes, H1 is confirmed for the old failure. If
-   CMD2 still fails, H1 is rejected as the sole cause.
+   CMD2 still fails, H1 is excluded as a sufficient explanation.
 
 **Not supported:** The old build's `ven` value does not prove that the missing
 normalization caused the CRC error. At 400 kHz the DLL is not required, the
 handoff DLL was already zero, and `HC_SELECT_IN_EN` was clear in the handoff
 value. The functional impact of the missing POR bits is unproven.
 
-### H2 — Rank 2: CMD-line electrical/signal-integrity or pad/pull-up issue corrupts the R2 response
+**Update (2026-10-31):** excluded as a sufficient explanation for the current
+failure by 2.6. It remains a candidate for the old `1a471089` build; the old
+failure's cause is not established.
+
+### H2 — CMD-line electrical/signal-integrity or pad/pull-up issue corrupts the R2 response
 
 **Statement:** The card drives a 136-bit R2 response on CMD. A pad direction,
 pull-up, drive-strength, pad-supply, or signal-integrity problem can corrupt one
@@ -522,7 +828,7 @@ or more response bits and make the controller's CRC check fail.
 **Not supported:** No CMD/CLK scope, pad voltage, pull-up, drive-strength, or
 signal-integrity measurement exists. CMD1 success does not prove R2 integrity.
 
-### H3 — Rank 3: rail/voltage/power state is wrong or droops during CMD2
+### H3 — rail/voltage/power state is wrong or droops during CMD2
 
 **Statement:** VCC (L24) or VCCQ/IO (L11) is not at the intended level, or the
 card is underpowered during the R2 response, causing a CRC error.
@@ -549,7 +855,7 @@ card is underpowered during the R2 response, causing a CRC error.
 **Not supported:** No rail measurement exists. The `pwr=0f`/`pst=0` values do not
 prove voltage or current. No droop evidence exists.
 
-### H4 — Rank 4: card-side CID/R2 CRC error or card state
+### H4 — card-side CID/R2 CRC error or card state
 
 **Statement:** The eMMC responds to CMD1 but transmits an invalid CID CRC, or is
 in a state where CMD2's R2 response is not reliable.
@@ -581,7 +887,7 @@ in a state where CMD2's R2 response is not reliable.
 success does not prove the CID CRC is valid. TWRP eMMC access is not re-verified
 here.
 
-### H5 — Rank 5: controller R2 CRC-engine/quirk/silicon behavior
+### H5 — controller R2 CRC-engine/quirk/silicon behavior
 
 **Statement:** The SDHCI v5 controller's CRC engine or R2 handling has a
 vendor-specific behavior that makes CMD2 fail even with a valid card response.
@@ -594,7 +900,8 @@ vendor-specific behavior that makes CMD2 fail even with a valid card response.
   check; the core always applies the non-quirk shift (`Gta4lEmmc.c:202-217`).
 - No direct observation of the controller's CRC computation exists.
 - If Linux/TWRP reads the CID on the same device, the controller/card path is
-  capable under Linux's configuration, which weakens H5 and strengthens H1/H2.
+  capable under Linux's configuration, which would weaken H5. It would not by
+  itself select another hypothesis.
 
 **Discriminating diagnostic:**
 
@@ -610,12 +917,12 @@ vendor-specific behavior that makes CMD2 fail even with a valid card response.
 was performed in this audit. The effect of any quirk on the CRC error bit is not
 established.
 
-### H6 — Rank 6: host software bug in the CMD2 path
+### H6 — host software bug in the CMD2 path
 
 **Statement:** The core's CMD2 encoding, response handling, or error mapping is
 wrong.
 
-**Why this is ranked low:**
+**Why this is considered less likely:**
 
 - Encoding matches mainline (`Gta4lEmmc.c:299`; `sdhci.h:68-71`).
 - Long-response normalization matches Linux and Samsung (`Gta4lEmmc.c:202-217`;
@@ -636,12 +943,12 @@ wrong.
 behaves identically. The software path is not the leading explanation, but it is
 not proven perfect.
 
-### H7 — Rank 7: clock frequency/programming is not actually 400 kHz
+### H7 — clock frequency/programming is not actually 400 kHz
 
 **Statement:** The RCG programming or parent rate is wrong, so CMD2 runs above
 the intended identification clock and fails CRC.
 
-**Why this is ranked low:**
+**Why this is considered less likely:**
 
 - The RCG values match the mainline table (`Gta4lEmmc.h:179-184`;
   `gcc-sm6115.c:1248-1258,1261`).
@@ -660,9 +967,59 @@ the intended identification clock and fails CRC.
 `cfg=00002017` and `clk=0007` are register states, not a measurement. The parent
 rate is assumed from the mainline table.
 
+### H8 — CMD3 completion is not observed (host completion path/timing)
+
+**Statement:** CMD2 succeeds, the card answers CMD3, but the controller's
+command-complete (`CC`) status is not observed by the polling path, so the
+driver reports a timeout even though the R1 response is present.
+
+**Why:**
+
+- Section 2.7: `rc=-7`, `fail_error=0x0000`, `fail_normal=0x0000`,
+  `step=9`; `RESPONSE0=0x00000500` is a plausible CMD3 R1 status, while
+  `RESPONSE1..3` retain the CMD2 CID words.
+- CMD3 is the first command in the sequence with `CRC | INDEX` and a short
+  response after a long response. CMD1 (`RESP_SHORT` only) completes with the
+  same polling loop, so the loop and the `CC` bit work for CMD1.
+- The build-2 CMD2 CRC did not reproduce in the diagnostics-only build, so
+  timing/state sensitivity around the CMD1→CMD2→CMD3 transition is possible.
+- The driver polls `NORMAL_INT_STATUS` and never reads the command register or
+  the response after the timeout; a missed `CC`, a masked status bit, or a
+  command-register/response-type issue cannot be distinguished from the
+  current record.
+
+**Discriminating diagnostic:**
+
+1. Capture `NORMAL_INT_STATUS`, `ERROR_INT_STATUS`, `PRESENT_STATE`,
+   `COMMAND`, and `RESPONSE0..3` immediately after the CMD3 completion poll
+   expires, before the interrupt clear.
+2. Add a post-CMD3 raw-window capture, and log the first and last observed
+   `NORMAL_INT_STATUS` values during the poll.
+3. Compare the CMD3 command encoding and completion path with the pinned
+   Linux `sdhci_send_command()`/`sdhci_finish_command()` path and with the
+   CMD1 path that succeeds.
+4. Check whether the controller requires a different response-type or
+   interrupt-enable setting for a CRC+index short response; do not change CRC
+   checking or add a quirk without evidence and owner approval.
+
+**Not supported:** No post-timeout command/status capture exists yet. The CMD3
+R1 value is plausible but not independently confirmed as the CMD3 response.
+The cause of the missing completion is not established.
+
+**fmt=2 update (2026-10-31):** H8 as stated is CMD3-specific and is not the
+terminal issue in the section 2.8 run. CMD3 completed (the `c3l` poll saw
+`CC`) and CMD9 completed (`step=11`). The same completion-observation pattern
+then appeared at CMD7, the first R1b command: `error=0`, `normal=0x0002` (TC),
+`CC` absent, and the driver returned its software timeout. The broader
+"completion is not observed" question therefore moves to the CMD7/R1b path; it
+is not confirmed for CMD3. See `docs/emmc-cmd7-timeout-finding.md`.
+
 ---
 
 ## 7. Discriminating diagnostic plan (owner approval required)
+
+**2026-10-31 cmd2window update:** D2/D3 have produced a CMD2 pass and a CMD3
+timeout (2.7). The next discriminating step is D7, not another CMD2 CRC run.
 
 ### D0 — Preconditions
 
@@ -672,7 +1029,7 @@ rate is assumed from the mainline table.
 - Do not disable CRC checking.
 - Do not write any partition without explicit owner approval.
 
-### D1 — Boot the already-flashed failure-record image
+### D1 — Boot the older failure-record image
 
 Image: `out/gta4l/ram-root-emmc-probe-failrec-evidence/boot-ram-root-emmc-probe-failrec.img`
 (`be30e9f4…`).
@@ -687,6 +1044,9 @@ Expected if the failure persists:
 
 This confirms CMD2 and the CRC error bit for that build.
 
+**Status:** superseded, not completed. D2 already captured the richer fields on
+2026-10-31; this image was not booted.
+
 ### D2 — Build and run the current failure-record image
 
 Build from current source (`Gta4lEmmc.c 722110a5…`, `Gta4lEmmcProbe.c d541514b…`).
@@ -697,9 +1057,12 @@ The current failure path captures:
 - `cmd1=` attempts/timeouts/OCR;
 - `v3=`, `dll=`, `dst=`, `ddr=`, `mnd=`, `hc=`.
 
-With separate owner approval, write to BOOT only and boot. Compare `ven`, `v3`,
-`dll`, `dst`, `ddr`, and `mnd` with the expected current values
-(`ven=0x18A9C`, `DLL_RST|DLL_PDN`, `PWRSAVE_DLL` clear).
+**Completed 2026-10-31.** Image `33311a32…` (kernel `12ebe94c…`) was written to
+BOOT only and run. The report is in 2.6. `ven=0x18A9C`, `PWRSAVE_DLL` clear,
+`DLL_RST|DLL_PDN`, and the RCG programmed for a nominal 400 kHz all match the
+expected current values. CMD2 failed with `CMD_CRC` in that image. The later
+`cmd2window` image (2.7) did not reproduce that failure; CMD2 completed and
+CMD3 timed out.
 
 ### D3 — Analyze the raw response
 
@@ -714,13 +1077,35 @@ Compare with a known-good CID from TWRP/Linux. Classification:
 
 | Observation | Interpretation | Next |
 | --- | --- | --- |
-| Reconstructed CID matches known CID, controller reports CRC | Response data bits intact; fault is in the CRC byte/check path (card or controller) | H4/H5 |
-| Reconstructed CID differs from known CID | Response bits corrupted | H2 (signal/electrical) |
-| Reconstructed CID matches, controller does not report CRC | Failure not reproduced on current build | H1 |
+| Reconstructed response matches the known CID, controller reports CRC | Response data bits intact; fault is in the CRC byte/check path (card or controller) | H4/H5 candidate |
+| Reconstructed response differs from the known CID | Not a valid CID; mismatch alone does not prove electrical corruption | Establish freshness/layout first; H2 candidate |
+| Reconstructed response matches, controller does not report CRC | Failure not reproduced on current build | H1 candidate for the old build; investigate the difference |
+| Raw response is OCR-like and not a CID layout | OCR-like failed-command snapshot; origin unconfirmed; not proof of stale CMD1 data or corrupted CID bits | Compare with the pre-CMD2 window (section 10), then investigate layout/response-type behavior |
 | `fail_index != 2` or `fail_command != 0x0209` | CMD2 attribution wrong for this run | Revisit H6 |
 
-The raw snapshot does not directly expose the card's CRC7 byte in the normal
-stripped-CRC layout. Do not claim a CRC7 recomputation from `rsp=` alone.
+**2026-10-31 result:** `rsp = 0x00000000, 0x00000000, 0x80000000, 0x00C0FF80`.
+`0x00C0FF80` is the CMD1 OCR `0xC0FF8080` shifted right by 8; the words are
+consistent with a left-aligned CMD1 short response and do not match the known
+CID (redacted here as `1501…1900`). The run is OCR-like, so the CID
+reconstruction classification cannot be applied. This is not proof that the
+register window retained the previous CMD1 response. A response snapshot after
+the final CMD1 and immediately before CMD2 was added to the working tree
+(section 10) and ran in the `cmd2window` image (2.7).
+
+**cmd2window result:** the pre-CMD2 window still held the CMD1 OCR
+(`c0ff8080,0,0,0`), so the pre-command clear did not empty it. After CMD2
+succeeded, the failed-command window (taken during the CMD3 timeout) held
+`00000500,5836384d,42009005,f4661978`: CID words 2..4 plus the CRC7 trailer,
+with `RESPONSE0` overwritten by a plausible CMD3 R1 status. The window is real
+CMD2 data, not the stale CMD1 OCR. The `read_long_response` reconstruction
+formula above cannot be applied to this window because `RESPONSE0` is not the
+CID's first word; a post-CMD3 capture with the CMD3 response separated from the
+CMD2 window is needed before using the formula as a CID check.
+
+The build-2 raw snapshot does not expose the card's CRC7 byte in the normal
+stripped-CRC layout. Do not claim a CRC7 recomputation from that `rsp=` alone;
+the `cmd2window` trailer match (`0x78`) is a consistency check against the
+known CID, not a CRC7 recomputation from a validated CID.
 
 ### D4 — Electrical measurements
 
@@ -737,14 +1122,43 @@ Measure and record:
 
 If TWRP/Linux can read the eMMC CID/CSD, record the exact command and output. If
 Linux reads the CID successfully on the same tablet, the card/rail path is
-capable under Linux's configuration; focus on the portable core's host-init
-state (H1) or a subtle timing/pad difference. If Linux also fails, focus on
-card/electrical (H2/H3/H4).
+capable under Linux's configuration; focus on host configuration or timing/pad
+differences (H2, H6, H7). If Linux also fails, focus on card/electrical
+(H2/H3/H4).
 
 ### D6 — Only then consider code changes
 
-No code change should be made until D1–D5 are recorded. Any code change requires
-owner approval and must not disable CRC checking.
+D1 and D2 are recorded (D2 completed 2026-10-31). The `cmd2window` run (2.7)
+completed D3's freshness check: the pre-CMD2 window held the CMD1 OCR, and the
+post-CMD2 window held real CID words. D4 and D5 remain. The D7 capture is
+implemented and host-tested in the working tree; a D7 hardware run is separately
+gated on owner approval. Do not make a code change from the `cmd2window` run
+alone. Any code change requires owner approval and must not disable CRC
+checking.
+
+### D7 — Capture the CMD3 completion state
+
+1. Extend the diagnostics-only capture to snapshot `NORMAL_INT_STATUS`,
+   `ERROR_INT_STATUS`, `PRESENT_STATE`, `COMMAND` and `RESPONSE0..3`
+   immediately after the CMD3 poll expires, before the interrupt clear.
+2. Record the first and last `NORMAL_INT_STATUS` values seen during the poll,
+   and the number of iterations completed.
+3. If `CC` is present in the snapshot, the polling path missed it; if it is
+   absent, compare the CMD3 command encoding and response type with the CMD1
+   path and the pinned Linux reference.
+4. Do not disable CRC checking or add a quirk without evidence and owner
+   approval.
+
+**Status:** implemented as the `fmt=2` capture, exercised by the probe
+simulator (`cmd3-no-cc`, `cmd3-late-cc`, `cmd9-timeout`, `cmd3-identify`) and
+run on hardware in the section 2.8 image. The success report also carries the
+capture, so identification that advances past CMD3 does not lose the evidence.
+The hardware run passed CMD2, CMD3 and CMD9 and stopped at CMD7; the D7 capture
+shows TC set and CC absent at the CMD7 timeout (2.8). The capture did not record
+CMD7 poll history because `c3l` is deliberately CMD3-only, and it did not
+record a pre-CMD7 response window; those remain open diagnostic gaps. Simulator
+agreement does not prove hardware register behavior. D4 and D5 remain, and any
+further CMD7 diagnostic run needs explicit owner approval.
 
 ---
 
@@ -753,57 +1167,95 @@ owner approval and must not disable CRC checking.
 The following statements are **not supported** by the current evidence and must
 not be presented as established:
 
-1. The stage-3 transcript does not contain the failing command index, error
-   status, or response words. CMD2 is an inference from the code path and `-8`.
-2. The failure-record image is flashed but not run. Its fields are not
-   hardware-confirmed.
-3. The hardware-tested build `1a471089…` is not current source. The current
-   source has not been hardware-tested.
+1. The older stage-3 transcript does not contain the failing command index,
+   error status, or response words. The 2026-10-31 section 2.6 run does
+   contain them (`fail_index=2`, `fail_error=0x0002`, `rsp=`), and the
+   section 2.7 run contains them for CMD3 (`fail_index=3`,
+   `fail_error=0x0000`, `rsp=`).
+2. The older `be30e9f4` failure-record image is flashed but not run. The
+   2026-10-31 `33311a32` image is the section 2.6 run evidence; the
+   `cmd2window` image (`b119f780…`) is the section 2.7 run evidence.
+3. The hardware-tested old build `1a471089…` is not current source. The
+   2026-10-31 `33311a32` image was built from the source then in the tree and
+   failed CMD2; the later `cmd2window` image includes the working tree's
+   capture and did not reproduce that failure.
 4. `ven=00318a0c` does not prove the current host-init policy was applied. It is
    the pre-POR handoff value plus pad bits.
 5. The old build's missing POR/vendor/DLL normalization is not proven to be the
-   cause of the CRC error. H1 is a hypothesis.
+   cause of the old CRC error, and is excluded as a sufficient explanation for
+   the 2.6 and 2.7 runs.
 6. No rail voltage, pad voltage, pull-up, drive-strength, or signal-integrity
    measurement exists. `pwr=0f`, `clk=0007`, and `cfg=00002017` are register
    states, not measurements.
-7. The actual card-clock frequency is not measured. The 400 kHz value is derived
-   from the RCG constants and the mainline parent rate.
-8. The CID/CSD/EXT_CSD contents and the card's CRC7 are unknown. CMD1 success
-   proves the card responded to R3, not that its CID CRC is valid.
+7. The actual card-clock frequency is not measured. The nominal 400 kHz value is
+   derived from the RCG constants and the mainline parent rate.
+8. The CID/CSD/EXT_CSD contents are not fully known. The `cmd2window` window
+   contains CID words 2..4 and a CRC7 trailer consistent with the known CID,
+   but the first CID word is absent and the window is not a validated CID.
+   CMD1 success proves the card responded to R3, not that its CID CRC is valid
+   in isolation.
 9. The controller's internal CRC computation and the card's transmitted CRC byte
-   are not observed. The raw `RESPONSE0..3` snapshot reconstructs the CID but
-   does not directly expose the CRC byte in the normal stripped-CRC layout.
+   are not observed directly. The section 2.6 raw snapshot is OCR-like; the
+   section 2.7 window contains real CID words and a CRC7 trailer, but
+   `RESPONSE0` was overwritten by the CMD3 R1 status. Neither window is a
+   validated CID.
 10. The card is not proven absent, unsupported, faulty, counterfeit, or damaged.
 11. The failure is not proven to be electrical, card-side, or controller-side.
-    The ranked hypotheses are not conclusions.
+    The hypotheses are not conclusions. The section 2.7 result points at the
+    CMD3 completion path (H8) but does not establish it.
 12. The stage-2 `rc=0` proves controller-local host init, not card communication
     or identification.
 13. TWRP/Linux eMMC access is not re-verified in this audit. If used as a
     comparator, record the exact command and output.
 14. No evidence supports disabling CRC checking. CRC checking must remain
     enabled.
-15. No partition, flash, or wipe action is authorized by this audit. TWRP on
-    `RECOVERY` must remain preserved.
+15. No further partition, flash, or wipe action is authorized by this audit.
+    The 2026-10-31 BOOT writes were separately owner-approved and RECOVERY
+    remained unchanged; TWRP on `RECOVERY` must remain preserved.
+16. The `cmd2window` capture ran on hardware in the section 2.7 image. It
+    establishes that the pre-CMD2 window still held the CMD1 OCR and that the
+    post-CMD2 window changed to CID words; it does not establish why CMD2
+    failed in the section 2.6 image or why CMD3 completion was missed.
+17. The CMD2 CRC failure did not reproduce in the `cmd2window` image. This does
+    not prove the section 2.6 failure was electrical, timing-related, or a
+    one-off; the cause of the difference is not established.
+18. The CMD3 R1 value `0x00000500` is plausible but not independently confirmed
+    as the CMD3 response; no post-CMD3 status/command capture exists yet.
+19. The `read_long_response` reconstruction formula was not applied successfully
+    to the section 2.7 window because `RESPONSE0` was overwritten. The window is
+    evidence of real CID bits, not a validated CID.
+20. No card content was read. The probe remains identification-only.
+
+**2026-10-31 fmt=2 update:** the later hardware run passed CMD3 and CMD9 and
+stopped at CMD7. Statements above that describe the CMD3 timeout as the latest
+result remain historical for the `cmd2window` image. The new report does not
+change the non-supported statements about CMD2 or CMD3, and it does not
+establish a CMD7 root cause. See section 2.8 and
+`docs/emmc-cmd7-timeout-finding.md`.
 
 ---
 
 ## 9. Documentation corrections
 
-The corrections below were applied in the working tree after the audit.
+The corrections below were applied in the working tree after the audit. The
+current-source hardware runs and the follow-up response-window captures are
+reflected in the current text and in sections 2.7 and 10.
 
 | Location | Current text/issue | Correction |
 | --- | --- | --- |
 | `src/UniXNU-gta4l/docs/emmc-driver.md:456` | Cites `package/Gta4lEmmc.h:208` for `GTA4L_EMMC_ERR_CMD_CRC` | Current line is `Gta4lEmmc.h:242` |
 | `src/UniXNU-gta4l/docs/emmc-driver.md:457-461` | Says `ven=00318a0c` repeats the stage-2 host-init state and the policy was applied | The pad bits are set, but `ven` is not the current normalized value (`0x18A9C`); the bullet is stale for current code |
 | `src/UniXNU-gta4l/docs/emmc-driver.md:370-376` | Says the failure-record build matches the current source hashes | True at build time; current source has changed. Re-check before citing the flashed image as current |
-| `src/UniXNU-gta4l/docs/emmc-driver.md:469-471` | Says the transcript does not establish which command failed | Add: code-path inference narrows it to CMD2 because CMD0 has no response and CMD1 has no CRC; the hardware index is still uncaptured |
+| `src/UniXNU-gta4l/docs/emmc-driver.md:469-471` | Says the transcript does not establish which command failed | Add: code-path inference narrows it to CMD2 because CMD0 has no response and CMD1 has no CRC; the 2026-10-31 run captures `fail_index=2` and `fail_command=0x0209` |
 | `src/UniXNU-gta4l/package/Gta4lEmmc.h:179` | Comment says "BI_TCXO / 24 * 1 / 4" | Corrected to the actual "BI_TCXO * 2 / 24 * 1 / 4" (= /48) in the current tree |
 | `src/UniXNU-gta4l/package/Gta4lEmmc.c:195-198` | Comment says the CRC byte is in the low byte of `RESPONSE0` | Corrected: the normal stripped-CRC layout does not expose the CRC byte there |
+| `src/UniXNU-gta4l/docs/emmc-driver.md` §5.3 | Says stage 3 stopped at a CMD2 CRC error | Add the `cmd2window` result: CMD2 passed and CMD3 timed out (2.7, §5.3) |
 
 The following documentation statements are correct and should be retained:
 
-- `src/UniXNU-gta4l/docs/emmc-driver.md:395`: the hardware failure-report run is
-  pending.
+- `src/UniXNU-gta4l/docs/emmc-driver.md:395`: the older failure-record image
+  was flashed but not booted. The text now distinguishes it from the completed
+  2026-10-31 current-source run (2.6, §5.3).
 - `src/UniXNU-gta4l/docs/emmc-driver.md:502-507,542`: the recorded stage-3
   transcript predates the failure record and DLL fields.
 - `src/UniXNU-gta4l/docs/emmc-driver.md:469-471`: the transcript does not
@@ -811,34 +1263,230 @@ The following documentation statements are correct and should be retained:
 
 ---
 
-## 10. Anchor index
+## 10. Post-run response-window capture (working tree)
 
-### 10.1 Current source
+The section 2.6 run could not distinguish a failed CMD2 response from an
+unchanged register window. The working tree adds diagnostics-only capture around
+identification; it does not change successful CMD1 semantics, add a second
+command attempt, write the response registers or disable CRC checking. The
+first capture layer ran on hardware in the section 2.7 `cmd2window` image; its
+result is in 2.7. The expanded D7 layer (`fmt=2`) ran on hardware in the
+section 2.8 image; its result is in 2.8 and
+`docs/emmc-cmd7-timeout-finding.md`.
+
+### 10.1 Capture points and fields
+
+The `cmd2window` layer:
+
+- `cmd1_response[4]` / `cmd1_response_valid`: raw `RESPONSE0..3` read after the
+  final accepted ready CMD1 and before the status clear
+  (`Gta4lEmmc.c:1067-1075`). `card_ready()` sets the valid flag only for the
+  ready response it accepts.
+- `pre_cmd2_response[4]` / `pre_cmd2_response_valid`: raw `RESPONSE0..3` read
+  after the pre-command interrupt clear and immediately before the `ARGUMENT`
+  and `COMMAND` writes, only for CMD2 (`Gta4lEmmc.c:359-365`). This separates a
+  W1C side effect from the command issue.
+- `fail_response[4]`: the existing failed-command snapshot, still taken before
+  the error latch is cleared (`Gta4lEmmc.c:97-116`).
+
+The expanded D7 layer:
+
+- `cmd2_normal` / `cmd2_error` / `cmd2_raw_response[4]` /
+  `cmd2_capture_valid`: status and a fresh raw `RESPONSE0..3` window taken
+  after CMD2 reports `CC` and before the post-command status clear
+  (`Gta4lEmmc.c:479-490`). The existing `read_long_response()` still produces
+  the normalized `host.cid[]` separately, so raw evidence and decoded CID can
+  be compared.
+- `pre_cmd3_normal/error/present/normal_enable/error_enable` /
+  `pre_cmd3_capture_valid`: samples taken after the pre-CMD3 W1C clear and
+  before the CMD3 `ARGUMENT`/`COMMAND` writes (`Gta4lEmmc.c:372-386`). A stale
+  completion or a lost status enable is visible here.
+- `poll_first_normal`, `poll_last_normal`, `poll_iterations`, `poll_ticks`,
+  `poll_index`, `poll_capture_valid`: CMD3-only poll history
+  (`Gta4lEmmc.c:396-447`). `poll_ticks` is the free-running counter delta
+  across the poll; the probe reports the counter frequency separately. The
+  capture is deliberately CMD3-only so later CMD9/CMD7 polls do not overwrite
+  it.
+- `timeout_normal/error/present/command/argument/response[4]`,
+  `timeout_response_stable` / `timeout_capture_valid`: fresh samples taken
+  after the poll expires and before the interrupt clear
+  (`Gta4lEmmc.c:450-466`). `fail_normal` is now this fresh read;
+  `poll_last_normal` keeps the last in-loop sample. `timeout_command` is the
+  SDHCI COMMAND readback, distinct from the GCC `cmd=` field.
+
+`gta4l_emmc_clear_failure()` zeroes every window, validity flag and expanded
+sample on controller init and before each CMD1 attempt
+(`Gta4lEmmc.c:128-182`), so an unreached checkpoint is explicitly invalid
+rather than zero-valued data.
+
+The probe report appends (format identifier `fmt=2`):
+
+    cmd1rsp=<valid>/<w0>,<w1>,<w2>,<w3>
+    pre2rsp=<valid>/<w0>,<w1>,<w2>,<w3>
+    c2=<valid>/<normal>/<error>/<w0>,<w1>,<w2>,<w3>
+    c3p=<valid>/<normal>/<error>/<present>/<normal_en>/<error_en>
+    c3t=<valid>/<command>/<argument>/<response-stable>
+    c3l=<valid>/<index>/<first-normal>/<last-normal>/<iterations>/<ticks>/<hz>
+    cid=<w0>,<w1>,<w2>,<w3> fmt=2 hv=<HOST_VERSION>
+
+`c3l` prints the 64-bit tick count as two adjacent 32-bit halves. `hv` is the
+SDHCI HOST_VERSION at offset `0xFE`, kept distinct from `mci=`. These are
+sequential register samples, not an atomic snapshot; added reads and timestamps
+perturb timing. The stage-3 success report (`GTA4L-EMMC IDENT CAPTURE`) and the
+post-read success report (`GTA4L-EMMC PROBE CAPTURE`) print the same `fmt=2`
+capture block, including the counter frequency, so a successful identification
+does not discard the D7 evidence.
+
+### 10.2 Simulator and test coverage
+
+The core simulator (`scripts/sim-gta4l-emmc/harness.c`) records every
+`RESPONSE0..3` read with the last command, offset and error-clear generation
+(`:409-419`), and invalidates the response on an error-status W1C clear only
+when a CMD_CRC bit was actually pending before that clear (`:943-951`); a
+normal-status W1C clear can also drop the window (`:913-928`). This enforces the
+snapshot-before-clear ordering. `response_window_at()` /
+`response_window_find()` (`:1295-1331`) identify complete four-word windows,
+and `cmd_issue_clear[]` (`:182,740`) records the clear generation at each
+command issue. The model also clears HOST_CONTROL2 on `RESET_ALL`
+(`:479-490`), so a second `controller_init()` raises the IO request again; the
+`power-unchanged-1v8-bus-only` scenario (`:1384-1391`) keeps the preserved-bit
+quirk behind an explicit flag. The new D7 flags model a normalized CMD2 raw
+layout (`:655-666`), a missing/late/stale CMD3 completion (`:300-307,812-816,
+915-924`) and a mismatched status-enable readback (`:314-320`).
+
+New scenarios and extended checks (setup `:1501-1524`; capture/window
+assertions `:2051-2141,2365-2432`; CMD3 timeout assertions `:2577-2642`):
+
+- `cmd2-normalized`: models the photographed raw layout (normalized CID words,
+  CRC trailer in the low byte of `RESPONSE3`). Checks the raw capture, the
+  differently decoded `host.cid[]`, the window read order and the
+  capture-before-clear generation.
+- `cmd3-no-cc`: CMD3 loads its R1 response but never raises `CC`; checks the
+  first/last poll samples, exhaustion, fresh timeout samples, command/argument
+  readback and response stability.
+- `cmd3-late-cc`: `CC` appears only in the fresh post-timeout normal-status
+  read; checks that the in-loop samples lack `CC` and that the timeout snapshot
+  has it, without changing the returned timeout.
+- `cmd3-stale-cc`: a stale `CC` survives the pre-CMD3 clear; checks the
+  pre-CMD3 capture and the first poll sample.
+- `cmd3-identify`: CMD3 returns the hardware-seen Identify R1 status
+  (`0x00000500`); checks pre-CMD3 status enables and the non-timeout capture
+  path.
+- `cmd3-enable-readback`: the status-enable readback does not match the
+  programmed value; checks the pre-CMD3 enable fields while the run still
+  succeeds.
+- `cmd1-not-ready-then-ready`: two completed not-ready CMD1 replies, then a
+  ready reply; three attempts, no timeouts, valid final CMD1 window.
+- `cmd1-not-ready-then-ready-crc`: the recorded 2026-10-31 sequence — two
+  not-ready CMD1 replies, a ready reply, then CMD2 CRC; checks three attempts,
+  no timeouts, a valid final CMD1 window and a failed window distinct from
+  pre-CMD2.
+- `cmd1-clear-invalidates-window`: a normal-status W1C clears `RESPONSE0..3`;
+  the CMD1 snapshot must already hold the OCR while pre-CMD2 reads the cleared
+  registers.
+- `reinit-clears-windows`: a second `controller_init()` succeeds and clears
+  both window validity flags, all eight words and the expanded D7 samples.
+- `cmd2-crc-distinct`: distinct final-CMD1 and failed-CMD2 windows; checks all
+  four words and that the pre-CMD2 read happens after a later status clear while
+  the failed window is read before the post-failure clear.
+- `cmd2-crc-unchanged`: the controller keeps the response; pre-CMD2 and failed
+  windows are identical.
+- `cmd2-crc-ocr-like`: an OCR-like rearranged failed-command window, matching
+  the 2026-10-31 observation without treating it as proof of staleness.
+- `cmd1-timeout-recovery-crc` now also requires valid windows and a failed
+  window different from pre-CMD2.
+- `cmd1-timeout-exhausted` and `card-not-ready` require both validity flags to
+  stay zero.
+
+The probe simulator (`scripts/sim-gta4l-emmc-probe/harness.c`) now models the
+full identification sequence through EXT_CSD: CMD7/CMD13 TRAN polling, the
+EXT_CSD read through `BUFFER_DATA_PORT`, block-transfer register writes, a late
+CMD3 completion that appears only after the poll loop has expired, a CMD9
+timeout, and the CMD7 R1b completion cases: TC only, changed and unchanged
+response windows, CC-then-TC, TC-then-CC, simultaneous completion, CC without a
+busy completion (a bounded timeout), a busy-phase error, a late busy-phase error
+and bounded-trace overflow. Its `cmd2-crc`, `cmd3-no-cc`, `cmd3-late-cc`, `cmd9-timeout`,
+`cmd3-identify` and `cmd7-*` scenarios check the actual report text:
+command/argument labels, the distinct last-poll and fresh post-timeout samples,
+the CMD3-only poll history, the separate CMD7 pre-command/poll/terminal/trace
+captures, raw versus decoded CID, the absence of invented captures, and that
+identification stops after the first timeout. `cmd3-identify` also checks that
+the success report carries the CMD2, pre-CMD3, poll-history, CMD7,
+counter-frequency and CID fields.
+
+Host results at this audit snapshot: `python3 scripts/test-gta4l-emmc.py`
+passes 78 scenarios and 40 mutation controls; the probe command
+`python3 scripts/test-gta4l-emmc-probe.py` passes 22 scenarios and 19 mutation
+controls (these are the counts at the audit snapshot; current counts are
+maintained in `docs/emmc-driver.md`). New core mutations suppress the failed
+snapshot, the final-CMD1 snapshot, the CMD1 valid flag or the pre-CMD2 snapshot,
+point the CMD1 capture at the wrong field, retime the pre-CMD2 capture before
+the status clear, retime the final-CMD1 capture after it, and drop the
+response-window clear on reinit. New probe mutations insert an unguarded SDHCI
+read, replace the clock guard with an unconditional branch, suppress a GCC or
+SDHCI report read, the raw R2 snapshot, either identification response window,
+the captured CMD2 error, the capture-format identifier, the HOST_VERSION sample,
+the success-report CID or poll history, or the timeout command index; six CMD7
+mutations suppress the pre-command validity, poll OR mask, TC validity, CC
+validity, trace overflow count or terminal response window. Each is
+rejected for its expected reason. Simulator agreement does not prove hardware
+register behavior; the D7 capture is still host-only.
+
+### 10.3 Interpretation (unchanged policy)
+
+| Observation | Interpretation | Hypothesis impact | Next |
+| --- | --- | --- | --- |
+| Pre-CMD2 and failed windows identical, OCR-like | The register window did not visibly change across CMD2; a stale/retained window is possible | H5 or layout/response-type behavior; not H2 proof | Compare with the CMD1 window and the reference response layout |
+| Pre-CMD2 and failed windows identical, both zero | Window not updated; CMD2 response absent from the register file | H5/H6 candidate | Check command issue/status ordering before blaming the card |
+| Pre-CMD2 and failed windows differ; failed window is not CID-shaped | CMD2 updated the window but not with valid CID data | H2 or H4 candidate; still no valid CID | Scope CMD/CLK, then compare the card's CID path |
+| Failed window reconstructs the known CID but CRC is reported | Data bits intact; fault is in the CRC byte/check path | H4/H5 candidate | Card/controller CRC-path comparison |
+| CMD2 succeeds, CMD3 times out; failed window has CID words 2..4 and a plausible CMD3 R1 status in `RESPONSE0` | CMD2 delivered real CID data; the CMD3 response appears present but `CC` was not observed | H5/H6/H8 candidate; CMD2 electrical/CRC explanations not supported | Capture post-CMD3 status/command and separate the CMD2 window from the CMD3 response (D7) |
+| D7 `c3p` shows `CC` already set after the pre-CMD3 clear | A stale completion survived the W1C clear or the clear did not complete | W1C synchronization/stale completion candidate | Compare with the vendor's post-clear behavior; do not add a delay without evidence |
+| D7 `c3p` status enables differ from the programmed values | Status-enable configuration was lost | Configuration-loss path candidate | Trace enable writes and any reset/ownership path |
+| D7 `c3t`/`c3l` show `CC` only in the fresh post-timeout read | Completion arrived after the last in-loop sample | Late completion, not necessarily a missed poll | Correlate the measured ticks with the timeout; no functional change yet |
+| D7 `c2` raw words and `cid=` decoded words disagree | The controller's raw response layout differs from the assumed SDHCI order | Response-layout candidate; no guessed quirk | Compare against the pinned reference and the photographed layout |
+| CMD2 succeeds | Failure not reproduced in this run | H1 candidate for the old build; the failure moved to CMD3 (H8) | Continue identification only, not sector I/O |
+
+No CRC checking may be disabled, and a failed R2 snapshot is never promoted to
+a CID.
+
+---
+
+## 11. Anchor index
+
+The line anchors and scenario counts in this section describe the `fmt=2`
+image source snapshot. The working tree has since added the `fmt=4` CMD7
+capture and its scenarios, so re-derive the anchors before reuse; current
+working-tree counts are in section 10.
+
+### 11.1 Current source
 
 - `src/UniXNU-gta4l/package/Gta4lEmmc.c`
-  - `84-95`: raw response snapshot
+  - `84-95`: raw response reader
   - `97-116`: failure record (snapshot before clear)
-  - `118-133`: failure clear
-  - `202-217`: long-response normalization
-  - `230-243`: status enables / interrupt signalling off
-  - `265-284`: error mapping
-  - `287-362`: command send/poll/response
-  - `511-566`: 400 kHz RCG and clock enable
-  - `568-682`: power-on / power acknowledgement
-  - `684-700`: pad configuration
-  - `702-736`: low-speed vendor/DLL normalization
-  - `738-750`: card clock enable
-  - `752-897`: controller init
-  - `814-818`: POR write
-  - `825-864`: HOST_CONTROL2 and pad switch
-  - `866`: low-speed normalization call
-  - `872-891`: clock, power, pads, card clock
-  - `900-934`: CMD1 / card ready
-  - `936-961`: response validation
-  - `1041-1163`: init sequence
-  - `1058-1060`: CMD0
-  - `1073-1075`: CMD2
-  - `1082-1085`: CID capture
+  - `118-143`: failure clear, including both response windows and flags
+  - `212-227`: long-response normalization
+  - `230-253`: interrupt clear / status enables
+  - `276-294`: error mapping
+  - `297-386`: command send/poll/response
+  - `318-325`: pre-CMD2 window capture after the status clear
+  - `377-382`: final-CMD1 window capture before the status clear
+  - `535-589`: 400 kHz RCG and clock enable
+  - `592-705`: power-on / power acknowledgement
+  - `708-719`: pad configuration
+  - `726-759`: low-speed vendor/DLL normalization
+  - `762-773`: card clock enable
+  - `776-921`: controller init
+  - `839-842`: POR write
+  - `856-889`: HOST_CONTROL2 and pad switch
+  - `890`: low-speed normalization call
+  - `896-921`: clock, power, pads, card clock
+  - `924-958`: CMD1 / card ready
+  - `961-985`: response validation
+  - `1066-1188`: init sequence
+  - `1084-1086`: CMD0
+  - `1098-1100`: CMD2
+  - `1107-1110`: CID capture
 - `src/UniXNU-gta4l/package/Gta4lEmmc.h`
   - `101`: vendor POR `0xA9C`
   - `128-144`: error bits/mask
@@ -848,33 +1496,59 @@ The following documentation statements are correct and should be retained:
   - `187`: SDC1 pad value
   - `207`: CMD2
   - `242`: `GTA4L_EMMC_ERR_CMD_CRC -8`
-  - `324-328`: failure response/CMD1 fields
+  - `324-331`: failure response, CMD1/pre-CMD2 windows and validity flags
 - `src/UniXNU-gta4l/package/Gta4lEmmcProbe.c`
   - `24-26`: SDHCI/GCC/TLMM bases
   - `345-352`: fixed 1.8 V / pad policy
   - `354-358`: stage dispatch
-  - `425-447`: failure panic with `fail=`, `rsp=`, `cmd1=`
-  - `468`: HOST REPORT
-  - `477`: IDENT REPORT
+  - `425-456`: failure panic with `fail=`, `rsp=`, `cmd1rsp=`, `pre2rsp=`,
+    `cmd1=`
+  - `477`: HOST REPORT
+  - `486`: IDENT REPORT
 
-### 10.2 Simulator
+### 11.2 Simulator
 
 - `src/UniXNU-gta4l/scripts/sim-gta4l-emmc/harness.c`
-  - `44`: initial vendor `0x00318A0C`
-  - `527-543`: raw response encoding
-  - `650-651`: CRC injection
-  - `1073-1081`: simulator init
-  - `1202-1213`: `cmd-crc`, `cmd-crc-with-cc`, `cmd-crc-snapshot`
-  - `1333-1345`: RCG CFG/M/N/D checks
-  - `1362-1392`: 1.8 V, pad, DLL, vendor normalization checks
-  - `1699-1701`: expected `CMD_CRC` scenarios
-  - `1742-1763`: CRC capture and CC+CRC priority
-  - `1765-1790`: raw response snapshot
-  - `1795-1801`: CMD1 retry counters
+  - `21`: response-read log bound
+  - `45`: initial vendor `0x00318A0C`
+  - `116-119`: response-clear, preserved-HOST_CONTROL2 and D7 flags
+  - `168-182`: capture/scenario state and `cmd_issue_clear[]`
+  - `300-320`: late-CC and status-enable-readback injection
+  - `409-419`: response-read tracking (command, offset, clear generation)
+  - `479-490`: RESET_ALL clears HOST_CONTROL2 unless preserved
+  - `593-632`: raw response encoding
+  - `636-672`: CMD2 response loader, including the normalized layout
+  - `727-742`: command issue / `cmd_clear_count` / `cmd_issue_clear`
+  - `812-816`: CMD3 completion suppression for no-CC/late-CC runs
+  - `913-928`: normal-status W1C invalidation and stale-CC injection
+  - `943-951`: error-status W1C response invalidation after the pending-bit check
+  - `1226-1231`: simulator init (MCI/HOST version seeds)
+  - `1295-1331`: response-window helpers
+  - `1384-1391`: preserved-VDD_180 scenario setup
+  - `1400-1524`: CRC, CMD1-not-ready, CMD2 window and D7 scenario setup
+  - `1620-1628`: RCG CFG/M/N/D checks
+  - `1650-1710`: 1.8 V, pad, DLL, vendor normalization checks
+  - `1818-1900`: CMD1/pre-CMD2/reinit response-window assertions
+  - `2051-2141`: D7 non-timeout capture assertions
+  - `2169-2210`: expected `CMD_CRC`/`CMD_TIMEOUT` scenarios
+  - `2227-2290`: CRC failure capture
+  - `2295-2432`: CMD1/pre-CMD2/failed-window assertions
+  - `2577-2642`: CMD3 no-CC/late-CC timeout assertions
 - `src/UniXNU-gta4l/scripts/test-gta4l-emmc.py`
   - scenario list, source policy, and mutation controls cover the same rules.
+  - 69 scenarios, 40 mutation controls.
+- `src/UniXNU-gta4l/scripts/sim-gta4l-emmc-probe/harness.c`
+  - full identification sequence through EXT_CSD, CMD7/CMD13 TRAN polling,
+    late-CC and CMD9-timeout injection, and the stage-3 failure/success reports,
+    including `cmd1rsp=`/`pre2rsp=` and the `fmt=2` D7 fields; seeds HOST_VERSION
+    `0x1234`.
+- `src/UniXNU-gta4l/scripts/sim-gta4l-emmc-probe/include/kern/debug.h`
+  - format-checked `panic` prototype so the report's specifiers and arguments
+    are verified at compile time.
+- `src/UniXNU-gta4l/scripts/test-gta4l-emmc-probe.py`
+  - 13 scenarios, 13 mutation controls.
 
-### 10.3 Linux/Samsung references
+### 11.3 Linux/Samsung references
 
 - `/tmp/opencode/linux-pin/sdhci.h:68-71`: response-type constants
 - `/tmp/opencode/linux-pin/sdhci.c:1711-1712`: `RESP_LONG` for `MMC_RSP_136`
@@ -897,14 +1571,20 @@ The following documentation statements are correct and should be retained:
 - `/tmp/opencode/linux-verify/gcc-sm6115.c:1248-1258`: SDCC1 apps table
 - `/tmp/opencode/linux-verify/gcc-sm6115.c:1261`: `cmd_rcgr = 0x38028`
 
-### 10.4 Hardware evidence and project docs
+### 11.4 Hardware evidence and project docs
 
 - `out/gta4l/ram-root-emmc-probe-evidence/host-report-stage2.txt:1-3`: stage-2 PASS
 - `out/gta4l/ram-root-emmc-probe-stage3-evidence/host-report-stage3.txt:1-3`: stage-3 FAIL
-- `out/gta4l/ram-root-emmc-probe-failrec-evidence/flash-record.json:1-26`: failure-record flash, run pending
+- `out/gta4l/ram-root-emmc-probe-failrec-evidence/flash-record.json:1-26`: older failure-record flash, not booted
+- `out/gta4l/ram-root-emmc-probe-cmd2crc-build2-evidence/flash-record.json`: current-source BOOT flash and run (2.6)
+- `out/gta4l/ram-root-emmc-probe-cmd2crc-build2-evidence/stage3-failure-report.txt`: 2026-10-31 stage-3 report
+- `out/gta4l/ram-root-emmc-probe-cmd2crc-build2-evidence/stage3-cmd2-crc-failure-photo-2026-10-31.jpg`: photo SHA-256 `39f03d3f…`
+- `out/gta4l/ram-root-emmc-probe-cmd2window-evidence/flash-record.json`: `cmd2window` BOOT flash and run (2.7)
+- `out/gta4l/ram-root-emmc-probe-cmd2window-evidence/stage3-cmd2window-report.txt`: 2026-10-31 CMD3-timeout report transcribed from the photo
+- `out/gta4l/ram-root-emmc-probe-cmd2window-evidence/stage3-cmd2window-photo-2026-10-31.jpg`: photo SHA-256 `a9656fc9…`
 - `src/UniXNU-gta4l/docs/emmc-driver.md:328,360`: stage-2/3 kernel hash
-- `src/UniXNU-gta4l/docs/emmc-driver.md:383`: failure-record kernel hash
-- `src/UniXNU-gta4l/docs/emmc-driver.md:395`: hardware run pending
+- `src/UniXNU-gta4l/docs/emmc-driver.md:383`: older failure-record kernel hash
+- `src/UniXNU-gta4l/docs/emmc-driver.md:395`: older failure-record image not booted; current-source run complete (2.6)
 - `src/UniXNU-gta4l/docs/emmc-driver.md:450-471`: stage-3 interpretation
 - `src/UniXNU-gta4l/docs/emmc-driver.md:502-507,542`: transcript predates failure record
 - `src/UniXNU-gta4l/docs/sdhci-handoff-audit.md:130-158`: handoff snapshot

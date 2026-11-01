@@ -68,6 +68,13 @@ SCENARIOS = [
     'cmd0-crc',
     'cmd1-crc',
     'cmd1-timeout-recovery-crc',
+    'cmd1-not-ready-then-ready',
+    'cmd1-not-ready-then-ready-crc',
+    'cmd1-clear-invalidates-window',
+    'reinit-clears-windows',
+    'cmd2-crc-distinct',
+    'cmd2-crc-unchanged',
+    'cmd2-crc-ocr-like',
     'cmd1-timeout-recover',
     'cmd1-timeout-exhausted',
     'cmd-index',
@@ -79,6 +86,35 @@ SCENARIOS = [
     'bad-cid',
     'bad-csd',
     'cmd3-error',
+    'cmd2-normalized',
+    'cmd3-no-cc',
+    'cmd3-late-cc',
+    'cmd3-stale-cc',
+    'cmd3-identify',
+    'cmd3-enable-readback',
+    'cmd7-tc-only',
+    'cmd7-fresh-window',
+    'cmd7-cc-then-tc',
+    'cmd7-tc-then-cc',
+    'cmd7-simultaneous',
+    'cmd7-terminal-change',
+    'cmd7-last-poll',
+    'cmd7-delayed-release',
+    'cmd7-late-tc',
+    'cmd7-cc-only',
+    'cmd7-neither',
+    'cmd7-stale-status',
+    'cmd7-busy-error',
+    'cmd7-late-error',
+    'cmd7-terminal-error',
+    'cmd7-data-timeout-after-cc',
+    'cmd7-data-crc-after-cc',
+    'cmd0-irrelevant-tc',
+    'cmd2-irrelevant-tc',
+    'cmd3-irrelevant-tc',
+    'cmd7-trace-overflow',
+    'cmd7-trace-plateau',
+    'cmd7-trace-return',
     'small-card',
     'partition-access',
 ]
@@ -242,6 +278,18 @@ def check_source() -> None:
                   'sdhci_before_bcr_deassert', 'sdhci_before_clocks',
                   'dll_pdn_before_rst', 'dll_rst_written',
                   'dll_pdn_written', 'cmd1_timeouts_remaining',
+                  'cmd1_not_ready_remaining', 'cmd2_keep_response',
+                  'cmd2_ocr_like_response', 'cmd_clear_count',
+                  'cmd2_normalized_layout', 'cmd3_no_cc', 'cmd3_late_cc',
+                  'cmd3_stale_cc', 'cmd3_identify_status',
+                  'cmd7_cc_immediate', 'cmd7_tc_immediate',
+                  'cmd7_keep_response', 'cmd7_fresh_response',
+                  'cmd7_toggle_status', 'cmd7_trace_overflow',
+                  'enable_readback_wrong', 'cmd_issue_clear',
+                  'response_read_offset', 'cmd1_response_valid',
+                  'pre_cmd2_response_valid',
+                  'clear_response_on_normal_w1c',
+                  'preserve_host_control2',
                   'apps_branch_fail', 'ahb_branch_fail',
                   'sim_note_sdhci_access', 'branch_writes'):
         assert token in harness, f'harness missing {token}'
@@ -268,7 +316,8 @@ def build(compiler: str, directory: Path, name: str,
     return output
 
 
-def run(binary: Path, scenario: str, expect_success: bool = True) -> bool:
+def run(binary: Path, scenario: str, expect_success: bool = True,
+        expected_reason=None) -> bool:
     result = subprocess.run([str(binary), scenario], capture_output=True,
                             text=True)
     if expect_success:
@@ -284,6 +333,11 @@ def run(binary: Path, scenario: str, expect_success: bool = True) -> bool:
         return True
     if result.returncode == 0:
         print(f'FAIL mutation accepted scenario {scenario}')
+        return False
+    if expected_reason is not None and expected_reason not in result.stderr:
+        print(result.stderr)
+        print(f'FAIL mutation {scenario}: expected diagnostic '
+              f'{expected_reason!r}')
         return False
     return True
 
@@ -421,6 +475,63 @@ def main() -> int:
              '\t/* raw response snapshot removed by mutation */\n',
              'Gta4lEmmc.c', ('-Wno-unused-function',),
              'cmd-crc-snapshot'),
+            ('cmd1-response-snapshot-missing',
+             '\t\tgta4l_emmc_read_raw_response(host, host->cmd1_response);\n',
+             '\t\t/* final CMD1 snapshot removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'cmd1-not-ready-then-ready'),
+            ('cmd1-response-valid-missing',
+             '\t\t\t\thost->cmd1_response_valid = 1;\n',
+             '\t\t\t\t/* CMD1 window validity removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'cmd1-not-ready-then-ready'),
+            ('cmd1-response-wrong-field',
+             '\t\tgta4l_emmc_read_raw_response(host, host->cmd1_response);\n',
+             '\t\tgta4l_emmc_read_raw_response(host, host->fail_response);\n',
+             'Gta4lEmmc.c', (), 'cmd1-not-ready-then-ready'),
+            ('pre-cmd2-snapshot-missing',
+             '\t\tgta4l_emmc_read_raw_response(host, host->pre_cmd2_response);\n'
+             '\t\thost->pre_cmd2_response_valid = 1;\n',
+             '\t\t/* pre-CMD2 snapshot removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'cmd2-crc-distinct'),
+            ('pre-cmd2-snapshot-retimed',
+             '\tgta4l_emmc_clear_interrupts(host);\n'
+             '\tif (index == GTA4L_EMMC_CMD2) {\n'
+             '\t\t/* Capture the post-clear window immediately before CMD2 is\n'
+             '\t\t * submitted, so a W1C side effect is visible separately from\n'
+             '\t\t * the failed-command snapshot. Diagnostics only. */\n'
+             '\t\tgta4l_emmc_read_raw_response(host, host->pre_cmd2_response);\n'
+             '\t\thost->pre_cmd2_response_valid = 1;\n'
+             '\t}\n',
+             '\tif (index == GTA4L_EMMC_CMD2) {\n'
+             '\t\t/* pre-CMD2 snapshot retimed before the status clear */\n'
+             '\t\tgta4l_emmc_read_raw_response(host, host->pre_cmd2_response);\n'
+             '\t\thost->pre_cmd2_response_valid = 1;\n'
+             '\t}\n'
+             '\tgta4l_emmc_clear_interrupts(host);\n',
+             'Gta4lEmmc.c', (), 'cmd2-crc-distinct'),
+            ('cmd1-response-retimed',
+             '\t\tif (index == GTA4L_EMMC_CMD1) {\n'
+             '\t\t\t/* Keep the raw window from this CMD1 before the status\n'
+             '\t\t\t * clear can invalidate it. card_ready marks it valid only\n'
+             '\t\t\t * for the final accepted ready response. Diagnostics\n'
+             '\t\t\t * only. */\n'
+             '\t\t\tgta4l_emmc_read_raw_response(host, host->cmd1_response);\n'
+             '\t\t}\n',
+             '\t\t/* CMD1 raw snapshot removed before the status clear by\n'
+             '\t\t * mutation. */\n',
+             'Gta4lEmmc.c', (), 'cmd1-clear-invalidates-window'),
+            ('clear-failure-windows-missing',
+             '\thost->cmd1_response[0] = 0;\n'
+             '\thost->cmd1_response[1] = 0;\n'
+             '\thost->cmd1_response[2] = 0;\n'
+             '\thost->cmd1_response[3] = 0;\n'
+             '\thost->pre_cmd2_response[0] = 0;\n'
+             '\thost->pre_cmd2_response[1] = 0;\n'
+             '\thost->pre_cmd2_response[2] = 0;\n'
+             '\thost->pre_cmd2_response[3] = 0;\n'
+             '\thost->cmd1_response_valid = 0;\n'
+             '\thost->pre_cmd2_response_valid = 0;\n',
+             '\t/* response-window clear removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'reinit-clears-windows'),
             ('clocks-flag-unset',
              '\thost->clocks_enabled = 0;\n',
              '\thost->clocks_enabled = 1;\n',
@@ -553,13 +664,198 @@ def main() -> int:
              '\t}\n',
              '\t/* 4 KiB sector check removed by mutation */\n',
              'Gta4lEmmc.c', (), 'data-sector-4k'),
+            ('cmd7-trace-last-stored',
+             '\thost->cmd7_trace_prev_normal = normal;\n'
+             '\thost->cmd7_trace_prev_error = error;\n'
+             '\thost->cmd7_trace_prev_valid = 1;\n'
+             '\tcount = host->cmd7_trace_count;\n'
+             '\tif (count < GTA4L_EMMC_CMD7_TRACE_ENTRIES) {\n'
+             '\t\thost->cmd7_trace[count].iteration = iteration;\n',
+             '\tcount = host->cmd7_trace_count;\n'
+             '\tif (count < GTA4L_EMMC_CMD7_TRACE_ENTRIES) {\n'
+             '\t\thost->cmd7_trace_prev_normal = normal;\n'
+             '\t\thost->cmd7_trace_prev_error = error;\n'
+             '\t\thost->cmd7_trace_prev_valid = 1;\n'
+             '\t\thost->cmd7_trace[count].iteration = iteration;\n',
+             'Gta4lEmmc.c', (), 'cmd7-trace-return'),
+            ('cmd7-terminal-normal-reused',
+             '\t\tnormal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_NORMAL_INT_STATUS);\n'
+             '\t\tpresent = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n',
+             '\t\t/* Reused poll normal sample kept by mutation. */\n'
+             '\t\tpresent = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n',
+             'Gta4lEmmc.c', (), 'cmd7-terminal-change'),
+            ('cmd7-cc-only-success',
+             '\tbusy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==\n'
+             '\t    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);\n',
+             '\tbusy = 0;\n',
+             'Gta4lEmmc.c', (), 'cmd7-cc-only'),
+            ('cmd7-accept-tc-only',
+             '\t\t\tif ((normal & GTA4L_EMMC_INT_CC) != 0) {\n'
+             '\t\t\t\tcc_seen = 1;\n'
+             '\t\t\t}\n',
+             '\t\t\tif ((normal & (GTA4L_EMMC_INT_CC |\n'
+             '\t\t\t    GTA4L_EMMC_INT_TC)) != 0) {\n'
+             '\t\t\t\tcc_seen = 1;\n'
+             '\t\t\t}\n',
+             'Gta4lEmmc.c', (), 'cmd7-tc-only'),
+            ('cmd7-clear-sticky-evidence',
+             '\t\t\tif ((normal & GTA4L_EMMC_INT_TC) != 0) {\n'
+             '\t\t\t\ttc_seen = 1;\n'
+             '\t\t\t}\n',
+             '\t\t\tif ((normal & GTA4L_EMMC_INT_TC) != 0) {\n'
+             '\t\t\t\ttc_seen = 1;\n'
+             '\t\t\t\tcc_seen = 0;\n'
+             '\t\t\t}\n',
+             'Gta4lEmmc.c', (), 'cmd7-cc-then-tc'),
+            ('cmd7-terminal-error-final-sample-removed',
+             '\t\t/* The terminal capture reads COMMAND, ARGUMENT and the raw\n'
+             '\t\t * response window after the first error sample. Re-read the\n'
+             '\t\t * error status after those reads so an error that becomes\n'
+             '\t\t * visible during them is still evaluated before the status\n'
+             '\t\t * clear. This final sample is the observation boundary; an\n'
+             '\t\t * error asserted after it remains unobserved. */\n'
+             '\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n',
+             '\t\t/* final terminal-read error sample removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'cmd7-terminal-error'),
+            ('cmd7-ignore-final-error',
+             '\t\tif ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {\n'
+             '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
+             '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn gta4l_emmc_map_error(error, 0);\n'
+             '\t\t}\n',
+             '\t\tif (0) {\n'
+             '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
+             '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn gta4l_emmc_map_error(error, 0);\n'
+             '\t\t}\n',
+             'Gta4lEmmc.c', (), 'cmd7-late-error'),
+            ('cmd7-response-before-cc',
+             '\t\t\tif ((cc_seen != 0) && (response_snapshot == 0) &&\n'
+             '\t\t\t    (response != 0)) {\n',
+             '\t\t\tif ((response_snapshot == 0) && (response != 0)) {\n',
+             'Gta4lEmmc.c', (), 'cmd7-tc-only'),
+            ('cmd7-budget-rearmed-after-cc',
+             '\tfor (step = 0; step < iterations; step++) {\n'
+             '\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
+             '\n'
+             '\t\tif ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {\n'
+             '\t\t\tnormal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_NORMAL_INT_STATUS);\n'
+             '\t\t\tpresent = gta4l_emmc_read32(host,\n'
+             '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\t\tif (record_cmd7 != 0) {\n'
+             '\t\t\t\tgta4l_emmc_note_cmd7_poll(host, step, normal,\n'
+             '\t\t\t\t    error, poll_start);\n'
+             '\t\t\t\thost->cmd7_poll_iterations = step + 1u;\n'
+             '\t\t\t\thost->cmd7_poll_ticks =\n'
+             '\t\t\t\t    gta4l_emmc_counter(host) - poll_start;\n'
+             '\t\t\t\thost->cmd7_poll_capture_valid = 1;\n'
+             '\t\t\t\tgta4l_emmc_capture_cmd7_terminal(host, normal,\n'
+             '\t\t\t\t    error, present);\n'
+             '\t\t\t}\n'
+             '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
+             '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn gta4l_emmc_map_error(error, 0);\n'
+             '\t\t}\n',
+             '\tfor (step = 0; (step < iterations) ||\n'
+             '\t    ((cc_seen != 0) && (tc_seen == 0)); step++) {\n'
+             '\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
+             '\n'
+             '\t\tif ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {\n'
+             '\t\t\tnormal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_NORMAL_INT_STATUS);\n'
+             '\t\t\tpresent = gta4l_emmc_read32(host,\n'
+             '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\t\tif (record_cmd7 != 0) {\n'
+             '\t\t\t\tgta4l_emmc_note_cmd7_poll(host, step, normal,\n'
+             '\t\t\t\t    error, poll_start);\n'
+             '\t\t\t\thost->cmd7_poll_iterations = step + 1u;\n'
+             '\t\t\t\thost->cmd7_poll_ticks =\n'
+             '\t\t\t\t    gta4l_emmc_counter(host) - poll_start;\n'
+             '\t\t\t\thost->cmd7_poll_capture_valid = 1;\n'
+             '\t\t\t\tgta4l_emmc_capture_cmd7_terminal(host, normal,\n'
+             '\t\t\t\t    error, present);\n'
+             '\t\t\t}\n'
+             '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
+             '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn gta4l_emmc_map_error(error, 0);\n'
+             '\t\t}\n',
+             'Gta4lEmmc.c', (), 'cmd7-late-tc'),
+            ('cmd7-loose-response-type',
+             '\tbusy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==\n'
+             '\t    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);\n',
+             '\tbusy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) != 0);\n',
+             'Gta4lEmmc.c', (), 'success'),
+            ('cmd7-early-command',
+             '\tbusy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==\n'
+             '\t    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);\n',
+             '\tbusy = 0;\n',
+             'Gta4lEmmc.c', (), 'cmd7-delayed-release'),
         ]
+        mutation_reasons = {
+            'cmd1-response-snapshot-missing':
+                'ready CMD1 raw window does not hold the OCR',
+            'cmd1-response-valid-missing':
+                'ready CMD1 raw window was not marked valid',
+            'cmd1-response-wrong-field':
+                'ready CMD1 raw window does not hold the OCR',
+            'cmd1-response-retimed':
+                'CMD1 window did not survive the later status clear',
+            'pre-cmd2-snapshot-missing':
+                'pre-CMD2 raw window was not marked valid',
+            'pre-cmd2-snapshot-retimed':
+                'pre-CMD2 window was not captured after the last status '
+                'clear',
+            'clear-failure-windows-missing':
+                'reinit did not clear the CMD1 window validity',
+            'cmd7-trace-last-stored':
+                'return trace did not count the transition back to the '
+                'last stored state',
+            'cmd7-terminal-normal-reused':
+                'CMD7 terminal sample lost the post-poll status change',
+            'cmd7-cc-only-success':
+                'cmd7-cc-only returned',
+            'cmd7-accept-tc-only':
+                'cmd7-tc-only returned',
+            'cmd7-clear-sticky-evidence':
+                'init result -7',
+            'cmd7-ignore-final-error':
+                'a later command followed the CMD7 failure',
+            'cmd7-terminal-error-final-sample-removed':
+                'cmd7-terminal-error returned 0',
+            'cmd7-response-before-cc':
+                'TC-only run read the response before CC',
+            'cmd7-budget-rearmed-after-cc':
+                'cmd7-late-tc returned 0',
+            'cmd7-loose-response-type':
+                'init result -14',
+            'cmd7-early-command':
+                'a command was submitted before the busy release',
+        }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)
             mutated = build(compiler, directory / name, f'emmc-{name}',
                             core=core, header_dir=directory / name,
                             extra_flags=extra)
-            if not run(mutated, scenario, expect_success=False):
+            reason = mutation_reasons.get(name)
+            if not run(mutated, scenario, expect_success=False,
+                       expected_reason=reason):
                 print(f'mutation {name} was accepted')
                 return 1
 

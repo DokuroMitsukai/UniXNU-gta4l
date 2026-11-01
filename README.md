@@ -36,11 +36,15 @@ partition layout, payload policy and packaging.
   handshake, CMD3 RCA assignment, enumeration, capacity/partition validation
   and single-block PIO reads. The opt-in `gta4l-emmc-probe=1/2/3` XNU probe is
   built into the kernel archive list. Stage 2 (controller and host init)
-  completed on the tablet; stage 3 (identification) fails at CMD2 with a
-  response CRC error, so no block device, filesystem, DMA, CQE, ICE or write
-  path exists and CRC checking remains enabled. See
-  [docs/emmc-driver.md](docs/emmc-driver.md) and
-  [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md).
+  completed on the tablet. Stage 3 (identification) first failed at CMD2 with
+  a response CRC error; a later `cmd2window` run passed CMD2 and stopped at a
+  CMD3 completion timeout, and the `fmt=2` run passed CMD3 and CMD9 and stopped
+  at a CMD7 R1b completion timeout with TC set and CC absent. The working tree
+  adds diagnostics-only `fmt=4` CMD7 capture; it has not run on hardware. No
+  block device, filesystem, DMA, CQE, ICE or write path exists and CRC checking
+  remains enabled. See [docs/emmc-driver.md](docs/emmc-driver.md),
+  [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md) and
+  [docs/emmc-cmd7-timeout-finding.md](docs/emmc-cmd7-timeout-finding.md).
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
   input requirements, not gta4l hardware evidence.
 
@@ -65,6 +69,19 @@ register and command code is not transferable. The host-only static audit in
 [docs/native-emmc-reference-audit.md](docs/native-emmc-reference-audit.md)
 records the reusable publication patterns, the MediaTek-specific parts and the
 completion/error-path findings. No code is imported.
+
+## PixelExperience reference
+
+The PixelExperience Plus 11 (Android 11) release for `gta4l`/SM-T505 by
+[dolbaras](https://github.com/dolbaras/gta4l-gta4lwifi-roms) is a reference for
+the vendor storage stack, not for XNU. Its release payload and pinned source
+anchors are compared in
+[docs/pe-storage-stack-provenance.md](docs/pe-storage-stack-provenance.md):
+the artifact digest matches the published release metadata, the boot board name
+matches the pinned device configuration, the QRD overlay's `sdhci@4744000`
+node matches the live FDT, and the inspected vendor source sends CMD7 as R1
+rather than the port's R1B. Exact source-to-artifact identity is unresolved,
+only the SM-T505 build was device-tested, and no code or quirk is imported.
 
 ## Inputs
 

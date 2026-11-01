@@ -25,8 +25,10 @@
 #include "Gta4lEmmc.h"
 
 void gta4l_emmc_probe_run(void);
+void gta4l_emmc_probe_width_fixture(int form);
 uint64_t gta4l_emmc_probe_test_counter(void);
 uint64_t gta4l_emmc_probe_test_counter_hz(void);
+void gta4l_emmc_probe_test_delay_us(uint32_t microseconds);
 uint8_t gta4l_emmc_probe_test_read8(uint32_t space, uint32_t offset);
 uint16_t gta4l_emmc_probe_test_read16(uint32_t space, uint32_t offset);
 uint32_t gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset);
@@ -68,6 +70,7 @@ _Static_assert(GTA4L_EMMC_REG_NORMAL_INT_STATUS == 0x30u,
 _Static_assert(GTA4L_EMMC_REG_ERROR_INT_STATUS == 0x32u,
     "ERROR_INT_STATUS offset");
 _Static_assert(GTA4L_EMMC_REG_HOST_CONTROL2 == 0x3Eu, "HOST_CONTROL2 offset");
+_Static_assert(GTA4L_EMMC_REG_HOST_VERSION == 0xFEu, "HOST_VERSION offset");
 _Static_assert(GTA4L_EMMC_REG_CORE_DLL_CONFIG == 0x200u,
     "CORE_DLL_CONFIG offset");
 _Static_assert(GTA4L_EMMC_REG_CORE_DLL_STATUS == 0x208u,
@@ -122,9 +125,112 @@ static uint16_t error_int;
 static uint32_t pwr_status;
 static uint16_t last_command;
 static uint32_t last_argument;
+static uint32_t last_index;
 static unsigned int cmd_count;
 static int bad_command_format;
 static int bad_command_order;
+static uint16_t block_size;
+static uint16_t block_count;
+static uint16_t transfer_mode;
+static uint32_t buffer_data[GTA4L_EMMC_BLOCK_BYTES / 4u];
+static uint32_t buffer_index;
+static unsigned char ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+static int cmd2_crc_fail;
+static int cmd3_no_cc;
+static int cmd3_late_cc;
+static int cmd3_cc_delay;
+static int cmd3_identify_status;
+static int cmd9_timeout;
+static unsigned int cmd3_normal_reads;
+static uint32_t ext_csd_count = 0x01000000u;
+/* CMD7 R1b modeling. Event times are microseconds from command issue against
+ * the simulated counter; -1 means the event never occurs. Status-read counts
+ * are not the event clock. */
+static int cmd7_cc_immediate;
+static int cmd7_tc_immediate;
+static int cmd7_cc_delay;
+static int cmd7_tc_delay;
+static int cmd7_error_delay;
+static int cmd7_error_status;
+static int cmd7_keep_response;
+static int cmd7_fresh_response;
+static int cmd7_toggle_status;
+static int cmd7_access_latency_us;
+static int cmd7_cc_due;
+static int cmd7_tc_due;
+static int cmd7_error_due;
+static int cmd7_cc_time_valid;
+static int cmd7_tc_time_valid;
+static int cmd7_error_time_valid;
+static uint64_t cmd7_cc_time;
+static uint64_t cmd7_tc_time;
+static uint64_t cmd7_error_time;
+static uint64_t cmd7_issue_time;
+static uint64_t cmd7_release_time;
+static uint64_t cmd7_next_issue_time;
+static int cmd7_next_index;
+static int cmd7_early_command;
+static int cmd7_command_readback;
+static int response_read_before_cc;
+static const uint32_t cmd7_window[4] = {
+	0x40400CF6u, 0xDBFFEF0Fu, 0x5903FF00u, 0x00070000u
+};
+static const uint8_t *expected_order;
+static unsigned int expected_order_count;
+
+static const uint32_t sim_cid[4] = {
+	0x15010044u, 0x5836384Du, 0x42009005u, 0xF4661900u
+};
+static const uint32_t sim_csd[4] = {
+	0xD0270132u, 0x0F5903FFu, 0xF6DBFFEFu, 0x8E404000u
+};
+
+static uint32_t sim_load(const unsigned char *window, uint32_t offset,
+    uint32_t width);
+static void sim_store(unsigned char *window, uint32_t offset, uint32_t width,
+    uint32_t value);
+
+static void
+sim_set_long_response(const uint32_t words[4])
+{
+	uint32_t reg[4];
+	uint32_t index;
+
+	reg[3] = words[0] >> 8;
+	reg[2] = (words[1] >> 8) | ((words[0] & 0xFFu) << 24);
+	reg[1] = (words[2] >> 8) | ((words[1] & 0xFFu) << 24);
+	reg[0] = (words[3] >> 8) | ((words[2] & 0xFFu) << 24);
+	for (index = 0; index < 4u; index++) {
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE + index * 4u, 4u,
+		    reg[index]);
+	}
+}
+
+static void
+sim_fill_buffer_words(const uint8_t *bytes)
+{
+	uint32_t index;
+
+	for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index += 4u) {
+		buffer_data[index / 4u] =
+		    (uint32_t)bytes[index] |
+		    ((uint32_t)bytes[index + 1u] << 8) |
+		    ((uint32_t)bytes[index + 2u] << 16) |
+		    ((uint32_t)bytes[index + 3u] << 24);
+	}
+}
+
+static void
+sim_fill_block(uint32_t lba)
+{
+	uint8_t bytes[GTA4L_EMMC_BLOCK_BYTES];
+	uint32_t index;
+
+	for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+		bytes[index] = (uint8_t)((lba * 7u) + (index * 13u));
+	}
+	sim_fill_buffer_words(bytes);
+}
 
 static uint32_t
 sim_load(const unsigned char *window, uint32_t offset, uint32_t width)
@@ -220,9 +326,34 @@ sim_clear_response(void)
 	}
 }
 
-/* Minimal command engine for the stage-3 CMD2 CRC scenario. CMD0 and CMD1
- * complete normally; CMD2 raises CMD_CRC and loads synthetic R2 words so the
- * production failure report has something to format. */
+static void
+sim_apply_cmd7_events(void)
+{
+	if (last_index != GTA4L_EMMC_CMD7) {
+		return;
+	}
+	if ((cmd7_cc_due == 0) && (cmd7_cc_time_valid != 0) &&
+	    (counter_value >= cmd7_cc_time)) {
+		normal_int |= GTA4L_EMMC_INT_CC;
+		cmd7_cc_due = 1;
+	}
+	if ((cmd7_tc_due == 0) && (cmd7_tc_time_valid != 0) &&
+	    (counter_value >= cmd7_tc_time)) {
+		normal_int |= GTA4L_EMMC_INT_TC;
+		cmd7_tc_due = 1;
+		cmd7_release_time = counter_value;
+	}
+	if ((cmd7_error_due == 0) && (cmd7_error_time_valid != 0) &&
+	    (counter_value >= cmd7_error_time)) {
+		error_int |= (uint16_t)cmd7_error_status;
+		cmd7_error_due = 1;
+	}
+}
+
+/* Minimal command engine for the stage-3 scenarios. CMD0 and CMD1 complete
+ * normally; CMD2 can fail with CMD_CRC and synthetic R2 words, CMD3 can omit
+ * or delay its completion, and the identification sequence can complete so the
+ * success report path is exercised. */
 static void
 sim_command(uint16_t command)
 {
@@ -230,25 +361,29 @@ sim_command(uint16_t command)
 	uint32_t flags = (uint32_t)command & 0xFFu;
 	uint32_t words[4];
 	uint32_t word;
+	uint64_t cc_time;
+	uint64_t tc_time;
 
+	sim_apply_cmd7_events();
+	if ((last_index == GTA4L_EMMC_CMD7) &&
+	    (index != GTA4L_EMMC_CMD7)) {
+		if (cmd7_tc_due == 0) {
+			cmd7_early_command = 1;
+		}
+		cmd7_next_issue_time = counter_value;
+		cmd7_next_index = (int)index;
+	}
 	last_command = command;
-	cmd_count++;
-	if (cmd_count == 1u) {
-		if ((index != 0u) || (last_argument != 0u)) {
-			bad_command_order = 1;
-		}
-	} else if (cmd_count == 2u) {
-		if ((index != 1u) ||
-		    (last_argument != GTA4L_EMMC_OCR_VALUE)) {
-			bad_command_order = 1;
-		}
-	} else if (cmd_count == 3u) {
-		if ((index != 2u) || (last_argument != 0u)) {
+	last_index = index;
+	if (cmd_count < expected_order_count) {
+		if (index != expected_order[cmd_count]) {
 			bad_command_order = 1;
 		}
 	} else {
 		bad_command_order = 1;
 	}
+	cmd_count++;
+	buffer_index = 0;
 	if (index == 0u) {
 		if (flags != GTA4L_EMMC_CMD_RESP_NONE) {
 			bad_command_format = 1;
@@ -269,19 +404,125 @@ sim_command(uint16_t command)
 		if (flags != (GTA4L_EMMC_CMD_RESP_LONG | GTA4L_EMMC_CMD_CRC)) {
 			bad_command_format = 1;
 		}
-		/* Synthetic R2 words: this is a formatting/capture test, not a
-		 * real CID. */
-		words[0] = 0x11111111u;
-		words[1] = 0x22222222u;
-		words[2] = 0x33333333u;
-		words[3] = 0x44444444u;
-		for (word = 0; word < 4u; word++) {
-			sim_store(sdhci,
-			    GTA4L_EMMC_REG_RESPONSE + word * 4u, 4u,
-			    words[word]);
+		if (cmd2_crc_fail != 0) {
+			/* Synthetic R2 words: this is a formatting/capture
+			 * test, not a real CID. */
+			words[0] = 0x11111111u;
+			words[1] = 0x22222222u;
+			words[2] = 0x33333333u;
+			words[3] = 0x44444444u;
+			for (word = 0; word < 4u; word++) {
+				sim_store(sdhci,
+				    GTA4L_EMMC_REG_RESPONSE + word * 4u, 4u,
+				    words[word]);
+			}
+			error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
+			normal_int |= 0x8000u;
+			return;
 		}
-		error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
-		normal_int |= 0x8000u;
+		sim_set_long_response(sim_cid);
+		normal_int |= GTA4L_EMMC_INT_CC;
+		return;
+	}
+	if (index == GTA4L_EMMC_CMD3) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX)) {
+			bad_command_format = 1;
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+		    cmd3_identify_status ? 0x00000500u : 0x00000900u);
+		cmd3_normal_reads = 0;
+		if ((cmd3_no_cc == 0) && (cmd3_late_cc == 0) &&
+		    (cmd3_cc_delay < 0)) {
+			normal_int |= GTA4L_EMMC_INT_CC;
+		}
+		return;
+	}
+	if (index == GTA4L_EMMC_CMD9) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_LONG |
+		    GTA4L_EMMC_CMD_CRC)) {
+			bad_command_format = 1;
+		}
+		sim_set_long_response(sim_csd);
+		if (cmd9_timeout == 0) {
+			normal_int |= GTA4L_EMMC_INT_CC;
+		}
+		return;
+	}
+	if (index == GTA4L_EMMC_CMD7) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT_BUSY |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX)) {
+			bad_command_format = 1;
+		}
+		cmd7_issue_time = counter_value;
+		cmd7_cc_due = 0;
+		cmd7_tc_due = 0;
+		cmd7_error_due = 0;
+		cmd7_command_readback = 0;
+		cmd7_cc_time_valid =
+		    ((cmd7_cc_immediate != 0) || (cmd7_cc_delay >= 0)) ? 1 : 0;
+		cmd7_tc_time_valid =
+		    ((cmd7_tc_immediate != 0) || (cmd7_tc_delay >= 0)) ? 1 : 0;
+		cmd7_error_time_valid = (cmd7_error_delay >= 0) ? 1 : 0;
+		cc_time = counter_value;
+		tc_time = counter_value;
+		if ((cmd7_cc_immediate == 0) && (cmd7_cc_delay >= 0)) {
+			cc_time += (uint64_t)cmd7_cc_delay;
+		}
+		if ((cmd7_tc_immediate == 0) && (cmd7_tc_delay >= 0)) {
+			tc_time += (uint64_t)cmd7_tc_delay;
+		}
+		cmd7_cc_time = cc_time;
+		cmd7_tc_time = tc_time;
+		cmd7_error_time = counter_value +
+		    ((cmd7_error_delay >= 0) ?
+		    (uint64_t)cmd7_error_delay : 0);
+		if (cmd7_keep_response == 0) {
+			if (cmd7_fresh_response != 0) {
+				for (word = 0; word < 4u; word++) {
+					sim_store(sdhci,
+					    GTA4L_EMMC_REG_RESPONSE +
+					    word * 4u, 4u,
+					    cmd7_window[word]);
+				}
+			} else {
+				sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE,
+				    4u, 0x00000900u);
+			}
+		}
+		sim_apply_cmd7_events();
+		return;
+	}
+	if (index == GTA4L_EMMC_CMD13) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX)) {
+			bad_command_format = 1;
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
+		normal_int |= GTA4L_EMMC_INT_CC;
+		return;
+	}
+	if ((index == GTA4L_EMMC_CMD8) || (index == GTA4L_EMMC_CMD17)) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
+		    GTA4L_EMMC_CMD_DATA)) {
+			bad_command_format = 1;
+		}
+		if ((block_size != GTA4L_EMMC_BLOCK_BYTES) ||
+		    (block_count != 1u) ||
+		    ((transfer_mode & (GTA4L_EMMC_TM_READ |
+		    GTA4L_EMMC_TM_BLOCK_COUNT_EN)) !=
+		    (GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN))) {
+			bad_command_format = 1;
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
+		if (index == GTA4L_EMMC_CMD8) {
+			sim_fill_buffer_words(ext_csd);
+		} else {
+			sim_fill_block(last_argument);
+		}
+		normal_int |= GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_BRR |
+		    GTA4L_EMMC_INT_TC;
 		return;
 	}
 	/* No later command is expected. Report a CRC error so an unexpected
@@ -316,10 +557,40 @@ gta4l_emmc_probe_test_read16(uint32_t space, uint32_t offset)
 			sdhci_read_count[offset]++;
 		}
 		if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
+			if (last_index == GTA4L_EMMC_CMD3) {
+				cmd3_normal_reads++;
+				if ((cmd3_late_cc != 0) &&
+				    (cmd3_normal_reads >
+				    (GTA4L_EMMC_CMD_TIMEOUT_US /
+				    GTA4L_EMMC_POLL_STEP_US))) {
+					normal_int |= GTA4L_EMMC_INT_CC;
+				}
+				if ((cmd3_cc_delay >= 0) &&
+				    (cmd3_normal_reads >
+				    (unsigned int)cmd3_cc_delay)) {
+					normal_int |= GTA4L_EMMC_INT_CC;
+				}
+			}
+			if (last_index == GTA4L_EMMC_CMD7) {
+				sim_apply_cmd7_events();
+				if (cmd7_toggle_status != 0) {
+					normal_int ^= GTA4L_EMMC_INT_BRR;
+				}
+			}
 			return normal_int;
 		}
 		if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
+			if (last_index == GTA4L_EMMC_CMD7) {
+				sim_apply_cmd7_events();
+			}
 			return error_int;
+		}
+		if ((offset == GTA4L_EMMC_REG_COMMAND) &&
+		    (last_index == GTA4L_EMMC_CMD7)) {
+			/* Terminal captures read the command readback before
+			 * the raw response window; mark them so the
+			 * before-CC check covers only in-loop snapshots. */
+			cmd7_command_readback = 1;
 		}
 	} else if (space == GTA4L_EMMC_SPACE_GCC) {
 		gcc_accesses++;
@@ -338,8 +609,31 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 		if (offset < SIM_WINDOW) {
 			sdhci_read_count[offset]++;
 		}
+		if ((offset >= GTA4L_EMMC_REG_RESPONSE) &&
+		    (offset < (GTA4L_EMMC_REG_RESPONSE + 16u)) &&
+		    (last_index == GTA4L_EMMC_CMD7)) {
+			if ((cmd7_cc_due == 0) &&
+			    (cmd7_command_readback == 0)) {
+				response_read_before_cc = 1;
+			}
+			if (cmd7_access_latency_us > 0) {
+				counter_value +=
+				    (uint64_t)cmd7_access_latency_us;
+				sim_apply_cmd7_events();
+			}
+		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) {
 			return pwr_status;
+		}
+		if (offset == GTA4L_EMMC_REG_BUFFER_DATA_PORT) {
+			uint32_t word = 0;
+
+			if (buffer_index <
+			    (GTA4L_EMMC_BLOCK_BYTES / 4u)) {
+				word = buffer_data[buffer_index];
+			}
+			buffer_index++;
+			return word;
 		}
 	} else if (space == GTA4L_EMMC_SPACE_GCC) {
 		gcc_accesses++;
@@ -377,6 +671,15 @@ gta4l_emmc_probe_test_write16(uint32_t space, uint32_t offset, uint16_t value)
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
 		sdhci_accesses++;
 		sdhci_writes++;
+		if (offset == GTA4L_EMMC_REG_BLOCK_SIZE) {
+			block_size = value;
+		}
+		if (offset == GTA4L_EMMC_REG_BLOCK_COUNT) {
+			block_count = value;
+		}
+		if (offset == GTA4L_EMMC_REG_TRANSFER_MODE) {
+			transfer_mode = value;
+		}
 		if (offset == GTA4L_EMMC_REG_COMMAND) {
 			sim_store(sdhci, offset, 2u, value);
 			sim_command(value);
@@ -388,8 +691,11 @@ gta4l_emmc_probe_test_write16(uint32_t space, uint32_t offset, uint16_t value)
 			return;
 		}
 		if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
+			uint16_t pending = (uint16_t)(error_int &
+			    GTA4L_EMMC_INT_ERR_CMD_CRC);
+
 			error_int &= (uint16_t)~value;
-			if ((value & GTA4L_EMMC_INT_ERR_CMD_CRC) != 0) {
+			if ((value & pending) != 0) {
 				sim_clear_response();
 			}
 			sim_store(sdhci, offset, 2u, 0);
@@ -458,7 +764,15 @@ gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset, uint32_t value)
 uint64_t
 gta4l_emmc_probe_test_counter(void)
 {
-	return ++counter_value;
+	return counter_value;
+}
+
+void
+gta4l_emmc_probe_test_delay_us(uint32_t microseconds)
+{
+	counter_value += ((uint64_t)microseconds * SIM_COUNTER_HZ +
+	    999999u) / 1000000u;
+	sim_apply_cmd7_events();
 }
 
 uint64_t
@@ -511,10 +825,17 @@ void
 panic(const char *format, ...)
 {
 	va_list arguments;
+	int length;
 
 	va_start(arguments, format);
-	vsnprintf(panic_message, sizeof(panic_message), format, arguments);
+	length = vsnprintf(panic_message, sizeof(panic_message), format,
+	    arguments);
 	va_end(arguments);
+	if ((length < 0) || ((size_t)length >= sizeof(panic_message))) {
+		fprintf(stderr, "panic report truncated: %d bytes into %zu\n",
+		    length, sizeof(panic_message));
+		exit(2);
+	}
 	if (panic_ready == 0) {
 		fprintf(stderr, "unexpected panic: %s\n", panic_message);
 		exit(2);
@@ -524,6 +845,7 @@ panic(const char *format, ...)
 
 static int failures;
 static int panicked;
+static int width_form;
 
 static void
 check(int condition, const char *message)
@@ -534,10 +856,76 @@ check(int condition, const char *message)
 	}
 }
 
+/* Report-buffer predicate shared by the synthetic width fixtures and the
+ * report-budget negative control. A report of `length` bytes needs one more
+ * byte for the NUL terminator. */
+static int
+report_budget_accepts(size_t length)
+{
+	return ((length + 1u) <= sizeof(panic_message)) ? 1 : 0;
+}
+
+static void
+sim_init_ext_csd(void)
+{
+	uint32_t count = ext_csd_count;
+
+	memset(ext_csd, 0, sizeof(ext_csd));
+	ext_csd[GTA4L_EMMC_EXT_CSD_REV_OFF] = 8u;
+	ext_csd[183] = 2u;
+	ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 0] =
+	    (uint8_t)(count & 0xFFu);
+	ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 1] =
+	    (uint8_t)((count >> 8) & 0xFFu);
+	ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 2] =
+	    (uint8_t)((count >> 16) & 0xFFu);
+	ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 3] =
+	    (uint8_t)((count >> 24) & 0xFFu);
+}
+
 static void
 sim_init(void)
 {
 	sim_store(sdhci, GTA4L_EMMC_REG_MCI_VERSION, 4u, SIM_VERSION_GOOD);
+	sim_store(sdhci, GTA4L_EMMC_REG_HOST_VERSION, 2u, 0x1234u);
+	cmd7_cc_immediate = 1;
+	cmd7_tc_immediate = 0;
+	cmd3_cc_delay = -1;
+	cmd7_cc_delay = -1;
+	cmd7_tc_delay = -1;
+	cmd7_error_delay = -1;
+	sim_init_ext_csd();
+}
+
+static const uint8_t order_cmd2[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2
+};
+static const uint8_t order_cmd3[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3
+};
+static const uint8_t order_cmd9[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9
+};
+static const uint8_t order_ident[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8
+};
+static const uint8_t order_probe[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17
+};
+static const uint8_t order_cmd7[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7
+};
+
+static void
+set_expected_order(const uint8_t *order, unsigned int count)
+{
+	expected_order = order;
+	expected_order_count = count;
 }
 
 int
@@ -578,6 +966,207 @@ main(int argc, char **argv)
 		/* Run the full identification sequence and fail the first
 		 * CRC-checked command with a synthetic R2 response. */
 		stage = 3;
+		cmd2_crc_fail = 1;
+		set_expected_order(order_cmd2,
+		    (unsigned int)(sizeof(order_cmd2) / sizeof(order_cmd2[0])));
+	} else if (strcmp(scenario, "cmd3-no-cc") == 0) {
+		/* CMD3 never raises the completion interrupt. */
+		stage = 3;
+		cmd3_no_cc = 1;
+		set_expected_order(order_cmd3,
+		    (unsigned int)(sizeof(order_cmd3) / sizeof(order_cmd3[0])));
+	} else if (strcmp(scenario, "cmd3-late-cc") == 0) {
+		/* CMD3 raises the completion interrupt only after the polling
+		 * loop has already timed out and taken its fresh sample. */
+		stage = 3;
+		cmd3_late_cc = 1;
+		set_expected_order(order_cmd3,
+		    (unsigned int)(sizeof(order_cmd3) / sizeof(order_cmd3[0])));
+	} else if (strcmp(scenario, "cmd3-identify") == 0) {
+		/* Complete identification through EXT_CSD so the success
+		 * report carries the populated captures. */
+		stage = 3;
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_ident,
+		    (unsigned int)(sizeof(order_ident) / sizeof(order_ident[0])));
+	} else if (strcmp(scenario, "cmd9-timeout") == 0) {
+		/* CMD3 completes but CMD9 times out, so the timeout capture is
+		 * for a different command than the CMD3 poll history. */
+		stage = 3;
+		cmd9_timeout = 1;
+		set_expected_order(order_cmd9,
+		    (unsigned int)(sizeof(order_cmd9) / sizeof(order_cmd9[0])));
+	} else if (strcmp(scenario, "cmd7-tc-only") == 0) {
+		/* Owner-transcribed failure: TC is set, CC is absent, and the
+		 * retained response window is the CMD9 tail. */
+		stage = 3;
+		cmd7_cc_immediate = 0;
+		cmd7_tc_immediate = 1;
+		cmd7_keep_response = 1;
+		set_expected_order(order_cmd7,
+		    (unsigned int)(sizeof(order_cmd7) / sizeof(order_cmd7[0])));
+	} else if (strcmp(scenario, "cmd7-fresh-window") == 0) {
+		/* Same TC-only timeout with a response window that changes at
+		 * CMD7 submission. */
+		stage = 3;
+		cmd7_cc_immediate = 0;
+		cmd7_tc_immediate = 1;
+		cmd7_fresh_response = 1;
+		set_expected_order(order_cmd7,
+		    (unsigned int)(sizeof(order_cmd7) / sizeof(order_cmd7[0])));
+	} else if (strcmp(scenario, "cmd7-cc-then-tc") == 0) {
+		/* CC arrives immediately; the busy release arrives 50 us
+		 * later. Both are required for success. */
+		stage = 3;
+		cmd7_cc_immediate = 1;
+		cmd7_tc_immediate = 0;
+		cmd7_tc_delay = 50;
+		set_expected_order(order_ident,
+		    (unsigned int)(sizeof(order_ident) / sizeof(order_ident[0])));
+	} else if (strcmp(scenario, "cmd7-tc-then-cc") == 0) {
+		stage = 3;
+		cmd7_cc_immediate = 0;
+		cmd7_tc_immediate = 1;
+		cmd7_cc_delay = 10;
+		set_expected_order(order_ident,
+		    (unsigned int)(sizeof(order_ident) / sizeof(order_ident[0])));
+	} else if (strcmp(scenario, "cmd7-simultaneous") == 0) {
+		stage = 3;
+		cmd7_cc_immediate = 1;
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_ident,
+		    (unsigned int)(sizeof(order_ident) / sizeof(order_ident[0])));
+	} else if (strcmp(scenario, "cmd7-last-poll") == 0) {
+		/* Both completions become due on the last permitted poll. */
+		stage = 3;
+		cmd7_cc_immediate = 0;
+		cmd7_cc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
+		    GTA4L_EMMC_POLL_STEP_US);
+		cmd7_tc_immediate = 0;
+		cmd7_tc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
+		    GTA4L_EMMC_POLL_STEP_US);
+		set_expected_order(order_ident,
+		    (unsigned int)(sizeof(order_ident) / sizeof(order_ident[0])));
+	} else if (strcmp(scenario, "cmd7-cc-only") == 0) {
+		/* CC arrives and the busy release never does, so the
+		 * identification fails without a downstream command. */
+		stage = 3;
+		cmd7_cc_immediate = 1;
+		cmd7_tc_immediate = 0;
+		set_expected_order(order_cmd7,
+		    (unsigned int)(sizeof(order_cmd7) / sizeof(order_cmd7[0])));
+	} else if (strcmp(scenario, "cmd7-busy-error") == 0) {
+		stage = 3;
+		cmd7_cc_immediate = 1;
+		cmd7_tc_immediate = 1;
+		cmd7_error_delay = 0;
+		cmd7_error_status = GTA4L_EMMC_INT_ERR_CMD_TIMEOUT;
+		set_expected_order(order_cmd7,
+		    (unsigned int)(sizeof(order_cmd7) / sizeof(order_cmd7[0])));
+	} else if (strcmp(scenario, "cmd7-late-error") == 0) {
+		/* Both completions arrive first; the busy-phase error becomes
+		 * due during the explicit response-read latency and is
+		 * evaluated at the terminal sample. */
+		stage = 3;
+		cmd7_cc_immediate = 1;
+		cmd7_tc_immediate = 1;
+		cmd7_access_latency_us = 1;
+		cmd7_error_delay = 1;
+		cmd7_error_status = GTA4L_EMMC_INT_ERR_CMD_TIMEOUT;
+		set_expected_order(order_cmd7,
+		    (unsigned int)(sizeof(order_cmd7) / sizeof(order_cmd7[0])));
+	} else if (strcmp(scenario, "cmd7-terminal-error") == 0) {
+		/* Both completions arrive first. The error is not due at the
+		 * first terminal error sample; it becomes due during the
+		 * terminal command/argument/response reads and must be caught
+		 * by the final error sample before the status clear. */
+		stage = 3;
+		cmd7_cc_immediate = 1;
+		cmd7_tc_immediate = 1;
+		cmd7_access_latency_us = 1;
+		cmd7_error_delay = 2;
+		cmd7_error_status = GTA4L_EMMC_INT_ERR_CMD_TIMEOUT;
+		set_expected_order(order_cmd7,
+		    (unsigned int)(sizeof(order_cmd7) / sizeof(order_cmd7[0])));
+	} else if (strcmp(scenario, "cmd7-trace-overflow") == 0) {
+		stage = 3;
+		cmd7_cc_immediate = 0;
+		cmd7_toggle_status = 1;
+		set_expected_order(order_cmd7,
+		    (unsigned int)(sizeof(order_cmd7) / sizeof(order_cmd7[0])));
+	} else if (strcmp(scenario, "report-max-width-failure") == 0) {
+		/* Longest failure form: both poll budgets run to their limit and
+		 * the CMD7 trace fills its four entries and overflows. */
+		stage = 3;
+		cmd3_cc_delay = 99999;
+		cmd7_cc_immediate = 0;
+		cmd7_toggle_status = 1;
+		set_expected_order(order_cmd7,
+		    (unsigned int)(sizeof(order_cmd7) / sizeof(order_cmd7[0])));
+	} else if (strcmp(scenario, "report-max-width-success") == 0) {
+		/* Maximum-width identification success form: capacity, both
+		 * poll budgets at their limit and a full CMD7 trace. */
+		stage = 3;
+		ext_csd_count = 0xFFFFFFFFu;
+		sim_init_ext_csd();
+		cmd3_cc_delay = 99999;
+		cmd7_cc_immediate = 0;
+		cmd7_cc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
+		    GTA4L_EMMC_POLL_STEP_US);
+		cmd7_tc_immediate = 0;
+		cmd7_tc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
+		    GTA4L_EMMC_POLL_STEP_US);
+		cmd7_toggle_status = 1;
+		set_expected_order(order_ident,
+		    (unsigned int)(sizeof(order_ident) / sizeof(order_ident[0])));
+	} else if (strcmp(scenario, "report-max-width-probe") == 0) {
+		/* Longest success form: the full probe with sector reads,
+		 * maximum-width capacity, both poll budgets at their limit and
+		 * a full CMD7 trace. */
+		stage = 1;
+		ext_csd_count = 0xFFFFFFFFu;
+		sim_init_ext_csd();
+		cmd3_cc_delay = 99999;
+		cmd7_cc_immediate = 0;
+		cmd7_cc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
+		    GTA4L_EMMC_POLL_STEP_US);
+		cmd7_tc_immediate = 0;
+		cmd7_tc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
+		    GTA4L_EMMC_POLL_STEP_US);
+		cmd7_toggle_status = 1;
+		set_expected_order(order_probe,
+		    (unsigned int)(sizeof(order_probe) / sizeof(order_probe[0])));
+	} else if (strcmp(scenario, "report-width-failure") == 0) {
+		/* Synthetic field-wise width bound, not a controller state. */
+		width_form = 1;
+	} else if (strcmp(scenario, "report-width-ident") == 0) {
+		width_form = 2;
+	} else if (strcmp(scenario, "report-width-probe") == 0) {
+		width_form = 3;
+	} else if (strcmp(scenario, "report-width-budget-control") == 0) {
+		/* Negative control for the report-budget predicate: the last
+		 * byte that still leaves room for the NUL must be accepted and
+		 * the first byte past the buffer must be rejected. */
+		check(report_budget_accepts(sizeof(panic_message) - 1u),
+		    "the report-budget predicate rejected a fitting report");
+		check(!report_budget_accepts(sizeof(panic_message)),
+		    "the report-budget predicate accepted an oversized report");
+		if (failures != 0) {
+			return 1;
+		}
+		printf("PASS %s\n", scenario);
+		return 0;
+	} else if (strcmp(scenario, "oversized-report") == 0) {
+		/* Negative control for the report guard: a message that cannot
+		 * fit the 2048-byte buffer must be rejected explicitly, not
+		 * truncated and treated as a report. */
+		char oversized[2100];
+
+		memset(oversized, 'A', sizeof(oversized) - 1u);
+		oversized[sizeof(oversized) - 1u] = '\0';
+		panic_ready = 1;
+		panic("%s", oversized);
+		return 2;
 	} else {
 		fprintf(stderr, "unknown scenario %s\n", scenario);
 		return 2;
@@ -585,7 +1174,11 @@ main(int argc, char **argv)
 
 	if (setjmp(panic_jmp) == 0) {
 		panic_ready = 1;
-		gta4l_emmc_probe_run();
+		if (width_form != 0) {
+			gta4l_emmc_probe_width_fixture(width_form - 1);
+		} else {
+			gta4l_emmc_probe_run();
+		}
 	} else {
 		panicked = 1;
 	}
@@ -755,6 +1348,27 @@ main(int argc, char **argv)
 		check(strstr(panic_message,
 		    "rsp=11111111,22222222,33333333,44444444") != NULL,
 		    "the report did not capture the raw R2 response");
+		check(strstr(panic_message,
+		    "cmd1rsp=1/c0ff8080,00000000,00000000,00000000") != NULL,
+		    "the report did not capture the final CMD1 window");
+		check(strstr(panic_message,
+		    "pre2rsp=1/c0ff8080,00000000,00000000,00000000") != NULL,
+		    "the report did not capture the pre-CMD2 window");
+		check(strstr(panic_message,
+		    "c2=0/0000/0000/00000000,00000000,00000000,00000000") != NULL,
+		    "the report invented a CMD2 capture");
+		check(strstr(panic_message,
+		    "c3p=0/0000/0000/00000000/0000/0000") != NULL,
+		    "the report invented a pre-CMD3 capture");
+		check(strstr(panic_message,
+		    "c3t=0/0/0000/00000000/0/"
+		    "00000000,00000000,00000000,00000000") != NULL,
+		    "the report invented a timeout capture");
+		check(strstr(panic_message,
+		    "cid=00000000,00000000,00000000,00000000 fmt=4 hv=1234")
+		    != NULL,
+		    "the report does not carry the capture format and "
+		    "HOST_VERSION");
 		check(strstr(panic_message, "cmd1=1/0/c0ff8080") != NULL,
 		    "the report does not show the accepted CMD1 OCR");
 		check(strstr(panic_message, "clocks=1") != NULL,
@@ -826,6 +1440,777 @@ main(int argc, char **argv)
 		    "the report did not sample the APPS branch");
 		check(gcc_read_count[GTA4L_EMMC_GCC_SDCC1_AHB_CBCR] == 3u,
 		    "the report did not sample the AHB branch");
+	} else if ((strcmp(scenario, "cmd3-no-cc") == 0) ||
+	    (strcmp(scenario, "cmd3-late-cc") == 0)) {
+		check(panicked == 1, "a CMD3 timeout did not panic");
+		check(strstr(panic_message, "stage=3") != NULL,
+		    "the CMD3 timeout report does not name the stage");
+		check(strstr(panic_message, "rc=-7") != NULL,
+		    "the CMD3 timeout report does not name the timeout");
+		check(strstr(panic_message,
+		    "fail=1/3/65536/0000031a/0000/") != NULL,
+		    "the report does not name the timed-out CMD3");
+		check(strstr(panic_message,
+		    "c3t=1/3/031a/00010000/1/"
+		    "00000900,4d420090,44583638,00150100") != NULL,
+		    "the timeout capture does not carry the CMD3 index and "
+		    "raw response");
+		check(strstr(panic_message,
+		    "c3p=1/0000/0000/00000000/0023/07ff") != NULL,
+		    "the report did not capture the pre-CMD3 state");
+		check(strstr(panic_message,
+		    "c2=1/0001/0000/05f46619,4d420090,44583638,00150100")
+		    != NULL,
+		    "the report did not capture the successful CMD2");
+		check(bad_command_format == 0,
+		    "the init sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the init sent commands in the wrong order");
+		check(cmd_count == 4u, "the init did not stop after CMD3");
+		check(strstr(panic_message,
+		    "c3l=1/3/0000/0000/100000/00000000000f4240/1000000")
+		    != NULL,
+		    "the poll history does not show the completion arrived "
+		    "after the loop");
+		if (strcmp(scenario, "cmd3-no-cc") == 0) {
+			check(strstr(panic_message,
+			    "fail=1/3/65536/0000031a/0000/0000/00000000/9")
+			    != NULL,
+			    "the timed-out CMD3 report has a completion bit");
+		} else {
+			check(strstr(panic_message,
+			    "fail=1/3/65536/0000031a/0000/0001/00000000/9")
+			    != NULL,
+			    "the fresh post-timeout sample lost the late "
+			    "completion");
+		}
+		check(strstr(panic_message,
+		    "cid=15010044,5836384d,42009005,f4661900") != NULL,
+		    "the report lost the CID decoded from the valid CMD2");
+	} else if (strcmp(scenario, "cmd9-timeout") == 0) {
+		check(panicked == 1, "a CMD9 timeout did not panic");
+		check(strstr(panic_message, "rc=-7") != NULL,
+		    "the CMD9 timeout report does not name the timeout");
+		check(strstr(panic_message,
+		    "fail=1/9/65536/00000909/0000/0000/00000000/10") != NULL,
+		    "the report does not name the timed-out CMD9");
+		check(strstr(panic_message,
+		    "c3t=1/9/0909/00010000/1/"
+		    "ef8e4040,fff6dbff,320f5903,00d02701") != NULL,
+		    "the timeout capture does not label CMD9");
+		check(strstr(panic_message,
+		    "c3l=1/3/0001/0001/1/0000000000000000/1000000") != NULL,
+		    "the report lost the successful CMD3 poll history");
+		check(strstr(panic_message,
+		    "c3p=1/0000/0000/00000000/0023/07ff") != NULL,
+		    "the report did not capture the pre-CMD3 state");
+		check(strstr(panic_message,
+		    "c2=1/0001/0000/05f46619,4d420090,44583638,00150100")
+		    != NULL,
+		    "the report did not capture the successful CMD2");
+		check(strstr(panic_message,
+		    "cid=15010044,5836384d,42009005,f4661900") != NULL,
+		    "the report lost the CID decoded from the valid CMD2");
+		check(bad_command_format == 0,
+		    "the init sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the init sent commands in the wrong order");
+		check(cmd_count == 5u, "the init did not stop after CMD9");
+	} else if (strcmp(scenario, "report-max-width-failure") == 0) {
+		check(panicked == 1, "the maximum-width failure did not panic");
+		check(strstr(panic_message, "stage=3") != NULL,
+		    "the maximum-width failure report does not name the stage");
+		check(strstr(panic_message, "rc=-7") != NULL,
+		    "the maximum-width failure report does not name the "
+		    "timeout");
+		check(strstr(panic_message,
+		    "fail=1/7/65536/0000071b/0000/0020/00000000/11")
+		    != NULL,
+		    "the maximum-width failure report does not name the "
+		    "overflow timeout");
+		check(strstr(panic_message,
+		    "c3l=1/3/0000/0001/100000/"
+		    "00000000000f4236/1000000") != NULL,
+		    "the maximum-width failure report lost the full CMD3 poll "
+		    "budget");
+		check(strstr(panic_message,
+		    "c7q=1/0020/0000/0020/0000/100000/"
+		    "00000000000f4240") != NULL,
+		    "the maximum-width failure report lost the full CMD7 poll "
+		    "budget");
+		check(strstr(panic_message,
+		    "c7c=0/0/0000000000000000/0/0/"
+		    "0000000000000000") != NULL,
+		    "the maximum-width failure report claims a completion");
+		check(strstr(panic_message,
+		    "c7t=1/0020/0000/00000000/0000071b/00010000/"
+		    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+		    "the maximum-width failure report lost the terminal state");
+		check(strstr(panic_message,
+		    "c7x=4/99996/0:0020:0000,1:0000:0000,"
+		    "2:0020:0000,3:0000:0000") != NULL,
+		    "the maximum-width failure report lost the four trace "
+		    "entries or the overflow count");
+		check(strlen(panic_message) < 2048u,
+		    "the maximum-width failure report exceeds the 2048-byte "
+		    "panic-text budget");
+	} else if (strcmp(scenario, "cmd3-identify") == 0) {
+		check(panicked == 1, "the identification success did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC IDENT REPORT: rc=0 mci=10000072 rca=1 "
+		    "cap=16777216 rev=8 bw=2 ocr=c0ff8080 ext=0000000b")
+		    != NULL,
+		    "the success report does not carry the decoded card data");
+		check(strstr(panic_message, "step=15") != NULL,
+		    "the success report does not show the ready step");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC IDENT CAPTURE fmt=4 hv=1234") != NULL,
+		    "the success report does not carry the capture format and "
+		    "HOST_VERSION");
+		check(strstr(panic_message,
+		    "c2=1/0001/0000/05f46619,4d420090,44583638,00150100")
+		    != NULL,
+		    "the success report lost the CMD2 capture");
+		check(strstr(panic_message,
+		    "c3p=1/0000/0000/00000000/0023/07ff") != NULL,
+		    "the success report lost the pre-CMD3 capture");
+		check(strstr(panic_message,
+		    "c3t=0/0/0000/00000000/0/"
+		    "00000000,00000000,00000000,00000000") != NULL,
+		    "the success report invented a timeout capture");
+		check(strstr(panic_message,
+		    "c3l=1/3/0001/0001/1/0000000000000000/1000000") != NULL,
+		    "the success report lost the CMD3 poll history");
+		check(strstr(panic_message,
+		    "cid=15010044,5836384d,42009005,f4661900") != NULL,
+		    "the success report does not carry the decoded CID");
+		check(bad_command_format == 0,
+		    "the init sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the init sent commands in the wrong order");
+		check(cmd_count == 8u,
+		    "the init did not complete the identification sequence");
+		check(last_index == GTA4L_EMMC_CMD8,
+		    "the last command was not the EXT_CSD read");
+	} else if (strcmp(scenario, "report-max-width-success") == 0) {
+		check(panicked == 1, "the maximum-width success did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC IDENT REPORT: rc=0 mci=10000072 rca=1 "
+		    "cap=4294967295 rev=8 bw=2") != NULL,
+		    "the maximum-width success report does not carry the "
+		    "maximum-width capacity");
+		check(strstr(panic_message,
+		    "c3l=1/3/0000/0001/100000/"
+		    "00000000000f4236/1000000") != NULL,
+		    "the maximum-width success report lost the full CMD3 poll "
+		    "budget");
+		check(strstr(panic_message,
+		    "c7q=1/0023/0000/0020/0003/100000/"
+		    "00000000000f4236") != NULL,
+		    "the maximum-width success report lost the full CMD7 poll "
+		    "budget");
+		check(strstr(panic_message,
+		    "c7c=1/99999/00000000000f4236/1/99999/"
+		    "00000000000f4236") != NULL,
+		    "the maximum-width success report lost the last-iteration "
+		    "completion");
+		check(strstr(panic_message,
+		    "c7t=1/0023/0000/00000000/0000071b/00010000/"
+		    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+		    "the maximum-width success report lost the terminal state");
+		check(strstr(panic_message,
+		    "c7x=4/99996/0:0020:0000,1:0000:0000,"
+		    "2:0020:0000,3:0000:0000") != NULL,
+		    "the maximum-width success report lost the four trace "
+		    "entries or the overflow count");
+		check(strlen(panic_message) < 2048u,
+		    "the maximum-width success report exceeds the 2048-byte "
+		    "panic-text budget");
+	} else if (strcmp(scenario, "report-max-width-probe") == 0) {
+		check(panicked == 1, "the maximum-width probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 "
+		    "cap=4294967295 rev=8 bw=2") != NULL,
+		    "the maximum-width probe report does not carry the "
+		    "maximum-width capacity");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE CID 15010044 5836384d 42009005 "
+		    "f4661900") != NULL,
+		    "the maximum-width probe report lost the CID");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE CSD d0270132 0f5903ff f6dbffef "
+		    "8e404000") != NULL,
+		    "the maximum-width probe report lost the CSD");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE BLOCK0 sum=5c510100 words=271a0d00 "
+		    "cdc0b3a6 01f4e7da 35281b0e") != NULL,
+		    "the maximum-width probe report lost block 0");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE BLOCK1 sum=ee0a9f00 words=2e211407 "
+		    "6255483b 96897c6f cabdb0a3") != NULL,
+		    "the maximum-width probe report lost block 1");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE CAPTURE fmt=4 hv=1234") != NULL,
+		    "the maximum-width probe report does not carry the "
+		    "capture format and HOST_VERSION");
+		check(strstr(panic_message,
+		    "c3l=1/3/0000/0001/100000/"
+		    "00000000000f4236/1000000") != NULL,
+		    "the maximum-width probe report lost the full CMD3 poll "
+		    "budget");
+		check(strstr(panic_message,
+		    "c7q=1/0023/0000/0020/0003/100000/"
+		    "00000000000f4236") != NULL,
+		    "the maximum-width probe report lost the full CMD7 poll "
+		    "budget");
+		check(strstr(panic_message,
+		    "c7c=1/99999/00000000000f4236/1/99999/"
+		    "00000000000f4236") != NULL,
+		    "the maximum-width probe report lost the last-iteration "
+		    "completion");
+		check(strstr(panic_message,
+		    "c7t=1/0023/0000/00000000/0000071b/00010000/"
+		    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+		    "the maximum-width probe report lost the terminal state");
+		check(strstr(panic_message,
+		    "c7x=4/99996/0:0020:0000,1:0000:0000,"
+		    "2:0020:0000,3:0000:0000") != NULL,
+		    "the maximum-width probe report lost the four trace "
+		    "entries or the overflow count");
+		check(bad_command_format == 0,
+		    "the maximum-width probe sent a command with the wrong "
+		    "flags");
+		check(bad_command_order == 0,
+		    "the maximum-width probe sent commands in the wrong order");
+		check(cmd_count == 10u,
+		    "the maximum-width probe did not complete the sector reads");
+		check(strlen(panic_message) < 2048u,
+		    "the maximum-width probe report exceeds the 2048-byte "
+		    "panic-text budget");
+	} else if (strcmp(scenario, "report-width-failure") == 0) {
+		check(panicked == 1, "the synthetic width failure did not panic");
+		check(strstr(panic_message, "stage=3") != NULL,
+		    "the synthetic width failure report does not name the "
+		    "stage");
+		check(strstr(panic_message, "rc=-18") != NULL,
+		    "the synthetic width failure report does not carry the "
+		    "widest host-side negative result code");
+		check(strstr(panic_message,
+		    "fail=1/63/4294967295/0000ffff/ffff/ffff/ffffffff/15")
+		    != NULL,
+		    "the synthetic width failure report does not carry the "
+		    "field-wise capture bounds");
+		check(strstr(panic_message,
+		    "rsp=ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width failure report lost the raw window");
+		check(strstr(panic_message,
+		    "cmd1rsp=1/ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width failure report lost the CMD1 window");
+		check(strstr(panic_message,
+		    "pre2rsp=1/ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width failure report lost the pre-CMD2 "
+		    "window");
+		check(strstr(panic_message,
+		    "c2=1/ffff/ffff/ffffffff,ffffffff,ffffffff,ffffffff")
+		    != NULL,
+		    "the synthetic width failure report lost the CMD2 "
+		    "capture");
+		check(strstr(panic_message,
+		    "c3p=1/ffff/ffff/ffffffff/ffff/ffff") != NULL,
+		    "the synthetic width failure report lost the pre-CMD3 "
+		    "state");
+		check(strstr(panic_message,
+		    "c3t=1/63/ffff/ffffffff/1/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width failure report lost the timeout "
+		    "capture");
+		check(strstr(panic_message,
+		    "c3l=1/63/ffff/ffff/100000/"
+		    "ffffffffffffffff/1000000000 cid=") != NULL,
+		    "the synthetic width failure report lost the six-digit "
+		    "poll-iteration and ten-digit counter fields");
+		check(strstr(panic_message,
+		    "cid=ffffffff,ffffffff,ffffffff,ffffffff fmt=4 hv=ffff "
+		    "cmd1=20/20/ffffffff") != NULL,
+		    "the synthetic width failure report lost the CID, capture "
+		    "format, CMD1 count or host version");
+		check(strstr(panic_message,
+		    "clocks=1 mci=ffffffff pwr=ff clk=ffff hc=ff "
+		    "hc2=ffff ven=ffffffff v3=ffffffff dll=ffffffff "
+		    "dst=ffffffff ddr=ffffffff pst=ffffffff cfg=ffffffff "
+		    "mnd=ffffffff/ffffffff/ffffffff cmd=ffffffff "
+		    "bcr=ffffffff apps=ffffffff ahb=ffffffff step=15") != NULL,
+		    "the synthetic width failure report lost the sampler "
+		    "state");
+		check(strstr(panic_message,
+		    "log=99999/8/4294967295/4294967295") != NULL,
+		    "the synthetic width failure report lost the log fields");
+		check(strstr(panic_message,
+		    "c7p=1/ffff/ffff/ffffffff/ffff/ffff/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width failure report lost the pre-CMD7 "
+		    "state");
+		check(strstr(panic_message,
+		    "c7q=1/ffff/ffff/ffff/ffff/100000/"
+		    "ffffffffffffffff") != NULL,
+		    "the synthetic width failure report lost the CMD7 poll "
+		    "summary");
+		check(strstr(panic_message,
+		    "c7c=1/99999/ffffffffffffffff/1/99999/"
+		    "ffffffffffffffff") != NULL,
+		    "the synthetic width failure report lost the valid late "
+		    "CC and TC");
+		check(strstr(panic_message,
+		    "c7t=1/ffff/ffff/ffffffff/0000ffff/ffffffff/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width failure report lost the terminal "
+		    "CMD7 state");
+		check(strstr(panic_message,
+		    "c7x=4/99996/0:ffff:ffff,99997:0000:0000,"
+		    "99998:ffff:0000,99999:0000:ffff") != NULL,
+		    "the synthetic width failure report lost the late stored "
+		    "trace index or the overflow bound");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width failure report does not fit the "
+		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-ident") == 0) {
+		check(panicked == 1, "the synthetic width ident did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC IDENT REPORT: rc=0 mci=ffffffff rca=1 "
+		    "cap=4294967295 rev=255 bw=15 ocr=ffffffff ext=ffffffff "
+		    "hc2=ffff ven=ffffffff dll=ffffffff dst=ffffffff "
+		    "pst=ffffffff step=15 log=99999") != NULL,
+		    "the synthetic width ident report lost the field-wise "
+		    "header bounds");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC IDENT CAPTURE fmt=4 hv=ffff "
+		    "c2=1/ffff/ffff/ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width ident report lost the capture header "
+		    "or CMD2 capture");
+		check(strstr(panic_message,
+		    "c3p=1/ffff/ffff/ffffffff/ffff/ffff "
+		    "c3t=1/63/ffff/ffffffff/1/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width ident report lost the pre-CMD3 or "
+		    "timeout capture");
+		check(strstr(panic_message,
+		    "c7p=1/ffff/ffff/ffffffff/ffff/ffff/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width ident report lost the pre-CMD7 "
+		    "state");
+		check(strstr(panic_message,
+		    "c7q=1/ffff/ffff/ffff/ffff/100000/"
+		    "ffffffffffffffff") != NULL,
+		    "the synthetic width ident report lost the CMD7 poll "
+		    "summary");
+		check(strstr(panic_message,
+		    "c3l=1/63/ffff/ffff/100000/"
+		    "ffffffffffffffff/1000000000 cid=") != NULL,
+		    "the synthetic width ident report lost the six-digit "
+		    "poll-iteration and ten-digit counter fields");
+		check(strstr(panic_message,
+		    "c7c=1/99999/ffffffffffffffff/1/99999/"
+		    "ffffffffffffffff") != NULL,
+		    "the synthetic width ident report lost the valid late CC "
+		    "and TC");
+		check(strstr(panic_message,
+		    "c7t=1/ffff/ffff/ffffffff/0000ffff/ffffffff/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width ident report lost the terminal "
+		    "CMD7 state");
+		check(strstr(panic_message,
+		    "c7x=4/99996/0:ffff:ffff,99997:0000:0000,"
+		    "99998:ffff:0000,99999:0000:ffff") != NULL,
+		    "the synthetic width ident report lost the late stored "
+		    "trace index or the overflow bound");
+		check(strstr(panic_message,
+		    "cid=ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width ident report lost the CID");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width ident report does not fit the "
+		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-probe") == 0) {
+		check(panicked == 1, "the synthetic width probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=ffffffff rca=1 "
+		    "cap=4294967295 rev=255 bw=15 ocr=ffffffff ext=ffffffff "
+		    "hc2=ffff ven=ffffffff dll=ffffffff dst=ffffffff "
+		    "pst=ffffffff step=15 log=99999") != NULL,
+		    "the synthetic width probe report lost the field-wise "
+		    "header bounds");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE CID ffffffff ffffffff ffffffff "
+		    "ffffffff") != NULL,
+		    "the synthetic width probe report lost the CID");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE CSD ffffffff ffffffff ffffffff "
+		    "ffffffff") != NULL,
+		    "the synthetic width probe report lost the CSD");
+		check(strstr(panic_message,
+		    "words=ffffffff ffffffff ffffffff ffffffff") != NULL,
+		    "the synthetic width probe report lost the block words");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE CAPTURE fmt=4 hv=ffff "
+		    "c2=1/ffff/ffff/ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width probe report lost the capture header "
+		    "or CMD2 capture");
+		check(strstr(panic_message,
+		    "c3p=1/ffff/ffff/ffffffff/ffff/ffff "
+		    "c3t=1/63/ffff/ffffffff/1/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width probe report lost the pre-CMD3 or "
+		    "timeout capture");
+		check(strstr(panic_message,
+		    "c7p=1/ffff/ffff/ffffffff/ffff/ffff/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width probe report lost the pre-CMD7 "
+		    "state");
+		check(strstr(panic_message,
+		    "c7q=1/ffff/ffff/ffff/ffff/100000/"
+		    "ffffffffffffffff") != NULL,
+		    "the synthetic width probe report lost the CMD7 poll "
+		    "summary");
+		check(strstr(panic_message,
+		    "c3l=1/63/ffff/ffff/100000/"
+		    "ffffffffffffffff/1000000000 cid=") != NULL,
+		    "the synthetic width probe report lost the six-digit "
+		    "poll-iteration and ten-digit counter fields");
+		check(strstr(panic_message,
+		    "c7c=1/99999/ffffffffffffffff/1/99999/"
+		    "ffffffffffffffff") != NULL,
+		    "the synthetic width probe report lost the valid late CC "
+		    "and TC");
+		check(strstr(panic_message,
+		    "c7t=1/ffff/ffff/ffffffff/0000ffff/ffffffff/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width probe report lost the terminal "
+		    "CMD7 state");
+		check(strstr(panic_message,
+		    "c7x=4/99996/0:ffff:ffff,99997:0000:0000,"
+		    "99998:ffff:0000,99999:0000:ffff") != NULL,
+		    "the synthetic width probe report lost the late stored "
+		    "trace index or the overflow bound");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width probe report does not fit the "
+		    "2048-byte panic buffer including the NUL");
+	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
+	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
+	    (strcmp(scenario, "cmd7-busy-error") == 0) ||
+	    (strcmp(scenario, "cmd7-cc-only") == 0) ||
+	    (strcmp(scenario, "cmd7-late-error") == 0) ||
+	    (strcmp(scenario, "cmd7-terminal-error") == 0) ||
+	    (strcmp(scenario, "cmd7-trace-overflow") == 0)) {
+		check(panicked == 1, "a CMD7 timeout did not panic");
+		check(strstr(panic_message, "stage=3") != NULL,
+		    "the CMD7 timeout report does not name the stage");
+		check(strstr(panic_message, "rc=-7") != NULL,
+		    "the CMD7 timeout report does not name the timeout");
+		check(strstr(panic_message,
+		    "c3l=1/3/0001/0001/1/0000000000000000/1000000")
+		    != NULL,
+		    "the report lost the successful CMD3 poll history");
+		check(strstr(panic_message,
+		    "c3p=1/0000/0000/00000000/0023/07ff") != NULL,
+		    "the report did not capture the pre-CMD3 state");
+		check(strstr(panic_message,
+		    "c2=1/0001/0000/05f46619,4d420090,44583638,00150100")
+		    != NULL,
+		    "the report did not capture the successful CMD2");
+		check(strstr(panic_message,
+		    "cid=15010044,5836384d,42009005,f4661900 fmt=4 hv=1234")
+		    != NULL,
+		    "the report does not carry the capture format and "
+		    "HOST_VERSION");
+		check(strstr(panic_message,
+		    "c7p=1/0000/0000/00000000/0023/07ff/"
+		    "ef8e4040,fff6dbff,320f5903,00d02701") != NULL,
+		    "the report did not capture the pre-CMD7 state");
+		check(bad_command_format == 0,
+		    "the init sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the init sent commands in the wrong order or with the "
+		    "wrong argument");
+		check(cmd_count == 6u,
+		    "the init did not stop after CMD7");
+		check(last_index == GTA4L_EMMC_CMD7,
+		    "the failing command was not CMD7");
+		if (strcmp(scenario, "cmd7-busy-error") == 0) {
+			check(strstr(panic_message,
+			    "fail=1/7/65536/0000071b/0001/0003/00000000/11")
+			    != NULL,
+			    "the report does not name the busy-phase error");
+			check(strstr(panic_message,
+			    "c7q=1/0003/0001/0003/0003/1/"
+			    "0000000000000000") != NULL,
+			    "the busy-phase error poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/0/0000000000000000/1/0/"
+			    "0000000000000000") != NULL,
+			    "the busy-phase error lost the observed CC");
+			check(strstr(panic_message,
+			    "c7t=1/0003/0001/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the terminal sample lost the busy-phase error");
+			check(strstr(panic_message,
+			    "c7x=1/0/0:0003:0001,0:0000:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the trace lost the busy-phase error");
+		} else if (strcmp(scenario, "cmd7-trace-overflow") == 0) {
+			check(strstr(panic_message,
+			    "fail=1/7/65536/0000071b/0000/0020/00000000/11")
+			    != NULL,
+			    "the report does not name the overflow timeout");
+			check(strstr(panic_message,
+			    "c7q=1/0020/0000/0020/0000/100000/"
+			    "00000000000f4240") != NULL,
+			    "the overflow poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=0/0/0000000000000000/0/0/"
+			    "0000000000000000") != NULL,
+			    "the overflow run claims a completion");
+			check(strstr(panic_message,
+			    "c7t=1/0020/0000/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the overflow terminal state mismatch");
+			check(strstr(panic_message,
+			    "c7x=4/99996/0:0020:0000,1:0000:0000,"
+			    "2:0020:0000,3:0000:0000") != NULL,
+			    "the bounded trace or overflow count mismatch");
+			check(strlen(panic_message) < 2048u,
+			    "the bounded-trace report exceeds the 2048-byte "
+			    "panic-text budget");
+		} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
+		    (strcmp(scenario, "cmd7-fresh-window") == 0)) {
+			check(strstr(panic_message,
+			    "fail=1/7/65536/0000071b/0000/0002/00000000/11")
+			    != NULL,
+			    "the report does not name the TC-only timeout");
+			check(strstr(panic_message,
+			    "c7q=1/0002/0000/0002/0002/100000/"
+			    "00000000000f4240") != NULL,
+			    "the TC-only poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=0/0/0000000000000000/1/0/"
+			    "0000000000000000") != NULL,
+			    "the TC-only capture lost the observed TC");
+			check(strstr(panic_message,
+			    "c7x=1/0/0:0002:0000,0:0000:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the TC-only trace mismatch");
+			check(response_read_before_cc == 0,
+			    "the TC-only run read the response before CC");
+			if (strcmp(scenario, "cmd7-fresh-window") == 0) {
+				check(strstr(panic_message,
+				    "c7t=1/0002/0000/00000000/0000071b/"
+				    "00010000/40400cf6,dbffef0f,5903ff00,"
+				    "00070000") != NULL,
+				    "the report did not capture the fresh "
+				    "CMD7 window");
+				check(strstr(panic_message,
+				    "rsp=40400cf6,dbffef0f,5903ff00,00070000")
+				    != NULL,
+				    "the failure snapshot lost the fresh CMD7 "
+				    "window");
+			} else {
+				check(strstr(panic_message,
+				    "c7t=1/0002/0000/00000000/0000071b/"
+				    "00010000/ef8e4040,fff6dbff,320f5903,"
+				    "00d02701") != NULL,
+				    "the report did not retain the unchanged "
+				    "CMD7 window");
+			}
+		} else if (strcmp(scenario, "cmd7-cc-only") == 0) {
+			check(strstr(panic_message,
+			    "fail=1/7/65536/0000071b/0000/0001/00000000/11")
+			    != NULL,
+			    "the report does not name the CC-only timeout");
+			check(strstr(panic_message,
+			    "c7q=1/0001/0000/0001/0001/100000/"
+			    "00000000000f4240") != NULL,
+			    "the CC-only poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/0/0000000000000000/0/0/"
+			    "0000000000000000") != NULL,
+			    "the CC-only capture lost the observed CC");
+			check(strstr(panic_message,
+			    "c7t=1/0001/0000/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the CC-only terminal state mismatch");
+			check(strstr(panic_message,
+			    "c7x=1/0/0:0001:0000,0:0000:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the CC-only trace mismatch");
+		} else if (strcmp(scenario, "cmd7-terminal-error") == 0) {
+			check(strstr(panic_message,
+			    "fail=1/7/65536/0000071b/0001/0003/00000000/11")
+			    != NULL,
+			    "the report does not name the terminal-read "
+			    "error");
+			check(strstr(panic_message,
+			    "c7q=1/0003/0000/0003/0003/1/"
+			    "0000000000000001") != NULL,
+			    "the terminal-read error poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/0/0000000000000000/1/0/"
+			    "0000000000000000") != NULL,
+			    "the terminal-read error completion history "
+			    "mismatch");
+			check(strstr(panic_message,
+			    "c7t=1/0003/0000/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the terminal capture saw the error too early");
+			check(strstr(panic_message,
+			    "c7x=1/0/0:0003:0000,0:0000:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the terminal-read error trace mismatch");
+			check(cmd7_error_due == 1,
+			    "the terminal-read error never became due");
+		} else {
+			check(strstr(panic_message,
+			    "fail=1/7/65536/0000071b/0001/0003/00000000/11")
+			    != NULL,
+			    "the report does not name the late busy-phase "
+			    "error");
+			check(strstr(panic_message,
+			    "c7q=1/0003/0000/0003/0003/1/"
+			    "0000000000000001") != NULL,
+			    "the late-error poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/0/0000000000000000/1/0/"
+			    "0000000000000000") != NULL,
+			    "the late-error completion history mismatch");
+			check(strstr(panic_message,
+			    "c7t=1/0003/0001/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the success report lost the late busy-phase "
+			    "error");
+			check(strstr(panic_message,
+			    "c7x=1/0/0:0003:0000,0:0000:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the trace lost the late busy-phase error");
+		}
+	} else if ((strcmp(scenario, "cmd7-cc-then-tc") == 0) ||
+	    (strcmp(scenario, "cmd7-tc-then-cc") == 0) ||
+	    (strcmp(scenario, "cmd7-simultaneous") == 0) ||
+	    (strcmp(scenario, "cmd7-last-poll") == 0) ||
+	    (strcmp(scenario, "cmd3-identify") == 0)) {
+		check(panicked == 1, "the CMD7 success did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC IDENT REPORT: rc=0") != NULL,
+		    "the CMD7 success report does not carry rc=0");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC IDENT CAPTURE fmt=4 hv=1234") != NULL,
+		    "the success report does not carry the capture format");
+		check(strstr(panic_message,
+		    "c3l=1/3/0001/0001/1/0000000000000000/1000000")
+		    != NULL,
+		    "the success report lost the CMD3 poll history");
+		check(strstr(panic_message,
+		    "c3t=0/0/0000/00000000/0/"
+		    "00000000,00000000,00000000,00000000") != NULL,
+		    "the success report invented a timeout capture");
+		check(strstr(panic_message,
+		    "c7p=1/0000/0000/00000000/0023/07ff/"
+		    "ef8e4040,fff6dbff,320f5903,00d02701") != NULL,
+		    "the success report did not capture the pre-CMD7 state");
+		check(bad_command_format == 0,
+		    "the init sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the init sent commands in the wrong order or with the "
+		    "wrong argument");
+		check(cmd_count == 8u,
+		    "the init did not complete the identification sequence");
+		check(last_index == GTA4L_EMMC_CMD8,
+		    "the last command was not the EXT_CSD read");
+		if (strcmp(scenario, "cmd7-tc-then-cc") == 0) {
+			check(strstr(panic_message,
+			    "c7q=1/0003/0000/0002/0003/2/"
+			    "000000000000000a") != NULL,
+			    "the TC-then-CC poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/1/000000000000000a/1/0/"
+			    "0000000000000000") != NULL,
+			    "the TC-then-CC completion history mismatch");
+			check(strstr(panic_message,
+			    "c7x=2/0/0:0002:0000,1:0003:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the TC-then-CC trace mismatch");
+			check(strstr(panic_message,
+			    "c7t=1/0003/0000/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the TC-then-CC terminal state mismatch");
+		} else if (strcmp(scenario, "cmd7-simultaneous") == 0) {
+			check(strstr(panic_message,
+			    "c7q=1/0003/0000/0003/0003/1/"
+			    "0000000000000000") != NULL,
+			    "the simultaneous poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/0/0000000000000000/1/0/"
+			    "0000000000000000") != NULL,
+			    "the simultaneous completion history mismatch");
+			check(strstr(panic_message,
+			    "c7x=1/0/0:0003:0000,0:0000:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the simultaneous trace mismatch");
+			check(strstr(panic_message,
+			    "c7t=1/0003/0000/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the simultaneous terminal state mismatch");
+		} else if (strcmp(scenario, "cmd7-cc-then-tc") == 0) {
+			check(strstr(panic_message,
+			    "c7q=1/0003/0000/0001/0003/6/"
+			    "0000000000000032") != NULL,
+			    "the CC-then-TC poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/0/0000000000000000/1/5/"
+			    "0000000000000032") != NULL,
+			    "the CC-then-TC completion history mismatch");
+			check(strstr(panic_message,
+			    "c7x=2/0/0:0001:0000,5:0003:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the CC-then-TC trace mismatch");
+			check(strstr(panic_message,
+			    "c7t=1/0003/0000/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the CC-then-TC terminal state mismatch");
+		} else if (strcmp(scenario, "cmd7-last-poll") == 0) {
+			check(strstr(panic_message,
+			    "c7q=1/0003/0000/0000/0003/100000/"
+			    "00000000000f4236") != NULL,
+			    "the last-poll poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/99999/00000000000f4236/1/99999/"
+			    "00000000000f4236") != NULL,
+			    "the last-poll completion history mismatch");
+			check(strstr(panic_message,
+			    "c7x=2/0/0:0000:0000,99999:0003:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the last-poll trace mismatch");
+			check(strstr(panic_message,
+			    "c7t=1/0003/0000/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the last-poll terminal state mismatch");
+		} else {
+			check(strstr(panic_message,
+			    "c7q=1/0003/0000/0003/0003/1/"
+			    "0000000000000000") != NULL,
+			    "the success poll history mismatch");
+			check(strstr(panic_message,
+			    "c7c=1/0/0000000000000000/1/0/"
+			    "0000000000000000") != NULL,
+			    "the success completion history mismatch");
+			check(strstr(panic_message,
+			    "c7x=1/0/0:0003:0000,0:0000:0000,"
+			    "0:0000:0000,0:0000:0000") != NULL,
+			    "the success trace mismatch");
+			check(strstr(panic_message,
+			    "c7t=1/0003/0000/00000000/0000071b/00010000/"
+			    "00000900,fff6dbff,320f5903,00d02701") != NULL,
+			    "the success report lost the terminal CMD7 state");
+		}
+		check(strlen(panic_message) < 2048u,
+		    "the CMD7 success report exceeds the 2048-byte "
+		    "panic-text budget");
 	} else {
 		check(panicked == 1, "a branch-clock failure did not panic");
 		check(strstr(panic_message, "GTA4L-EMMC PROBE FAILED") != NULL,
@@ -877,9 +2262,27 @@ main(int argc, char **argv)
 		}
 	}
 
+	if ((width_form == 0) &&
+	    (strcmp(scenario, "stage-off") != 0) &&
+	    (strcmp(scenario, "map-fail") != 0) &&
+	    (strcmp(scenario, "conflict") != 0) &&
+	    (strcmp(scenario, "branch-apps") != 0) &&
+	    (strcmp(scenario, "branch-ahb") != 0)) {
+		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_VERSION] == 1u,
+		    "the report did not sample HOST_VERSION");
+	}
+
 	if (failures != 0) {
+		fprintf(stderr, "REPORT len=%zu: %s\n", strlen(panic_message),
+		    panic_message);
 		return 1;
 	}
-	printf("PASS %s\n", scenario);
+	if (width_form != 0) {
+		printf("PASS %s bytes=%zu margin=%zu\n", scenario,
+		    strlen(panic_message),
+		    sizeof(panic_message) - (strlen(panic_message) + 1u));
+	} else {
+		printf("PASS %s\n", scenario);
+	}
 	return 0;
 }

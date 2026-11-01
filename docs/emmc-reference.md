@@ -157,6 +157,18 @@ records the reusable patterns, the MediaTek-specific parts, the
 completion/error-path gaps and the host-only test plan. It adds no hardware
 result and does not change any gta4l blocker.
 
+## PixelExperience reference
+
+The PixelExperience Plus 11 (Android 11) `gta4l`/SM-T505 release by dolbaras
+and its pinned `lineage-18.1` source anchors are compared in
+[pe-storage-stack-provenance.md](pe-storage-stack-provenance.md). The release
+boot DTB base plus QRD overlay produces an `sdhci@4744000` node semantically
+identical to the live FDT (property order differs), and the kernel is
+vendor-lineage 4.19.300 code. The inspected vendor source sends CMD7 as R1
+with no in-command busy wait, unlike the port's R1B design. The release cannot
+be tied to exact source commits and only its SM-T505 build was device-tested;
+no code is imported.
+
 ## Open questions before implementation
 
 1. What state does Mu-Silicium leave the controller, clocks and card in after

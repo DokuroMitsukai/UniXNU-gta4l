@@ -14,18 +14,38 @@ refuses the probe without touching either window, and that a failure after the
 clocks were verified still samples the SDHCI diagnostics (the instrumentation
 control). The clock-timeout scenario programs the 400 kHz RCG and asserts the
 formatted GCC config/M/N/D/command values and the per-offset diagnostic read
-counts. The cmd2-crc scenario runs the stage-3 identification sequence through
-CMD0 and CMD1, fails CMD2 with a synthetic CRC error and R2 response, and checks
-the captured failure fields, the exact command order and arguments, the response
-snapshot and report read counts. Six
-mutations insert an unguarded SDHCI read, replace the guard with an
-unconditional branch, suppress a GCC report read, suppress an SDHCI report read,
-suppress the raw R2 snapshot and suppress the captured CMD2 error; each must be
-rejected for the expected reported reason, not merely by a nonzero exit.
+counts. The cmd3-no-cc, cmd3-late-cc and cmd9-timeout scenarios run the
+identification sequence far enough to record a real CMD3 poll history and a
+timeout capture, including a late completion that arrives only after the poll
+loop has timed out. The cmd3-identify scenario completes identification through
+EXT_CSD and checks that the success report still carries the populated CMD2,
+pre-CMD3, poll-history and CID fields. Mutations insert an unguarded SDHCI read,
+replace the guard with an unconditional branch, suppress a GCC report read,
+suppress an SDHCI report read, suppress the raw R2 snapshot, suppress either
+identification response window, suppress the captured CMD2 error, suppress the
+success-report CID or poll history, or suppress the timeout command index; each
+must be rejected for the expected reported reason, not merely by a nonzero exit.
+
+The report-max-width scenarios run the failure, identification and full-probe
+success report forms with the widest values the simulator can produce: a
+10-digit capacity, both poll budgets at their limit, 16-hex-digit tick fields,
+a full four-entry CMD7 trace and its overflow count. The report-width scenarios
+instead invoke the production formatters from
+scripts/sim-gta4l-emmc-probe/report-width-fixture.c with synthetic field-wise
+extremes, assert every bounded field and require the measured length plus margin
+to fit the 2048-byte buffer; a width-budget control checks the accept boundary
+at 2047 and 2048 bytes. Two width-fixture mutations narrow a stored trace index
+and must fail the corresponding width scenario's trace assertion. The
+oversized-report control feeds the panic guard a message
+that cannot fit the 2048-byte buffer and requires the explicit truncation
+rejection, not an unrelated crash. The fit assertions are host vsnprintf
+checks; they do not establish that the kernel panic renderer or the display
+shows the whole report.
 
 Nothing here touches a device, maps real MMIO or executes firmware.
 """
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +56,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / 'package' / 'Gta4lEmmcProbe.c'
 CORE = ROOT / 'package' / 'Gta4lEmmc.c'
 HARNESS = ROOT / 'scripts' / 'sim-gta4l-emmc-probe' / 'harness.c'
+FIXTURE = ROOT / 'scripts' / 'sim-gta4l-emmc-probe' / 'report-width-fixture.c'
 INCLUDE = ROOT / 'scripts' / 'sim-gta4l-emmc-probe' / 'include'
 
 SCENARIOS = [
@@ -48,7 +69,35 @@ SCENARIOS = [
     'clock-timeout',
     'clock-stable-timeout',
     'cmd2-crc',
+    'cmd3-no-cc',
+    'cmd3-late-cc',
+    'cmd9-timeout',
+    'cmd3-identify',
+    'cmd7-tc-only',
+    'cmd7-fresh-window',
+    'cmd7-cc-then-tc',
+    'cmd7-tc-then-cc',
+    'cmd7-simultaneous',
+    'cmd7-last-poll',
+    'cmd7-cc-only',
+    'cmd7-busy-error',
+    'cmd7-late-error',
+    'cmd7-terminal-error',
+    'cmd7-trace-overflow',
+    'report-max-width-failure',
+    'report-max-width-success',
+    'report-max-width-probe',
+    'report-width-failure',
+    'report-width-ident',
+    'report-width-probe',
+    'report-width-budget-control',
 ]
+
+WIDTH_SCENARIOS = (
+    'report-width-failure',
+    'report-width-ident',
+    'report-width-probe',
+)
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'
 
@@ -56,6 +105,7 @@ HOOK_DECLS = '''
 /* Host-test hooks supplied by scripts/sim-gta4l-emmc-probe/harness.c. */
 uint64_t gta4l_emmc_probe_test_counter(void);
 uint64_t gta4l_emmc_probe_test_counter_hz(void);
+void gta4l_emmc_probe_test_delay_us(uint32_t microseconds);
 uint8_t gta4l_emmc_probe_test_read8(uint32_t space, uint32_t offset);
 uint16_t gta4l_emmc_probe_test_read16(uint32_t space, uint32_t offset);
 uint32_t gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset);
@@ -76,8 +126,41 @@ REWRITES = (
      '\tvalue = gta4l_emmc_probe_test_counter_hz();\n'),
     ('\t__asm__ volatile("dsb sy" ::: "memory");\n',
      '\t/* barrier supplied by the host harness */\n'),
-    ('\t\t__asm__ volatile("yield");\n',
-     '\t\t/* yield supplied by the host harness */\n'),
+    ('''static void
+gta4l_emmc_probe_delay_us(void *context, uint32_t microseconds)
+{
+\tstruct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
+\tuint64_t start;
+\tuint64_t ticks;
+\tuint64_t spins = 0;
+\tuint64_t limit;
+\tuint64_t hz = probe->counter_hz;
+
+\tif (hz == 0u) {
+\t\thz = 19200000u;
+\t}
+\tticks = (((uint64_t)microseconds * hz) + 999999u) / 1000000u;
+\tlimit = ticks + 1000000u;
+\tstart = gta4l_emmc_probe_counter();
+\twhile ((gta4l_emmc_probe_counter() - start) < ticks) {
+\t\tif (++spins > limit) {
+\t\t\t/* A stalled counter would silently skip the settle
+\t\t\t * interval. Stop the diagnostic instead. */
+\t\t\tpanic("GTA4L-EMMC PROBE FAILED: generic counter "
+\t\t\t    "stalled (hz=%u us=%u)",
+\t\t\t    (unsigned int)hz,
+\t\t\t    (unsigned int)microseconds);
+\t\t}
+\t\t__asm__ volatile("yield");
+\t}
+}
+''', '''static void
+gta4l_emmc_probe_delay_us(void *context, uint32_t microseconds)
+{
+\t(void)context;
+\tgta4l_emmc_probe_test_delay_us(microseconds);
+}
+'''),
     ('''static uint8_t
 gta4l_emmc_probe_read8(void *context, uint32_t space, uint32_t offset)
 {
@@ -234,19 +317,176 @@ MUTATIONS = [
      'version-fail',
      'the report did not sample the power control'),
     ('cmd2-response-suppressed',
-     '\t\t    host.fail_step, host.fail_response[0],\n',
-     '\t\t    host.fail_step, 0u,\n',
+     '\t    host->fail_step, host->fail_response[0],\n',
+     '\t    host->fail_step, 0u,\n',
      'cmd2-crc',
      'the report did not capture the raw R2 response'),
+    ('cmd2-cmd1-window-suppressed',
+     '\t    host->cmd1_response[0], host->cmd1_response[1],\n',
+     '\t    0u, host->cmd1_response[1],\n',
+     'cmd2-crc',
+     'the report did not capture the final CMD1 window'),
+    ('cmd2-pre-window-suppressed',
+     '\t    host->pre_cmd2_response[0], host->pre_cmd2_response[1],\n',
+     '\t    0u, host->pre_cmd2_response[1],\n',
+     'cmd2-crc',
+     'the report did not capture the pre-CMD2 window'),
     ('cmd2-error-suppressed',
-     '\t\t    stage, result, (unsigned int)host.fail_valid,\n'
-     '\t\t    host.fail_index, host.fail_argument, host.fail_command,\n'
-     '\t\t    (unsigned int)host.fail_error,\n',
-     '\t\t    stage, result, (unsigned int)host.fail_valid,\n'
-     '\t\t    host.fail_index, host.fail_argument, host.fail_command,\n'
-     '\t\t    0u,\n',
+     '\t    stage, result, (unsigned int)host->fail_valid,\n'
+     '\t    host->fail_index, host->fail_argument, host->fail_command,\n'
+     '\t    (unsigned int)host->fail_error,\n',
+     '\t    stage, result, (unsigned int)host->fail_valid,\n'
+     '\t    host->fail_index, host->fail_argument, host->fail_command,\n'
+     '\t    0u,\n',
      'cmd2-crc',
      'the report does not name the failed CMD2'),
+    ('capture-format-suppressed',
+     'cid=%08x,%08x,%08x,%08x fmt=4 hv=%04x ',
+     'cid=%08x,%08x,%08x,%08x fmt=3 hv=%04x ',
+     'cmd2-crc',
+     'the report does not carry the capture format'),
+    ('host-version-suppressed',
+     '\t\t\thost_version = gta4l_emmc_probe_read16(&probe,\n'
+     '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t\t\t    GTA4L_EMMC_REG_HOST_VERSION);\n',
+     '\t\t\thost_version = 0;\n',
+     'cmd2-crc',
+     'the report did not sample HOST_VERSION'),
+    ('ident-cid-suppressed',
+     '\t    ident_host->cid[0], ident_host->cid[1],\n'
+     '\t    ident_host->cid[2], ident_host->cid[3],\n'
+     '\t    GTA4L_EMMC_PROBE_CMD7_ARGS(*ident_host));\n',
+     '\t    0u, ident_host->cid[1],\n'
+     '\t    ident_host->cid[2], ident_host->cid[3],\n'
+     '\t    GTA4L_EMMC_PROBE_CMD7_ARGS(*ident_host));\n',
+     'cmd3-identify',
+     'the success report does not carry the decoded CID'),
+    ('ident-poll-first-suppressed',
+     '\t    (unsigned int)regs->host_version,\n'
+     '\t    (unsigned int)ident_host->cmd2_capture_valid,\n'
+     '\t    (unsigned int)ident_host->cmd2_normal,\n'
+     '\t    (unsigned int)ident_host->cmd2_error,\n'
+     '\t    ident_host->cmd2_raw_response[0],\n'
+     '\t    ident_host->cmd2_raw_response[1],\n'
+     '\t    ident_host->cmd2_raw_response[2],\n'
+     '\t    ident_host->cmd2_raw_response[3],\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_capture_valid,\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_normal,\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_error,\n'
+     '\t    ident_host->pre_cmd3_present,\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_normal_enable,\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_error_enable,\n'
+     '\t    (unsigned int)ident_host->timeout_capture_valid,\n'
+     '\t    (unsigned int)ident_host->timeout_index,\n'
+     '\t    (unsigned int)ident_host->timeout_command,\n'
+     '\t    ident_host->timeout_argument,\n'
+     '\t    (unsigned int)ident_host->timeout_response_stable,\n'
+     '\t    ident_host->timeout_response[0], ident_host->timeout_response[1],\n'
+     '\t    ident_host->timeout_response[2], ident_host->timeout_response[3],\n'
+     '\t    (unsigned int)ident_host->poll_capture_valid,\n'
+     '\t    ident_host->poll_index,\n'
+     '\t    (unsigned int)ident_host->poll_first_normal,\n',
+     '\t    (unsigned int)regs->host_version,\n'
+     '\t    (unsigned int)ident_host->cmd2_capture_valid,\n'
+     '\t    (unsigned int)ident_host->cmd2_normal,\n'
+     '\t    (unsigned int)ident_host->cmd2_error,\n'
+     '\t    ident_host->cmd2_raw_response[0],\n'
+     '\t    ident_host->cmd2_raw_response[1],\n'
+     '\t    ident_host->cmd2_raw_response[2],\n'
+     '\t    ident_host->cmd2_raw_response[3],\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_capture_valid,\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_normal,\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_error,\n'
+     '\t    ident_host->pre_cmd3_present,\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_normal_enable,\n'
+     '\t    (unsigned int)ident_host->pre_cmd3_error_enable,\n'
+     '\t    (unsigned int)ident_host->timeout_capture_valid,\n'
+     '\t    (unsigned int)ident_host->timeout_index,\n'
+     '\t    (unsigned int)ident_host->timeout_command,\n'
+     '\t    ident_host->timeout_argument,\n'
+     '\t    (unsigned int)ident_host->timeout_response_stable,\n'
+     '\t    ident_host->timeout_response[0], ident_host->timeout_response[1],\n'
+     '\t    ident_host->timeout_response[2], ident_host->timeout_response[3],\n'
+     '\t    (unsigned int)ident_host->poll_capture_valid,\n'
+     '\t    ident_host->poll_index,\n'
+     '\t    0u,\n',
+     'cmd3-identify',
+     'the success report lost the CMD3 poll history'),
+    ('timeout-index-suppressed',
+     '\t    host->pre_cmd2_response[2], host->pre_cmd2_response[3],\n'
+     '\t    (unsigned int)host->cmd2_capture_valid,\n'
+     '\t    (unsigned int)host->cmd2_normal,\n'
+     '\t    (unsigned int)host->cmd2_error,\n'
+     '\t    host->cmd2_raw_response[0], host->cmd2_raw_response[1],\n'
+     '\t    host->cmd2_raw_response[2], host->cmd2_raw_response[3],\n'
+     '\t    (unsigned int)host->pre_cmd3_capture_valid,\n'
+     '\t    (unsigned int)host->pre_cmd3_normal,\n'
+     '\t    (unsigned int)host->pre_cmd3_error,\n'
+     '\t    host->pre_cmd3_present,\n'
+     '\t    (unsigned int)host->pre_cmd3_normal_enable,\n'
+     '\t    (unsigned int)host->pre_cmd3_error_enable,\n'
+     '\t    (unsigned int)host->timeout_capture_valid,\n'
+     '\t    (unsigned int)host->timeout_index,\n',
+     '\t    host->pre_cmd2_response[2], host->pre_cmd2_response[3],\n'
+     '\t    (unsigned int)host->cmd2_capture_valid,\n'
+     '\t    (unsigned int)host->cmd2_normal,\n'
+     '\t    (unsigned int)host->cmd2_error,\n'
+     '\t    host->cmd2_raw_response[0], host->cmd2_raw_response[1],\n'
+     '\t    host->cmd2_raw_response[2], host->cmd2_raw_response[3],\n'
+     '\t    (unsigned int)host->pre_cmd3_capture_valid,\n'
+     '\t    (unsigned int)host->pre_cmd3_normal,\n'
+     '\t    (unsigned int)host->pre_cmd3_error,\n'
+     '\t    host->pre_cmd3_present,\n'
+     '\t    (unsigned int)host->pre_cmd3_normal_enable,\n'
+     '\t    (unsigned int)host->pre_cmd3_error_enable,\n'
+     '\t    (unsigned int)host->timeout_capture_valid,\n'
+     '\t    0u,\n',
+     'cmd3-no-cc',
+     'the timeout capture does not carry the CMD3 index and raw response'),
+    ('cmd7-pre-valid-suppressed',
+     '\t(unsigned int)(host).cmd7_pre_capture_valid, \\\n',
+     '\t0u, \\\n',
+     'cmd7-tc-only',
+     'the report did not capture the pre-CMD7 state'),
+    ('cmd7-poll-mask-suppressed',
+     '\t(unsigned int)(host).cmd7_poll_or_normal, \\\n',
+     '\t0u, \\\n',
+     'cmd7-tc-only',
+     'the TC-only poll history mismatch'),
+    ('cmd7-tc-valid-suppressed',
+     '\t(unsigned int)(host).cmd7_tc_valid, (host).cmd7_tc_iteration, \\\n',
+     '\t0u, (host).cmd7_tc_iteration, \\\n',
+     'cmd7-tc-only',
+     'the TC-only capture lost the observed TC'),
+    ('cmd7-cc-valid-suppressed',
+     '\t(unsigned int)(host).cmd7_cc_valid, (host).cmd7_cc_iteration, \\\n',
+     '\t0u, (host).cmd7_cc_iteration, \\\n',
+     'cmd7-tc-then-cc',
+     'the TC-then-CC completion history mismatch'),
+    ('cmd7-trace-overflow-suppressed',
+     '\t(host).cmd7_trace_count, (host).cmd7_trace_overflow, \\\n',
+     '\t(host).cmd7_trace_count, 0u, \\\n',
+     'cmd7-trace-overflow',
+     'the bounded trace or overflow count mismatch'),
+    ('cmd7-terminal-window-suppressed',
+     '\t(host).cmd7_term_response[0], (host).cmd7_term_response[1], \\\n',
+     '\t0u, (host).cmd7_term_response[1], \\\n',
+     'cmd7-fresh-window',
+     'the report did not capture the fresh CMD7 window'),
+    ('width-trace-index-1-narrowed',
+     '\thost.cmd7_trace[1].iteration = 99997u;\n',
+     '\thost.cmd7_trace[1].iteration = 1u;\n',
+     'report-width-failure',
+     'the synthetic width failure report lost the late stored trace '
+     'index or the overflow bound',
+     'fixture'),
+    ('width-trace-index-2-narrowed',
+     '\thost.cmd7_trace[2].iteration = 99998u;\n',
+     '\thost.cmd7_trace[2].iteration = 2u;\n',
+     'report-width-ident',
+     'the synthetic width ident report lost the late stored trace '
+     'index or the overflow bound',
+     'fixture'),
 ]
 
 
@@ -264,6 +504,7 @@ def rewrite(text: str) -> str:
         assert text.count(old) == 1, f'probe rewrite not unique: {old[:48]!r}'
         text = text.replace(old, new)
     assert '__asm__' not in text, 'architectural instructions were not replaced'
+    text += '\n#include "report-width-fixture.c"\n'
     return text
 
 
@@ -271,7 +512,7 @@ def build(compiler: str, directory: Path, source: Path) -> Path:
     output = directory / 'emmc-probe-sim'
     command = [
         compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-O1',
-        f'-I{INCLUDE}', f'-I{ROOT / "package"}',
+        f'-I{INCLUDE}', f'-I{ROOT / "package"}', f'-I{HARNESS.parent}',
         str(source), str(CORE), str(HARNESS), '-o', str(output),
     ]
     result = subprocess.run(command, capture_output=True, text=True)
@@ -280,6 +521,49 @@ def build(compiler: str, directory: Path, source: Path) -> Path:
         print(result.stderr)
         raise SystemExit('probe simulation compile failed')
     return output
+
+
+def run_oversized(binary: Path) -> bool:
+    result = subprocess.run([str(binary), 'oversized-report'],
+                            capture_output=True, text=True)
+    combined = result.stdout + result.stderr
+    if result.returncode != 2:
+        print(combined)
+        print('FAIL oversized report was not rejected with exit 2')
+        return False
+    if 'panic report truncated: 2099 bytes into 2048' not in combined:
+        print(combined)
+        print('FAIL oversized report did not report the expected rejection')
+        return False
+    return True
+
+
+def run_width(binary: Path, scenario: str) -> bool:
+    result = subprocess.run([str(binary), scenario], capture_output=True,
+                            text=True)
+    if result.returncode != 0:
+        print(result.stdout)
+        print(result.stderr)
+        print(f'FAIL width scenario {scenario}')
+        return False
+    match = re.search(
+        rf'^PASS {re.escape(scenario)} bytes=(\d+) margin=(\d+)$',
+        result.stdout, re.MULTILINE)
+    if match is None:
+        print(result.stdout)
+        print(f'FAIL width scenario {scenario}: no measured PASS line')
+        return False
+    length, margin = (int(group) for group in match.groups())
+    if length == 0:
+        print(result.stdout)
+        print(f'FAIL width scenario {scenario}: empty report')
+        return False
+    if length + 1 + margin != 2048:
+        print(result.stdout)
+        print(f'FAIL width scenario {scenario}: measurement does not add up '
+              'to the 2048-byte panic buffer')
+        return False
+    return True
 
 
 def run(binary: Path, scenario: str, expect_success: bool = True,
@@ -325,20 +609,43 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix='gta4l-emmc-probe-') as tmp:
         directory = Path(tmp)
         source = rewrite(PROBE.read_text())
+        fixture = FIXTURE.read_text()
         probe = directory / 'Gta4lEmmcProbe.c'
         probe.write_text(source)
+        (directory / 'report-width-fixture.c').write_text(fixture)
         binary = build(compiler, directory, probe)
 
         for scenario in SCENARIOS:
-            if not run(binary, scenario):
+            if scenario in WIDTH_SCENARIOS:
+                ok = run_width(binary, scenario)
+            else:
+                ok = run(binary, scenario)
+            if not ok:
                 return 1
 
-        for name, old, new, scenario, expected in MUTATIONS:
-            assert source.count(old) == 1, f'{name} mutation is not unique'
+        if not run_oversized(binary):
+            return 1
+
+        for mutation in MUTATIONS:
+            name, old, new, scenario, expected = mutation[:5]
+            target = mutation[5] if len(mutation) > 5 else 'probe'
+            if target == 'probe':
+                assert source.count(old) == 1, (
+                    f'{name} mutation is not unique')
+                mutated_source = source.replace(old, new)
+                mutated_fixture = fixture
+            else:
+                assert target == 'fixture', (
+                    f'{name} mutation has an unknown target')
+                assert fixture.count(old) == 1, (
+                    f'{name} mutation is not unique')
+                mutated_source = source
+                mutated_fixture = fixture.replace(old, new)
             mutated = directory / name
             mutated.mkdir()
             probe = mutated / 'Gta4lEmmcProbe.c'
-            probe.write_text(source.replace(old, new))
+            probe.write_text(mutated_source)
+            (mutated / 'report-width-fixture.c').write_text(mutated_fixture)
             binary = build(compiler, mutated, probe)
             if not run(binary, scenario, expect_success=False,
                        expect_failure_text=expected):
@@ -346,7 +653,9 @@ def main() -> int:
                 return 1
 
     print(f'PASS gta4l eMMC probe: {len(SCENARIOS)} scenarios, '
-          f'{len(MUTATIONS)} mutation controls')
+          f'{len(MUTATIONS)} mutation controls, '
+          f'{len(WIDTH_SCENARIOS)} width-bound materializations, '
+          f'1 oversized-report control')
     return 0
 
 

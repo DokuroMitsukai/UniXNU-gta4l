@@ -75,6 +75,15 @@ gta4l_emmc_log(struct gta4l_emmc_host *host, uint32_t event, uint32_t a,
 	}
 }
 
+static uint64_t
+gta4l_emmc_counter(struct gta4l_emmc_host *host)
+{
+	if (host->ops->counter != 0) {
+		return host->ops->counter(host->context);
+	}
+	return 0;
+}
+
 /* Keep the terminal command failure intact before the status latches are
  * cleared. The probe reports these fields, so a hardware panic identifies the
  * command instead of only the final reset log. Recovered CMD1 busy timeouts are
@@ -115,9 +124,88 @@ gta4l_emmc_record_failure(struct gta4l_emmc_host *host, uint32_t index,
 	    ((uint32_t)error << 16) | normal);
 }
 
+/* Capture the terminal CMD7 state before the status clear. The raw response
+ * window is diagnostics only; equality with an earlier window does not prove
+ * that the value was retained. */
+static void
+gta4l_emmc_capture_cmd7_terminal(struct gta4l_emmc_host *host, uint16_t normal,
+    uint16_t error, uint32_t present)
+{
+	host->cmd7_term_normal = normal;
+	host->cmd7_term_error = error;
+	host->cmd7_term_present = present;
+	host->cmd7_term_command = gta4l_emmc_read16(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_COMMAND);
+	host->cmd7_term_argument = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_ARGUMENT);
+	gta4l_emmc_read_raw_response(host, host->cmd7_term_response);
+	host->cmd7_term_capture_valid = 1;
+}
+
+/* Record the first CMD7 poll sample and each observed status change. The
+ * previous-observed pair is updated even after the bounded store fills, so the
+ * overflow counter counts omitted observed changes rather than comparisons
+ * against the last stored entry. A repeated sample is not a transition. When
+ * the store is full only the overflow counter advances; the stored entries keep
+ * their original order. */
+static void
+gta4l_emmc_record_cmd7_trace(struct gta4l_emmc_host *host, uint32_t iteration,
+    uint16_t normal, uint16_t error)
+{
+	uint32_t count;
+
+	if ((host->cmd7_trace_prev_valid != 0u) &&
+	    (host->cmd7_trace_prev_normal == normal) &&
+	    (host->cmd7_trace_prev_error == error)) {
+		return;
+	}
+	host->cmd7_trace_prev_normal = normal;
+	host->cmd7_trace_prev_error = error;
+	host->cmd7_trace_prev_valid = 1;
+	count = host->cmd7_trace_count;
+	if (count < GTA4L_EMMC_CMD7_TRACE_ENTRIES) {
+		host->cmd7_trace[count].iteration = iteration;
+		host->cmd7_trace[count].normal = normal;
+		host->cmd7_trace[count].error = error;
+		host->cmd7_trace_count = count + 1u;
+	} else {
+		host->cmd7_trace_overflow++;
+	}
+}
+
+/* Fold one CMD7 poll sample into the observed-status summary. The samples are
+ * sequential reads, so an OR mask proves only which bits were observed, not
+ * that every hardware transition was seen. Diagnostics only. */
+static void
+gta4l_emmc_note_cmd7_poll(struct gta4l_emmc_host *host, uint32_t iteration,
+    uint16_t normal, uint16_t error, uint64_t poll_start)
+{
+	host->cmd7_poll_or_normal |= normal;
+	host->cmd7_poll_or_error |= error;
+	if (iteration == 0u) {
+		host->cmd7_poll_first_normal = normal;
+	}
+	host->cmd7_poll_last_normal = normal;
+	if ((host->cmd7_cc_valid == 0u) &&
+	    ((normal & GTA4L_EMMC_INT_CC) != 0)) {
+		host->cmd7_cc_valid = 1;
+		host->cmd7_cc_iteration = iteration;
+		host->cmd7_cc_ticks = gta4l_emmc_counter(host) - poll_start;
+	}
+	if ((host->cmd7_tc_valid == 0u) &&
+	    ((normal & GTA4L_EMMC_INT_TC) != 0)) {
+		host->cmd7_tc_valid = 1;
+		host->cmd7_tc_iteration = iteration;
+		host->cmd7_tc_ticks = gta4l_emmc_counter(host) - poll_start;
+	}
+	gta4l_emmc_record_cmd7_trace(host, iteration, normal, error);
+}
+
 static void
 gta4l_emmc_clear_failure(struct gta4l_emmc_host *host)
 {
+	uint32_t index;
+
 	host->fail_index = 0;
 	host->fail_argument = 0;
 	host->fail_command = 0;
@@ -129,7 +217,87 @@ gta4l_emmc_clear_failure(struct gta4l_emmc_host *host)
 	host->fail_response[2] = 0;
 	host->fail_response[3] = 0;
 	host->fail_step = 0;
+	host->cmd1_response[0] = 0;
+	host->cmd1_response[1] = 0;
+	host->cmd1_response[2] = 0;
+	host->cmd1_response[3] = 0;
+	host->pre_cmd2_response[0] = 0;
+	host->pre_cmd2_response[1] = 0;
+	host->pre_cmd2_response[2] = 0;
+	host->pre_cmd2_response[3] = 0;
+	host->cmd1_response_valid = 0;
+	host->pre_cmd2_response_valid = 0;
 	host->fail_valid = 0;
+	host->cmd2_normal = 0;
+	host->cmd2_error = 0;
+	host->cmd2_raw_response[0] = 0;
+	host->cmd2_raw_response[1] = 0;
+	host->cmd2_raw_response[2] = 0;
+	host->cmd2_raw_response[3] = 0;
+	host->cmd2_capture_valid = 0;
+	host->pre_cmd3_normal = 0;
+	host->pre_cmd3_error = 0;
+	host->pre_cmd3_present = 0;
+	host->pre_cmd3_normal_enable = 0;
+	host->pre_cmd3_error_enable = 0;
+	host->pre_cmd3_capture_valid = 0;
+	host->poll_first_normal = 0;
+	host->poll_last_normal = 0;
+	host->poll_iterations = 0;
+	host->poll_ticks = 0;
+	host->poll_index = 0;
+	host->poll_capture_valid = 0;
+	host->timeout_normal = 0;
+	host->timeout_error = 0;
+	host->timeout_present = 0;
+	host->timeout_command = 0;
+	host->timeout_argument = 0;
+	host->timeout_index = 0;
+	host->timeout_response[0] = 0;
+	host->timeout_response[1] = 0;
+	host->timeout_response[2] = 0;
+	host->timeout_response[3] = 0;
+	host->timeout_response_stable = 0;
+	host->timeout_capture_valid = 0;
+	host->cmd7_pre_normal = 0;
+	host->cmd7_pre_error = 0;
+	host->cmd7_pre_present = 0;
+	host->cmd7_pre_normal_enable = 0;
+	host->cmd7_pre_error_enable = 0;
+	for (index = 0; index < 4u; index++) {
+		host->cmd7_pre_response[index] = 0;
+		host->cmd7_term_response[index] = 0;
+	}
+	host->cmd7_pre_capture_valid = 0;
+	host->cmd7_poll_or_normal = 0;
+	host->cmd7_poll_or_error = 0;
+	host->cmd7_poll_first_normal = 0;
+	host->cmd7_poll_last_normal = 0;
+	host->cmd7_poll_iterations = 0;
+	host->cmd7_poll_ticks = 0;
+	host->cmd7_cc_iteration = 0;
+	host->cmd7_cc_ticks = 0;
+	host->cmd7_cc_valid = 0;
+	host->cmd7_tc_iteration = 0;
+	host->cmd7_tc_ticks = 0;
+	host->cmd7_tc_valid = 0;
+	host->cmd7_poll_capture_valid = 0;
+	host->cmd7_trace_count = 0;
+	host->cmd7_trace_overflow = 0;
+	host->cmd7_trace_prev_normal = 0;
+	host->cmd7_trace_prev_error = 0;
+	host->cmd7_trace_prev_valid = 0;
+	for (index = 0; index < GTA4L_EMMC_CMD7_TRACE_ENTRIES; index++) {
+		host->cmd7_trace[index].iteration = 0;
+		host->cmd7_trace[index].normal = 0;
+		host->cmd7_trace[index].error = 0;
+	}
+	host->cmd7_term_normal = 0;
+	host->cmd7_term_error = 0;
+	host->cmd7_term_present = 0;
+	host->cmd7_term_command = 0;
+	host->cmd7_term_argument = 0;
+	host->cmd7_term_capture_valid = 0;
 }
 
 static uint32_t
@@ -294,6 +462,15 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 	uint32_t present;
 	uint32_t iterations;
 	uint32_t step;
+	uint64_t poll_start;
+	uint32_t busy_response;
+	int record_poll;
+	int record_cmd7;
+	int busy;
+	int cc_seen;
+	int tc_seen;
+	int response_snapshot;
+	int timed_out;
 	int result;
 
 	command = (uint16_t)((index << 8) | flags);
@@ -306,6 +483,58 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		return result;
 	}
 	gta4l_emmc_clear_interrupts(host);
+	if (index == GTA4L_EMMC_CMD2) {
+		/* Capture the post-clear window immediately before CMD2 is
+		 * submitted, so a W1C side effect is visible separately from
+		 * the failed-command snapshot. Diagnostics only. */
+		gta4l_emmc_read_raw_response(host, host->pre_cmd2_response);
+		host->pre_cmd2_response_valid = 1;
+	}
+	if (index == GTA4L_EMMC_CMD3) {
+		/* Capture the state after the pre-command clear and before
+		 * CMD3 is submitted. A stale completion or a lost status
+		 * enable is visible here. Diagnostics only. */
+		host->pre_cmd3_normal = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		host->pre_cmd3_error = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		host->pre_cmd3_present = gta4l_emmc_read32(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		host->pre_cmd3_normal_enable = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_ENABLE);
+		host->pre_cmd3_error_enable = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_ENABLE);
+		host->pre_cmd3_capture_valid = 1;
+	}
+	if (index == GTA4L_EMMC_CMD7) {
+		/* Capture the state after the pre-command clear and before
+		 * CMD7 is submitted. A stale completion, a lost status
+		 * enable or a retained response window is visible here.
+		 * These are sequential reads, not an atomic snapshot.
+		 * Diagnostics only. */
+		host->cmd7_pre_normal = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		host->cmd7_pre_error = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		host->cmd7_pre_present = gta4l_emmc_read32(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		host->cmd7_pre_normal_enable = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_ENABLE);
+		host->cmd7_pre_error_enable = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_ENABLE);
+		gta4l_emmc_read_raw_response(host, host->cmd7_pre_response);
+		host->cmd7_pre_capture_valid = 1;
+	}
 	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_ARGUMENT, argument);
 	gta4l_emmc_barrier(host);
@@ -314,6 +543,47 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 	gta4l_emmc_barrier(host);
 
 	iterations = gta4l_emmc_poll_iterations(timeout_us);
+	record_poll = (index == GTA4L_EMMC_CMD3);
+	record_cmd7 = (index == GTA4L_EMMC_CMD7);
+	busy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==
+	    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);
+	cc_seen = 0;
+	tc_seen = 0;
+	response_snapshot = 0;
+	busy_response = 0;
+	if (record_poll != 0) {
+		host->poll_first_normal = 0;
+		host->poll_last_normal = 0;
+		host->poll_iterations = 0;
+		host->poll_ticks = 0;
+		host->poll_index = index;
+		host->poll_capture_valid = 0;
+	}
+	if (record_cmd7 != 0) {
+		host->cmd7_poll_or_normal = 0;
+		host->cmd7_poll_or_error = 0;
+		host->cmd7_poll_first_normal = 0;
+		host->cmd7_poll_last_normal = 0;
+		host->cmd7_poll_iterations = 0;
+		host->cmd7_poll_ticks = 0;
+		host->cmd7_cc_iteration = 0;
+		host->cmd7_cc_ticks = 0;
+		host->cmd7_cc_valid = 0;
+		host->cmd7_tc_iteration = 0;
+		host->cmd7_tc_ticks = 0;
+		host->cmd7_tc_valid = 0;
+		host->cmd7_poll_capture_valid = 0;
+		host->cmd7_trace_count = 0;
+		host->cmd7_trace_overflow = 0;
+		host->cmd7_trace_prev_normal = 0;
+		host->cmd7_trace_prev_error = 0;
+		host->cmd7_trace_prev_valid = 0;
+	}
+	if ((record_poll != 0) || (record_cmd7 != 0)) {
+		poll_start = gta4l_emmc_counter(host);
+	} else {
+		poll_start = 0;
+	}
 	for (step = 0; step < iterations; step++) {
 		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
@@ -324,6 +594,16 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 			present = gta4l_emmc_read32(host,
 			    GTA4L_EMMC_SPACE_SDHCI,
 			    GTA4L_EMMC_REG_PRESENT_STATE);
+			if (record_cmd7 != 0) {
+				gta4l_emmc_note_cmd7_poll(host, step, normal,
+				    error, poll_start);
+				host->cmd7_poll_iterations = step + 1u;
+				host->cmd7_poll_ticks =
+				    gta4l_emmc_counter(host) - poll_start;
+				host->cmd7_poll_capture_valid = 1;
+				gta4l_emmc_capture_cmd7_terminal(host, normal,
+				    error, present);
+			}
 			gta4l_emmc_record_failure(host, index, argument,
 			    command, error, normal, present);
 			gta4l_emmc_clear_interrupts(host);
@@ -331,29 +611,145 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		}
 		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
-		if ((normal & GTA4L_EMMC_INT_CC) != 0) {
+		if (record_poll != 0) {
+			if (step == 0) {
+				host->poll_first_normal = normal;
+			}
+			host->poll_last_normal = normal;
+		}
+		if (record_cmd7 != 0) {
+			gta4l_emmc_note_cmd7_poll(host, step, normal, error,
+			    poll_start);
+		}
+		if (busy != 0) {
+			if ((normal & GTA4L_EMMC_INT_CC) != 0) {
+				cc_seen = 1;
+			}
+			if ((normal & GTA4L_EMMC_INT_TC) != 0) {
+				tc_seen = 1;
+			}
+			if ((cc_seen != 0) && (response_snapshot == 0) &&
+			    (response != 0)) {
+				busy_response = gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_RESPONSE);
+				response_snapshot = 1;
+			}
+			if ((cc_seen != 0) && (tc_seen != 0)) {
+				break;
+			}
+		} else if ((normal & GTA4L_EMMC_INT_CC) != 0) {
 			break;
 		}
 		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 	}
-	if ((normal & GTA4L_EMMC_INT_CC) == 0) {
+	timed_out = (busy != 0) ?
+	    ((cc_seen == 0) || (tc_seen == 0)) :
+	    ((normal & GTA4L_EMMC_INT_CC) == 0);
+	if (record_poll != 0) {
+		host->poll_iterations = timed_out ? step : step + 1u;
+		host->poll_ticks = gta4l_emmc_counter(host) - poll_start;
+		host->poll_capture_valid = 1;
+	}
+	if (record_cmd7 != 0) {
+		host->cmd7_poll_iterations = timed_out ? step : step + 1u;
+		host->cmd7_poll_ticks = gta4l_emmc_counter(host) - poll_start;
+		host->cmd7_poll_capture_valid = 1;
+	}
+	if (timed_out != 0) {
+		/* Fresh post-timeout samples. fail_normal is this fresh read,
+		 * not the last poll sample; poll_last_normal keeps the loop
+		 * value. Diagnostics only. */
 		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
 		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_PRESENT_STATE);
+		host->timeout_normal = normal;
+		host->timeout_error = error;
+		host->timeout_present = present;
+		host->timeout_command = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_COMMAND);
+		host->timeout_argument = gta4l_emmc_read32(host,
+		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_ARGUMENT);
+		host->timeout_index = index;
+		gta4l_emmc_read_raw_response(host, host->timeout_response);
+		host->timeout_capture_valid = 1;
+		if (record_cmd7 != 0) {
+			gta4l_emmc_capture_cmd7_terminal(host, normal, error,
+			    present);
+		}
 		gta4l_emmc_record_failure(host, index, argument, command,
 		    error, normal, present);
+		host->timeout_response_stable =
+		    (host->timeout_response[0] == host->fail_response[0]) &&
+		    (host->timeout_response[1] == host->fail_response[1]) &&
+		    (host->timeout_response[2] == host->fail_response[2]) &&
+		    (host->timeout_response[3] == host->fail_response[3]);
 		gta4l_emmc_clear_interrupts(host);
 		return GTA4L_EMMC_ERR_CMD_TIMEOUT;
 	}
 
-	if (response != 0) {
-		if ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==
-		    GTA4L_EMMC_CMD_RESP_LONG) {
-			gta4l_emmc_read_long_response(host, response);
-		} else {
-			response[0] = gta4l_emmc_read32(host,
-			    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_RESPONSE);
+	if (index == GTA4L_EMMC_CMD2) {
+		/* Capture the intact CMD2 window and its status before the
+		 * status clear can invalidate either. The normalized CID is
+		 * decoded below by the existing read_long_response path.
+		 * Diagnostics only. */
+		host->cmd2_normal = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		host->cmd2_error = gta4l_emmc_read16(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		gta4l_emmc_read_raw_response(host, host->cmd2_raw_response);
+		host->cmd2_capture_valid = 1;
+	}
+	if (busy == 0) {
+		if (response != 0) {
+			if ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==
+			    GTA4L_EMMC_CMD_RESP_LONG) {
+				gta4l_emmc_read_long_response(host, response);
+			} else {
+				response[0] = gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_RESPONSE);
+			}
+		}
+		if (index == GTA4L_EMMC_CMD1) {
+			/* Keep the raw window from this CMD1 before the status
+			 * clear can invalidate it. card_ready marks it valid only
+			 * for the final accepted ready response. Diagnostics
+			 * only. */
+			gta4l_emmc_read_raw_response(host, host->cmd1_response);
+		}
+	} else {
+		if ((response != 0) && (response_snapshot != 0)) {
+			response[0] = busy_response;
+		}
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		if (record_cmd7 != 0) {
+			gta4l_emmc_capture_cmd7_terminal(host, normal, error,
+			    present);
+		}
+		/* The terminal capture reads COMMAND, ARGUMENT and the raw
+		 * response window after the first error sample. Re-read the
+		 * error status after those reads so an error that becomes
+		 * visible during them is still evaluated before the status
+		 * clear. This final sample is the observation boundary; an
+		 * error asserted after it remains unobserved. */
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			gta4l_emmc_record_failure(host, index, argument,
+			    command, error, normal, present);
+			gta4l_emmc_clear_interrupts(host);
+			return gta4l_emmc_map_error(error, 0);
 		}
 	}
 
@@ -920,6 +1316,7 @@ gta4l_emmc_card_ready(struct gta4l_emmc_host *host)
 		if (result == GTA4L_EMMC_OK) {
 			if ((response[0] & 0x80000000u) != 0) {
 				host->ocr = response[0];
+				host->cmd1_response_valid = 1;
 				return GTA4L_EMMC_OK;
 			}
 		} else if (result != GTA4L_EMMC_ERR_CMD_TIMEOUT) {

@@ -41,6 +41,7 @@
 #define GTA4L_EMMC_REG_ERROR_INT_SIGNAL    0x3Au
 #define GTA4L_EMMC_REG_HOST_CONTROL2       0x3Eu
 #define GTA4L_EMMC_REG_CAPABILITIES        0x40u
+#define GTA4L_EMMC_REG_HOST_VERSION        0xFEu
 
 /* Qualcomm v5 vendor registers. */
 #define GTA4L_EMMC_REG_MCI_VERSION         0x318u
@@ -201,6 +202,13 @@
 #define GTA4L_EMMC_POLL_STEP_US            10u
 #define GTA4L_EMMC_MAX_POLL_ITERATIONS     100000u
 
+/* Diagnostic capture format reported by the probe. Bump the value when the
+ * meaning or order of the capture fields changes. */
+#define GTA4L_EMMC_CAPTURE_FMT             4u
+/* Bounded CMD7 status-transition trace. Each entry records an observed
+ * change; further changes increment the overflow counter. */
+#define GTA4L_EMMC_CMD7_TRACE_ENTRIES      4u
+
 /* MMC command indexes. */
 #define GTA4L_EMMC_CMD0                    0u
 #define GTA4L_EMMC_CMD1                    1u
@@ -293,6 +301,15 @@ struct gta4l_emmc_ops {
 	void     (*barrier)(void *context);
 	void     (*delay_us)(void *context, uint32_t microseconds);
 	void     (*log)(void *context, uint32_t event, uint32_t a, uint32_t b);
+	/* Optional free-running counter used only to measure poll duration.
+	 * The caller reports its frequency separately. */
+	uint64_t (*counter)(void *context);
+};
+
+struct gta4l_emmc_cmd7_trace {
+	uint32_t iteration; /* poll iteration that observed the change */
+	uint32_t normal;    /* normal interrupt status at that sample */
+	uint32_t error;     /* error interrupt status at that sample */
 };
 
 struct gta4l_emmc_host {
@@ -325,7 +342,76 @@ struct gta4l_emmc_host {
 	uint32_t fail_step;      /* last_step when the failure was recorded */
 	uint32_t cmd1_attempts;  /* CMD1 attempts in the last card_ready call */
 	uint32_t cmd1_timeouts;  /* CMD1 attempts that returned a timeout */
+	uint32_t cmd1_response[4]; /* raw RESPONSE0..3 after a ready CMD1 */
+	uint32_t pre_cmd2_response[4]; /* raw RESPONSE0..3 before CMD2 issue */
+	uint8_t  cmd1_response_valid;
+	uint8_t  pre_cmd2_response_valid;
 	uint8_t  fail_valid;
+	/* Expanded CMD2-to-CMD3 capture (diagnostics only). These samples are
+	 * sequential register reads, not an atomic snapshot. */
+	uint32_t cmd2_normal;    /* normal status when CMD2 completed */
+	uint32_t cmd2_error;     /* error status when CMD2 completed */
+	uint32_t cmd2_raw_response[4]; /* raw RESPONSE0..3 after CMD2 */
+	uint8_t  cmd2_capture_valid;
+	uint32_t pre_cmd3_normal;   /* normal status after the pre-command clear */
+	uint32_t pre_cmd3_error;
+	uint32_t pre_cmd3_present;
+	uint32_t pre_cmd3_normal_enable;
+	uint32_t pre_cmd3_error_enable;
+	uint8_t  pre_cmd3_capture_valid;
+	uint32_t poll_first_normal; /* first normal status in the poll */
+	uint32_t poll_last_normal;  /* last normal status in the poll */
+	uint32_t poll_iterations;   /* poll iterations completed */
+	uint64_t poll_ticks;        /* counter delta across the poll */
+	uint32_t poll_index;        /* command whose poll was recorded */
+	uint8_t  poll_capture_valid;
+	uint32_t timeout_normal;    /* fresh post-timeout normal status */
+	uint32_t timeout_error;     /* fresh post-timeout error status */
+	uint32_t timeout_present;   /* fresh post-timeout present state */
+	uint32_t timeout_command;   /* SDHCI COMMAND readback after timeout */
+	uint32_t timeout_argument;  /* SDHCI ARGUMENT readback after timeout */
+	uint32_t timeout_index;     /* command whose timeout was captured */
+	uint32_t timeout_response[4]; /* fresh raw RESPONSE0..3 after timeout */
+	uint8_t  timeout_response_stable; /* matches fail_response */
+	uint8_t  timeout_capture_valid;
+	/* CMD7 R1b capture (diagnostics only). These fields are separate from
+	 * the CMD3 fields so a later CMD7 cannot overwrite the CMD3 evidence.
+	 * Every sample is a sequential register read, not an atomic snapshot;
+	 * the extra reads can perturb timing and cannot prove continuous bus
+	 * visibility. */
+	uint32_t cmd7_pre_normal;   /* normal status after the pre-command clear */
+	uint32_t cmd7_pre_error;    /* error status after the pre-command clear */
+	uint32_t cmd7_pre_present;  /* present state before submission */
+	uint32_t cmd7_pre_normal_enable;
+	uint32_t cmd7_pre_error_enable;
+	uint32_t cmd7_pre_response[4]; /* raw RESPONSE0..3 before submission */
+	uint8_t  cmd7_pre_capture_valid;
+	uint32_t cmd7_poll_or_normal; /* OR of normal samples observed in the poll */
+	uint32_t cmd7_poll_or_error;  /* OR of error samples observed in the poll */
+	uint32_t cmd7_poll_first_normal;
+	uint32_t cmd7_poll_last_normal;
+	uint32_t cmd7_poll_iterations;
+	uint64_t cmd7_poll_ticks;
+	uint32_t cmd7_cc_iteration; /* first in-poll CC observation */
+	uint64_t cmd7_cc_ticks;
+	uint8_t  cmd7_cc_valid;
+	uint32_t cmd7_tc_iteration; /* first in-poll TC observation */
+	uint64_t cmd7_tc_ticks;
+	uint8_t  cmd7_tc_valid;
+	uint8_t  cmd7_poll_capture_valid;
+	uint32_t cmd7_trace_count;    /* stored trace entries */
+	uint32_t cmd7_trace_overflow; /* observed changes not stored */
+	uint32_t cmd7_trace_prev_normal; /* previous observed normal sample */
+	uint32_t cmd7_trace_prev_error;  /* previous observed error sample */
+	uint8_t  cmd7_trace_prev_valid;  /* a previous sample was observed */
+	struct gta4l_emmc_cmd7_trace cmd7_trace[GTA4L_EMMC_CMD7_TRACE_ENTRIES];
+	uint32_t cmd7_term_normal;  /* terminal normal status before clear */
+	uint32_t cmd7_term_error;   /* terminal error status before clear */
+	uint32_t cmd7_term_present; /* terminal present state before clear */
+	uint32_t cmd7_term_command; /* SDHCI COMMAND readback before clear */
+	uint32_t cmd7_term_argument;
+	uint32_t cmd7_term_response[4]; /* terminal raw RESPONSE0..3 */
+	uint8_t  cmd7_term_capture_valid;
 };
 
 /* Controller reset, GCC 400 kHz setup, retained-rail power handshake, pads. */

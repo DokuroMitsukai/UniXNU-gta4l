@@ -18,6 +18,7 @@
 #define SIM_GCC_WORDS  0x40u
 #define SIM_TLMM_WORDS 0x04u
 #define SIM_MAX_LOG    128u
+#define SIM_MAX_RESPONSE_READS 64u
 
 /* Independent copies of the SDHCI semantics the simulator enforces. These
  * are deliberately not taken from the production header, so a mutated header
@@ -113,6 +114,8 @@ struct sim {
 	uint32_t cmd_crc_index;
 	int cmd_crc_with_cc;
 	int clear_response_on_w1c;
+	int clear_response_on_normal_w1c;
+	int preserve_host_control2;
 	int cmd_index;
 	int data_timeout;
 	int data_crc;
@@ -163,6 +166,71 @@ struct sim {
 	uint64_t bcr_assert_time_us;
 	uint64_t bcr_pulse_us;
 	uint32_t cmd1_timeouts_remaining;
+	uint32_t cmd1_not_ready_remaining;
+	int cmd2_keep_response;
+	int cmd2_ocr_like_response;
+	int cmd2_normalized_layout;
+	int cmd3_no_cc;
+	int cmd3_late_cc;
+	int cmd3_stale_cc;
+	int cmd3_identify_status;
+	int enable_readback_wrong;
+	uint32_t cmd3_normal_reads;
+	/* CMD7 R1b modeling. Delays are microseconds from command issue; -1
+	 * means the event never occurs. Events are applied from modeled time,
+	 * not from status-read counts. */
+	int cmd7_cc_immediate;
+	int cmd7_tc_immediate;
+	int cmd7_cc_delay;
+	int cmd7_tc_delay;
+	int cmd7_error_delay;
+	int cmd7_error_status;
+	int cmd7_keep_response;
+	int cmd7_fresh_response;
+	int cmd7_toggle_status;
+	int cmd7_script;
+	const uint32_t *cmd7_script_values;
+	uint32_t cmd7_script_length;
+	uint32_t cmd7_script_index;
+	int cmd7_tc_raised;
+	uint32_t cmd7_normal_reads;
+	uint32_t cmd7_error_reads;
+	uint32_t cmd7_window[4];
+	uint64_t cmd7_issue_time_us;
+	uint64_t cmd7_cc_time_us;
+	uint64_t cmd7_tc_time_us;
+	uint64_t cmd7_error_time_us;
+	int cmd7_cc_time_valid;
+	int cmd7_tc_time_valid;
+	int cmd7_error_time_valid;
+	int cmd7_cc_due;
+	int cmd7_tc_due;
+	int cmd7_error_due;
+	int cmd7_cc_applied;
+	int cmd7_busy;
+	int cmd7_cc_observed;
+	int cmd7_tc_observed;
+	int cmd7_error_observed;
+	int cmd7_early_command;
+	int cmd7_access_latency_us;
+	int cmd7_stale_status;
+	int cmd7_stale_injected;
+	uint64_t cmd7_release_time_us;
+	uint64_t cmd7_next_issue_time_us;
+	int cmd7_next_index;
+	int cmd7_command_readback;
+	int response_read_before_cc;
+	int irrelevant_tc_valid;
+	uint32_t irrelevant_tc_index;
+	uint32_t cmd9_normal_clear_count;
+	uint32_t cmd2_normal_clear_count;
+	uint32_t error_clear_count;
+	uint32_t cmd_clear_count;
+	uint32_t cmd_issue_clear[64];
+	uint32_t response_read_count;
+	uint32_t response_read_cmd[SIM_MAX_RESPONSE_READS];
+	uint32_t response_read_clear[SIM_MAX_RESPONSE_READS];
+	uint32_t response_read_offset[SIM_MAX_RESPONSE_READS];
 	int access_violation;
 	int command_error;
 };
@@ -188,6 +256,7 @@ sim_sdhci_width_ok(uint32_t offset, uint32_t width)
 	case 0x38u: /* NORMAL_INT_SIGNAL */
 	case 0x3Au: /* ERROR_INT_SIGNAL */
 	case 0x3Eu: /* HOST_CONTROL2 */
+	case 0xFEu: /* HOST_VERSION */
 		return width == 2u;
 	case 0x08u: /* ARGUMENT */
 	case 0x10u: /* RESPONSE */
@@ -233,6 +302,33 @@ sim_note_sdhci_access(struct sim *sim)
 	}
 }
 
+static void
+sim_apply_cmd7_events(struct sim *sim)
+{
+	if (sim->last_cmd != GTA4L_EMMC_CMD7) {
+		return;
+	}
+	if ((sim->cmd7_cc_due == 0) && (sim->cmd7_cc_time_valid != 0) &&
+	    (sim->time_us >= sim->cmd7_cc_time_us)) {
+		sim->normal_int |= GTA4L_EMMC_INT_CC;
+		sim->cmd7_cc_due = 1;
+		sim->cmd7_cc_applied = 1;
+	}
+	if ((sim->cmd7_tc_due == 0) && (sim->cmd7_tc_time_valid != 0) &&
+	    (sim->time_us >= sim->cmd7_tc_time_us)) {
+		sim->normal_int |= GTA4L_EMMC_INT_TC;
+		sim->cmd7_tc_due = 1;
+		sim->cmd7_tc_raised = 1;
+		sim->cmd7_release_time_us = sim->time_us;
+		sim->cmd7_busy = 0;
+	}
+	if ((sim->cmd7_error_due == 0) && (sim->cmd7_error_time_valid != 0) &&
+	    (sim->time_us >= sim->cmd7_error_time_us)) {
+		sim->error_int |= (uint16_t)sim->cmd7_error_status;
+		sim->cmd7_error_due = 1;
+	}
+}
+
 static uint8_t
 sim_read8(void *context, uint32_t space, uint32_t offset)
 {
@@ -275,10 +371,89 @@ sim_read16(void *context, uint32_t space, uint32_t offset)
 			return 0;
 		}
 		if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
-			return sim->normal_int & sim->normal_enable;
+			uint16_t value;
+
+			if ((sim->cmd3_late_cc != 0) &&
+			    (sim->last_cmd == GTA4L_EMMC_CMD3)) {
+				sim->cmd3_normal_reads++;
+				if (sim->cmd3_normal_reads >
+				    (GTA4L_EMMC_CMD_TIMEOUT_US /
+				    GTA4L_EMMC_POLL_STEP_US)) {
+					sim->normal_int |= GTA4L_EMMC_INT_CC;
+				}
+			}
+			if (sim->last_cmd == GTA4L_EMMC_CMD7) {
+				sim->cmd7_normal_reads++;
+				sim_apply_cmd7_events(sim);
+				if (sim->cmd7_toggle_status != 0) {
+					sim->normal_int ^=
+					    GTA4L_EMMC_INT_BRR;
+				}
+				if ((sim->cmd7_script != 0) &&
+				    (sim->cmd7_script_length != 0u)) {
+					uint32_t sample;
+
+					if (sim->cmd7_script_index <
+					    sim->cmd7_script_length) {
+						sample =
+						    sim->cmd7_script_values[
+						    sim->cmd7_script_index];
+					} else {
+						sample =
+						    sim->cmd7_script_values[
+						    sim->cmd7_script_length -
+						    1u];
+					}
+					if ((sample & 1u) != 0) {
+						sim->normal_int |=
+						    GTA4L_EMMC_INT_BRR;
+					} else {
+						sim->normal_int &=
+						    (uint16_t)
+						    ~GTA4L_EMMC_INT_BRR;
+					}
+					sim->cmd7_script_index++;
+				}
+			}
+			value = sim->normal_int & sim->normal_enable;
+			if ((sim->last_cmd == GTA4L_EMMC_CMD7) &&
+			    ((value & GTA4L_EMMC_INT_CC) != 0)) {
+				sim->cmd7_cc_observed = 1;
+			}
+			if ((sim->last_cmd == GTA4L_EMMC_CMD7) &&
+			    ((value & GTA4L_EMMC_INT_TC) != 0)) {
+				sim->cmd7_tc_observed = 1;
+			}
+			return value;
 		}
 		if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
-			return sim->error_int & sim->error_enable;
+			uint16_t value;
+
+			if (sim->last_cmd == GTA4L_EMMC_CMD7) {
+				sim->cmd7_error_reads++;
+				sim_apply_cmd7_events(sim);
+			}
+			value = sim->error_int & sim->error_enable;
+			if ((sim->last_cmd == GTA4L_EMMC_CMD7) &&
+			    ((value & GTA4L_EMMC_INT_ERR_MASK) != 0)) {
+				sim->cmd7_error_observed = 1;
+			}
+			return value;
+		}
+		if (offset == GTA4L_EMMC_REG_NORMAL_INT_ENABLE) {
+			return sim->enable_readback_wrong ?
+			    0u : sim->normal_enable;
+		}
+		if (offset == GTA4L_EMMC_REG_ERROR_INT_ENABLE) {
+			return sim->enable_readback_wrong ?
+			    0u : sim->error_enable;
+		}
+		if ((offset == GTA4L_EMMC_REG_COMMAND) &&
+		    (sim->last_cmd == GTA4L_EMMC_CMD7)) {
+			/* Terminal captures read the command readback before
+			 * the raw response window; mark them so the
+			 * before-CC check covers only in-loop snapshots. */
+			sim->cmd7_command_readback = 1;
 		}
 		return (uint16_t)(sim->sdhci[offset] |
 		    ((uint16_t)sim->sdhci[offset + 1u] << 8));
@@ -311,6 +486,7 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			sim->access_violation = 1;
 			return 0;
 		}
+		sim_apply_cmd7_events(sim);
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) {
 			if (((sim->power_delayed_bus != 0) ||
 			    (sim->power_late_bus_only != 0)) &&
@@ -363,6 +539,45 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			uint32_t value = sim->buffer_data[
 			    sim->buffer_index % (GTA4L_EMMC_BLOCK_BYTES / 4u)];
 			sim->buffer_index++;
+			return value;
+		}
+		if ((offset >= GTA4L_EMMC_REG_RESPONSE) &&
+		    (offset < (GTA4L_EMMC_REG_RESPONSE + 16u))) {
+			if ((sim->last_cmd == GTA4L_EMMC_CMD7) &&
+			    (sim->cmd7_cc_observed == 0) &&
+			    (sim->cmd7_command_readback == 0)) {
+				sim->response_read_before_cc = 1;
+			}
+			if ((sim->last_cmd == GTA4L_EMMC_CMD7) &&
+			    (sim->cmd7_access_latency_us > 0)) {
+				/* Explicit per-access latency for the final
+				 * sample race only. */
+				sim->time_us +=
+				    (uint64_t)sim->cmd7_access_latency_us;
+				sim_apply_cmd7_events(sim);
+			}
+			if (sim->response_read_count <
+			    SIM_MAX_RESPONSE_READS) {
+				sim->response_read_cmd[
+				    sim->response_read_count] =
+				    sim->last_cmd;
+				sim->response_read_clear[
+				    sim->response_read_count] =
+				    sim->error_clear_count;
+				sim->response_read_offset[
+				    sim->response_read_count] = offset;
+				sim->response_read_count++;
+			}
+		}
+		if (offset == GTA4L_EMMC_REG_PRESENT_STATE) {
+			uint32_t value = (uint32_t)sim->sdhci[offset] |
+			    ((uint32_t)sim->sdhci[offset + 1u] << 8) |
+			    ((uint32_t)sim->sdhci[offset + 2u] << 16) |
+			    ((uint32_t)sim->sdhci[offset + 3u] << 24);
+
+			if (sim->cmd7_busy != 0) {
+				value |= GTA4L_EMMC_PRESENT_DAT_INHIBIT;
+			}
 			return value;
 		}
 		return (uint32_t)sim->sdhci[offset] |
@@ -422,6 +637,17 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 			sim->reset_written = 1;
 			if (!sim->reset_timeout) {
 				sim->sdhci[offset] = 0;
+				/* RESET_ALL resets HOST_CONTROL2 in hardware,
+				 * so a later init sees VDD_180 clear and raises
+				 * the IO request again. A controller that keeps
+				 * the bit across reset is modelled separately. */
+				if (sim->preserve_host_control2 == 0) {
+					sim->sdhci[
+					    GTA4L_EMMC_REG_HOST_CONTROL2] = 0;
+					sim->sdhci[
+					    GTA4L_EMMC_REG_HOST_CONTROL2 +
+					    1u] = 0;
+				}
 			}
 		}
 		if (offset == GTA4L_EMMC_REG_POWER_CONTROL) {
@@ -549,6 +775,63 @@ sim_set_response(struct sim *sim, const uint32_t *words, uint32_t count)
 	}
 }
 
+/* Store a raw RESPONSE0..3 window exactly as given. */
+static void
+sim_set_raw_response(struct sim *sim, const uint32_t words[4])
+{
+	uint32_t index;
+	uint32_t offset;
+
+	for (index = 0; index < 4u; index++) {
+		uint32_t value = words[index];
+
+		offset = GTA4L_EMMC_REG_RESPONSE + index * 4u;
+		sim->sdhci[offset] = (uint8_t)(value & 0xFFu);
+		sim->sdhci[offset + 1u] = (uint8_t)((value >> 8) & 0xFFu);
+		sim->sdhci[offset + 2u] = (uint8_t)((value >> 16) & 0xFFu);
+		sim->sdhci[offset + 3u] = (uint8_t)((value >> 24) & 0xFFu);
+	}
+}
+
+static void
+sim_load_cmd2_response(struct sim *sim)
+{
+	uint32_t words[4];
+	uint32_t raw[4];
+
+	if (sim->cmd2_keep_response != 0) {
+		/* Model a controller that does not update the response
+		 * registers for this failed command. */
+		return;
+	}
+	if (sim->cmd2_ocr_like_response != 0) {
+		/* The 2026-10-31 raw window: OCR-like, origin unconfirmed. */
+		raw[0] = 0x00000000u;
+		raw[1] = 0x00000000u;
+		raw[2] = 0x80000000u;
+		raw[3] = 0x00C0FF80u;
+		sim_set_raw_response(sim, raw);
+		return;
+	}
+	if (sim->cmd2_normalized_layout != 0) {
+		/* Model the cmd2window observation: the controller stores the
+		 * CID words in normalized order, with the CRC trailer in the
+		 * low byte of the last word. CMD3 later overwrites RESPONSE0,
+		 * leaving words 1..3 as the photographed window. */
+		raw[0] = sim->cid[0];
+		raw[1] = sim->cid[1];
+		raw[2] = sim->cid[2];
+		raw[3] = (sim->cid[3] & 0xFFFFFF00u) | 0x78u;
+		sim_set_raw_response(sim, raw);
+		return;
+	}
+	words[0] = sim->bad_cid ? 0 : sim->cid[0];
+	words[1] = sim->bad_cid ? 0 : sim->cid[1];
+	words[2] = sim->bad_cid ? 0 : sim->cid[2];
+	words[3] = sim->bad_cid ? 0 : sim->cid[3];
+	sim_set_response(sim, words, 4);
+}
+
 static int
 sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
     uint16_t flags)
@@ -610,10 +893,25 @@ sim_command(struct sim *sim, uint16_t command)
 	    GTA4L_EMMC_REG_ARGUMENT);
 	uint32_t response = 0x00000900u; /* READY_FOR_DATA | TRAN */
 	uint32_t words[4];
+	uint64_t cc_time = 0;
+	uint64_t tc_time = 0;
 
+	sim_apply_cmd7_events(sim);
+	if ((sim->last_cmd == GTA4L_EMMC_CMD7) &&
+	    (index != GTA4L_EMMC_CMD7)) {
+		if ((sim->cmd7_busy != 0) ||
+		    ((sim->cmd7_tc_due != 0) &&
+		    (sim->cmd7_tc_observed == 0))) {
+			sim->cmd7_early_command = 1;
+		}
+		sim->cmd7_next_issue_time_us = sim->time_us;
+		sim->cmd7_next_index = (int)index;
+	}
 	sim->last_cmd = index;
 	sim->last_cmd_argument = argument;
 	sim->cmd_count++;
+	sim->cmd_clear_count = sim->error_clear_count;
+	sim->cmd_issue_clear[index] = sim->error_clear_count;
 	sim->buffer_index = 0;
 	if (index == GTA4L_EMMC_CMD0) {
 		sim->cmd0_time_us = sim->time_us;
@@ -637,15 +935,11 @@ sim_command(struct sim *sim, uint16_t command)
 		return;
 	}
 	if (index == GTA4L_EMMC_CMD2) {
-		/* Load the long response before an injected CRC error so the
-		 * snapshot ordering test has real words to capture. A real
-		 * controller may or may not load a bad response; the core must
-		 * still treat it as diagnostics only. */
-		words[0] = sim->bad_cid ? 0 : sim->cid[0];
-		words[1] = sim->bad_cid ? 0 : sim->cid[1];
-		words[2] = sim->bad_cid ? 0 : sim->cid[2];
-		words[3] = sim->bad_cid ? 0 : sim->cid[3];
-		sim_set_response(sim, words, 4);
+		/* Load the response before an injected CRC error so the
+		 * snapshot ordering tests have words to capture. A real
+		 * controller may or may not update a bad response; the core
+		 * must still treat it as diagnostics only. */
+		sim_load_cmd2_response(sim);
 	}
 	if ((sim->cmd_crc_index != SIM_CMD_CRC_NONE) &&
 	    (index == sim->cmd_crc_index)) {
@@ -666,35 +960,86 @@ sim_command(struct sim *sim, uint16_t command)
 		break;
 	case GTA4L_EMMC_CMD1:
 		response = GTA4L_EMMC_OCR_VALUE;
-		if (sim->card_never_ready == 0) {
+		if (sim->cmd1_not_ready_remaining != 0) {
+			/* A completed but not-ready R3 reply. */
+			sim->cmd1_not_ready_remaining--;
+		} else if (sim->card_never_ready == 0) {
 			response |= 0x80000000u;
 		}
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		sim_set_response(sim, &response, 1);
 		break;
 	case GTA4L_EMMC_CMD2:
-		words[0] = sim->bad_cid ? 0 : sim->cid[0];
-		words[1] = sim->bad_cid ? 0 : sim->cid[1];
-		words[2] = sim->bad_cid ? 0 : sim->cid[2];
-		words[3] = sim->bad_cid ? 0 : sim->cid[3];
+		sim_load_cmd2_response(sim);
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
-		sim_set_response(sim, words, 4);
 		break;
 	case GTA4L_EMMC_CMD3:
 		/* eMMC SET_RELATIVE_ADDR: the host assigns the RCA in the
 		 * argument; the response is R1 status. */
 		sim->cmd3_argument = argument;
 		sim->rca = argument >> 16;
-		response = 0x00000900u;
+		response = sim->cmd3_identify_status ? 0x00000500u :
+		    0x00000900u;
 		if (sim->cmd3_error != 0) {
 			response |= 0x00000080u;
 		}
-		sim->normal_int |= GTA4L_EMMC_INT_CC;
+		sim->cmd3_normal_reads = 0;
+		if ((sim->cmd3_no_cc == 0) && (sim->cmd3_late_cc == 0)) {
+			sim->normal_int |= GTA4L_EMMC_INT_CC;
+		}
 		sim_set_response(sim, &response, 1);
 		break;
 	case GTA4L_EMMC_CMD7:
-		sim->normal_int |= GTA4L_EMMC_INT_CC;
-		sim_set_response(sim, &response, 1);
+		sim->cmd7_normal_reads = 0;
+		sim->cmd7_error_reads = 0;
+		sim->cmd7_script_index = 0;
+		sim->cmd7_tc_raised = 0;
+		sim->cmd7_cc_observed = 0;
+		sim->cmd7_tc_observed = 0;
+		sim->cmd7_error_observed = 0;
+		sim->cmd7_early_command = 0;
+		sim->cmd7_release_time_us = 0;
+		sim->cmd7_next_issue_time_us = 0;
+		sim->cmd7_next_index = -1;
+		sim->cmd7_command_readback = 0;
+		sim->response_read_before_cc = 0;
+		sim->cmd7_issue_time_us = sim->time_us;
+		sim->cmd7_cc_time_valid =
+		    ((sim->cmd7_cc_immediate != 0) ||
+		    (sim->cmd7_cc_delay >= 0)) ? 1 : 0;
+		sim->cmd7_tc_time_valid =
+		    ((sim->cmd7_tc_immediate != 0) ||
+		    (sim->cmd7_tc_delay >= 0)) ? 1 : 0;
+		sim->cmd7_error_time_valid =
+		    (sim->cmd7_error_delay >= 0) ? 1 : 0;
+		cc_time = sim->time_us;
+		tc_time = sim->time_us;
+		if ((sim->cmd7_cc_immediate == 0) &&
+		    (sim->cmd7_cc_delay >= 0)) {
+			cc_time += (uint64_t)sim->cmd7_cc_delay;
+		}
+		if ((sim->cmd7_tc_immediate == 0) &&
+		    (sim->cmd7_tc_delay >= 0)) {
+			tc_time += (uint64_t)sim->cmd7_tc_delay;
+		}
+		sim->cmd7_cc_time_us = cc_time;
+		sim->cmd7_tc_time_us = tc_time;
+		sim->cmd7_error_time_us = sim->time_us +
+		    ((sim->cmd7_error_delay >= 0) ?
+		    (uint64_t)sim->cmd7_error_delay : 0);
+		sim->cmd7_cc_due = 0;
+		sim->cmd7_tc_due = 0;
+		sim->cmd7_error_due = 0;
+		sim->cmd7_cc_applied = 0;
+		if (sim->cmd7_keep_response == 0) {
+			if (sim->cmd7_fresh_response != 0) {
+				sim_set_raw_response(sim, sim->cmd7_window);
+			} else {
+				sim_set_response(sim, &response, 1);
+			}
+		}
+		sim_apply_cmd7_events(sim);
+		sim->cmd7_busy = (sim->cmd7_tc_due == 0) ? 1 : 0;
 		break;
 	case GTA4L_EMMC_CMD9:
 		words[0] = sim->bad_csd ? 0xFFFFFFFFu : sim->csd[0];
@@ -747,6 +1092,11 @@ sim_command(struct sim *sim, uint16_t command)
 		sim_set_response(sim, &response, 1);
 		break;
 	}
+	if ((sim->irrelevant_tc_valid != 0) &&
+	    (index == sim->irrelevant_tc_index)) {
+		/* Non-busy response types must ignore TC as a completion. */
+		sim->normal_int |= GTA4L_EMMC_INT_TC;
+	}
 }
 
 static void
@@ -789,12 +1139,54 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 	}
 	if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
 		sim->normal_int &= (uint16_t)~value;
+		if ((sim->cmd3_stale_cc != 0) &&
+		    (sim->last_cmd == GTA4L_EMMC_CMD2)) {
+			/* The post-CMD2 clear is the first one; the
+			 * pre-CMD3 clear is the second. Inject a stale
+			 * completion that survives the second clear. */
+			sim->cmd2_normal_clear_count++;
+			if (sim->cmd2_normal_clear_count == 2u) {
+				sim->normal_int |= GTA4L_EMMC_INT_CC;
+			}
+		}
+		if ((sim->cmd7_stale_status != 0) &&
+		    (sim->last_cmd == GTA4L_EMMC_CMD9)) {
+			/* Inject after the CMD9 tail clear; the CMD7
+			 * pre-command clear must remove it. */
+			sim->cmd9_normal_clear_count++;
+			if (sim->cmd9_normal_clear_count == 1u) {
+				sim->normal_int |= GTA4L_EMMC_INT_CC |
+				    GTA4L_EMMC_INT_TC;
+			}
+		}
+		if (sim->clear_response_on_normal_w1c != 0) {
+			/* Model a controller that drops the response window
+			 * when the normal-status latch is cleared. */
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + 0u, 0u);
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + 4u, 0u);
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + 8u, 0u);
+			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE + 12u, 0u);
+		}
 		return;
 	}
 	if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
+		uint16_t pending = (uint16_t)(sim->error_int &
+		    GTA4L_EMMC_INT_ERR_CMD_CRC);
+
 		sim->error_int &= (uint16_t)~value;
+		sim->error_clear_count++;
+		if ((sim->cmd7_stale_status != 0) &&
+		    (sim->last_cmd == GTA4L_EMMC_CMD9) &&
+		    (sim->cmd9_normal_clear_count == 1u)) {
+			/* Stale error latched after the CMD9 tail clear. */
+			sim->error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
+		}
 		if ((sim->clear_response_on_w1c != 0) &&
-		    ((value & GTA4L_EMMC_INT_ERR_CMD_CRC) != 0)) {
+		    ((value & pending) != 0)) {
 			/* A real controller may invalidate the response with
 			 * the latch clear. The snapshot must already exist. */
 			sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI,
@@ -1039,6 +1431,14 @@ sim_delay_us(void *context, uint32_t microseconds)
 	sim->time_us += microseconds;
 }
 
+static uint64_t
+sim_counter(void *context)
+{
+	struct sim *sim = (struct sim *)context;
+
+	return sim->time_us;
+}
+
 static void
 sim_log(void *context, uint32_t event, uint32_t a, uint32_t b)
 {
@@ -1062,6 +1462,7 @@ static const struct gta4l_emmc_ops sim_ops = {
 	.barrier = sim_barrier,
 	.delay_us = sim_delay_us,
 	.log = sim_log,
+	.counter = sim_counter,
 };
 
 static void
@@ -1071,6 +1472,11 @@ sim_init(struct sim *sim)
 	sim->sector_count = 61071360u;
 	sim->partition_config = 0u;
 	sim->cmd_crc_index = SIM_CMD_CRC_NONE;
+	sim->cmd7_cc_immediate = 1;
+	sim->cmd7_tc_immediate = 1;
+	sim->cmd7_cc_delay = -1;
+	sim->cmd7_tc_delay = -1;
+	sim->cmd7_error_delay = -1;
 	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_MCI_VERSION,
 	    0x10000072u);
 	/* The observed stage-3 vendor value: MCLK default, HC_SELECT_IN=6
@@ -1131,6 +1537,61 @@ scenario_is(const char *name, const char *expected)
 	return strcmp(name, expected) == 0;
 }
 
+/* True when the four logged reads starting at start are one complete
+ * RESPONSE0..3 raw window captured while cmd was the last command. */
+static int
+response_window_at(const struct sim *sim, uint32_t start, uint32_t cmd)
+{
+	uint32_t index;
+
+	if (start + 4u > sim->response_read_count) {
+		return 0;
+	}
+	for (index = 0; index < 4u; index++) {
+		if (sim->response_read_cmd[start + index] != cmd) {
+			return 0;
+		}
+		if (sim->response_read_offset[start + index] !=
+		    GTA4L_EMMC_REG_RESPONSE + index * 4u) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* Find the n-th complete raw window captured while cmd was last issued.
+ * Returns the start index or 0xFFFFFFFFu when absent. */
+static uint32_t
+response_window_find(const struct sim *sim, uint32_t cmd, uint32_t nth)
+{
+	uint32_t index;
+	uint32_t seen = 0;
+
+	for (index = 0; index + 4u <= sim->response_read_count; index++) {
+		if (!response_window_at(sim, index, cmd)) {
+			continue;
+		}
+		if (seen == nth) {
+			return index;
+		}
+		seen++;
+	}
+	return 0xFFFFFFFFu;
+}
+
+/* CMD7 normal-status sequences for the bounded-trace semantics regressions.
+ * A non-zero value raises BRR; zero clears it. Values past the end repeat the
+ * last element, so a sequence can settle into a plateau. */
+static const uint32_t cmd7_trace_plateau_script[] = {
+	0u, 1u, 0u, 1u, 0u, 1u, 0u, 1u, 1u
+};
+static const uint32_t cmd7_trace_return_script[] = {
+	1u, 0u, 1u, 0u, 1u, 0u, 1u, 0u, 0u
+};
+static const uint32_t cmd7_terminal_change_script[] = {
+	0u, 1u
+};
+
 int
 main(int argc, char **argv)
 {
@@ -1185,6 +1646,7 @@ main(int argc, char **argv)
 		/* Model a controller that preserved VDD_180 across reset: the
 		 * write changes nothing, so no IO request is due, but a
 		 * standalone BUS_ON then implies the wrong level. */
+		sim.preserve_host_control2 = 1;
 		sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL2] =
 		    (uint8_t)(SIM_CTRL_VDD_180 & 0xFFu);
 		sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL2 + 1u] = 0;
@@ -1220,6 +1682,41 @@ main(int argc, char **argv)
 		 * the retry succeeds, then CMD2 fails its CRC check. */
 		sim.cmd1_timeouts_remaining = 1;
 		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+	} else if (scenario_is(scenario, "cmd1-not-ready-then-ready")) {
+		/* Two completed but not-ready CMD1 replies, then a ready
+		 * reply: three attempts, no timeouts, matching the
+		 * 2026-10-31 hardware counters. */
+		sim.cmd1_not_ready_remaining = 2;
+	} else if (scenario_is(scenario, "cmd1-not-ready-then-ready-crc")) {
+		/* The recorded hardware sequence: two not-ready CMD1 replies,
+		 * a ready CMD1, then a CMD2 CRC failure. */
+		sim.cmd1_not_ready_remaining = 2;
+		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+	} else if (scenario_is(scenario, "cmd1-clear-invalidates-window")) {
+		/* A controller may drop RESPONSE0..3 when the normal-status
+		 * latch is cleared. The CMD1 window must already be captured;
+		 * the pre-CMD2 window then reflects the cleared registers. */
+		sim.clear_response_on_normal_w1c = 1;
+	} else if (scenario_is(scenario, "cmd2-crc-distinct")) {
+		/* Distinct post-CMD1 and failed-CMD2 windows. Seed stale
+		 * words beyond RESPONSE0 so every captured word is checked. */
+		sim_write32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_RESPONSE + 4u, 0x01020304u);
+		sim_write32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_RESPONSE + 8u, 0x05060708u);
+		sim_write32(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_RESPONSE + 12u, 0x090A0B0Cu);
+		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+	} else if (scenario_is(scenario, "cmd2-crc-unchanged")) {
+		/* CMD2 fails without updating the response registers: the
+		 * pre-CMD2 and failed windows are identical. */
+		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+		sim.cmd2_keep_response = 1;
+	} else if (scenario_is(scenario, "cmd2-crc-ocr-like")) {
+		/* CMD2 fails after loading the hardware's OCR-like raw
+		 * window (origin unconfirmed). */
+		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
+		sim.cmd2_ocr_like_response = 1;
 	} else if (scenario_is(scenario, "cmd1-timeout-recover")) {
 		/* A single busy timeout is recovered by the retry; the run must
 		 * finish with no failure record at all. */
@@ -1262,6 +1759,180 @@ main(int argc, char **argv)
 		sim.bad_csd = 1;
 	} else if (scenario_is(scenario, "cmd3-error")) {
 		sim.cmd3_error = 1;
+	} else if (scenario_is(scenario, "cmd2-normalized")) {
+		/* Model the cmd2window observation: the controller stores the
+		 * CID words in normalized order with the CRC trailer in the
+		 * low byte of RESPONSE3. The raw capture must preserve that
+		 * layout while the decoded CID is kept separate. */
+		sim.cmd2_normalized_layout = 1;
+	} else if (scenario_is(scenario, "cmd3-no-cc")) {
+		/* CMD3 loads its R1 response but never raises CC. */
+		sim.cmd3_no_cc = 1;
+	} else if (scenario_is(scenario, "cmd3-late-cc")) {
+		/* CC appears only after the final in-loop normal-status
+		 * sample, i.e. in the fresh post-timeout read. */
+		sim.cmd3_late_cc = 1;
+	} else if (scenario_is(scenario, "cmd3-stale-cc")) {
+		/* A stale CC survives the pre-CMD3 status clear. */
+		sim.cmd3_stale_cc = 1;
+	} else if (scenario_is(scenario, "cmd3-identify")) {
+		/* CMD3 returns the Identify-state R1 status seen on
+		 * hardware. */
+		sim.cmd3_identify_status = 1;
+	} else if (scenario_is(scenario, "cmd3-enable-readback")) {
+		/* The status-enable readback does not reflect the value the
+		 * core programmed, without changing the actual enables. */
+		sim.enable_readback_wrong = 1;
+	} else if (scenario_is(scenario, "cmd7-tc-only")) {
+		/* Owner-transcribed failure: TC is set, CC is absent, and the
+		 * retained response window looks like the CMD9 CSD tail. */
+		sim.cmd7_cc_immediate = 0;
+		sim.cmd7_tc_immediate = 1;
+		sim.cmd7_keep_response = 1;
+	} else if (scenario_is(scenario, "cmd7-fresh-window")) {
+		/* Same TC-only timeout, but the response window changes at
+		 * CMD7 submission. Equality of the pre and terminal windows
+		 * is not required for, and does not prove, staleness. */
+		sim.cmd7_cc_immediate = 0;
+		sim.cmd7_tc_immediate = 1;
+		sim.cmd7_fresh_response = 1;
+		sim.cmd7_window[0] = 0x40400CF6u;
+		sim.cmd7_window[1] = 0xDBFFEF0Fu;
+		sim.cmd7_window[2] = 0x5903FF00u;
+		sim.cmd7_window[3] = 0x00070000u;
+	} else if (scenario_is(scenario, "cmd7-cc-then-tc")) {
+		/* CC first; the busy release arrives 50 us later. Success
+		 * requires both events; CC stays sticky over repeated polls. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_tc_delay = 50;
+	} else if (scenario_is(scenario, "cmd7-tc-then-cc")) {
+		/* TC is visible first; CC appears on the second poll sample. */
+		sim.cmd7_cc_immediate = 0;
+		sim.cmd7_cc_delay = 10;
+		sim.cmd7_tc_immediate = 1;
+	} else if (scenario_is(scenario, "cmd7-simultaneous")) {
+		/* Zero-length busy interval: CC and TC on the first sample. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 1;
+	} else if (scenario_is(scenario, "cmd7-terminal-change")) {
+		/* The ignored status bit changes after the final poll sample
+		 * so a reused poll sample is distinguishable from a fresh
+		 * terminal sample. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 1;
+		sim.cmd7_script = 1;
+		sim.cmd7_script_values = cmd7_terminal_change_script;
+		sim.cmd7_script_length =
+		    (uint32_t)(sizeof(cmd7_terminal_change_script) /
+		    sizeof(cmd7_terminal_change_script[0]));
+	} else if (scenario_is(scenario, "cmd7-last-poll")) {
+		/* Both events become due on the last permitted poll. */
+		sim.cmd7_cc_immediate = 0;
+		sim.cmd7_cc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
+		    GTA4L_EMMC_POLL_STEP_US);
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_tc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
+		    GTA4L_EMMC_POLL_STEP_US);
+	} else if (scenario_is(scenario, "cmd7-delayed-release")) {
+		/* A 200 us busy interval must block the next command. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_tc_delay = 200;
+	} else if (scenario_is(scenario, "cmd7-late-tc")) {
+		/* TC first becomes due after the full in-budget window. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_tc_delay = (int)GTA4L_EMMC_CMD_TIMEOUT_US;
+	} else if (scenario_is(scenario, "cmd7-cc-only")) {
+		/* CC is accepted but the busy release never arrives. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 0;
+	} else if (scenario_is(scenario, "cmd7-neither")) {
+		/* Neither completion ever arrives. */
+		sim.cmd7_cc_immediate = 0;
+		sim.cmd7_tc_immediate = 0;
+	} else if (scenario_is(scenario, "cmd7-stale-status")) {
+		/* Stale CC/TC/error latched after the CMD9 tail clear must be
+		 * removed by the CMD7 pre-command clear. */
+		sim.cmd7_stale_status = 1;
+	} else if (scenario_is(scenario, "cmd7-busy-error")) {
+		/* Error latched together with both completions: error
+		 * precedence must win. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 1;
+		sim.cmd7_error_delay = 0;
+		sim.cmd7_error_status = GTA4L_EMMC_INT_ERR_CMD_TIMEOUT;
+	} else if (scenario_is(scenario, "cmd7-late-error")) {
+		/* Both completions arrive first; the error becomes due during
+		 * the explicit response-read latency and is evaluated in the
+		 * terminal sample. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 1;
+		sim.cmd7_access_latency_us = 1;
+		sim.cmd7_error_delay = 1;
+		sim.cmd7_error_status = GTA4L_EMMC_INT_ERR_CMD_TIMEOUT;
+	} else if (scenario_is(scenario, "cmd7-terminal-error")) {
+		/* Both completions arrive first. The error is not due at the
+		 * first terminal error sample; it becomes due during the
+		 * terminal command/argument/response reads and must be caught
+		 * by the final error sample before the status clear. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 1;
+		sim.cmd7_access_latency_us = 1;
+		sim.cmd7_error_delay = 2;
+		sim.cmd7_error_status = GTA4L_EMMC_INT_ERR_CMD_TIMEOUT;
+	} else if (scenario_is(scenario, "cmd7-data-timeout-after-cc")) {
+		/* DATA_TIMEOUT after CC and before TC maps to a failure. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_tc_delay = 100;
+		sim.cmd7_error_delay = 50;
+		sim.cmd7_error_status = GTA4L_EMMC_INT_ERR_DATA_TIMEOUT;
+	} else if (scenario_is(scenario, "cmd7-data-crc-after-cc")) {
+		/* DATA_CRC after CC and before TC maps to a failure. */
+		sim.cmd7_cc_immediate = 1;
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_tc_delay = 100;
+		sim.cmd7_error_delay = 50;
+		sim.cmd7_error_status = GTA4L_EMMC_INT_ERR_DATA_CRC;
+	} else if (scenario_is(scenario, "cmd0-irrelevant-tc") ||
+	    scenario_is(scenario, "cmd2-irrelevant-tc") ||
+	    scenario_is(scenario, "cmd3-irrelevant-tc")) {
+		/* A non-busy response type must not treat TC as completion. */
+		sim.irrelevant_tc_valid = 1;
+		sim.irrelevant_tc_index =
+		    scenario_is(scenario, "cmd0-irrelevant-tc") ?
+		    GTA4L_EMMC_CMD0 :
+		    (scenario_is(scenario, "cmd2-irrelevant-tc") ?
+		    GTA4L_EMMC_CMD2 : GTA4L_EMMC_CMD3);
+	} else if (scenario_is(scenario, "cmd7-trace-overflow")) {
+		/* Neither completion appears and an ignored normal-status bit
+		 * changes on every sample, so the bounded trace overflows. */
+		sim.cmd7_cc_immediate = 0;
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_toggle_status = 1;
+	} else if (scenario_is(scenario, "cmd7-trace-plateau")) {
+		/* Alternate past the bounded store, then stop changing. Only
+		 * observed changes may advance the overflow counter. */
+		sim.cmd7_cc_immediate = 0;
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_script = 1;
+		sim.cmd7_script_values = cmd7_trace_plateau_script;
+		sim.cmd7_script_length =
+		    (uint32_t)(sizeof(cmd7_trace_plateau_script) /
+		    sizeof(cmd7_trace_plateau_script[0]));
+	} else if (scenario_is(scenario, "cmd7-trace-return")) {
+		/* After the store fills, a sample that differs from the
+		 * previous observation but equals the last stored entry is
+		 * still an observed change, then the sequence plateaus. */
+		sim.cmd7_cc_immediate = 0;
+		sim.cmd7_tc_immediate = 0;
+		sim.cmd7_script = 1;
+		sim.cmd7_script_values = cmd7_trace_return_script;
+		sim.cmd7_script_length =
+		    (uint32_t)(sizeof(cmd7_trace_return_script) /
+		    sizeof(cmd7_trace_return_script[0]));
 	} else if (scenario_is(scenario, "small-card")) {
 		sim.sector_count = 4096u;
 		sim_fill_ext_csd(&sim);
@@ -1299,6 +1970,23 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "signaling-3v3") ||
 	    scenario_is(scenario, "vendor-mclk-hs400") ||
 	    scenario_is(scenario, "vendor-hc-select-en") ||
+	    scenario_is(scenario, "cmd1-not-ready-then-ready") ||
+	    scenario_is(scenario, "cmd1-clear-invalidates-window") ||
+	    scenario_is(scenario, "reinit-clears-windows") ||
+	    scenario_is(scenario, "cmd2-normalized") ||
+	    scenario_is(scenario, "cmd3-identify") ||
+	    scenario_is(scenario, "cmd3-stale-cc") ||
+	    scenario_is(scenario, "cmd3-enable-readback") ||
+	    scenario_is(scenario, "cmd7-cc-then-tc") ||
+	    scenario_is(scenario, "cmd7-tc-then-cc") ||
+	    scenario_is(scenario, "cmd7-simultaneous") ||
+	    scenario_is(scenario, "cmd7-terminal-change") ||
+	    scenario_is(scenario, "cmd7-last-poll") ||
+	    scenario_is(scenario, "cmd7-delayed-release") ||
+	    scenario_is(scenario, "cmd7-stale-status") ||
+	    scenario_is(scenario, "cmd0-irrelevant-tc") ||
+	    scenario_is(scenario, "cmd2-irrelevant-tc") ||
+	    scenario_is(scenario, "cmd3-irrelevant-tc") ||
 	    scenario_is(scenario, "cmd1-timeout-recover")) {
 		check(result == GTA4L_EMMC_OK, "initialization failed");
 		if (result != GTA4L_EMMC_OK) {
@@ -1324,6 +2012,26 @@ main(int argc, char **argv)
 		    host.cid[2] == 0x42009005u &&
 		    host.cid[3] == 0xF4661900u,
 		    "CID long-response normalization mismatch");
+		check(host.cmd2_capture_valid == 1u,
+		    "successful init did not capture the CMD2 window");
+		check(host.cmd2_raw_response[0] == 0x05F46619u &&
+		    host.cmd2_raw_response[1] == 0x4D420090u &&
+		    host.cmd2_raw_response[2] == 0x44583638u &&
+		    host.cmd2_raw_response[3] == 0x00150100u,
+		    "CMD2 raw capture is not the standard SDHCI layout");
+		check(host.pre_cmd3_capture_valid == 1u,
+		    "successful init did not capture the pre-CMD3 state");
+		check(host.poll_capture_valid == 1u,
+		    "successful init did not record the CMD3 poll");
+		check(host.poll_index == GTA4L_EMMC_CMD3,
+		    "recorded poll is not for CMD3");
+		check(host.poll_iterations == 1u,
+		    "immediately-complete CMD3 poll did not stop on the first "
+		    "sample");
+		check((host.poll_first_normal & GTA4L_EMMC_INT_CC) != 0,
+		    "CMD3 poll did not observe the completion");
+		check(host.timeout_capture_valid == 0u,
+		    "successful CMD3 recorded a timeout capture");
 		check(host.csd[0] == 0xD0270132u &&
 		    host.csd[1] == 0x0F5903FFu &&
 		    host.csd[2] == 0xF6DBFFEFu &&
@@ -1519,6 +2227,116 @@ main(int argc, char **argv)
 		    "recovered CMD1 run did not reach READY");
 		check(host.capacity_blocks == 61071360u,
 		    "recovered CMD1 run did not enumerate the card");
+	} else if (scenario_is(scenario, "cmd1-not-ready-then-ready")) {
+		check(sim.cmd1_not_ready_remaining == 0u,
+		    "the injected not-ready CMD1 replies were not consumed");
+		check(host.cmd1_attempts == 3u,
+		    "not-ready CMD1 run did not report three attempts");
+		check(host.cmd1_timeouts == 0u,
+		    "not-ready CMD1 run reported a timeout");
+		check(host.ocr == (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+		    "not-ready CMD1 run did not cache the ready OCR");
+		check(host.cmd1_response_valid == 1u,
+		    "ready CMD1 raw window was not marked valid");
+		check(host.pre_cmd2_response_valid == 1u,
+		    "pre-CMD2 raw window was not marked valid");
+		check(host.cmd1_response[0] ==
+		    (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+		    "ready CMD1 raw window does not hold the OCR");
+		check(host.last_step == GTA4L_EMMC_STEP_READY,
+		    "not-ready CMD1 run did not reach READY");
+		check(host.capacity_blocks == 61071360u,
+		    "not-ready CMD1 run did not enumerate the card");
+	} else if (scenario_is(scenario, "cmd1-not-ready-then-ready-crc")) {
+		check(sim.cmd1_not_ready_remaining == 0u,
+		    "not-ready+CRC run did not consume the injected replies");
+		check(host.cmd1_attempts == 3u,
+		    "not-ready+CRC run did not report three attempts");
+		check(host.cmd1_timeouts == 0u,
+		    "not-ready+CRC run reported a timeout");
+		check(host.cmd1_response_valid == 1u,
+		    "not-ready+CRC run did not mark the final CMD1 window "
+		    "valid");
+		check(host.pre_cmd2_response_valid == 1u,
+		    "not-ready+CRC run did not capture the pre-CMD2 window");
+		check(host.cmd1_response[0] ==
+		    (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+		    "not-ready+CRC run lost the ready CMD1 OCR");
+		check(host.fail_index == GTA4L_EMMC_CMD2,
+		    "not-ready+CRC run did not capture CMD2");
+		check(host.fail_command == 0x0209u,
+		    "not-ready+CRC CMD2 encoding mismatch");
+		check(host.fail_step == GTA4L_EMMC_STEP_CMD1,
+		    "not-ready+CRC failure step is not CMD1");
+		check(host.fail_response[0] !=
+		    host.pre_cmd2_response[0] ||
+		    host.fail_response[1] !=
+		    host.pre_cmd2_response[1] ||
+		    host.fail_response[2] !=
+		    host.pre_cmd2_response[2] ||
+		    host.fail_response[3] !=
+		    host.pre_cmd2_response[3],
+		    "not-ready+CRC failed window equals the pre-CMD2 window");
+	} else if (scenario_is(scenario, "cmd1-clear-invalidates-window")) {
+		check(host.cmd1_response_valid == 1u,
+		    "CMD1 window was not marked valid before the clear");
+		check(host.cmd1_response[0] ==
+		    (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+		    "CMD1 window did not survive the later status clear");
+		check(host.pre_cmd2_response_valid == 1u,
+		    "pre-CMD2 window was not marked valid");
+		check(host.pre_cmd2_response[0] == 0u &&
+		    host.pre_cmd2_response[1] == 0u &&
+		    host.pre_cmd2_response[2] == 0u &&
+		    host.pre_cmd2_response[3] == 0u,
+		    "pre-CMD2 window was not cleared by the normal-status "
+		    "write");
+		check(host.last_step == GTA4L_EMMC_STEP_READY,
+		    "cleared-window run did not reach READY");
+	} else if (scenario_is(scenario, "reinit-clears-windows")) {
+		check(host.cmd1_response_valid == 1u &&
+		    host.pre_cmd2_response_valid == 1u,
+		    "initial run did not produce both response windows");
+		check(host.cmd7_pre_capture_valid == 1u &&
+		    host.cmd7_poll_capture_valid == 1u &&
+		    host.cmd7_term_capture_valid == 1u,
+		    "initial run did not produce the CMD7 captures");
+		check(host.cmd7_trace_count != 0u,
+		    "initial run did not record a CMD7 trace");
+		result = gta4l_emmc_controller_init(&host);
+		check(result == GTA4L_EMMC_OK, "reinitialization failed");
+		check(host.cmd1_response_valid == 0u,
+		    "reinit did not clear the CMD1 window validity");
+		check(host.pre_cmd2_response_valid == 0u,
+		    "reinit did not clear the pre-CMD2 window validity");
+		check(host.cmd7_pre_capture_valid == 0u &&
+		    host.cmd7_poll_capture_valid == 0u &&
+		    host.cmd7_term_capture_valid == 0u,
+		    "reinit did not clear the CMD7 capture validity");
+		check(host.cmd7_cc_valid == 0u && host.cmd7_tc_valid == 0u,
+		    "reinit left the CMD7 completion flags");
+		check(host.cmd7_trace_count == 0u &&
+		    host.cmd7_trace_overflow == 0u,
+		    "reinit left the CMD7 trace");
+		check(host.cmd1_response[0] == 0u &&
+		    host.cmd1_response[1] == 0u &&
+		    host.cmd1_response[2] == 0u &&
+		    host.cmd1_response[3] == 0u,
+		    "reinit left CMD1 window data");
+		check(host.pre_cmd2_response[0] == 0u &&
+		    host.pre_cmd2_response[1] == 0u &&
+		    host.pre_cmd2_response[2] == 0u &&
+		    host.pre_cmd2_response[3] == 0u,
+		    "reinit left pre-CMD2 window data");
+		check(host.cmd7_pre_response[0] == 0u &&
+		    host.cmd7_pre_response[1] == 0u &&
+		    host.cmd7_pre_response[2] == 0u &&
+		    host.cmd7_pre_response[3] == 0u &&
+		    host.cmd7_term_response[0] == 0u &&
+		    host.cmd7_term_response[1] == 0u &&
+		    host.cmd7_term_response[2] == 0u &&
+		    host.cmd7_term_response[3] == 0u,
+		    "reinit left CMD7 response windows");
 	} else if (scenario_is(scenario, "power-delayed-bus") ||
 	    scenario_is(scenario, "power-bus-then-io")) {
 		check(sim.bus_acked == 1,
@@ -1675,6 +2493,248 @@ main(int argc, char **argv)
 		check(result == GTA4L_EMMC_OK, "EXT_CSD read failed");
 		check(ext[GTA4L_EMMC_EXT_CSD_REV_OFF] == 8u,
 		    "EXT_CSD revision mismatch");
+	} else if (scenario_is(scenario, "cmd2-normalized") ||
+	    scenario_is(scenario, "cmd3-identify") ||
+	    scenario_is(scenario, "cmd3-stale-cc") ||
+	    scenario_is(scenario, "cmd3-enable-readback")) {
+		check(result == GTA4L_EMMC_OK, "initialization failed");
+		if (result != GTA4L_EMMC_OK) {
+			fprintf(stderr, "init result %d\n", result);
+			return 1;
+		}
+		if (scenario_is(scenario, "cmd2-normalized")) {
+			uint32_t start;
+
+			check(host.cmd2_capture_valid == 1u,
+			    "normalized-layout run did not capture CMD2");
+			check(host.cmd2_raw_response[0] == 0x15010044u &&
+			    host.cmd2_raw_response[1] == 0x5836384Du &&
+			    host.cmd2_raw_response[2] == 0x42009005u &&
+			    host.cmd2_raw_response[3] == 0xF4661978u,
+			    "CMD2 raw capture lost the photographed layout");
+			check(host.cid[0] == 0x66197842u &&
+			    host.cid[1] == 0x00900558u &&
+			    host.cid[2] == 0x36384D15u &&
+			    host.cid[3] == 0x01004400u,
+			    "decoded CID did not follow the standard SDHCI "
+			    "normalization");
+			check(host.cid[0] != host.cmd2_raw_response[0] ||
+			    host.cid[1] != host.cmd2_raw_response[1] ||
+			    host.cid[2] != host.cmd2_raw_response[2] ||
+			    host.cid[3] != host.cmd2_raw_response[3],
+			    "raw layout and decoded CID were not kept "
+			    "distinct");
+			start = response_window_find(&sim,
+			    GTA4L_EMMC_CMD2, 0);
+			check(start != 0xFFFFFFFFu,
+			    "CMD2 window was not read as a group");
+			if (start != 0xFFFFFFFFu) {
+				check(sim.response_read_clear[start] ==
+				    sim.cmd_issue_clear[GTA4L_EMMC_CMD2],
+				    "CMD2 window was captured after the "
+				    "post-command clear");
+			}
+		}
+		if (scenario_is(scenario, "cmd3-identify")) {
+			check(host.pre_cmd3_capture_valid == 1u,
+			    "identify-status run did not capture pre-CMD3 "
+			    "state");
+			check((host.pre_cmd3_normal &
+			    GTA4L_EMMC_INT_CC) == 0,
+			    "pre-CMD3 status already held a completion");
+			check(host.pre_cmd3_normal_enable ==
+			    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC |
+			    GTA4L_EMMC_INT_BRR),
+			    "pre-CMD3 normal enables do not match the core");
+			check(host.pre_cmd3_error_enable ==
+			    GTA4L_EMMC_INT_ERR_MASK,
+			    "pre-CMD3 error enables do not match the core");
+			check(host.poll_capture_valid == 1u,
+			    "identify-status run did not record the CMD3 "
+			    "poll");
+			check(host.poll_index == GTA4L_EMMC_CMD3,
+			    "identify-status poll is not for CMD3");
+			check(host.timeout_capture_valid == 0u,
+			    "identify-status run recorded a timeout capture");
+		}
+		if (scenario_is(scenario, "cmd3-stale-cc")) {
+			check(host.pre_cmd3_capture_valid == 1u,
+			    "stale-CC run did not capture pre-CMD3 state");
+			check((host.pre_cmd3_normal &
+			    GTA4L_EMMC_INT_CC) != 0,
+			    "stale completion did not survive the pre-CMD3 "
+			    "clear");
+			check(host.poll_capture_valid == 1u,
+			    "stale-CC run did not record the CMD3 poll");
+			check((host.poll_first_normal &
+			    GTA4L_EMMC_INT_CC) != 0,
+			    "stale-CC poll did not observe a completion");
+		}
+		if (scenario_is(scenario, "cmd3-enable-readback")) {
+			check(host.pre_cmd3_capture_valid == 1u,
+			    "enable-readback run did not capture pre-CMD3 "
+			    "state");
+			check(host.pre_cmd3_normal_enable == 0u,
+			    "normal enable readback mismatch was not "
+			    "captured");
+			check(host.pre_cmd3_error_enable == 0u,
+			    "error enable readback mismatch was not "
+			    "captured");
+			check(host.poll_capture_valid == 1u,
+			    "enable-readback run did not record the CMD3 "
+			    "poll");
+		}
+	} else if (scenario_is(scenario, "cmd7-cc-then-tc") ||
+	    scenario_is(scenario, "cmd7-tc-then-cc") ||
+	    scenario_is(scenario, "cmd7-simultaneous") ||
+	    scenario_is(scenario, "cmd7-terminal-change") ||
+	    scenario_is(scenario, "cmd7-last-poll") ||
+	    scenario_is(scenario, "cmd7-delayed-release") ||
+	    scenario_is(scenario, "cmd7-stale-status") ||
+	    scenario_is(scenario, "cmd0-irrelevant-tc") ||
+	    scenario_is(scenario, "cmd2-irrelevant-tc") ||
+	    scenario_is(scenario, "cmd3-irrelevant-tc")) {
+		check(host.cmd7_pre_capture_valid == 1u,
+		    "CMD7 success did not capture the pre-command state");
+		check(host.cmd7_poll_capture_valid == 1u,
+		    "CMD7 success did not record the poll");
+		check(host.cmd7_term_capture_valid == 1u,
+		    "CMD7 success did not capture the terminal state");
+		check(host.cmd7_cc_valid == 1u,
+		    "CMD7 success did not observe CC");
+		check(host.cmd7_tc_valid == 1u,
+		    "CMD7 success did not observe TC");
+		check((host.cmd7_poll_or_normal & GTA4L_EMMC_INT_CC) != 0,
+		    "CMD7 poll mask lost the observed CC");
+		check((host.cmd7_poll_or_normal & GTA4L_EMMC_INT_TC) != 0,
+		    "CMD7 poll mask lost the observed TC");
+		if (scenario_is(scenario, "cmd7-terminal-change")) {
+			check(host.cmd7_poll_last_normal ==
+			    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC),
+			    "terminal-change poll last sample is not CC|TC");
+			check(host.cmd7_term_normal ==
+			    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC |
+			    GTA4L_EMMC_INT_BRR),
+			    "CMD7 terminal sample lost the post-poll status "
+			    "change");
+		} else {
+			check(host.cmd7_term_normal ==
+			    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC),
+			    "CMD7 terminal sample does not hold both "
+			    "completions");
+		}
+		check(host.last_step == GTA4L_EMMC_STEP_READY,
+		    "CMD7 success did not reach READY");
+		check(sim.cmd_count == 8u,
+		    "CMD7 success did not complete identification");
+		check(sim.cmd7_early_command == 0,
+		    "a command was submitted before the busy release");
+		check(sim.response_read_before_cc == 0,
+		    "the response window was read before CC");
+		if (scenario_is(scenario, "cmd7-cc-then-tc")) {
+			check(host.cmd7_cc_iteration == 0u,
+			    "CC-then-TC run did not observe CC first");
+			check(host.cmd7_tc_iteration == 5u,
+			    "CC-then-TC run did not observe TC after five poll "
+			    "intervals");
+			check(host.cmd7_poll_iterations == 6u,
+			    "CC-then-TC run polled for the wrong number of "
+			    "iterations");
+			check(host.cmd7_poll_ticks == 50u,
+			    "CC-then-TC poll ticks do not match the modeled "
+			    "busy interval");
+			check(host.cmd7_trace_count == 2u,
+			    "CC-then-TC trace does not hold both samples");
+			check(host.cmd7_trace[0].normal ==
+			    GTA4L_EMMC_INT_CC &&
+			    host.cmd7_trace[1].normal ==
+			    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC),
+			    "CC-then-TC trace samples changed");
+		}
+		if (scenario_is(scenario, "cmd7-tc-then-cc")) {
+			check(host.cmd7_tc_valid == 1u &&
+			    host.cmd7_tc_iteration == 0u,
+			    "TC-then-CC run did not observe TC first");
+			check(host.cmd7_cc_iteration == 1u,
+			    "TC-then-CC run did not observe CC on the second "
+			    "sample");
+			check(host.cmd7_trace_count == 2u,
+			    "TC-then-CC trace does not hold both samples");
+			check(host.cmd7_trace[0].normal ==
+			    GTA4L_EMMC_INT_TC,
+			    "TC-then-CC trace first sample is not TC");
+			check(host.cmd7_trace[1].normal ==
+			    (GTA4L_EMMC_INT_TC | GTA4L_EMMC_INT_CC),
+			    "TC-then-CC trace second sample is not TC|CC");
+		}
+		if (scenario_is(scenario, "cmd7-simultaneous")) {
+			check(host.cmd7_cc_iteration == 0u &&
+			    host.cmd7_tc_iteration == 0u,
+			    "simultaneous completion was not seen on the first "
+			    "sample");
+			check(host.cmd7_poll_iterations == 1u,
+			    "zero-length busy interval polled more than once");
+			check(host.cmd7_trace_count == 1u,
+			    "simultaneous completion produced a transition "
+			    "trace");
+		}
+		if (scenario_is(scenario, "cmd7-last-poll")) {
+			check(host.cmd7_cc_iteration ==
+			    (GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US) - 1u &&
+			    host.cmd7_tc_iteration ==
+			    (GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US) - 1u,
+			    "last-poll completion was not seen on the final "
+			    "permitted sample");
+			check(host.cmd7_poll_iterations ==
+			    GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "last-poll run did not consume the full budget");
+			check(host.cmd7_poll_ticks ==
+			    (uint64_t)(host.cmd7_poll_iterations - 1u) *
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "last-poll tick count does not match the modeled "
+			    "delays");
+		}
+		if (scenario_is(scenario, "cmd7-delayed-release")) {
+			check(host.cmd7_tc_iteration == 20u,
+			    "delayed release was not observed at 200 us");
+			check(host.cmd7_poll_ticks == 200u,
+			    "delayed-release poll ticks are not 200 us");
+			check(sim.cmd7_release_time_us ==
+			    sim.cmd7_issue_time_us + 200u,
+			    "busy release time is not issue + 200 us");
+			check(sim.cmd7_next_issue_time_us >=
+			    sim.cmd7_release_time_us,
+			    "the next command was issued before the busy "
+			    "release");
+			check(sim.cmd7_next_index == GTA4L_EMMC_CMD13,
+			    "the command after CMD7 is not CMD13");
+		}
+		if (scenario_is(scenario, "cmd7-stale-status")) {
+			check(host.cmd7_pre_normal == 0u,
+			    "stale completion survived the pre-CMD7 clear");
+			check(host.cmd7_pre_error == 0u,
+			    "stale error survived the pre-CMD7 clear");
+		}
+		if (scenario_is(scenario, "cmd3-irrelevant-tc")) {
+			check(host.poll_capture_valid == 1u,
+			    "irrelevant-TC CMD3 poll was not recorded");
+			check(host.poll_iterations == 1u,
+			    "irrelevant TC did not stop the CMD3 poll at CC");
+			check((host.poll_first_normal &
+			    GTA4L_EMMC_INT_CC) != 0 &&
+			    (host.poll_first_normal &
+			    GTA4L_EMMC_INT_TC) != 0,
+			    "irrelevant-TC CMD3 poll did not observe CC|TC");
+		}
+		if (scenario_is(scenario, "cmd0-irrelevant-tc") ||
+		    scenario_is(scenario, "cmd2-irrelevant-tc") ||
+		    scenario_is(scenario, "cmd3-irrelevant-tc")) {
+			check(host.timeout_capture_valid == 0u,
+			    "an irrelevant TC caused a command timeout");
+		}
 	} else {
 		switch (result) {
 		case GTA4L_EMMC_ERR_VERSION:
@@ -1697,7 +2757,20 @@ main(int argc, char **argv)
 			    scenario_is(scenario, "power-churn");
 			break;
 		case GTA4L_EMMC_ERR_CMD_TIMEOUT:
-			expected = scenario_is(scenario, "cmd-timeout");
+			expected = scenario_is(scenario, "cmd-timeout") ||
+			    scenario_is(scenario, "cmd3-no-cc") ||
+			    scenario_is(scenario, "cmd3-late-cc") ||
+			    scenario_is(scenario, "cmd7-tc-only") ||
+			    scenario_is(scenario, "cmd7-fresh-window") ||
+			    scenario_is(scenario, "cmd7-busy-error") ||
+			    scenario_is(scenario, "cmd7-late-error") ||
+			    scenario_is(scenario, "cmd7-terminal-error") ||
+			    scenario_is(scenario, "cmd7-cc-only") ||
+			    scenario_is(scenario, "cmd7-neither") ||
+			    scenario_is(scenario, "cmd7-late-tc") ||
+			    scenario_is(scenario, "cmd7-trace-overflow") ||
+			    scenario_is(scenario, "cmd7-trace-plateau") ||
+			    scenario_is(scenario, "cmd7-trace-return");
 			break;
 		case GTA4L_EMMC_ERR_CMD_CRC:
 			expected = scenario_is(scenario, "cmd-crc") ||
@@ -1705,6 +2778,10 @@ main(int argc, char **argv)
 			    scenario_is(scenario, "cmd-crc-snapshot") ||
 			    scenario_is(scenario, "cmd0-crc") ||
 			    scenario_is(scenario, "cmd1-crc") ||
+			    scenario_is(scenario, "cmd2-crc-distinct") ||
+			    scenario_is(scenario, "cmd2-crc-unchanged") ||
+			    scenario_is(scenario, "cmd2-crc-ocr-like") ||
+			    scenario_is(scenario, "cmd1-not-ready-then-ready-crc") ||
 			    scenario_is(scenario,
 			    "cmd1-timeout-recovery-crc");
 			break;
@@ -1714,10 +2791,12 @@ main(int argc, char **argv)
 		case GTA4L_EMMC_ERR_DATA_TIMEOUT:
 			expected = scenario_is(scenario, "data-timeout-init") ||
 			    scenario_is(scenario, "no-tc-init") ||
-			    scenario_is(scenario, "no-brr-init");
+			    scenario_is(scenario, "no-brr-init") ||
+			    scenario_is(scenario, "cmd7-data-timeout-after-cc");
 			break;
 		case GTA4L_EMMC_ERR_DATA_CRC:
-			expected = scenario_is(scenario, "data-crc-init");
+			expected = scenario_is(scenario, "data-crc-init") ||
+			    scenario_is(scenario, "cmd7-data-crc-after-cc");
 			break;
 		case GTA4L_EMMC_ERR_CARD_NOT_READY:
 			expected = scenario_is(scenario, "card-not-ready") ||
@@ -1748,6 +2827,10 @@ main(int argc, char **argv)
 		    scenario_is(scenario, "cmd-crc-snapshot") ||
 		    scenario_is(scenario, "cmd0-crc") ||
 		    scenario_is(scenario, "cmd1-crc") ||
+		    scenario_is(scenario, "cmd2-crc-distinct") ||
+		    scenario_is(scenario, "cmd2-crc-unchanged") ||
+		    scenario_is(scenario, "cmd2-crc-ocr-like") ||
+		    scenario_is(scenario, "cmd1-not-ready-then-ready-crc") ||
 		    scenario_is(scenario, "cmd1-timeout-recovery-crc")) {
 			check(host.fail_valid == 1,
 			    "CRC failure was not captured");
@@ -1758,6 +2841,10 @@ main(int argc, char **argv)
 		if (scenario_is(scenario, "cmd-crc") ||
 		    scenario_is(scenario, "cmd-crc-with-cc") ||
 		    scenario_is(scenario, "cmd-crc-snapshot") ||
+		    scenario_is(scenario, "cmd2-crc-distinct") ||
+		    scenario_is(scenario, "cmd2-crc-unchanged") ||
+		    scenario_is(scenario, "cmd2-crc-ocr-like") ||
+		    scenario_is(scenario, "cmd1-not-ready-then-ready-crc") ||
 		    scenario_is(scenario, "cmd1-timeout-recovery-crc")) {
 			check(sim.last_cmd == GTA4L_EMMC_CMD2,
 			    "a later command was sent after the CMD2 CRC failure");
@@ -1814,6 +2901,158 @@ main(int argc, char **argv)
 			check(host.ocr ==
 			    (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
 			    "CMD2 failure run did not cache the ready OCR");
+			check(host.cmd1_response_valid == 1u,
+			    "recovered CMD1 run did not mark its window valid");
+			check(host.pre_cmd2_response_valid == 1u,
+			    "recovered CMD1 run did not capture the pre-CMD2 "
+			    "window");
+			check(host.cmd1_response[0] ==
+			    (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+			    "recovered CMD1 run did not capture the ready OCR");
+			check(host.fail_response[0] !=
+			    host.pre_cmd2_response[0] ||
+			    host.fail_response[1] !=
+			    host.pre_cmd2_response[1] ||
+			    host.fail_response[2] !=
+			    host.pre_cmd2_response[2] ||
+			    host.fail_response[3] !=
+			    host.pre_cmd2_response[3],
+			    "failed CMD2 window equals the pre-CMD2 window");
+		}
+		if (scenario_is(scenario, "cmd2-crc-distinct")) {
+			uint32_t expected[4];
+			uint32_t cmd1_start;
+			uint32_t pre_start;
+			uint32_t fail_start;
+
+			expected[3] = sim.cid[0] >> 8;
+			expected[2] = (sim.cid[1] >> 8) |
+			    ((sim.cid[0] & 0xFFu) << 24);
+			expected[1] = (sim.cid[2] >> 8) |
+			    ((sim.cid[1] & 0xFFu) << 24);
+			expected[0] = (sim.cid[3] >> 8) |
+			    ((sim.cid[2] & 0xFFu) << 24);
+
+			check(host.cmd1_response_valid == 1u,
+			    "final CMD1 raw window was not marked valid");
+			check(host.pre_cmd2_response_valid == 1u,
+			    "pre-CMD2 raw window was not marked valid");
+			check(host.cmd1_response[0] ==
+			    (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+			    "final CMD1 raw word 0 is not the ready OCR");
+			check(host.cmd1_response[1] == 0x01020304u,
+			    "final CMD1 raw word 1 was not captured");
+			check(host.cmd1_response[2] == 0x05060708u,
+			    "final CMD1 raw word 2 was not captured");
+			check(host.cmd1_response[3] == 0x090A0B0Cu,
+			    "final CMD1 raw word 3 was not captured");
+			check(host.pre_cmd2_response[0] ==
+			    host.cmd1_response[0] &&
+			    host.pre_cmd2_response[1] ==
+			    host.cmd1_response[1] &&
+			    host.pre_cmd2_response[2] ==
+			    host.cmd1_response[2] &&
+			    host.pre_cmd2_response[3] ==
+			    host.cmd1_response[3],
+			    "pre-CMD2 window is not the post-CMD1 window");
+			check(host.fail_response[0] == expected[0] &&
+			    host.fail_response[1] == expected[1] &&
+			    host.fail_response[2] == expected[2] &&
+			    host.fail_response[3] == expected[3],
+			    "failed-CMD2 window does not hold the raw CID "
+			    "layout");
+			check(host.fail_response[0] !=
+			    host.pre_cmd2_response[0] &&
+			    host.fail_response[1] !=
+			    host.pre_cmd2_response[1] &&
+			    host.fail_response[2] !=
+			    host.pre_cmd2_response[2] &&
+			    host.fail_response[3] !=
+			    host.pre_cmd2_response[3],
+			    "distinct CMD1/CMD2 windows share a word");
+
+			cmd1_start = response_window_find(&sim,
+			    GTA4L_EMMC_CMD1, 0);
+			pre_start = response_window_find(&sim,
+			    GTA4L_EMMC_CMD1, 1);
+			fail_start = response_window_find(&sim,
+			    GTA4L_EMMC_CMD2, 0);
+			check(cmd1_start != 0xFFFFFFFFu,
+			    "post-CMD1 window was not read as a group");
+			check(pre_start != 0xFFFFFFFFu,
+			    "pre-CMD2 window was not read as a group");
+			check(fail_start != 0xFFFFFFFFu,
+			    "failed-CMD2 window was not read as a group");
+			if ((cmd1_start != 0xFFFFFFFFu) &&
+			    (pre_start != 0xFFFFFFFFu) &&
+			    (fail_start != 0xFFFFFFFFu)) {
+				check(sim.response_read_clear[pre_start] >
+				    sim.response_read_clear[cmd1_start],
+				    "pre-CMD2 window was not captured after a "
+				    "later status clear");
+				check(sim.response_read_clear[pre_start] ==
+				    sim.cmd_clear_count,
+				    "pre-CMD2 window was not captured after "
+				    "the last status clear");
+				check(sim.response_read_clear[fail_start] ==
+				    sim.cmd_clear_count,
+				    "failed-CMD2 window was not captured "
+				    "before the post-failure clear");
+			}
+		}
+		if (scenario_is(scenario, "cmd2-crc-unchanged")) {
+			check(host.cmd1_response_valid == 1u,
+			    "unchanged-window run lost the final CMD1 window");
+			check(host.pre_cmd2_response_valid == 1u,
+			    "unchanged-window run did not capture pre-CMD2");
+			check(host.cmd1_response[0] ==
+			    (GTA4L_EMMC_OCR_VALUE | 0x80000000u),
+			    "unchanged-window CMD1 word 0 is not the OCR");
+			check(host.cmd1_response[1] == 0u &&
+			    host.cmd1_response[2] == 0u &&
+			    host.cmd1_response[3] == 0u,
+			    "unchanged-window CMD1 words 1..3 are not zero");
+			check(host.pre_cmd2_response[0] ==
+			    host.cmd1_response[0] &&
+			    host.pre_cmd2_response[1] ==
+			    host.cmd1_response[1] &&
+			    host.pre_cmd2_response[2] ==
+			    host.cmd1_response[2] &&
+			    host.pre_cmd2_response[3] ==
+			    host.cmd1_response[3],
+			    "pre-CMD2 window changed without a CMD2 update");
+			check(host.fail_response[0] ==
+			    host.pre_cmd2_response[0] &&
+			    host.fail_response[1] ==
+			    host.pre_cmd2_response[1] &&
+			    host.fail_response[2] ==
+			    host.pre_cmd2_response[2] &&
+			    host.fail_response[3] ==
+			    host.pre_cmd2_response[3],
+			    "failed window changed though the controller kept "
+			    "the response");
+		}
+		if (scenario_is(scenario, "cmd2-crc-ocr-like")) {
+			check(host.cmd1_response_valid == 1u,
+			    "OCR-like run lost the final CMD1 window");
+			check(host.pre_cmd2_response_valid == 1u,
+			    "OCR-like run did not capture pre-CMD2");
+			check(host.pre_cmd2_response[0] ==
+			    (GTA4L_EMMC_OCR_VALUE | 0x80000000u) &&
+			    host.pre_cmd2_response[1] == 0u &&
+			    host.pre_cmd2_response[2] == 0u &&
+			    host.pre_cmd2_response[3] == 0u,
+			    "OCR-like pre-CMD2 window is not the CMD1 OCR");
+			check(host.fail_response[0] == 0u &&
+			    host.fail_response[1] == 0u &&
+			    host.fail_response[2] == 0x80000000u &&
+			    host.fail_response[3] == 0x00C0FF80u,
+			    "OCR-like failed-command window was not captured");
+			check(host.fail_response[2] !=
+			    host.pre_cmd2_response[2] ||
+			    host.fail_response[3] !=
+			    host.pre_cmd2_response[3],
+			    "rearranged window was not distinguished");
 		}
 		if (scenario_is(scenario, "cmd1-timeout-exhausted")) {
 			check(host.fail_valid == 1,
@@ -1834,6 +3073,10 @@ main(int argc, char **argv)
 			    "exhausted CMD1 run did not record every timeout");
 			check(host.ocr == 0u,
 			    "an unready card cached an OCR value");
+			check(host.cmd1_response_valid == 0u,
+			    "unreached CMD1 baseline was marked valid");
+			check(host.pre_cmd2_response_valid == 0u,
+			    "unreached CMD2 window was marked valid");
 		}
 		if (scenario_is(scenario, "clock-branch-apps-fail") ||
 		    scenario_is(scenario, "clock-branch-ahb-fail")) {
@@ -1933,6 +3176,377 @@ main(int argc, char **argv)
 		    scenario_is(scenario, "cmd3-error")) {
 			check(host.fail_valid == 0,
 			    "non-command failure recorded a command failure");
+		}
+		if (scenario_is(scenario, "card-not-ready")) {
+			check(host.cmd1_response_valid == 0u,
+			    "never-ready CMD1 baseline was marked valid");
+			check(host.pre_cmd2_response_valid == 0u,
+			    "never-ready run captured a pre-CMD2 window");
+		}
+		if (scenario_is(scenario, "cmd3-no-cc") ||
+		    scenario_is(scenario, "cmd3-late-cc")) {
+			check(host.fail_valid == 1,
+			    "CMD3 timeout was not captured");
+			check(host.fail_index == GTA4L_EMMC_CMD3,
+			    "CMD3 timeout did not capture CMD3");
+			check(host.fail_command == 0x031Au,
+			    "timed-out CMD3 encoding mismatch");
+			check(host.fail_error == 0u,
+			    "timed-out CMD3 has a spurious error status");
+			check(host.fail_step == GTA4L_EMMC_STEP_CMD2,
+			    "CMD3 timeout step is not CMD2");
+			check(host.cmd2_capture_valid == 1u,
+			    "CMD3 timeout lost the CMD2 capture");
+			check(host.pre_cmd3_capture_valid == 1u,
+			    "CMD3 timeout did not capture pre-CMD3 state");
+			check(host.poll_capture_valid == 1u,
+			    "CMD3 timeout did not record the poll");
+			check(host.poll_index == GTA4L_EMMC_CMD3,
+			    "recorded poll is not for CMD3");
+			check(host.poll_iterations ==
+			    GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "CMD3 timeout poll did not run to exhaustion");
+			check(host.poll_ticks ==
+			    (uint64_t)host.poll_iterations *
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "CMD3 poll tick count does not match the "
+			    "simulated delays");
+			check(host.timeout_capture_valid == 1u,
+			    "CMD3 timeout did not capture fresh state");
+			check(host.timeout_command == 0x031Au,
+			    "timed-out CMD3 readback mismatch");
+			check(host.timeout_argument ==
+			    (GTA4L_EMMC_DEFAULT_RCA << 16),
+			    "timed-out CMD3 argument readback mismatch");
+			check(host.timeout_response_stable == 1u,
+			    "post-timeout response window changed before the "
+			    "clear");
+		}
+		if (scenario_is(scenario, "cmd3-no-cc")) {
+			check((host.poll_first_normal &
+			    GTA4L_EMMC_INT_CC) == 0,
+			    "no-CC run saw a completion in the first sample");
+			check((host.poll_last_normal &
+			    GTA4L_EMMC_INT_CC) == 0,
+			    "no-CC run saw a completion in the last sample");
+			check((host.timeout_normal &
+			    GTA4L_EMMC_INT_CC) == 0,
+			    "no-CC run saw a completion after the timeout");
+		}
+		if (scenario_is(scenario, "cmd3-late-cc")) {
+			check((host.poll_first_normal &
+			    GTA4L_EMMC_INT_CC) == 0,
+			    "late-CC run saw a completion in the first "
+			    "sample");
+			check((host.poll_last_normal &
+			    GTA4L_EMMC_INT_CC) == 0,
+			    "late-CC run saw a completion in the last "
+			    "sample");
+			check((host.timeout_normal &
+			    GTA4L_EMMC_INT_CC) != 0,
+			    "late-CC run did not see the post-timeout "
+			    "completion");
+		}
+		if (scenario_is(scenario, "cmd7-tc-only") ||
+		    scenario_is(scenario, "cmd7-fresh-window") ||
+		    scenario_is(scenario, "cmd7-busy-error") ||
+		    scenario_is(scenario, "cmd7-late-error") ||
+		    scenario_is(scenario, "cmd7-terminal-error") ||
+		    scenario_is(scenario, "cmd7-cc-only") ||
+		    scenario_is(scenario, "cmd7-neither") ||
+		    scenario_is(scenario, "cmd7-late-tc") ||
+		    scenario_is(scenario, "cmd7-data-timeout-after-cc") ||
+		    scenario_is(scenario, "cmd7-data-crc-after-cc") ||
+		    scenario_is(scenario, "cmd7-trace-overflow") ||
+		    scenario_is(scenario, "cmd7-trace-plateau") ||
+		    scenario_is(scenario, "cmd7-trace-return")) {
+			check(host.fail_valid == 1,
+			    "CMD7 timeout was not captured");
+			check(host.fail_index == GTA4L_EMMC_CMD7,
+			    "CMD7 timeout did not capture CMD7");
+			check(host.fail_command == 0x071Bu,
+			    "timed-out CMD7 encoding mismatch");
+			check(host.fail_argument ==
+			    (GTA4L_EMMC_DEFAULT_RCA << 16),
+			    "timed-out CMD7 argument mismatch");
+			check(host.fail_step == GTA4L_EMMC_STEP_CMD9,
+			    "CMD7 timeout step is not CMD9");
+			check(host.cmd7_pre_capture_valid == 1u,
+			    "CMD7 timeout did not capture pre-command state");
+			check(host.cmd7_poll_capture_valid == 1u,
+			    "CMD7 timeout did not record the poll");
+			check(host.cmd7_term_capture_valid == 1u,
+			    "CMD7 timeout did not capture terminal state");
+			check(host.cmd7_term_command == 0x071Bu,
+			    "terminal CMD7 readback mismatch");
+			check(host.cmd7_term_argument ==
+			    (GTA4L_EMMC_DEFAULT_RCA << 16),
+			    "terminal CMD7 argument readback mismatch");
+			check(sim.last_cmd == GTA4L_EMMC_CMD7,
+			    "a later command followed the CMD7 failure");
+			check(sim.cmd_count == 6u,
+			    "CMD7 failure did not stop identification");
+		}
+		if (scenario_is(scenario, "cmd7-tc-only") ||
+		    scenario_is(scenario, "cmd7-fresh-window")) {
+			check(host.timeout_capture_valid == 1u,
+			    "CMD7 timeout did not capture fresh state");
+			check(host.timeout_index == GTA4L_EMMC_CMD7,
+			    "CMD7 timeout capture names another command");
+			check(host.cmd7_cc_valid == 0u,
+			    "TC-only timeout observed a command completion");
+			check(host.cmd7_tc_valid == 1u &&
+			    host.cmd7_tc_iteration == 0u,
+			    "TC-only timeout did not observe TC first");
+			check((host.cmd7_poll_or_normal &
+			    GTA4L_EMMC_INT_TC) != 0,
+			    "TC-only poll mask lost the observed TC");
+			check((host.cmd7_poll_or_normal &
+			    GTA4L_EMMC_INT_CC) == 0,
+			    "TC-only poll mask claims an observed CC");
+			check(host.cmd7_poll_iterations ==
+			    GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "TC-only poll did not run to exhaustion");
+			check(host.cmd7_poll_ticks ==
+			    (uint64_t)host.cmd7_poll_iterations *
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "CMD7 poll tick count does not match the "
+			    "simulated delays");
+			check(host.cmd7_trace_count == 1u,
+			    "TC-only run recorded a transition");
+			check(host.cmd7_trace_overflow == 0u,
+			    "TC-only trace overflowed");
+			check(host.fail_error == 0u,
+			    "TC-only timeout has a spurious error status");
+			check(host.fail_normal == GTA4L_EMMC_INT_TC,
+			    "TC-only failure status is not TC");
+			check(sim.response_read_before_cc == 0,
+			    "TC-only run read the response before CC");
+		}
+		if (scenario_is(scenario, "cmd7-tc-only")) {
+			/* The retained window is equal before and after
+			 * CMD7. That is an observation, not proof that the
+			 * controller failed to update it. */
+			check(host.cmd7_pre_response[0] ==
+			    host.cmd7_term_response[0] &&
+			    host.cmd7_pre_response[1] ==
+			    host.cmd7_term_response[1] &&
+			    host.cmd7_pre_response[2] ==
+			    host.cmd7_term_response[2] &&
+			    host.cmd7_pre_response[3] ==
+			    host.cmd7_term_response[3],
+			    "retained CMD7 window changed");
+			check(host.timeout_response_stable == 1u,
+			    "two post-timeout samples disagreed");
+		}
+		if (scenario_is(scenario, "cmd7-fresh-window")) {
+			check(host.cmd7_term_response[0] == 0x40400CF6u &&
+			    host.cmd7_term_response[1] == 0xDBFFEF0Fu &&
+			    host.cmd7_term_response[2] == 0x5903FF00u &&
+			    host.cmd7_term_response[3] == 0x00070000u,
+			    "fresh CMD7 window was not captured");
+			check(host.cmd7_pre_response[0] !=
+			    host.cmd7_term_response[0] ||
+			    host.cmd7_pre_response[1] !=
+			    host.cmd7_term_response[1] ||
+			    host.cmd7_pre_response[2] !=
+			    host.cmd7_term_response[2] ||
+			    host.cmd7_pre_response[3] !=
+			    host.cmd7_term_response[3],
+			    "fresh CMD7 window equals the retained window");
+			/* Two agreeing post-timeout samples do not make the
+			 * window stale; it differs from the pre-CMD7 window. */
+			check(host.timeout_response_stable == 1u,
+			    "two post-timeout samples disagreed");
+		}
+		if (scenario_is(scenario, "cmd7-busy-error")) {
+			check((host.fail_error &
+			    GTA4L_EMMC_INT_ERR_CMD_TIMEOUT) != 0,
+			    "busy-phase error was not captured");
+			check(host.cmd7_poll_iterations == 1u,
+			    "busy-phase error was not seen on the first poll");
+			check(host.cmd7_poll_ticks == 0u,
+			    "busy-phase error advanced the poll clock");
+			check(host.cmd7_cc_valid == 1u,
+			    "busy-phase error run did not observe CC");
+			check(host.cmd7_term_error ==
+			    GTA4L_EMMC_INT_ERR_CMD_TIMEOUT,
+			    "terminal sample lost the busy-phase error");
+		}
+		if (scenario_is(scenario, "cmd7-cc-only")) {
+			check(host.cmd7_cc_valid == 1u,
+			    "CC-only run did not observe CC");
+			check(host.cmd7_tc_valid == 0u,
+			    "CC-only run observed a busy completion");
+			check(host.cmd7_poll_iterations ==
+			    GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "CC-only run did not exhaust the budget");
+			check(host.cmd7_poll_ticks ==
+			    (uint64_t)host.cmd7_poll_iterations *
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "CC-only tick count does not match the modeled "
+			    "busy interval");
+			check(host.fail_normal == GTA4L_EMMC_INT_CC,
+			    "CC-only failure status is not CC");
+			check(host.fail_error == 0u,
+			    "CC-only timeout has a spurious error status");
+			check(sim.cmd7_early_command == 0,
+			    "CC-only run submitted a command before release");
+		}
+		if (scenario_is(scenario, "cmd7-neither")) {
+			check(host.cmd7_cc_valid == 0u &&
+			    host.cmd7_tc_valid == 0u,
+			    "no-completion run observed an event");
+			check(host.cmd7_poll_iterations ==
+			    GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "no-completion run did not exhaust the budget");
+			check(host.fail_normal == 0u,
+			    "no-completion failure status is not clear");
+		}
+		if (scenario_is(scenario, "cmd7-late-tc")) {
+			check(host.cmd7_cc_valid == 1u,
+			    "late-TC run did not observe CC");
+			check(host.cmd7_tc_valid == 0u,
+			    "late-TC run observed TC in-budget");
+			check((host.timeout_normal &
+			    GTA4L_EMMC_INT_TC) != 0,
+			    "late-TC run did not expose TC after the budget");
+			check(host.cmd7_poll_iterations ==
+			    GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "late-TC run did not exhaust the budget");
+		}
+		if (scenario_is(scenario, "cmd7-late-error")) {
+			check((host.fail_error &
+			    GTA4L_EMMC_INT_ERR_CMD_TIMEOUT) != 0,
+			    "final-sample error was not mapped");
+			check(host.cmd7_cc_valid == 1u &&
+			    host.cmd7_tc_valid == 1u,
+			    "late-error run lost an in-budget completion");
+			check(host.cmd7_poll_iterations == 1u,
+			    "late-error run polled past the first sample");
+			check(host.cmd7_poll_ticks == 1u,
+			    "late-error run did not advance the explicit "
+			    "response-read latency");
+			check((host.cmd7_term_error &
+			    GTA4L_EMMC_INT_ERR_CMD_TIMEOUT) != 0,
+			    "terminal sample lost the final error");
+			check(sim.response_read_before_cc == 0,
+			    "late-error run read the response before CC");
+		}
+		if (scenario_is(scenario, "cmd7-terminal-error")) {
+			check((host.fail_error &
+			    GTA4L_EMMC_INT_ERR_CMD_TIMEOUT) != 0,
+			    "terminal-read error was not mapped");
+			check(host.cmd7_cc_valid == 1u &&
+			    host.cmd7_tc_valid == 1u,
+			    "terminal-error run lost an in-budget completion");
+			check(host.cmd7_poll_iterations == 1u,
+			    "terminal-error run polled past the first sample");
+			check(host.cmd7_poll_ticks == 1u,
+			    "terminal-error run did not advance the explicit "
+			    "response-read latency");
+			check(host.cmd7_term_error == 0u,
+			    "terminal capture saw an error before the "
+			    "terminal reads");
+			check(sim.cmd7_error_due == 1,
+			    "terminal-read error never became due");
+			check(sim.response_read_before_cc == 0,
+			    "terminal-error run read the response before CC");
+		}
+		if (scenario_is(scenario, "cmd7-data-timeout-after-cc") ||
+		    scenario_is(scenario, "cmd7-data-crc-after-cc")) {
+			uint16_t expected_error =
+			    scenario_is(scenario,
+			    "cmd7-data-timeout-after-cc") ?
+			    GTA4L_EMMC_INT_ERR_DATA_TIMEOUT :
+			    GTA4L_EMMC_INT_ERR_DATA_CRC;
+
+			check((host.fail_error & expected_error) != 0,
+			    "post-CC data error was not preserved");
+			check(host.cmd7_cc_valid == 1u,
+			    "post-CC data error run lost CC");
+			check(host.cmd7_tc_valid == 0u,
+			    "post-CC data error run observed TC first");
+			check(host.cmd7_poll_iterations == 6u,
+			    "post-CC data error was not seen at 50 us");
+			check(host.cmd7_poll_ticks == 50u,
+			    "post-CC data error poll ticks are not 50 us");
+			check((host.cmd7_term_error & expected_error) != 0,
+			    "terminal sample lost the post-CC data error");
+			check(sim.response_read_before_cc == 0,
+			    "response read before CC in a data-error run");
+			check(sim.cmd7_early_command == 0,
+			    "a command was submitted after the data error");
+		}
+		if (scenario_is(scenario, "cmd7-trace-overflow")) {
+			check(host.cmd7_trace_count ==
+			    GTA4L_EMMC_CMD7_TRACE_ENTRIES,
+			    "bounded trace did not fill");
+			check(host.cmd7_trace_overflow ==
+			    (GTA4L_EMMC_CMD_TIMEOUT_US /
+			    GTA4L_EMMC_POLL_STEP_US) - 4u,
+			    "overflow count is not the number of observed "
+			    "changes after the first four entries");
+			check(host.cmd7_trace[0].normal ==
+			    GTA4L_EMMC_INT_BRR &&
+			    host.cmd7_trace[1].normal == 0u &&
+			    host.cmd7_trace[2].normal ==
+			    GTA4L_EMMC_INT_BRR &&
+			    host.cmd7_trace[3].normal == 0u,
+			    "alternating trace first four entries changed");
+			check(host.cmd7_cc_valid == 0u,
+			    "overflow run observed a command completion");
+		}
+		if (scenario_is(scenario, "cmd7-trace-plateau")) {
+			check(host.cmd7_trace_count ==
+			    GTA4L_EMMC_CMD7_TRACE_ENTRIES,
+			    "plateau trace did not fill");
+			check(host.cmd7_trace_overflow == 4u,
+			    "plateau trace did not count exactly the four "
+			    "observed changes after the store filled");
+			check(host.cmd7_trace[0].normal == 0u &&
+			    host.cmd7_trace[1].normal ==
+			    GTA4L_EMMC_INT_BRR &&
+			    host.cmd7_trace[2].normal == 0u &&
+			    host.cmd7_trace[3].normal ==
+			    GTA4L_EMMC_INT_BRR,
+			    "plateau trace first four entries changed");
+			check(host.cmd7_trace[0].iteration == 0u &&
+			    host.cmd7_trace[1].iteration == 1u &&
+			    host.cmd7_trace[2].iteration == 2u &&
+			    host.cmd7_trace[3].iteration == 3u,
+			    "plateau trace iterations changed");
+			check(host.fail_normal == GTA4L_EMMC_INT_BRR,
+			    "plateau timeout did not end at the scripted "
+			    "plateau");
+		}
+		if (scenario_is(scenario, "cmd7-trace-return")) {
+			check(host.cmd7_trace_count ==
+			    GTA4L_EMMC_CMD7_TRACE_ENTRIES,
+			    "return trace did not fill");
+			check(host.cmd7_trace_overflow == 4u,
+			    "return trace did not count the transition back "
+			    "to the last stored state");
+			check(host.cmd7_trace[0].normal ==
+			    GTA4L_EMMC_INT_BRR &&
+			    host.cmd7_trace[1].normal == 0u &&
+			    host.cmd7_trace[2].normal ==
+			    GTA4L_EMMC_INT_BRR &&
+			    host.cmd7_trace[3].normal == 0u,
+			    "return trace first four entries changed");
+			check(host.cmd7_trace[0].iteration == 0u &&
+			    host.cmd7_trace[1].iteration == 1u &&
+			    host.cmd7_trace[2].iteration == 2u &&
+			    host.cmd7_trace[3].iteration == 3u,
+			    "return trace iterations changed");
+			check(host.fail_normal == 0u,
+			    "return timeout did not end at the scripted "
+			    "plateau");
 		}
 	}
 
