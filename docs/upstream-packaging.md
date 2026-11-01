@@ -190,7 +190,12 @@ Do not dispatch the workflow until the artifact limit is resolved and the run
 is separately authorized. A missing Xcode 26.6 or runner image change fails
 fast in the toolchain step; that has not been exercised.
 
-The existing gta4l kernel workflow is not the canonical packaging action: it
-pins a different UniXNU fork, contains local Xcode/Nabu/token patches and does
-not call `scripts/package.sh`. It is left unchanged. Do not dispatch it from
-this record.
+The three legacy kernel workflows (`build-xnu-kernel-gta4l.yaml`,
+`workflowtest.yaml`, `workingworkflow.yaml`) and `.circleci/config.yml` are not
+the canonical packaging action: they pin a different UniXNU fork, use mutable
+action tags or a connected CI service, contain local Xcode/Nabu/token patches
+and do not call `scripts/package.sh`. They are left unchanged; do not dispatch
+them from this record. `porting-record.yml` runs on push and pull_request and
+calls the reusable UniXNU check at `UniXNU/UniXNU@main`; that moving upstream
+ref is an accepted, non-publishing record dependency, not a source pin for a
+release build.
