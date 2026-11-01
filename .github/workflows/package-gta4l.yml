@@ -81,10 +81,10 @@ jobs:
 
       - name: Install and assert tools
         run: |
-          brew install dtc llvm lld cmake mtools ninja unifdef blacktop/tap/ipsw
+          brew install dtc llvm lld cmake mtools ninja unifdef
           ok=1
-          for tool in git make clang cmake ninja dtc fdtget fdtput aea compression_tool \
-                      mformat mcopy ipsw unifdef xcodebuild python3; do
+          for tool in git make clang cmake ninja dtc fdtget fdtput hdiutil compression_tool \
+                      mformat mcopy unifdef xcodebuild python3; do
             command -v "$tool" >/dev/null || { echo "missing tool: $tool"; ok=0; }
           done
           llvm="$(brew --prefix llvm)"

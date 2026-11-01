@@ -140,10 +140,11 @@ Host results for the adopted tree (2026-11-01):
   reordered XNU reports, missing caches and deterministic output.
 - `scripts/test-gta4l-boot-image.py`, `scripts/test-gta4l-diagnostic-package.py`
   and `scripts/test-gta4l-diagnostic-payload.py` pass.
-- The UniXNU unit suite passes (72 tests, 1 skipped). It covers the production
+- The UniXNU unit suite passes (73 tests, 1 skipped). It covers the production
   context, argument parsing, profile validation, feed precedence, saved-state
-  and environment handling, the offline inspection resolver, redaction and
-  IPSW cleanup. Profile resolution accepts `17` and the full name and rejects
+  and environment handling, the offline inspection resolver, redaction of
+  tokens, signed URLs and the platform seed, and IPSW cleanup. Profile
+  resolution accepts `17` and the full name and rejects
   `26`, `27`, an absent profile, a missing defconfig mapping and an `arm64e`
   profile. The release command's step order, `--check`, `--no-deps` and
   failure-stop behavior at every step are covered with mocks. Per-OS overrides
@@ -166,15 +167,19 @@ byte-identical to the template.
 static-validated only and has not run on a runner. It is manual-dispatch only,
 pins the actions and all three source checkouts, keeps `contents: read`,
 uses a bounded concurrency group and timeout, installs and asserts the
-toolchain, validates the platform seed, and runs the profile check and the
-full release for `ipados-17.7.11-21H461` only. Because the 192 MiB payload
-exceeds the BOOT partition, the release verify step is expected to fail and no
-artifact is uploaded; the upload step is limited to the four release outputs
-with one-day retention.
+toolchain, validates the platform seed, runs the host contract tests, and then
+runs the profile check and the full release for `ipados-17.7.11-21H461` only.
+The profile check uses `--check`, which runs the dependency/IPSW preparation;
+it is not an offline lint command. Because the 192 MiB payload exceeds the BOOT
+partition, the release verify step is expected to fail. Image publication is
+disabled: there is no upload step and no `if: success()` upload gate.
 
 The UniXNU pin is `f50d5bd5093ede81f8c1897b8ce5c93473c0fb7b` on
 `DokuroMitsukai/UniXNU`, the tip of the published
-`gta4l-release-pipeline` branch, so the checkout resolves. A dispatch
+`gta4l-release-pipeline` branch, so the checkout resolves. The local branch has
+later unpublished commits, including the platform-seed redaction: until the pin
+advances to a published commit, the runner relies on GitHub Actions secret
+masking for the seed. A dispatch
 still requires this workflow file on the device default branch, which this
 branch does not change. The firmware pin is the recorded Mu-Silicium
 integration commit, checked out without submodules: the build initializes only

@@ -140,13 +140,14 @@ class WorkflowTests(unittest.TestCase):
 
     def test_tool_assertions_match_the_shared_tool_lookup(self):
         tools = self.run_text('Install and assert tools')
-        for package in ('dtc', 'llvm', 'lld', 'cmake', 'mtools', 'ninja', 'unifdef',
-                        'blacktop/tap/ipsw'):
+        for package in ('dtc', 'llvm', 'lld', 'cmake', 'mtools', 'ninja', 'unifdef'):
             self.assertIn(package, tools)
         for tool in ('clang', 'llvm-objcopy', 'llvm-nm', 'fdtput', 'fdtget',
-                     'compression_tool', 'mformat', 'mcopy', 'aea', 'unifdef',
+                     'compression_tool', 'hdiutil', 'mformat', 'mcopy', 'unifdef',
                      'xcodebuild'):
             self.assertIn(tool, tools)
+        self.assertNotIn('ipsw', tools)
+        self.assertNotIn('aea', tools)
         self.assertIn('$(brew --prefix llvm)', tools)
         self.assertIn('$(brew --prefix lld)', tools)
         self.assertIn('llvm-config', tools)
