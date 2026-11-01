@@ -48,9 +48,19 @@ partition layout, payload policy and packaging.
   CMD7 CC and TC observed) on three units (the owner's SM-T505N and two
   owner-reported SM-T505s). The result is owner-supplied text without a photo
   file in the tree, supports a timing-sensitive contribution but does not
-  establish the CMD2 cause, and the delay is not proven necessary. No
-  block device, sector read, filesystem, DMA, CQE, ICE or write path exists and
-  CRC checking remains enabled. See [docs/emmc-driver.md](docs/emmc-driver.md),
+  establish the CMD2 cause, and the delay is not proven necessary. On
+  2026-11-02 the stage-1 image, built from the same source, completed
+  identification and both read-only `CMD17` PIO reads (blocks 0 and 1) on the
+  owner's SM-T505N and one of those SM-T505s. Both reports show `step=15`,
+  `log=7`, a protective-MBR type `0xEE` entry starting at LBA 1 in block 0,
+  the `EFI PART` GPT header in block 1 and the recovery-known CSD; the owner's
+  unit also shows the recovery-known CID. The T505N BOOT-only flash and
+  readback record is under
+  `out/gta4l/ram-root-emmc-probe-stage1-evidence/`; the SM-T505 run has no
+  flash record in the tree and its image identity is owner-reported/shared.
+  This is first sector-read content evidence, not a filesystem, block-device,
+  multi-block, DMA, CQE, ICE or write result, and CRC checking remains enabled.
+  See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and
   [docs/emmc-cmd7-timeout-finding.md](docs/emmc-cmd7-timeout-finding.md).

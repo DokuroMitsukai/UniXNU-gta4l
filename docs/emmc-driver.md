@@ -12,8 +12,11 @@ owner) failed at CMD2 with the same `-8` record as the first current-source
 run, so the CMD7 capture was not exercised `[C]`; the 2026-11-01 `cmd1gap`
 candidate added only an 8-us post-ready-CMD1 delay and completed full stage-3
 identification on the owner's SM-T505N and two owner-reported SM-T505s,
-including the CMD7 CC+TC capture `[C]`. Card identification is therefore
-observed on that candidate; sector reads and the later stages remain `[U]`. The
+including the CMD7 CC+TC capture `[C]`. The 2026-11-02 stage-1 image then
+completed identification and both read-only `CMD17` reads (blocks 0 and 1) on
+the owner's SM-T505N and one of those SM-T505s `[C]`. Card identification and
+single-block sector reads are therefore observed; multi-block reads, a
+filesystem, block-device publication and the later stages remain `[U]`. The
 core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
@@ -985,6 +988,50 @@ owner-supplied. Identification only: no sector read, bus-width change,
 high-speed mode, DMA, CQE, ICE, write, block-device publication or mount was
 issued, and CRC checking remains enabled.
 
+### 5.3.5 Stage-1 full-probe result (2026-11-02)
+
+The stage-1 image is the full probe (`gta4l-emmc-probe=1`) built from commit
+`417acc4d` (clean) with the committed `cmd1gap` source (`Gta4lEmmc.c
+874e6878…`, `Gta4lEmmc.h 5dd223f7…`, `Gta4lEmmcProbe.c 932552a2…`). Its
+archive is `e2a013e2…`, payload kernel `194c909f…`, payload `42e7a518…`
+(83,886,080 bytes, contract 7/7) and boot image `bf73a39b…` (85,688,320
+bytes, gate 18/18 against the v5 baseline `ce4d76e8…`). The BOOT-only flash
+record is
+`out/gta4l/ram-root-emmc-probe-stage1-evidence/flash-record.json`: pre-flash
+`92f4000e…` (the §5.3.4 image plus its unchanged tail), post-flash
+`421e8848…`, image-byte readback `bf73a39b…`, tail `a28b4ea2…` unchanged,
+`RECOVERY` `14e11370…` unchanged, pulled gate 18/18 and pulled payload contract
+7/7. The record was written before the boot. The same image was shared for a
+second unit; that unit has no flash record in this tree.
+
+The owner booted it on the owner's SM-T505N and on the SM-T505 whose CID is the
+first SM-T505 column in `docs/emmc-cmd2-crc-audit.md` §2.11. Both runs reached
+`GTA4L-EMMC PROBE REPORT: rc=0` and stopped at the intentional report panic
+after both `CMD17` reads, with `mci=10000072 rca=1 cap=61071360 rev=8 bw=0
+ocr=c0ff8080 hc2=0008 ven=00018a9c dll=6000642c dst=00000000 pst=00000000
+step=15 log=7`. The common report also carries the recovery-known CSD
+`d0270132 0f5903ff f6dbffef 8e404000`; on the owner's unit the CID matches the
+recovery-known CID. The two block reports are identical in their selected
+words: `BLOCK0 sum=62084b66 words=00000000 00000000 000000ee 00000001` (a
+protective-MBR type `0xEE` entry with start LBA 1) and `BLOCK1
+words=20494645 54524150 00010000 0000005c` (`EFI PART`, revision 1.0, 92-byte
+GPT header). The `BLOCK1` sum differs between units (`84d0543e`/`425cd1ab`)
+and the `BLOCK0` sum does not (`62084b66`); the sum is the probe's
+`sum*31 + byte` content fingerprint, so the per-device GPT header (disk GUID,
+header CRC and related fields) explains the difference without implying
+corruption. The selected words do not include the `0x55AA` MBR signature or
+the GPT header CRC, so those fields are covered by the full-sector fingerprint
+but are not independently printed.
+
+The reports are owner-supplied screen photographs without a photo file or hash
+in the tree; the SM-T505 unit has no flash record, and its attribution and
+image identity are owner-reported/shared. The run is read-only: no write,
+bus-width change, high-speed mode, DMA, CQE, ICE, mount, root switch or
+block-device publication. It establishes the first sector-read and MBR/GPT
+content evidence for blocks 0 and 1, not a filesystem, broader media
+reliability, or independent validation of the MBR/GPT CRC fields. The full
+transcription and field comparison are in `docs/emmc-cmd2-crc-audit.md` §2.12.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
@@ -998,8 +1045,9 @@ On a full success the probe panics with a report containing:
 
 Stage 2 stops with `GTA4L-EMMC HOST REPORT` and stage 3 with
 `GTA4L-EMMC IDENT REPORT`. The §5.3.4 candidate completed the stage-3
-identification report on three units; the full stage-1 report, which adds the
-block 0/block 1 sums and words, has not run. On failure the probe reports the
+identification report on three units; the §5.3.5 stage-1 image then completed
+the full report, including the block 0/block 1 reads, on the owner's SM-T505N
+and one SM-T505. On failure the probe reports the
 stage, result code,
 the `clocks` flag, MCI version, power/clock/`HOST_CONTROL2`/vendor/DLL registers,
 power-control status, GCC CFG/CMD/BCR/APPS-CBCR/AHB-CBCR, the last completed
@@ -1025,8 +1073,11 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   CMD2, CMD3 and CMD9 and stopped at a CMD7 R1b completion timeout `[C]`; the
   2026-11-01 `fmt=4` runs failed at CMD2 with the same `-8` record, so they did
   not exercise the CMD7 capture `[C]`; the 2026-11-01 `cmd1gap` candidate
-  completed identification, including CC+TC on CMD7, on three units `[C]`; a
-  sector read and the full stage-1 probe have not run `[U]`.
+  completed identification, including CC+TC on CMD7, on three units `[C]`; the
+  2026-11-02 stage-1 image completed identification and the read-only block 0
+  and block 1 `CMD17` reads on the owner's SM-T505N and one SM-T505 `[C]`.
+  Multi-block reads, a filesystem/partition-table verification and
+  block-device publication have not run `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
   levels, and it does not prove retention across suspend or shutdown `[U]`.
 - The 1.8 V signalling and pad-switch selection is a documented board policy

@@ -44,8 +44,14 @@ hardware runs on three units: that change refreshes the `README.md`,
 `docs/diagnostic-payload-input-inventory.md` and `porting.toml` rows, adds no
 manifest row, and records the candidate and runs in
 `docs/emmc-cmd1-gap-candidate.md`, `docs/emmc-cmd2-crc-audit.md` §2.11 and
-`docs/emmc-driver.md` §5.3.4; the table stays at 45 rows. This document's own
-hash is not listed. Hashes describe
+`docs/emmc-driver.md` §5.3.4; the table stays at 45 rows. It was refreshed once
+more on `2026-11-02` after the stage-1 full-probe runs on two units: that change
+refreshes the `README.md`, `docs/emmc-driver.md`,
+`docs/diagnostic-payload-input-inventory.md` and `porting.toml` rows, adds no
+manifest row, and records the run in `docs/emmc-cmd2-crc-audit.md` §2.12,
+`docs/emmc-driver.md` §5.3.5 and §6.1; the same batch closes the §2.10
+fold-width caveat with the pinned panic-screen renderer provenance; the
+table stays at 45 rows. This document's own hash is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
 without further content changes; if the committed content differs, re-run §6
@@ -90,19 +96,22 @@ and update the table.
 | Twenty-sixth LinuxForGta4l-source-audit paths at this snapshot | 5: 3 modified (`docs/emmc-reference.md`, `docs/evidence-baseline.md`, `porting.toml`) and 2 added (`docs/linuxforgta4l-org-audit.md`, `docs/linuxforgta4l-org-audit-manifest.tsv`) |
 | Twenty-seventh fail-closed hardware-run paths at this snapshot | 7 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Twenty-eighth cmd1gap hardware-run paths at this snapshot | 8 modified (`README.md`, `docs/emmc-cmd1-gap-candidate.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
-| Dirty entries at the hash snapshot | 8, exactly the twenty-eighth paths above |
+| Twenty-ninth stage-1 hardware-run paths at this snapshot | 6 modified (`README.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
+| Dirty entries at the hash snapshot | 6, exactly the twenty-ninth paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
-The hash table describes the twenty-eighth working-tree snapshot: the
+The hash table describes the twenty-ninth working-tree snapshot: the
 `60817c3` base, the twenty-fourth CMD7-diagnostics batch, the twenty-fifth
 PixelExperience-provenance paths, the LinuxForGta4l organization source audit,
-the 2026-11-01 `fmt=4` fail-closed hardware runs on two units and the
-`cmd1gap` candidate hardware runs on three units. The
+the 2026-11-01 `fmt=4` fail-closed hardware runs on two units, the
+`cmd1gap` candidate hardware runs on three units and the 2026-11-02 stage-1
+full-probe runs on two units. The
 `README.md`, `docs/emmc-driver.md`,
 `docs/diagnostic-payload-input-inventory.md` and `porting.toml` rows were
-refreshed for the candidate record and the corrected `README` status. Historical
-batch rows remain as recorded. The current snapshot is taken on top of
-`bb98c61`; the `60817c3` base row is retained as the historical base for the
+refreshed for the stage-1 record; `docs/emmc-cmd2-crc-audit.md` and
+`docs/evidence-baseline.md` are outside this hash table or not listed.
+Historical batch rows remain as recorded. The current snapshot is taken on top
+of `bb98c61`; the `60817c3` base row is retained as the historical base for the
 batches below. The eleventh correction commit `4c447b9`
 contains exactly the five paths in its row. The
 tenth correction commit `07a36e6`
@@ -506,13 +515,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `5314a1dc686e7fbfd2599dcb13081cb0f9b945bb3d8ff27d51439682e158c661` |
+| Repository README | `README.md` | `d3ce2770ee781aafd091007b7a9eb254b801cae26e23161d83ebfb784d9f121f` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `a3bc3a225d1106e4f7e539ded3aff682586dd0730109b55ad7807e1812146a5c` |
+| Porting record | `porting.toml` | `8a1d133e014bd26318237d273cd942166997e04305ac580c0ee5d36e0364800b` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `3052172d2c4555f56432d98c48be37f1cb8754e883c7a9ead3d59da3e267fcd9` |
+| eMMC driver record | `docs/emmc-driver.md` | `a8b2581633db09204b4d174b7902177a20a9a0c9fe65403e9a35651483660162` |
 | eMMC core header | `package/Gta4lEmmc.h` | `5dd223f787f7d7da532920bdc518ce0589af2a74cb5928df9231bbcae7dcc1af` |
 | eMMC core source | `package/Gta4lEmmc.c` | `874e687813bf9a8bbd8aeefa6533ba3edd35f74cd5126add85647f480fbd9def` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `932552a2b79297a14bce2fb40ab0702f8696d995bafd55cdeddc2b4bc6397f4a` |
@@ -521,7 +530,7 @@ bytes of the previously booted image `[S]`.
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `c0d742df56cbf69c499537e077be6b590ea1e89e33f656b21c3215561dae0157` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `99fcf769087f1c7da3096137237251a93f807dad48cab626aee9ad28664b2fba` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `b92d452c2a5d413e30672ec9181821c04b4f4ccc2ad540c8ea7c8e5731f19d08` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
 | Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `f293bee964bdd3bebbf40e4c8099a426780679065f3d65abceb9999255480558` |
@@ -914,6 +923,67 @@ read was issued, and CRC checking remains enabled.
 | eMMC `cmd1gap` three-unit run | RECORDED: three owner-supplied `IDENT REPORT rc=0` text transcriptions; no photo file or hash |
 | `scripts/test-gta4l-emmc.py` | PASS: 98 simulator scenarios and 55 mutation controls |
 | `scripts/test-gta4l-emmc-probe.py` | PASS: 31 scenarios, 21 mutation controls, 3 width-bound materializations and the oversized-report rejection control |
+| `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
+| `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
+| `scripts/test-gta4l-ram-root-fixture-recipe.py` | PASS: input and failure checks |
+| `scripts/check-gta4l.py` | PASS: SM6115 (gta4l) board layout verified |
+| Hash-table self-check in §6 | `rows=45 mismatches=0` |
+| `porting.toml` parse with `tomllib` | 13 areas |
+| `git diff --check` | PASS: clean |
+
+#### Stage-1 full-probe hardware-run record (2026-11-02)
+
+The stage-1 image is the full `emmc-probe-1` diagnostic (`gta4l-emmc-probe=1`)
+built from `417acc4d89ab72491cf769bb8ed1131c79e1bb15` (clean) with
+`Gta4lEmmc.c 874e6878…`, `Gta4lEmmc.h 5dd223f7…` and `Gta4lEmmcProbe.c
+932552a2…`; archive `e2a013e2…`, payload kernel `194c909f…`, payload
+`42e7a518…` (83,886,080 bytes, contract 7/7) and boot image `bf73a39b…`
+(85,688,320 bytes, gate 18/18 against the v5 baseline `ce4d76e8…`). The build
+provenance is
+`out/gta4l/ram-root-emmc-probe-stage1-evidence/build-provenance.json`.
+
+The BOOT-only flash record for the owner's SM-T505N is
+`out/gta4l/ram-root-emmc-probe-stage1-evidence/flash-record.json`: pre-flash
+partition `92f4000e…` (the `cmd1gap` image plus its unchanged tail), post-flash
+`421e8848…`, image-byte readback `bf73a39b…`, tail `a28b4ea2…` unchanged,
+`RECOVERY` `14e11370…` unchanged, pulled gate 18/18 and pulled payload contract
+7/7. The record was written before the boot. The same image was shared for a
+second unit; that unit has no flash record or readback in this tree.
+
+The owner booted the image on the SM-T505N and on one SM-T505 and supplied
+screen photographs. Both reports reached `GTA4L-EMMC PROBE REPORT: rc=0` with
+`mci=10000072 rca=1 cap=61071360 rev=8 bw=0 ocr=c0ff8080 hc2=0008
+ven=00018a9c dll=6000642c dst=00000000 pst=00000000 step=15 log=7`. The
+recovery-known CSD matches on both units, the owner's CID matches the
+recovery-known CID, and the SM-T505 CID matches the first SM-T505 column in
+`docs/emmc-cmd2-crc-audit.md` §2.11. Block 0 reports
+`sum=62084b66 words=00000000 00000000 000000ee 00000001` on both units (a
+protective-MBR type `0xEE` entry with start LBA 1); block 1 reports
+`words=20494645 54524150 00010000 0000005c` (`EFI PART`, revision 1.0, 92-byte
+GPT header) with sums `84d0543e` and `425cd1ab`. The sum is the probe's
+`sum*31 + byte` content fingerprint, not a CRC; the identical block 0 and
+different block 1 fingerprints are consistent with a shared protective MBR and
+a per-device GPT header (disk GUID/header CRC). The selected words do not
+include the `0x55AA` MBR signature or the GPT header CRC.
+
+The two reports are owner-supplied photographs; no photo file or hash from
+either run is in the tree. The SM-T505 flash procedure and unit attribution are
+owner-reported and its image identity rests on the shared `bf73a39b…` copy. The
+run is read-only (`CMD0`/`CMD1`/`CMD2`/`CMD3`/`CMD9`/`CMD7`/`CMD13`/`CMD8`/
+`CMD17`, CRC enabled, no writes, DMA, CQE, ICE, bus-width change, high-speed
+mode, mount or publication). It establishes sector-read and MBR/GPT content
+evidence for blocks 0 and 1, not a filesystem, multi-block reliability or
+independent MBR/GPT CRC verification. The full transcription and field
+comparison are in `docs/emmc-cmd2-crc-audit.md` §2.12 and
+`docs/emmc-driver.md` §5.3.5.
+
+| Check | Result |
+| --- | --- |
+| eMMC stage-1 BOOT write and readback | PASS: BOOT-only write; image-byte readback `bf73a39b…`, full partition `421e8848…`, tail `a28b4ea2…` unchanged, `RECOVERY` `14e11370…` unchanged |
+| eMMC stage-1 pulled-image gate | PASS: 18/18 on the pulled 85,688,320-byte image; 7/7 on the 83,886,080-byte payload extraction |
+| eMMC stage-1 two-unit run | RECORDED: two owner-supplied `PROBE REPORT rc=0` photographs; no photo file or hash |
+| `scripts/test-gta4l-emmc.py` | PASS: 98 simulator scenarios and 55 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | PASS: 33 scenarios and 22 mutation controls |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | `scripts/test-gta4l-ram-root-fixture-recipe.py` | PASS: input and failure checks |

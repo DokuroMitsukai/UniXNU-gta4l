@@ -326,6 +326,25 @@ payload contract 7/7. The owner then ran it on three units; all three reached
 results are owner-supplied text; no photo file or hash from this run is in the
 tree.
 
+The 2026-11-02 `emmc-probe-1` full-probe image is
+`out/gta4l/ram-root-emmc-probe-stage1-evidence/boot-ram-root-emmc-probe-stage1.img`
+(85,688,320 bytes, SHA-256
+`bf73a39b4a3612d14e377c3aba5f8f531796d0cf41e8d1d5630c3746acf87c10`); its
+payload is SHA-256
+`42e7a5185ff9e5c624b6a829987d6d3bd55d968929d67ddf712e6758c58253ff`,
+kernel `194c909f…`, source hashes `874e6878…`, `5dd223f7…` and `932552a2…`,
+with `gta4l-emmc-probe=1`, payload contract 7/7 and boot-image gate 18/18
+against the v5 baseline. The owner's SM-T505N flash record is
+`out/gta4l/ram-root-emmc-probe-stage1-evidence/flash-record.json`: BOOT only,
+pre-flash partition `92f4000e…`, post-flash `421e8848…`, image-byte readback
+`bf73a39b…`, tail `a28b4ea2…` unchanged, `RECOVERY` `14e11370…` unchanged,
+pulled gate 18/18 and pulled payload contract 7/7. The owner then booted it on
+the SM-T505N and one SM-T505; both reached `GTA4L-EMMC PROBE REPORT: rc=0` with
+successful block 0 and block 1 `CMD17` reads. The SM-T505 run has no flash
+record in the tree and its image identity is owner-reported/shared. See
+`docs/emmc-cmd2-crc-audit.md` §2.12 and `docs/emmc-driver.md` §5.3.5. The run
+reports are owner-supplied photographs; no photo file or hash is in the tree.
+
 This establishes the packaging step only. The inputs are existing artifacts;
 the replay does not reproduce the kernel or firmware.
 

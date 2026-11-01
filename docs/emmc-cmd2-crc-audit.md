@@ -15,7 +15,10 @@ record and response window as the section 2.6 image (sections 2.9 and 2.10); the
 CMD7 capture was not exercised. A later candidate added only an 8-us delay
 after an accepted ready CMD1. On 2026-11-01 it completed the full identification
 sequence (`rc=0`) on the owner's SM-T505N and on two owner-reported SM-T505
-units, which exercised the CMD7 capture (section 2.11). TWRP on `RECOVERY` was unchanged at
+units, which exercised the CMD7 capture (section 2.11). The owner then supplied
+stage-1 full-probe reports from the same SM-T505N and one of those SM-T505s;
+both completed identification and the read-only `CMD17` reads of blocks 0 and
+1 (section 2.12). TWRP on `RECOVERY` was unchanged at
 `14e11370c40fd5b70a3dba1d49283e938001141c9d5f8de6685653e6a793f5ae` in the
 recorded flash records. The owner reports the first `fmt=4` run on an SM-T505
 and a later BOOT-only run on the owner's SM-T505N; the results agree 1:1 per the
@@ -464,9 +467,27 @@ format's `c3l=`; `Gta41` is `Gta4l`; the earlier text extraction printed
 zero padding in `pre2rsp`, `c2`, `c7t`, `pages` and `free`. The current panic
 renderer in this tree prints 16 hex digits for `frames`, `pages` and `free`,
 and the photo's values are at that width; the earlier text's 17-digit forms are
-treated here as extraction-width artifacts pending an exact renderer/payload
-provenance check. That normalization does not identify a stack address or a
-linked renderer identity.
+treated here as extraction-width artifacts; the renderer is pinned in
+the paragraph below. That normalization does not identify a stack
+address or a linked renderer identity.
+
+The renderer provenance: every panic screen in sections 2.9-2.12 is
+drawn by the patched panic-screen renderer built from the pinned
+UniXNU checkout's `scripts/xnu-panic-screen.c`; the copy inside the
+gta4l kernel build tree
+(`out/gta4l/ipados-17.7.11-21H461/gta4l/tree/scripts/xnu-panic-screen.c`,
+byte-identical to the source) has no record of any source change after
+UniXNU commit `c1f6966` (2026-10-25), which precedes all of these
+diagnostic builds. The renderer prints each frame return address as
+`(fp[1] & 0x0000007fffffffffUL) | 0xffffff8000000000UL`, zero-padded
+to 16 hex digits; for kernel-text return addresses (for example
+`0xfffffff0079d72a4`) the OR restores the real address bit-for-bit,
+so the printed value equals the real kernel VA. It prints `pages`
+and `free` as `0x` followed by the sampled VM page counter value
+zero-padded to 16 hex digits (`hex()` builds `0x` plus
+`number(..., 16, 16, 1)`). The wide reads of this text are therefore
+glyph-reading artifacts; no transcribed value changes and no linked
+renderer identity is claimed.
 
 ```text
 GTA4L-EMMC PROBE FAILED: stage=3 rc=4294967288
@@ -737,6 +758,166 @@ root switch was issued. The image was written to BOOT only; the flash record
 shows `RECOVERY` unchanged and no other partition written. The report panic is
 intentional and stops the boot. No rail voltage, pad level or clock frequency
 was measured.
+
+### 2.12 Stage-1 full-probe result (2026-11-02)
+
+The stage-1 image is the full probe (`gta4l-emmc-probe=1`) built from commit
+`417acc4d89ab72491cf769bb8ed1131c79e1bb15` (clean) with the committed
+`cmd1gap` source: core/header/probe `874e6878…`, `5dd223f7…`, `932552a2…`;
+archive `e2a013e2…`, payload kernel `194c909f…`, payload `42e7a518…`
+(83,886,080 bytes, `gta4l-emmc-probe=1`, contract 7/7) and boot image
+`bf73a39b…` (85,688,320 bytes, gate 18/18 against the v5 baseline
+`ce4d76e8…`). Only the ramdisk differs from the pinned v5 baseline. The build
+provenance is
+`out/gta4l/ram-root-emmc-probe-stage1-evidence/build-provenance.json`.
+
+The BOOT-only flash record for the owner's SM-T505N is
+`out/gta4l/ram-root-emmc-probe-stage1-evidence/flash-record.json`: pre-flash
+partition `92f4000e…` (the section 2.11 image plus its unchanged tail),
+post-flash `421e8848…`, image-byte readback `bf73a39b…`, tail `a28b4ea2…`
+unchanged, `RECOVERY` `14e11370…` unchanged, pulled-image gate 18/18 and
+pulled payload contract 7/7. The record was written after the BOOT write and
+before the boot; it records no boot at that time. The owner then booted the
+image on that unit and supplied a screen photograph. The same
+85,688,320-byte image (SHA-256 `bf73a39b…`) was shared for the second unit;
+that unit has no flash record or device-side readback in this tree.
+
+The second run is on an SM-T505 whose CID matches the first SM-T505 column in
+section 2.11, so the report links that unit to the earlier identification run;
+the SM-T505N CID matches the owner's unit in section 2.11. Both runs reached
+`GTA4L-EMMC PROBE REPORT: rc=0` and stopped at the probe's intentional report
+panic after both `CMD17` reads. The report is emitted only after
+`gta4l_emmc_init()` returns `GTA4L_EMMC_OK`, both `gta4l_emmc_read_block()`
+calls succeed, and before any later operation (`Gta4lEmmcProbe.c:788-809`).
+The owner-supplied SM-T505N transcription, with the photographed line folding
+rejoined as in section 2.11 (`Gta41` is `Gta4l` and the 17-digit frame/page
+forms are reduced to the renderer's 16-digit width), is:
+
+```text
+GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 cap=61071360 rev=8 bw=0
+ocr=c0ff8080 ext=000009cb hc2=0008 ven=00018a9c dll=6000642c
+dst=00000000 pst=00000000 step=15 log=7
+GTA4L-EMMC PROBE CID 15010044 5836384d 42009005 f4661900
+GTA4L-EMMC PROBE CSD d0270132 0f5903ff f6dbffef 8e404000
+GTA4L-EMMC PROBE BLOCK0 sum=62084b66 words=00000000 00000000 000000ee 00000001
+GTA4L-EMMC PROBE BLOCK1 sum=84d0543e words=20494645 54524150 00010000 0000005c
+GTA4L-EMMC PROBE CAPTURE fmt=4 hv=7202
+c2=1/0001/0000/05f46619,4d420090,44583638,00150100
+c3p=1/0000/0000/03f800f0/0023/07ff
+c3t=0/0/0000/00000000/0/00000000,00000000,00000000,00000000
+c3l=1/3/0000/0001/26/0000000000001560/19200000
+cid=15010044,5836384d,42009005,f4661900
+c7p=1/0000/0000/03f800f0/0023/07ff/ef8e4040,fff6dbff,320f5903,00d02701
+c7q=1/0003/0000/0000/0003/26/0000000000001587
+c7c=1/25/0000000000001578/1/25/0000000000001579
+c7t=1/0003/0000/03f800f0/0000071b/00010000/00000700,0f5903ff,f6dbffef,8e40400c
+c7x=2/0/0:0000:0000,25:0003:0000,0:0000:0000,0:0000:0000 @Gta4lEmmcProbe.c:564
+frames fffffff0079d72a4 fffffff0076e7eb0 fffffff0072c8864 fffffff00741a4a4
+pages=0x0000000000079eae
+free=0x0000000000079472
+```
+
+The SM-T505 transcription is:
+
+```text
+GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 cap=61071360 rev=8 bw=0
+ocr=c0ff8080 ext=000009c7 hc2=0008 ven=00018a9c dll=6000642c
+dst=00000000 pst=00000000 step=15 log=7
+GTA4L-EMMC PROBE CID 15010044 5836384d 4200053c ce1e1800
+GTA4L-EMMC PROBE CSD d0270132 0f5903ff f6dbffef 8e404000
+GTA4L-EMMC PROBE BLOCK0 sum=62084b66 words=00000000 00000000 000000ee 00000001
+GTA4L-EMMC PROBE BLOCK1 sum=425cd1ab words=20494645 54524150 00010000 0000005c
+GTA4L-EMMC PROBE CAPTURE fmt=4 hv=7202
+c2=1/0001/0000/3cce1e18,4d420005,44583638,00150100
+c3p=1/0000/0000/03f800f0/0023/07ff
+c3t=0/0/0000/00000000/0/00000000,00000000,00000000,00000000
+c3l=1/3/0000/0001/26/000000000000155b/19200000
+cid=15010044,5836384d,4200053c,ce1e1800
+c7p=1/0000/0000/03f800f0/0023/07ff/ef8e4040,fff6dbff,320f5903,00d02701
+c7q=1/0003/0000/0000/0003/26/0000000000001586
+c7c=1/25/0000000000001577/1/25/0000000000001578
+c7t=1/0003/0000/03f800f0/0000071b/00010000/00000700,0f5903ff,f6dbffef,8e40400c
+c7x=2/0/0:0000:0000,25:0003:0000,0:0000:0000,0:0000:0000 @Gta4lEmmcProbe.c:564
+frames fffffff0079d72a4 fffffff0076e7eb0 fffffff0072c8864 fffffff00741a4a4
+pages=0x0000000000079eab
+free=0x000000000007944f
+```
+
+The fields that differ across the two units are limited to:
+
+| Field | SM-T505N | SM-T505 |
+| --- | --- | --- |
+| `ext=` (plain EXT_CSD byte sum) | `000009cb` | `000009c7` |
+| `CID` | `15010044 5836384d 42009005 f4661900` | `15010044 5836384d 4200053c ce1e1800` |
+| `c2` raw window | `05f46619,4d420090,44583638,00150100` | `3cce1e18,4d420005,44583638,00150100` |
+| `c3l` ticks | `…1560` | `…155b` |
+| `c7q` ticks | `…1587` | `…1586` |
+| `c7c` CC/TC ticks | `…1578`/`…1579` | `…1577`/`…1578` |
+| `BLOCK1` sum | `84d0543e` | `425cd1ab` |
+| `pages` | `0x0000000000079eae` | `0x0000000000079eab` |
+| `free` | `0x0000000000079472` | `0x000000000007944f` |
+
+Every other field is identical, including `mci=10000072`, `rca=1`,
+`cap=61071360`, `rev=8`, `bw=0`, `ocr=c0ff8080`, `hc2=0008`, `ven=00018a9c`,
+`dll=6000642c`, `dst=00000000`, `pst=00000000`, `step=15`, `log=7`, the CSD,
+`BLOCK0 sum=62084b66` and its four words, the `BLOCK1` four words, the `c3p`/
+`c7p` status/enable/present captures, the `c7t` terminal state and window, the
+`c7x` trace and the frame addresses.
+
+Decoding:
+
+- `step=15` is `GTA4L_EMMC_STEP_READY`; `log=7` adds two `READ` events to the
+  stage-3 count of five. The report is therefore a successful identification
+  followed by two successful single-block reads, not a partial run.
+- `cap=61071360` is the EXT_CSD `SEC_COUNT` value and matches the recovery
+  inventory: 61,071,360 × 512-byte sectors. The `CSD` line
+  `d0270132 0f5903ff f6dbffef 8e404000` matches the recovery-known CSD
+  `d02701320f5903fff6dbffef8e404000`. On the owner's unit the `CID` also
+  matches the recovery-known CID `150100445836384d42009005f4661900`; the
+  SM-T505 CID is the one recorded for that unit in section 2.11. The `c2` raw
+  window is consistent with the same CID bytes.
+- `BLOCK0 words=00000000 00000000 000000ee 00000001` are the selected words at
+  offsets 0, 446, 450 and 454. They show a zero word at offset 446, a
+  protective-MBR partition type `0xEE` at offset 450 and a partition start LBA
+  of 1 at offset 454. The selected words do not include the `0x55AA` MBR
+  signature at offset 510, so that signature is covered by the full-sector sum
+  but not independently printed by the report.
+- `BLOCK1 words=20494645 54524150 00010000 0000005c` are the words at offsets
+  0, 4, 8 and 12: ASCII `EFI `, ASCII `PART`, GPT revision 1.0 and a 92-byte
+  GPT header. The selected words do not include the GPT header CRC at offset
+  16 or the disk GUID at offset 56.
+- `sum=` is the probe's rolling content check, `sum = sum*31 + byte` over all
+  512 bytes (`Gta4lEmmcProbe.c:350-358`), not a CRC and not a cross-unit
+  constant. `BLOCK0` is identical on both units because the protective MBR is a
+  shared layout artifact; `BLOCK1` differs because the GPT header contains a
+  per-device disk GUID, header CRC and related fields. A differing `BLOCK1`
+  sum is therefore expected and is not evidence of corruption. The two sums are
+  content fingerprints, not independent verification of the MBR/GPT CRC fields.
+- The `c3l`/`c7q`/`c7c`/`c7t` captures repeat section 2.11's CMD3 and CMD7
+  poll/completion evidence: 38 iterations, CC and TC both observed at
+  iteration `0x25` (37), terminal normal `0x0003`, command `0x071B`, argument
+  `0x00010000`. The few changed tick values are per-run poll variation.
+- `dll=6000642c`, `ven=00018a9c`, `hc2=0008`, `dst=0` and `pst=0` are register
+  state, not measured clock or rail values. `pages`/`free` and the frames are
+  XNU VM/stack counters from the panic renderer, not eMMC evidence.
+
+Bounds and attribution: both reports are owner-supplied screen photographs,
+transcribed here; no photo file or hash from either run is in the tree. The
+SM-T505 flash procedure and unit attribution are owner-reported, and its image
+identity rests on the shared `bf73a39b…` copy rather than a device-side
+readback. The owner's SM-T505N has the BOOT-only flash record and readback
+described above. The runs are read-only: `CMD0`/`CMD1`/`CMD2`/`CMD3`/`CMD9`/
+`CMD7`/`CMD13`/`CMD8`/`CMD17` only, at the fixed identification clock, with CRC
+checking enabled. No write, bus-width change, high-speed mode, DMA, CQE, ICE,
+mount, root switch, block-device publication or repeated-read reliability test
+was issued. The two reads establish sector-read and MBR/GPT content evidence
+for blocks 0 and 1; they do not establish a filesystem, partition-table
+integrity beyond those selected words and sums, broader media reliability or
+the correctness of the GPT CRC fields.
+
+The two full CIDs and `c2` windows are the same identifiers already reproduced
+with the owner's explicit approval in section 2.11; they are repeated here for
+the same units and add no new device identifier.
 
 ---
 
