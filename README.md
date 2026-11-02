@@ -104,8 +104,15 @@ partition layout, payload policy and packaging.
   host width bit set and read back (`ha=02`), and an EXT_CSD read at the
   attempted width that returned the 1-bit content (`es=000009cb`, byte 183
   still 0). The other three boots failed before B1 at two TC-only/no-error
-  CMD17 timeouts and one CMD3-completion timeout. F3 remains unproven
-  (`docs/emmc-driver.md` §5.3.12, `docs/emmc-cmd2-crc-audit.md` §2.18).
+  CMD17 timeouts and one CMD3-completion timeout. A cold-boot session then
+  booted the same image three times with full power-down and power-on: one
+  stopped before B1 at the block-1 CMD17 timeout and two reproduced the same
+  4-bit tuple byte-for-byte, and the same-session BOOT re-read matched the
+  post-flash hash. The 4-bit stop is therefore 4/4 across warm and cold
+  boots, a retained warm-reset card state is excluded as its cause, and all
+  eight boots are bound to the flashed bytes. F3 remains unproven
+  (`docs/emmc-driver.md` §5.3.12–5.3.13,
+  `docs/emmc-cmd2-crc-audit.md` §2.18–2.19).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

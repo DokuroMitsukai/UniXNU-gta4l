@@ -1629,6 +1629,36 @@ signature still has no field-for-field simulator case. Host checks are
 unchanged (core 136/80, probe 57/34). No code change follows from this
 record; any further device step needs an explicit owner approval.
 
+### 5.3.13 Stage-B1R2 cold session and report binding (2026-11-02)
+
+A cold-boot session booted the same flashed `emmc-probe-4` image three times
+without reflashing, each boot a full power-down then power-on (no
+force-reboot key combo). Cold boot 1 stopped before B1 at the block-1 CMD17
+`-11`/`step=15` TC-only tuple
+(`1/17/1/0000113a/0000/0002/03f800f0/15`); cold boots 2 and 3 reached B1 and
+reproduced the 4-bit stop byte-for-byte (`c6=00000900`, `hb=00`, `ha=02`,
+`es=000009cb`, `sw=0`, `swrc=-19`, `BW=8 att=0`, `FAIL` all zero), differing
+only in the stack `free` counter (`pages` is identical). The same session's read-only
+`adb shell sha256sum /dev/block/mmcblk0p69` returned `ac356ef1…`, matching the
+flash record's post-flash hash, so `partition_verified_again_after_boot` is
+true and all eight boots (five warm, three cold) are bound to the flashed
+bytes. Evidence:
+`out/gta4l/ram-root-emmc-probe-b1r2-evidence/` (`hardware-run-record.json`,
+`flash-record.json`, eight transcripts and `b1r2-p69-reread.txt`).
+
+Status: the 4-bit stop is now 4/4 across warm and cold boots, which excludes a
+card state retained across warm resets as its cause; the pre-B1
+TC-only/no-error CMD17 signature is cold-vulnerable too, so the two
+signatures are independent. The report still cannot observe the pad-level
+width, so a card-side no-op and a data path that did not apply the new width
+remain indistinguishable. F3 remains `[U]`. The plan of record (§3.1.3) is
+the owner-approved B1C rung (`gta4l-emmc-probe=5`): on exactly this tuple it
+continues to the CMD19/CMD14 bus test and the stage-A content pass at 4-bit,
+re-reads byte 183, restores the host width and emits one report, with no
+8-bit attempt; the outcome does not auto-advance F3. Host checks are
+unchanged (core 136/80, probe 57/34). No code change follows from this
+record; the separately approved B1C batch implements the plan's continuation.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

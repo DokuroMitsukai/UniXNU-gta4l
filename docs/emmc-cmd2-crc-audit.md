@@ -1631,6 +1631,63 @@ that the host width bit was ineffective; that a full power cycle would change
 the result; that any width transfer works; or that the TC-only/no-error
 signature has a simulator model.
 
+### 2.19 Stage-B1R2 cold session and report binding (2026-11-02)
+
+A cold-boot session then booted the same flashed `emmc-probe-4` image three
+times without reflashing, each boot a full power-down followed by a power-on
+(no force-reboot key combo). The owner supplied the three reports as text (no
+photo file or hash in the tree) and stated that the first failed while the
+other two worked. The same session then re-read BOOT read-only:
+
+    $ adb shell sha256sum /dev/block/mmcblk0p69
+    ac356ef163263685229fab9022cc338eb0d878cfb8f81da1b6d7dc4704f27799  /dev/block/mmcblk0p69
+
+which matches `flash-record.json`'s post-flash p69 hash `ac356ef1…`, so
+`partition_verified_again_after_boot` is now true and all eight boots of the
+image (five warm, three cold) are bound to the flashed bytes through the
+shared post-flash hash. The three cold transcripts and the readout are saved
+under `out/gta4l/ram-root-emmc-probe-b1r2-evidence/`
+(`b1r2-coldboot1-block1-timeout.txt`, `b1r2-coldboot2-b1-report.txt`,
+`b1r2-coldboot3-b1-report.txt`, `b1r2-p69-reread.txt`) with their SHA-256
+values in `hardware-run-record.json`; the cold-boot method is owner-stated in
+chat and is repeated in the transcript headers this record adds, while the
+captured report bodies do not attest it.
+
+| Boot | Method | Reached B1? | Result |
+| --- | --- | --- | --- |
+| 6 | cold | no | Block-1 CMD17 `rc=-11`, `step=15`, `fail=1/17/1/0000113a/0000/0002/03f800f0/15`: the same TC-only/no-error terminal sample as warm boot 3, before the GPT gate. |
+| 7 | cold | yes | `B1 REPORT rc=-19 stop=1`: the `BW=4` tuple is byte-identical to warm boots 1–2 (`sw=0 swrc=-19 tt=0 hc=00 hb=00 ha=02 c6=00000900 es=000009cb`); `BW=8 att=0`; `FAIL` all zero; stack `pages=0x79ea9 free=0x7944d`. |
+| 8 | cold | yes | The same report; only `free` differs (`0x7946d`), while `pages` and every protocol/content field are identical. |
+
+Interpretation: the 4-bit stop is now reproduced in 4 of 4 B1-reaching boots
+across warm and cold boots, so a card state retained across warm resets is
+excluded as its cause; the pre-B1 TC-only/no-error CMD17 signature is
+cold-vulnerable too (cold boot 1 adds another instance), so the two
+signatures are independent. The cold session did not change the report-level
+picture: CMD6 R1 is clean, the host width bit is set and read back, and the
+EXT_CSD read at the attempted width returns the 1-bit content, so the
+card-visible BUS_WIDTH remained 0. The fork between a card-side no-op and a
+data path that did not apply the new width is still not resolvable from the
+report; the pad-level width is not observable.
+
+The owner-approved next step (plan §3.1.3, option (a)) is a fifth probe stage
+("B1C", `gta4l-emmc-probe=5`) that continues past exactly this tuple to the
+CMD19/CMD14 bus test and the stage-A content pass at 4-bit, then re-reads
+EXT_CSD byte 183, restores the host width and emits one report. It attempts
+no 8-bit width. Because the continuation satisfies the §1 F3 bus-test clause
+only if the content pass also matches, the rung's outcome does not
+auto-advance F3; the byte-183 divergence stays an owner-scoring decision.
+
+Supported by this section: the image identity inherited from §2.18; three
+owner-stated cold boots; the per-boot method; the two byte-identical
+B1 reports and their single `free`-counter difference; the pre-B1 CMD17
+sample; the p69 re-read and the binding of all eight boots; the warm-reset
+exclusion for the 4-bit stop; the cold vulnerability of the pre-B1
+signature; and the approved B1C rung. Not supported: the pad-level width;
+the card-side cause of the BUS_WIDTH no-op; that the cold session would
+change any other report field; that the B1C rung will pass; or that F3 is
+established.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
