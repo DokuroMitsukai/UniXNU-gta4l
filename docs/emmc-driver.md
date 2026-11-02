@@ -49,7 +49,7 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
 | `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 138 scenarios and 83 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 71 scenarios and 42 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 75 scenarios and 46 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -1847,8 +1847,63 @@ classes (CMD17 TC-only and the CMD19 wedge) record no data-timeout interrupt
 even though the core writes the DTO bit in `ERROR_INT_ENABLE`; the rung reads
 back the timeout/enable state, arms the minimum timeout for a healthy
 multi-block read longer than the counter, and repeats the 1-bit CMD19 wedge
-with an extended window. That rung is new code and needs its own build plus
-a fresh explicit BOOT-only flash approval.
+with an extended window. The host batch is implemented and host-tested in
+§5.3.17; the device run needs its own build plus a fresh explicit BOOT-only
+flash approval.
+
+### 5.3.17 Stage-B1C-1 data-timeout audit rung (gta4l-emmc-probe=7, 2026-11-03)
+
+The `gta4l-emmc-probe=7` stage runs after the stage-A pass and before any
+CMD6. It issues no card-state write; E2 repeats the already-approved
+non-persistent 1-bit CMD19 bus-test write. The stage always reports
+(`GTA4L-EMMC DTO REPORT`) and stops; there is no on-device retry.
+
+Why: both observed hang classes — the pre-B1 CMD17 TC-only/no-error stop and
+the CMD19 write wedge — record no data-timeout status although the core
+writes `ERROR_INT_ENABLE = INT_ERR_MASK` (DTO bit included) and the software
+windows are 1 s. The 400 kHz setup writes `CLOCK_CONTROL = 0x0001` as a full
+write, leaving TOUTVAL `[7:3] = 0`, the 2^13-cycle minimum (about 20.5 ms at
+400 kHz). The rung separates "the counter never decrements in these states"
+from "the timeout status never reaches the register".
+
+- R1: read back `CLOCK_CONTROL` (0x2C), `NORMAL_INT_ENABLE` (0x34),
+  `ERROR_INT_ENABLE` (0x36), `NORMAL_INT_SIGNAL` (0x38),
+  `ERROR_INT_SIGNAL` (0x3A) and `ERROR_INT_STATUS` (0x32) at rest. The
+  expected device values are `clk=0007 ne=0033 ee=07ff ns=0000 se=0000
+  es=0000`; the report records the observed values, not the expectation.
+- E1: force TOUTVAL=0 (preserving the clock-enable bits), read the value back
+  (`arm`), then read 8 blocks (about 83 ms at 1-bit/400 kHz, well past the
+  minimum) through the existing CMD18+CMD12 reader. A latched
+  `ERROR_INT_STATUS` DTO bit (`0x0010`) is the "counter works" result; a clean
+  completion or a software-bound timeout with `error=0` is the "counter did
+  not fire" result. The E1 fail tuple, block ordinal, drain and explicit-stop
+  fields are reported.
+- Q: re-read block 0 to prove the bus recovered; a failure records stop=11
+  and skips E2.
+- E2: repeat the 1-bit CMD19/CMD14 bus test with the optional per-host
+  `bus_test_window_us` override at 8 s (800,000 iterations of the 10 us
+  step, a dedicated `GTA4L_EMMC_MAX_BUS_TEST_ITERATIONS` cap; every other
+  poll keeps the universal 100,000-iteration cap). The extended bound lets a
+  late controller timeout latch; the report carries `att/win/rc/tt/tw/te/trc
+  /hc` and the terminal `FAIL`.
+
+Stop codes: 0 = E1 latched a DTO and E2 ran; 10 = E1 never latched a DTO and
+E2 ran; 11 = the recovery read failed (E2 skipped); 12 = the forced-TOUTVAL
+write did not read back; 13 = E2 passed (write path completed on this boot);
+14 = E2 returned an error class other than the timeout or pattern mismatch.
+Every row reports and stops; an uncovered row is an Appendix-B stop.
+
+Host checks: the probe suite is 75 scenarios and 46 mutation controls
+(71/42 before), adding `probe-dto-fired`, `probe-dto-silent`,
+`probe-dto-q-fail` and `probe-dto-e2-pass` plus four mutation controls
+(ignored extended window, silent E1 accepted, skipped recovery read and a
+wrong E1 block count). The `probe-dto-fired` row also proves the extended
+window is used by counting `ERROR_INT_STATUS` reads (>= 700,000); the
+ignored-window core mutation drops that below the bound and is rejected. The
+DTO report is 518 bytes at device-shaped values, far under the 2048-byte
+budget; no width fixture is involved. The diagnostic wrapper accepts
+`emmc-probe-7`. No build, flash or boot was performed; F3 remains `[U]` and
+the ladder does not auto-advance.
 
 ## 6. Expected report
 

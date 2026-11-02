@@ -221,6 +221,10 @@
 #define GTA4L_EMMC_RCG_TIMEOUT_US          100000u
 #define GTA4L_EMMC_POLL_STEP_US            10u
 #define GTA4L_EMMC_MAX_POLL_ITERATIONS     100000u
+/* The probe's data-timeout audit extends only the CMD19 bus-test write poll
+ * to 8 s (800,000 iterations at the 10 us step), so a late controller
+ * timeout can still latch. Every other poll keeps the universal cap. */
+#define GTA4L_EMMC_MAX_BUS_TEST_ITERATIONS 800000u
 
 /* Diagnostic capture format reported by the probe. Bump the value when the
  * meaning or order of the capture fields changes. */
@@ -349,6 +353,9 @@
  * the opt-in switch/test API. */
 #define GTA4L_EMMC_STEP_BUS_WIDTH         20u
 #define GTA4L_EMMC_STEP_BUS_TEST          21u
+/* Data-timeout audit: the probe-only timeout-configuration readback and
+ * experiments. The portable core never sets it. */
+#define GTA4L_EMMC_STEP_DTO               22u
 
 struct gta4l_emmc_ops {
 	uint8_t  (*read8)(void *context, uint32_t space, uint32_t offset);
@@ -497,6 +504,12 @@ struct gta4l_emmc_host {
 	uint32_t multi_drain_iterations; /* poll iterations it consumed */
 	uint8_t  multi_drain_used;
 	uint8_t  multi_drain_resolved;   /* transfer completion observed */
+	/* Optional override for the bus-test write-phase software bound in
+	 * microseconds. Zero keeps GTA4L_EMMC_DATA_TIMEOUT_US. The diagnostic
+	 * probe sets a longer bound for the data-timeout audit so a late
+	 * controller timeout can still be observed; the portable core never
+	 * sets it. Only the CMD19 write path reads it. */
+	uint32_t bus_test_window_us;
 };
 
 /* Controller reset, GCC 400 kHz setup, retained-rail power handshake, pads. */

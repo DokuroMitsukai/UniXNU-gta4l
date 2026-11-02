@@ -40,6 +40,17 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 #define GTA4L_EMMC_PROBE_FIRST_USABLE    34u
 #define GTA4L_EMMC_PROBE_BACKUP_SECTORS  33u
 
+/* Stage-7 data-timeout audit. With TOUTVAL [7:3] of CLOCK_CONTROL zero the
+ * controller's data timeout is 2^13 timeout clocks. At the fixed 400 kHz
+ * identification clock that is about 20.5 ms; an 8-block 1-bit read moves
+ * 4 KiB at about 50 kB/s, roughly 83 ms, so an armed minimum must fire
+ * mid-transfer if the counter decrements during a healthy transfer. E2
+ * repeats the 1-bit CMD19 write wedge under an 8 s software bound (about
+ * 390x the minimum) so a late controller timeout could still be observed. */
+#define GTA4L_EMMC_PROBE_DTO_BLOCKS      8u
+#define GTA4L_EMMC_PROBE_DTO_WINDOW_US   8000000u
+#define GTA4L_EMMC_PROBE_TOUTVAL_MASK    0x00F8u
+
 /* GPT header field offsets used by the gate. */
 #define GTA4L_EMMC_PROBE_GPT_BACKUP_LBA   0x20u
 #define GTA4L_EMMC_PROBE_GPT_FIRST_USABLE 0x28u
@@ -390,9 +401,12 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * CMD19/CMD14 bus test with a per-width content pass, 5 = stage-B1C, which
  * adds the continue-past-readback continuation on the exact observed 4-bit
  * tuple, 6 = stage-B1C plus a 1-bit CMD19/CMD14 discriminator that runs
- * after the stage-A pass and before any width switch. On stage 6 a failed
- * 1-bit test stops the rung (report stop=9) and issues no CMD6; a passing
- * 1-bit test falls through to the stage-5 flow unchanged. */
+ * after the stage-A pass and before any width switch, 7 = the data-timeout
+ * audit (readback, armed-minimum healthy multi-block read, recovery read and
+ * a repeated 1-bit CMD19 wedge under an extended bound; no CMD6). On stage 6
+ * a failed 1-bit test stops the rung (report stop=9) and issues no CMD6; a
+ * passing 1-bit test falls through to the stage-5 flow unchanged. Stage 7
+ * always reports and stops with the DTO report. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -401,7 +415,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 6)) {
+	if ((value < 1) || (value > 7)) {
 		return 0;
 	}
 	return value;
@@ -1090,6 +1104,218 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 	    host->fail_step);
 }
 
+/* Stage-7 data-timeout audit capture. Every field is an observed value: R1 is
+ * the timeout/enable readback, E1 the healthy 8-block read under the armed
+ * minimum, Q the recovery read and E2 the repeated 1-bit CMD19 wedge under
+ * the extended software bound. */
+struct gta4l_emmc_probe_dto {
+	uint16_t clk;
+	uint16_t normal_enable;
+	uint16_t error_enable;
+	uint16_t normal_signal;
+	uint16_t error_signal;
+	uint16_t error_status;
+	uint16_t arm;
+	uint32_t e1_blocks;
+	int      e1_result;
+	uint32_t e1_fail_valid;
+	uint32_t e1_fail_index;
+	uint32_t e1_fail_argument;
+	uint32_t e1_fail_command;
+	uint16_t e1_fail_error;
+	uint16_t e1_fail_normal;
+	uint32_t e1_fail_present;
+	uint32_t e1_fail_step;
+	uint32_t e1_multi_block;
+	uint32_t e1_drain_used;
+	uint32_t e1_drain_resolved;
+	uint32_t e1_drain_blocks;
+	uint32_t e1_drain_iterations;
+	int      e1_stop_result;
+	uint32_t e1_stop_valid;
+	uint32_t e1_stop_capture_valid;
+	int      q_result;
+	uint32_t e2_attempted;
+	uint32_t e2_window;
+	int      e2_result;
+	uint32_t e2_tested;
+	uint32_t e2_word;
+	uint32_t e2_expected;
+	int      e2_test_result;
+	uint8_t  e2_host_control;
+};
+
+static void
+gta4l_emmc_probe_report_dto(const struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_dto *dto, int rc, int stop)
+{
+	uint8_t hci = gta4l_emmc_probe_read8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	uint32_t qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	uint32_t dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	uint32_t dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+
+	panic("GTA4L-EMMC DTO REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
+	    "rev=%u hci=%02x step=%u log=%u\n"
+	    "GTA4L-EMMC DTO R1 clk=%04x ne=%04x ee=%04x ns=%04x se=%04x "
+	    "es=%04x arm=%04x\n"
+	    "GTA4L-EMMC DTO E1 n=%u rc=%d "
+	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u\n"
+	    "GTA4L-EMMC DTO E1S mb=%u sr=%d/%u/%u dr=%u/%u/%u/%u\n"
+	    "GTA4L-EMMC DTO Q rc=%d\n"
+	    "GTA4L-EMMC DTO E2 att=%u win=%u rc=%d tt=%u tw=%08x te=%08x "
+	    "trc=%d hc=%02x\n"
+	    "GTA4L-EMMC DTO PAD qdsd=%08x dll=%08x dst=%08x\n"
+	    "GTA4L-EMMC DTO FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
+	    (unsigned int)host->ext_csd_rev, (unsigned int)hci,
+	    host->last_step, probe->log_count,
+	    (unsigned int)dto->clk, (unsigned int)dto->normal_enable,
+	    (unsigned int)dto->error_enable, (unsigned int)dto->normal_signal,
+	    (unsigned int)dto->error_signal, (unsigned int)dto->error_status,
+	    (unsigned int)dto->arm,
+	    dto->e1_blocks, dto->e1_result, dto->e1_fail_valid,
+	    dto->e1_fail_index, dto->e1_fail_argument, dto->e1_fail_command,
+	    (unsigned int)dto->e1_fail_error,
+	    (unsigned int)dto->e1_fail_normal, dto->e1_fail_present,
+	    dto->e1_fail_step,
+	    dto->e1_multi_block, dto->e1_stop_result, dto->e1_stop_valid,
+	    dto->e1_stop_capture_valid, dto->e1_drain_used,
+	    dto->e1_drain_resolved, dto->e1_drain_blocks,
+	    dto->e1_drain_iterations,
+	    dto->q_result,
+	    dto->e2_attempted, dto->e2_window, dto->e2_result,
+	    dto->e2_tested, dto->e2_word, dto->e2_expected,
+	    dto->e2_test_result, (unsigned int)dto->e2_host_control,
+	    qdsd, dll, dst,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
+/* Run the stage-7 audit: read back the timeout configuration (R1), arm the
+ * minimum data timeout and read 8 blocks (E1), re-read block 0 to prove the bus
+ * recovered (Q), then repeat the 1-bit CMD19 write test under the extended
+ * software bound (E2). Report and stop in every case; no retry on device. */
+static void
+gta4l_emmc_probe_dto_run(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_range *range, uint8_t *block0)
+{
+	static uint8_t blocks[GTA4L_EMMC_PROBE_DTO_BLOCKS *
+	    GTA4L_EMMC_BLOCK_BYTES];
+	struct gta4l_emmc_probe_dto dto;
+	struct gta4l_emmc_bus_result bus;
+	uint16_t expected;
+	int e1_dto;
+	int stop;
+	int rc;
+
+	bzero(&dto, sizeof(dto));
+	bzero(&bus, sizeof(bus));
+	dto.e1_blocks = GTA4L_EMMC_PROBE_DTO_BLOCKS;
+	dto.clk = gta4l_emmc_probe_read16(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL);
+	dto.normal_enable = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_NORMAL_INT_ENABLE);
+	dto.error_enable = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_ERROR_INT_ENABLE);
+	dto.normal_signal = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_NORMAL_INT_SIGNAL);
+	dto.error_signal = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_ERROR_INT_SIGNAL);
+	dto.error_status = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_ERROR_INT_STATUS);
+
+	/* Force the minimum data timeout (2^13 timeout clocks) while keeping
+	 * the clock-enable bits, then read the value back. */
+	expected = (uint16_t)(dto.clk & ~GTA4L_EMMC_PROBE_TOUTVAL_MASK);
+	gta4l_emmc_probe_write16(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL, expected);
+	gta4l_emmc_probe_barrier(probe);
+	dto.arm = gta4l_emmc_probe_read16(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL);
+
+	host->last_step = GTA4L_EMMC_STEP_DTO;
+	dto.e1_result = gta4l_emmc_read_multi(host,
+	    (uint64_t)range->entries_lba, GTA4L_EMMC_PROBE_DTO_BLOCKS,
+	    blocks);
+	dto.e1_fail_valid = host->fail_valid;
+	dto.e1_fail_index = host->fail_index;
+	dto.e1_fail_argument = host->fail_argument;
+	dto.e1_fail_command = host->fail_command;
+	dto.e1_fail_error = host->fail_error;
+	dto.e1_fail_normal = host->fail_normal;
+	dto.e1_fail_present = host->fail_present;
+	dto.e1_fail_step = host->fail_step;
+	dto.e1_multi_block = host->multi_block;
+	dto.e1_drain_used = host->multi_drain_used;
+	dto.e1_drain_resolved = host->multi_drain_resolved;
+	dto.e1_drain_blocks = host->multi_drain_blocks;
+	dto.e1_drain_iterations = host->multi_drain_iterations;
+	dto.e1_stop_result = host->multi_stop_result;
+	dto.e1_stop_valid = host->multi_stop_valid;
+	dto.e1_stop_capture_valid = host->multi_stop_capture_valid;
+	e1_dto = (dto.e1_result == GTA4L_EMMC_ERR_DATA_TIMEOUT) &&
+	    (dto.e1_fail_valid != 0u) &&
+	    ((dto.e1_fail_error & GTA4L_EMMC_INT_ERR_DATA_TIMEOUT) != 0u);
+
+	/* The core keeps only the first failure record. It is snapshotted above,
+	 * so clear it now and let the report's terminal FAIL name the last
+	 * experiment (the recovery read or E2) instead of repeating E1. */
+	host->fail_valid = 0;
+	host->fail_index = 0;
+	host->fail_argument = 0;
+	host->fail_command = 0;
+	host->fail_error = 0;
+	host->fail_normal = 0;
+	host->fail_present = 0;
+	host->fail_step = 0;
+
+	dto.q_result = gta4l_emmc_read_block(host, 0u, block0);
+
+	if ((dto.arm == expected) && (dto.q_result == GTA4L_EMMC_OK)) {
+		dto.e2_attempted = 1u;
+		dto.e2_window = GTA4L_EMMC_PROBE_DTO_WINDOW_US;
+		host->bus_test_window_us = GTA4L_EMMC_PROBE_DTO_WINDOW_US;
+		dto.e2_result = gta4l_emmc_bus_test(host, 1u, &bus);
+		host->bus_test_window_us = 0u;
+		dto.e2_tested = 1u;
+		dto.e2_word = bus.test_word;
+		dto.e2_expected = bus.test_expected;
+		dto.e2_test_result = bus.test_result;
+		dto.e2_host_control = bus.host_control;
+	}
+
+	if (dto.arm != expected) {
+		stop = 12;
+		rc = 0;
+	} else if (dto.q_result != GTA4L_EMMC_OK) {
+		stop = 11;
+		rc = dto.q_result;
+	} else if (dto.e2_result == GTA4L_EMMC_OK) {
+		stop = 13;
+		rc = 0;
+	} else if ((dto.e2_result != GTA4L_EMMC_ERR_DATA_TIMEOUT) &&
+	    (dto.e2_result != GTA4L_EMMC_ERR_BUS_TEST)) {
+		stop = 14;
+		rc = dto.e2_result;
+	} else if (e1_dto != 0) {
+		stop = 0;
+		rc = dto.e2_result;
+	} else {
+		stop = 10;
+		rc = dto.e2_result;
+	}
+	gta4l_emmc_probe_report_dto(host, probe, &dto, rc, stop);
+}
+
 static void
 gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe *probe,
@@ -1516,6 +1742,18 @@ gta4l_emmc_probe_run(void)
 	}
 	range.last_sum = gta4l_emmc_probe_sum(range_block,
 	    GTA4L_EMMC_BLOCK_BYTES);
+
+	/* Stage 7: data-timeout audit. Both observed hang classes (the pre-B1
+	 * CMD17 TC-only stop and the CMD19 write wedge) record no data-timeout
+	 * error even though the core enables the DTO status bit, so this rung
+	 * reads back the timeout configuration, arms the minimum timeout for a
+	 * healthy multi-block read longer than the counter, and then repeats
+	 * the 1-bit CMD19 wedge under a longer software bound. It issues no
+	 * CMD6 and no card-state write; the CMD19 pattern write is the same
+	 * non-persistent class already approved for B1C. */
+	if (stage == 7) {
+		gta4l_emmc_probe_dto_run(&host, &probe, &range, block0);
+	}
 
 	/* Stage B1: switch the card/host to 4-bit then 8-bit, run the
 	 * CMD19/CMD14 bus-test round trip at each width, and repeat the

@@ -945,7 +945,19 @@ gta4l_emmc_write_data(struct gta4l_emmc_host *host, uint32_t index,
 	    GTA4L_EMMC_REG_COMMAND, command);
 	gta4l_emmc_barrier(host);
 
-	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
+	if (host->bus_test_window_us != 0u) {
+		iterations = host->bus_test_window_us /
+		    GTA4L_EMMC_POLL_STEP_US;
+		if (iterations == 0u) {
+			iterations = 1u;
+		}
+		if (iterations > GTA4L_EMMC_MAX_BUS_TEST_ITERATIONS) {
+			iterations = GTA4L_EMMC_MAX_BUS_TEST_ITERATIONS;
+		}
+	} else {
+		iterations =
+		    gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
+	}
 	for (step = 0; step < iterations; step++) {
 		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_ERROR_INT_STATUS);

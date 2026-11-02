@@ -142,6 +142,14 @@ partition layout, payload policy and packaging.
   width. The other eleven boots stopped pre-B1 (eight H8 CMD3 timeouts,
   three CMD17 TC-only/no-error timeouts, one at the GPT array's LBA 2). The
   `trc=-20` class remains unobserved; the byte-183 paradox is unchanged.
+  The next rung (owner-chosen) is a host data-timeout audit
+  (`gta4l-emmc-probe=7`): both hang classes record no data-timeout status
+  even though the core enables the DTO bit, so the stage reads back the
+  timeout/enable configuration, arms the minimum timeout for a healthy
+  8-block read longer than the counter, re-reads block 0 to prove recovery,
+  and repeats the 1-bit CMD19 wedge under an 8 s software bound. It is
+  implemented and host-tested (core 138/83, probe 75/46) but not built,
+  flashed or booted; it needs a fresh explicit BOOT-only flash approval.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

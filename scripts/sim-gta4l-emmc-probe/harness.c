@@ -946,7 +946,8 @@ sim_command(uint16_t command)
 			bad_command_format = 1;
 		}
 		if ((block_size != GTA4L_EMMC_BLOCK_BYTES) ||
-		    (block_count != SIM_GPT_ARRAY_BLOCKS) ||
+		    ((block_count != SIM_GPT_ARRAY_BLOCKS) &&
+		    (block_count != 8u)) ||
 		    (last_argument != SIM_GPT_ARRAY_LBA) ||
 		    ((transfer_mode & (GTA4L_EMMC_TM_READ |
 		    GTA4L_EMMC_TM_BLOCK_COUNT_EN |
@@ -983,7 +984,8 @@ sim_command(uint16_t command)
 			bad_command_format = 1;
 		}
 		if ((last_argument != 0u) ||
-		    (mb_count != SIM_GPT_ARRAY_BLOCKS) ||
+		    ((mb_count != SIM_GPT_ARRAY_BLOCKS) &&
+		    (mb_count != 8u)) ||
 		    (mb_argument != SIM_GPT_ARRAY_LBA)) {
 			bad_mb_command = 1;
 		}
@@ -1730,6 +1732,24 @@ static const uint8_t order_probe_b1c_1bit[] = {
 	GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD8
 };
+/* Stage 7: the stage-A pass, then the 8-block CMD18 with its explicit stop,
+ * a block-0 recovery read and the repeated 1-bit CMD19/CMD14 round trip. */
+static const uint8_t order_probe_dto[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD18, GTA4L_EMMC_CMD12,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14
+};
 static const uint8_t order_cmd7[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7
@@ -2283,6 +2303,38 @@ main(int argc, char **argv)
 		} else if (strcmp(scenario,
 		    "probe-b1-1bit-continue") == 0) {
 			cmd6_ignore = 1;
+		}
+	} else if ((strcmp(scenario, "probe-dto-fired") == 0) ||
+	    (strcmp(scenario, "probe-dto-silent") == 0) ||
+	    (strcmp(scenario, "probe-dto-q-fail") == 0) ||
+	    (strcmp(scenario, "probe-dto-e2-pass") == 0)) {
+		/* Stage 7: data-timeout audit. E1 reads 8 blocks with the
+		 * minimum timeout armed; probe-dto-fired and probe-dto-q-fail
+		 * inject a data-timeout error mid-transfer, probe-dto-silent
+		 * lets the read complete. probe-dto-q-fail also fails the
+		 * block-0 recovery read. E2 repeats the 1-bit CMD19 wall. */
+		stage = 7;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_probe_dto,
+		    (unsigned int)(sizeof(order_probe_dto) /
+		    sizeof(order_probe_dto[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if ((strcmp(scenario, "probe-dto-fired") == 0) ||
+		    (strcmp(scenario, "probe-dto-q-fail") == 0)) {
+			mb_fail_done = 3;
+			mb_fail_error = GTA4L_EMMC_INT_ERR_DATA_TIMEOUT;
+		}
+		if (strcmp(scenario, "probe-dto-q-fail") == 0) {
+			cmd17_fail_on = 26u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		}
+		if (strcmp(scenario, "probe-dto-e2-pass") != 0) {
+			cmd19_1bit_timeout = 1;
 		}
 	} else if ((strcmp(scenario, "probe-b1c-success") == 0) ||
 	    (strcmp(scenario, "probe-b1c-pass") == 0) ||
@@ -3715,6 +3767,96 @@ main(int argc, char **argv)
 		    "the 1-bit mismatch issued a CMD6");
 		check(cmd_count == 35u,
 		    "the 1-bit mismatch did not stop at CMD14");
+	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
+		check(panicked == 1, "the fired DTO audit did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC DTO REPORT: rc=-11 stop=0") != NULL,
+		    "the fired row does not name the E1 timeout and stop 0");
+		check(strstr(panic_message,
+		    "DTO R1 clk=0007 ne=0033 ee=07ff ns=0000 se=0000 "
+		    "es=0000 arm=0007") != NULL,
+		    "the R1 line lost the timeout or enable readback");
+		check(strstr(panic_message,
+		    "DTO E1 n=8 rc=-11 "
+		    "fail=1/18/2/0000123a/0010/0001/00000000/22") != NULL,
+		    "the E1 line lost the latched data-timeout record");
+		check(strstr(panic_message,
+		    "DTO E1S mb=3 sr=0/1/1 dr=0/0/0/0") != NULL,
+		    "the E1 line lost the block ordinal or the stop result");
+		check(strstr(panic_message, "DTO Q rc=0") != NULL,
+		    "the recovery read did not complete");
+		check(strstr(panic_message,
+		    "DTO E2 att=1 win=8000000 rc=-11 tt=1 tw=00000000 "
+		    "te=00000000 trc=-11 hc=00") != NULL,
+		    "the E2 line lost the repeated wedged write-phase result");
+		check(strstr(panic_message,
+		    "DTO FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/22")
+		    != NULL,
+		    "the terminal record lost the wedged CMD19 tuple");
+		check(sdhci_read_count[GTA4L_EMMC_REG_ERROR_INT_STATUS] >=
+		    700000u,
+		    "the extended data-timeout window was not used");
+		check(mb_stop_count == 1u,
+		    "the E1 transfer was not stopped explicitly");
+		check(cmd_count == 37u,
+		    "the fired run did not issue the expected command count");
+	} else if (strcmp(scenario, "probe-dto-silent") == 0) {
+		check(panicked == 1, "the silent DTO audit did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC DTO REPORT: rc=-11 stop=10") != NULL,
+		    "the silent row does not keep stop 10");
+		check(strstr(panic_message,
+		    "DTO E1 n=8 rc=0 "
+		    "fail=0/0/0/00000000/0000/0000/00000000/0") != NULL,
+		    "the silent E1 row invented a failure record");
+		check(strstr(panic_message,
+		    "DTO E1S mb=7 sr=0/1/1 dr=0/0/0/0") != NULL,
+		    "the silent E1 row lost the completed ordinal or the stop");
+		check(strstr(panic_message, "DTO Q rc=0") != NULL,
+		    "the silent row lost the recovery read");
+		check(strstr(panic_message,
+		    "DTO E2 att=1 win=8000000 rc=-11 tt=1") != NULL,
+		    "the silent row lost the repeated wedged write phase");
+		check(strstr(panic_message,
+		    "DTO FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/22")
+		    != NULL,
+		    "the silent row lost the terminal wedged CMD19 tuple");
+		check(mb_stop_count == 1u,
+		    "the silent E1 transfer was not stopped explicitly");
+		check(cmd_count == 37u,
+		    "the silent run did not issue the expected command count");
+	} else if (strcmp(scenario, "probe-dto-q-fail") == 0) {
+		check(panicked == 1, "the failed recovery read did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC DTO REPORT: rc=-12 stop=11") != NULL,
+		    "the failed recovery row does not name the read error");
+		check(strstr(panic_message,
+		    "DTO E1 n=8 rc=-11 "
+		    "fail=1/18/2/0000123a/0010/0001/00000000/22") != NULL,
+		    "the failed recovery row lost the E1 data-timeout record");
+		check(strstr(panic_message, "DTO Q rc=-12") != NULL,
+		    "the failed recovery read was not recorded");
+		check(strstr(panic_message,
+		    "DTO E2 att=0 win=0 rc=0 tt=0 tw=00000000 te=00000000 "
+		    "trc=0 hc=00") != NULL,
+		    "the failed recovery row still ran the CMD19 experiment");
+		check(strstr(panic_message,
+		    "DTO FAIL fail=1/17/0/0000113a/0020/0000/00000000/22")
+		    != NULL,
+		    "the terminal record lost the recovery-read tuple");
+		check(cmd_count == 36u,
+		    "the failed recovery run did not stop before CMD19");
+	} else if (strcmp(scenario, "probe-dto-e2-pass") == 0) {
+		check(panicked == 1, "the passing E2 audit did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC DTO REPORT: rc=0 stop=13") != NULL,
+		    "the passed write phase does not name its stop");
+		check(strstr(panic_message,
+		    "DTO E2 att=1 win=8000000 rc=0 tt=1 tw=000000a5 "
+		    "te=000000a5 trc=0 hc=00") != NULL,
+		    "the E2 line lost the passing 1-bit words");
+		check(cmd_count == 38u,
+		    "the passing E2 run did not complete CMD19/CMD14");
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		check(panicked == 1, "the synthetic width failure did not panic");
 		check(strstr(panic_message, "stage=3") != NULL,
@@ -4409,13 +4551,20 @@ main(int argc, char **argv)
 	}
 
 	if ((strncmp(scenario, "probe-b1c-", 10u) == 0) ||
-	    (strncmp(scenario, "probe-b1-1bit-", 15u) == 0)) {
+	    (strncmp(scenario, "probe-b1-1bit-", 15u) == 0) ||
+	    (strncmp(scenario, "probe-dto-", 10u) == 0)) {
 		check(bad_command_format == 0,
 		    "a B1C command used the wrong flags");
 		check(bad_command_order == 0,
 		    "the B1C run sent commands in the wrong order");
 		check(bad_command_argument == 0,
 		    "the B1C content pass read the wrong LBA list");
+	}
+	if (strncmp(scenario, "probe-dto-", 10u) == 0) {
+		check(bad_mb_command == 0,
+		    "the DTO run used the wrong CMD18/CMD12 form");
+		check(auto_cmd12_seen == 0,
+		    "the DTO run left AUTO_CMD12 enabled");
 	}
 
 	if (failures != 0) {

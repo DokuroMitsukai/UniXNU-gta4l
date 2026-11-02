@@ -146,6 +146,10 @@ SCENARIOS = [
     'probe-b1-1bit-timeout',
     'probe-b1-1bit-mismatch',
     'probe-b1-1bit-continue',
+    'probe-dto-fired',
+    'probe-dto-silent',
+    'probe-dto-q-fail',
+    'probe-dto-e2-pass',
     'probe-b1c-success',
     'probe-b1c-pass',
     'probe-b1c-late-commit',
@@ -704,6 +708,39 @@ MUTATIONS = [
      'probe-b1-1bit-timeout',
      'the 1-bit timeout does not name the data timeout and the '
      'discriminator stop'),
+    ('dto-window-ignored',
+     '\tif (host->bus_test_window_us != 0u) {\n'
+     '\t\titerations = host->bus_test_window_us /\n'
+     '\t\t    GTA4L_EMMC_POLL_STEP_US;\n'
+     '\t\tif (iterations == 0u) {\n'
+     '\t\t\titerations = 1u;\n'
+     '\t\t}\n'
+     '\t\tif (iterations > GTA4L_EMMC_MAX_BUS_TEST_ITERATIONS) {\n'
+     '\t\t\titerations = GTA4L_EMMC_MAX_BUS_TEST_ITERATIONS;\n'
+     '\t\t}\n'
+     '\t} else {\n'
+     '\t\titerations =\n'
+     '\t\t    gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);\n'
+     '\t}\n',
+     '\titerations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);\n',
+     'probe-dto-fired',
+     'the extended data-timeout window was not used',
+     'core'),
+    ('dto-silent-accepted',
+     '\t} else if (e1_dto != 0) {\n\t\tstop = 0;\n',
+     '\t} else if (e1_dto == 2) {\n\t\tstop = 0;\n',
+     'probe-dto-fired',
+     'the fired row does not name the E1 timeout and stop 0'),
+    ('dto-q-skipped',
+     '\tdto.q_result = gta4l_emmc_read_block(host, 0u, block0);\n',
+     '\tdto.q_result = GTA4L_EMMC_OK;\n\t(void)block0;\n',
+     'probe-dto-q-fail',
+     'the failed recovery read was not recorded'),
+    ('dto-wrong-blocks',
+     '\tdto.e1_blocks = GTA4L_EMMC_PROBE_DTO_BLOCKS;\n',
+     '\tdto.e1_blocks = 21u;\n',
+     'probe-dto-fired',
+     'the E1 line lost the latched data-timeout record'),
 ]
 
 
