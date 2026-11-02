@@ -55,7 +55,15 @@ table stays at 45 rows. One further refresh on `2026-11-02` records the
 owner-authorized read-only recovery-side readback of eMMC blocks 0 and 1 on the
 owner's SM-T505N: it independently reproduces the MBR signature and GPT header
 CRC, refreshes the `README.md`, `docs/emmc-driver.md` and `porting.toml` rows,
-adds no manifest row, and keeps the table at 45 rows. This document's own hash
+adds no manifest row, and keeps the table at 45 rows. One more refresh on
+`2026-11-02` records the stage-A extended content read: the rebuilt
+`emmc-probe-1` image read the GPT header, the full 84-entry primary array
+(LBAs 2..22), the first usable sector and the last sector on the owner's
+SM-T505N, and every per-LBA sum matched a same-session read-only recovery
+readback; it refreshes the `README.md`, `docs/emmc-driver.md`,
+`package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
+`scripts/build-gta4l-emmc-probe.py` and `porting.toml` rows, adds no manifest
+row, and keeps the table at 45 rows. This document's own hash
 is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
@@ -102,18 +110,21 @@ and update the table.
 | Twenty-seventh fail-closed hardware-run paths at this snapshot | 7 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Twenty-eighth cmd1gap hardware-run paths at this snapshot | 8 modified (`README.md`, `docs/emmc-cmd1-gap-candidate.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Twenty-ninth stage-1 hardware-run paths at this snapshot | 6 modified (`README.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
-| Dirty entries at the hash snapshot | 6, exactly the twenty-ninth paths above |
+| Thirtieth stage-A content-read paths at this snapshot | 11 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `scripts/build-gta4l-emmc-probe.py`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/test-gta4l-emmc-probe.py`) |
+| Dirty entries at the hash snapshot | 11, exactly the thirtieth paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
-The hash table describes the twenty-ninth working-tree snapshot: the
+The hash table describes the thirtieth working-tree snapshot: the
 `60817c3` base, the twenty-fourth CMD7-diagnostics batch, the twenty-fifth
 PixelExperience-provenance paths, the LinuxForGta4l organization source audit,
 the 2026-11-01 `fmt=4` fail-closed hardware runs on two units, the
-`cmd1gap` candidate hardware runs on three units and the 2026-11-02 stage-1
-full-probe runs on two units. The
-`README.md`, `docs/emmc-driver.md`,
-`docs/diagnostic-payload-input-inventory.md` and `porting.toml` rows were
-refreshed for the stage-1 record; `docs/emmc-cmd2-crc-audit.md` and
+`cmd1gap` candidate hardware runs on three units, the 2026-11-02 stage-1
+full-probe runs on two units and the stage-A extended content read on the
+owner's SM-T505N. The stage-A batch refreshed the `README.md`,
+`docs/emmc-driver.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
+`scripts/build-gta4l-emmc-probe.py` and `porting.toml` rows;
+`docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`,
+`scripts/sim-gta4l-emmc-probe/*`, `scripts/test-gta4l-emmc-probe.py` and
 `docs/evidence-baseline.md` are outside this hash table or not listed.
 Historical batch rows remain as recorded. The current snapshot is taken on top
 of `bb98c61`; the `60817c3` base row is retained as the historical base for the
@@ -520,19 +531,19 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `b45b04d3e23fc3f0dd1083c891abcec33ae360c3b9047d8fb6f113c5a0e5aeb2` |
+| Repository README | `README.md` | `ba7fefdc723c74de391596bb213d89483e5aa5845a42843ac711dff08c46e746` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `fdeeb95616ed581519cc2c6af622d12d9a928c23f32657f44149c39ef315efa8` |
+| Porting record | `porting.toml` | `8a78f1b7492ce791676e5e3f69aeda5ce0034e620ae941dacb16ab8674537868` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `d992b0ce4e0299b880687641f90b46d931e40cfdd9060b73b624b270d83955fe` |
-| eMMC core header | `package/Gta4lEmmc.h` | `5dd223f787f7d7da532920bdc518ce0589af2a74cb5928df9231bbcae7dcc1af` |
+| eMMC driver record | `docs/emmc-driver.md` | `33219cb81580732289271ec745e2eee8b81e4f1a1dcd46b1fb6a6f39554901c7` |
+| eMMC core header | `package/Gta4lEmmc.h` | `7e063c08da1725f939e2d0fabfd6421d8f5e759a11763dd53b8ed5ef73fa9bf4` |
 | eMMC core source | `package/Gta4lEmmc.c` | `874e687813bf9a8bbd8aeefa6533ba3edd35f74cd5126add85647f480fbd9def` |
-| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `932552a2b79297a14bce2fb40ab0702f8696d995bafd55cdeddc2b4bc6397f4a` |
+| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `034571f107697798b9c94f9dd8ec49435a265b239a49bee1938edec95c79a1e4` |
 | eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `7fa4b57ca270c0cb72121d4e1d2096d406cbd9453aee6346a1154f016115ee94` |
 | eMMC host test | `scripts/test-gta4l-emmc.py` | `12169faa63af21071b66e2ebe2610bf9ab45dfebd20169bb6f4ec415380b2734` |
-| eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `c0d742df56cbf69c499537e077be6b590ea1e89e33f656b21c3215561dae0157` |
+| eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `06d63380b539282611c389efe706cf9086989da02732b5d9ced2eb11390a6a0c` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `b92d452c2a5d413e30672ec9181821c04b4f4ccc2ad540c8ea7c8e5731f19d08` |
@@ -543,14 +554,18 @@ bytes of the previously booted image `[S]`.
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
 row. The seventeenth batch refreshed the eight changed-file hashes without
-adding a row. The §6 self-check expected 35 until an earlier correction, then
+adding a row. The stage-A batch refreshed six rows (`README.md`,
+`docs/emmc-driver.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
+`scripts/build-gta4l-emmc-probe.py` and `porting.toml`) without adding a row.
+The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
 Hash coverage scope: the 45-row manifest above does not include every file in
 this batch. In particular, it has no row for
 `scripts/sim-gta4l-emmc-probe/harness.c`,
 `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`,
-`scripts/test-gta4l-emmc-probe.py`, `docs/emmc-cmd7-timeout-finding.md`,
+`scripts/test-gta4l-emmc-probe.py`, `docs/emmc-cmd2-crc-audit.md`,
+`docs/emmc-cmd7-timeout-finding.md`,
 `scripts/test-gta4l-emmc-evidence-counts.py`,
 `docs/pe-storage-stack-provenance.md`, `docs/linuxforgta4l-org-audit.md` or
 `docs/linuxforgta4l-org-audit-manifest.tsv`; those files are outside the
@@ -806,7 +821,7 @@ width-closure and terminal-read observation-boundary edits, run from
 | Check | Result |
 | --- | --- |
 | Current native eMMC core test | PASS: 98 simulator scenarios and 55 mutation controls |
-| Current eMMC probe report test | PASS: 33 scenarios and 22 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1060 bytes), three width-bound materializations, two width-fixture narrowing controls, two full-probe block-read failure controls and the oversized-report rejection control |
+| Current eMMC probe report test | PASS: 38 scenarios and 26 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1493 bytes), three width-bound materializations, two width-fixture narrowing controls, two full-probe block-read failure controls, the stage-A GPT gate and 21-sector array content phase, four stage-A loop mutation controls (duplicate LBA, continued error, block-count off-by-one, wrong last LBA) and the oversized-report rejection control |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |
@@ -1000,6 +1015,71 @@ record). The full transcription and field comparison are in
 | `porting.toml` parse with `tomllib` | 13 areas |
 | `git diff --check` | PASS: clean |
 
+#### Stage-A extended content-read hardware-run record (2026-11-02)
+
+The stage-A image is the full `emmc-probe-1` diagnostic rebuilt from
+`53753df` with the extended read phase; the tree was dirty with
+`package/Gta4lEmmc.h 7e063c08…`, `package/Gta4lEmmcProbe.c 034571f1…`,
+`scripts/sim-gta4l-emmc-probe/harness.c 1e8ccdc2…`,
+`scripts/sim-gta4l-emmc-probe/report-width-fixture.c 522a6b5b…`,
+`scripts/test-gta4l-emmc-probe.py 68a91eb0…` and
+`scripts/build-gta4l-emmc-probe.py 06d63380…`; `Gta4lEmmc.c` stayed
+`874e6878…`. The build provenance is
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/build-provenance.json`: probe
+archive `57ed9995…`, payload `fdd85d25…` (83,886,080 bytes,
+`gta4l-emmc-probe=1`, contract 7/7) and boot image `721e5c87…` (85,688,320
+bytes, gate 18/18 against the v5 baseline `ce4d76e8…`).
+
+The BOOT-only flash record for the owner's SM-T505N is
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/flash-record.json`: pre-flash
+partition `421e8848…` (the stage-1 image plus its unchanged tail), post-flash
+`d55c09bf…`, image-byte readback `721e5c87…`, tail `a28b4ea2…` unchanged,
+`RECOVERY` `14e11370…` unchanged, and the EFS/sec_efs backups unchanged; no
+other partition was written. The record was written before the boot.
+
+The owner booted the image on the same SM-T505N and supplied a screen
+photograph, `probe-report-photo.jpg` (SHA-256 `663d2db3…`), with the
+transcription in `probe-report.txt`; both stay in the evidence directory. The
+report reached `GTA4L-EMMC PROBE REPORT: rc=0` with `step=18 log=30`, the new
+content lines and the same identification fields as the stage-1 record above.
+The GPT gate reported `elba=2 n=84 sz=128 first=34 last=61071326
+backup=61071359`, exactly the live and pinned header values. 84 × 128 =
+10,752 bytes = 21 sectors, so the primary array is LBAs 2..22;
+`BLOCKS 22=00000000` is expected because only entries 1..80 are populated and
+the last four 128-byte entry slots are zero. `DATA 34=f418cd33` is the first
+usable sector and `LSTLBA=61071359 sum=a89b26d5` is the backup GPT header at
+the last sector.
+
+The same session then read LBAs 0..33, LBA 34 and LBAs 61,071,326..61,071,359
+from `/dev/block/mmcblk0` in TWRP with `dd bs=512`, hashing each range on the
+device and capturing it with `adb exec-out`; no write, mount, format or
+partition change was issued. All 23 stage-A report sums (21 array + `DATA 34` +
+`LSTLBA`) reproduce from those bytes. The live primary sectors `0c7e9c03…` are
+byte-identical to the pinned recovery GPT dump, the live backup tail
+`41912e59…` is byte-identical to the pinned backup dump, both header CRCs are
+valid (`41c874ee`/`fde724e6`), the backup array equals the primary array, and
+the LBA 0/1 hashes match the stage-1 readback. Sector images and hashes stay in
+the gitignored
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/recovery-readback/` record. The
+full transcription and decoding are in `docs/emmc-cmd2-crc-audit.md` §2.13 and
+`docs/emmc-driver.md` §5.3.6.
+
+| Check | Result |
+| --- | --- |
+| eMMC stage-A BOOT write and readback | PASS: BOOT-only write; image-byte readback `721e5c87…`, full partition `d55c09bf…`, tail `a28b4ea2…` unchanged, `RECOVERY` `14e11370…` unchanged |
+| eMMC stage-A pulled-image gate | PASS: 18/18 on the pulled 85,688,320-byte image; 7/7 on the 83,886,080-byte payload extraction |
+| eMMC stage-A on-device report | RECORDED: owner-supplied photograph `probe-report-photo.jpg` (SHA-256 `663d2db3…`) with `rc=0`, `step=18`, `log=30`, the GPT gate, 21 array sums, `DATA 34` and `LSTLBA` |
+| eMMC stage-A recovery readback | PASS: same-session read-only `dd` of LBAs 0..33, 34 and 61,071,326..61,071,359; all 23 stage-A sums match; live primary bytes equal the pinned recovery GPT dump, live backup tail equals the pinned backup dump, both header CRCs valid, backup array equals primary array |
+| `scripts/test-gta4l-emmc.py` | PASS: 98 simulator scenarios and 55 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | PASS: 38 scenarios and 26 mutation controls, including the stage-A GPT gate, 21-sector array content phase and four loop mutation controls |
+| `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
+| `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
+| `scripts/test-gta4l-ram-root-fixture-recipe.py` | PASS: input and failure checks |
+| `scripts/check-gta4l.py` | PASS: SM6115 (gta4l) board layout verified |
+| Hash-table self-check in §6 | `rows=45 mismatches=0` |
+| `porting.toml` parse with `tomllib` | 13 areas |
+| `git diff --check` | PASS: clean |
+
 ## 7. Limits
 
 - The hashes are a snapshot of a dirty tree; any later edit invalidates them.
@@ -1016,6 +1096,14 @@ record). The full transcription and field comparison are in
   owner-reported. The result establishes a successful identification run
   sequence, not the CMD2 cause, the necessity of the 8-us delay, reliability or
   a sector read. The delay remains a candidate, not an adopted fix.
+- The 2026-11-02 stage-A record is a single read-only pass on the owner's
+  SM-T505N. The report is an owner-supplied photograph whose file and SHA-256
+  are in the gitignored `out/` record; every per-LBA sum is bound by one
+  same-session TWRP readback, and the GPT gate values are pinned to the live
+  header. It establishes repeated single-block CMD17 content reads over the GPT
+  region, not a multi-block transfer, bus-width/high-speed result, reliability
+  test, filesystem claim or write capability. The SM-T505 unit from the stage-1
+  batch was not re-run with the stage-A image.
 - The pinned Linux cache has no `.git`; its revision is documented provenance,
   not a verifiable git checkout `[U]`.
 - The booted image is not tracked; the copy in the gitignored output tree

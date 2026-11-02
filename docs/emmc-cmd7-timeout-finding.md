@@ -313,8 +313,8 @@ longer, and the production format strings and argument lists are the ones under
 test. The four stored trace indices use the late ordered sequence
 `0,99997,99998,99999`, so every index after the first is at five digits. The
 measured host lengths are 1093 bytes for the failure report, 788 for the
-identification report and 1060 for the full-probe report, leaving 954, 1259
-and 987 bytes of the 2048-byte buffer. The width-budget control separately
+identification report and 1493 for the full-probe report, leaving 954, 1259
+and 554 bytes of the 2048-byte buffer. The width-budget control separately
 checks the accept boundary at `sizeof(panic_message) - 1` and
 `sizeof(panic_message)`. This remains a host libc bound; it does not include the
 renderer's `\nframes` suffix, log truncation or framebuffer clipping, which are
@@ -343,8 +343,9 @@ widest expansion is a one-digit negative result such as `-7`, which becomes
 1093-byte host bound therefore becomes at most 1100 bytes on the renderer
 (`1093 - 1 + 8`, or equivalently `1093 - 3 + 10` for the fixture's `-18`).
 Identification and full-probe reports carry `rc=0`, so their renderer lengths
-stay 788 and 1060 bytes. Adding the 415-character worst-case frame suffix gives
-1515 bytes, which is within the 2047-character log by static arithmetic; that
+stay 788 and 1493 bytes. Adding the 415-character worst-case frame suffix gives
+1515 bytes for the failure report and 1908 bytes for the full-probe report,
+both within the 2047-character log by static arithmetic; that
 assumes the report is logged first and all 24 frames are emitted. It is not a
 device demonstration, so full-log capture remains an open gate.
 
@@ -368,8 +369,8 @@ scenario must reject it, while the plateau scenario checks that repeated
 unchanged samples do not advance the overflow count. The CC-only case now ends
 in a bounded timeout because CC alone is not success while the busy completion is
 missing; a core mutation that restores CC-only success is rejected.
-Host counts are 98 core scenarios with 55 mutation controls and 33 probe
-scenarios with 22 mutation controls; the `fmt=4` report ran on 2026-11-01 on two
+Host counts are 98 core scenarios with 55 mutation controls and 38 probe
+scenarios with 26 mutation controls; the `fmt=4` report ran on 2026-11-01 on two
 units (an SM-T505 and the owner's SM-T505N, per the owner); both reproduced the
 CMD2 failure before the CMD7 capture. The later `cmd1gap` candidate reached CMD7
 and observed CC and TC on three units (section 9), so the CMD7 capture is now

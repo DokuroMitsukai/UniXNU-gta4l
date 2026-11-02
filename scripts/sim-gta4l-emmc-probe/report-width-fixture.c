@@ -24,10 +24,12 @@ gta4l_emmc_probe_width_fixture(int form)
 	static uint8_t block1[GTA4L_EMMC_BLOCK_BYTES];
 	struct gta4l_emmc_probe probe;
 	struct gta4l_emmc_probe_regs regs;
+	struct gta4l_emmc_probe_range range;
 	struct gta4l_emmc_host host;
 
 	memset(&probe, 0, sizeof(probe));
 	memset(&regs, 0, sizeof(regs));
+	memset(&range, 0, sizeof(range));
 	memset(&host, 0, sizeof(host));
 	memset(block0, 0xFF, sizeof(block0));
 	memset(block1, 0xFF, sizeof(block1));
@@ -84,7 +86,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	host.csd[2] = 0xFFFFFFFFu;
 	host.csd[3] = 0xFFFFFFFFu;
 
-	/* Failure capture: command index 0..63, step 0..15, 20 CMD1
+	/* Failure capture: command index 0..63, step 0..18, 20 CMD1
 	 * attempts, arbitrary argument/raw windows. */
 	host.fail_valid = 1;
 	host.fail_index = 63u;
@@ -191,6 +193,19 @@ gta4l_emmc_probe_width_fixture(int form)
 	host.cmd7_term_response[2] = 0xFFFFFFFFu;
 	host.cmd7_term_response[3] = 0xFFFFFFFFu;
 
+	/* Extended content phase bounds: the gated header values stay pinned
+	 * (array LBA 2, 84 x 128-byte entries, first usable LBA 34) and only
+	 * the capacity-derived last/backup pair takes the widest form. */
+	range.entries_lba = GTA4L_EMMC_PROBE_ARRAY_LBA;
+	range.entry_count = GTA4L_EMMC_PROBE_ENTRY_COUNT;
+	range.entry_size = GTA4L_EMMC_PROBE_ENTRY_SIZE;
+	range.first_usable = GTA4L_EMMC_PROBE_FIRST_USABLE;
+	range.last_usable = 0xFFFFFFDDu;
+	range.backup_lba = 0xFFFFFFFEu;
+	range.data_sum = 0xFFFFFFFFu;
+	range.last_sum = 0xFFFFFFFFu;
+	memset(range.array, 0xFF, sizeof(range.array));
+
 	if (form == 0) {
 		/* stage 1..3 and the most negative result code, so the
 		 * signed-decimal field carries its widest production host
@@ -200,7 +215,8 @@ gta4l_emmc_probe_width_fixture(int form)
 	} else if (form == 1) {
 		gta4l_emmc_probe_report_ident(&host, &probe, &regs);
 	} else {
+		host.last_step = GTA4L_EMMC_STEP_PROBE_LAST;
 		gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0,
-		    block1);
+		    block1, &range);
 	}
 }

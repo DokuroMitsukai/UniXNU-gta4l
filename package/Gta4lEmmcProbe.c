@@ -26,6 +26,28 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 #define GTA4L_EMMC_PROBE_TLMM_BASE  0x00575000u
 #define GTA4L_EMMC_PROBE_WINDOW     0x00001000u
 
+/* Extended content phase (stage A). The LBA list is derived from the pinned
+ * recovery GPT header: the primary partition-entry array starts at LBA 2 and
+ * holds 84 128-byte entries (21 sectors), the first usable LBA is 34 and the
+ * backup header is the last sector. The gate refuses to read the range unless
+ * the live header carries exactly these values, so a changed layout aborts
+ * the diagnostic instead of reading pinned LBAs that no longer mean the same
+ * regions. */
+#define GTA4L_EMMC_PROBE_ARRAY_LBA       2u
+#define GTA4L_EMMC_PROBE_ARRAY_BLOCKS    21u
+#define GTA4L_EMMC_PROBE_ENTRY_COUNT     84u
+#define GTA4L_EMMC_PROBE_ENTRY_SIZE      128u
+#define GTA4L_EMMC_PROBE_FIRST_USABLE    34u
+#define GTA4L_EMMC_PROBE_BACKUP_SECTORS  33u
+
+/* GPT header field offsets used by the gate. */
+#define GTA4L_EMMC_PROBE_GPT_BACKUP_LBA   0x20u
+#define GTA4L_EMMC_PROBE_GPT_FIRST_USABLE 0x28u
+#define GTA4L_EMMC_PROBE_GPT_LAST_USABLE  0x30u
+#define GTA4L_EMMC_PROBE_GPT_ENTRIES_LBA  0x48u
+#define GTA4L_EMMC_PROBE_GPT_ENTRY_COUNT  0x50u
+#define GTA4L_EMMC_PROBE_GPT_ENTRY_SIZE   0x54u
+
 struct gta4l_emmc_probe {
 	uintptr_t sdhci;
 	uintptr_t gcc;
@@ -62,6 +84,21 @@ struct gta4l_emmc_probe_regs {
 	uint32_t bcr;
 	uint32_t apps_cbcr;
 	uint32_t ahb_cbcr;
+};
+
+/* Extended content phase values. The sums are per-LBA accumulator values over
+ * the whole 512-byte block; the GPT fields are the gated header values that
+ * selected the LBA list. */
+struct gta4l_emmc_probe_range {
+	uint32_t array[GTA4L_EMMC_PROBE_ARRAY_BLOCKS];
+	uint32_t entries_lba;
+	uint32_t entry_count;
+	uint32_t entry_size;
+	uint32_t first_usable;
+	uint32_t last_usable;
+	uint32_t backup_lba;
+	uint32_t data_sum;
+	uint32_t last_sum;
 };
 
 /* CMD7 R1b capture block shared by the failure and success reports. The field
@@ -367,6 +404,89 @@ gta4l_emmc_probe_word(const uint8_t *buffer, uint32_t offset)
 	    ((uint32_t)buffer[offset + 3u] << 24);
 }
 
+static uint64_t
+gta4l_emmc_probe_long(const uint8_t *buffer, uint32_t offset)
+{
+	return (uint64_t)gta4l_emmc_probe_word(buffer, offset) |
+	    ((uint64_t)gta4l_emmc_probe_word(buffer, offset + 4u) << 32);
+}
+
+static int
+gta4l_emmc_probe_gpt_signature(const uint8_t *buffer)
+{
+	static const uint8_t signature[8] = {
+		'E', 'F', 'I', ' ', 'P', 'A', 'R', 'T'
+	};
+	uint32_t index;
+
+	for (index = 0; index < 8u; index++) {
+		if (buffer[index] != signature[index]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* Gate the pinned LBA list against the live GPT header. Each failed check
+ * sets one bit so the abort report names the mismatched field instead of a
+ * generic refusal. */
+static uint32_t
+gta4l_emmc_probe_gpt(struct gta4l_emmc_probe_range *range,
+    const uint8_t *block1, uint32_t capacity_blocks)
+{
+	uint64_t backup_lba;
+	uint64_t first_usable;
+	uint64_t last_usable;
+	uint64_t entries_lba;
+	uint32_t entry_count;
+	uint32_t entry_size;
+	uint32_t bad = 0;
+
+	if (gta4l_emmc_probe_gpt_signature(block1) == 0) {
+		bad |= 0x01u;
+	}
+	backup_lba = gta4l_emmc_probe_long(block1,
+	    GTA4L_EMMC_PROBE_GPT_BACKUP_LBA);
+	first_usable = gta4l_emmc_probe_long(block1,
+	    GTA4L_EMMC_PROBE_GPT_FIRST_USABLE);
+	last_usable = gta4l_emmc_probe_long(block1,
+	    GTA4L_EMMC_PROBE_GPT_LAST_USABLE);
+	entries_lba = gta4l_emmc_probe_long(block1,
+	    GTA4L_EMMC_PROBE_GPT_ENTRIES_LBA);
+	entry_count = gta4l_emmc_probe_word(block1,
+	    GTA4L_EMMC_PROBE_GPT_ENTRY_COUNT);
+	entry_size = gta4l_emmc_probe_word(block1,
+	    GTA4L_EMMC_PROBE_GPT_ENTRY_SIZE);
+
+	range->entries_lba = (uint32_t)entries_lba;
+	range->entry_count = entry_count;
+	range->entry_size = entry_size;
+	range->first_usable = (uint32_t)first_usable;
+	range->last_usable = (uint32_t)last_usable;
+	range->backup_lba = (uint32_t)backup_lba;
+
+	if ((capacity_blocks == 0u) ||
+	    (backup_lba != (uint64_t)capacity_blocks - 1u)) {
+		bad |= 0x02u;
+	}
+	if (first_usable != GTA4L_EMMC_PROBE_FIRST_USABLE) {
+		bad |= 0x04u;
+	}
+	if ((last_usable + GTA4L_EMMC_PROBE_BACKUP_SECTORS) != backup_lba) {
+		bad |= 0x08u;
+	}
+	if (entries_lba != GTA4L_EMMC_PROBE_ARRAY_LBA) {
+		bad |= 0x10u;
+	}
+	if (entry_count != GTA4L_EMMC_PROBE_ENTRY_COUNT) {
+		bad |= 0x20u;
+	}
+	if (entry_size != GTA4L_EMMC_PROBE_ENTRY_SIZE) {
+		bad |= 0x40u;
+	}
+	return bad;
+}
+
 static void
 gta4l_emmc_probe_report_failure(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe *probe, int stage, int result,
@@ -498,10 +618,24 @@ gta4l_emmc_probe_report_ident(const struct gta4l_emmc_host *ident_host,
 }
 
 static void
+gta4l_emmc_probe_report_read_failure(const struct gta4l_emmc_host *host,
+    const char *phase, uint32_t lba, int result)
+{
+	panic("GTA4L-EMMC PROBE FAILED: %s read lba=%u rc=%d step=%u "
+	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u", phase, lba, result,
+	    host->last_step, (unsigned int)host->fail_valid,
+	    host->fail_index, host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
+static void
 gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe *probe,
     const struct gta4l_emmc_probe_regs *regs,
-    const uint8_t *block0, const uint8_t *block1)
+    const uint8_t *block0, const uint8_t *block1,
+    const struct gta4l_emmc_probe_range *range)
 {
 	panic("GTA4L-EMMC PROBE REPORT: rc=0 mci=%08x rca=%u cap=%u rev=%u "
 	    "bw=%u ocr=%08x ext=%08x hc2=%04x ven=%08x dll=%08x "
@@ -510,6 +644,14 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 	    "GTA4L-EMMC PROBE CSD %08x %08x %08x %08x\n"
 	    "GTA4L-EMMC PROBE BLOCK0 sum=%08x words=%08x %08x %08x %08x\n"
 	    "GTA4L-EMMC PROBE BLOCK1 sum=%08x words=%08x %08x %08x %08x\n"
+	    "GTA4L-EMMC PROBE GPT elba=%u n=%u sz=%u first=%u last=%u "
+	    "backup=%u\n"
+	    "GTA4L-EMMC PROBE BLOCKS"
+	    " 2=%08x 3=%08x 4=%08x 5=%08x 6=%08x 7=%08x 8=%08x 9=%08x"
+	    " 10=%08x 11=%08x 12=%08x 13=%08x 14=%08x 15=%08x 16=%08x"
+	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
+	    "GTA4L-EMMC PROBE DATA %u=%08x\n"
+	    "GTA4L-EMMC PROBE LSTLBA=%u sum=%08x\n"
 	    "GTA4L-EMMC PROBE CAPTURE fmt=4 hv=%04x "
 	    "c2=%u/%04x/%04x/%08x,%08x,%08x,%08x "
 	    "c3p=%u/%04x/%04x/%08x/%04x/%04x "
@@ -533,6 +675,17 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 	    gta4l_emmc_probe_word(block1, 4),
 	    gta4l_emmc_probe_word(block1, 8),
 	    gta4l_emmc_probe_word(block1, 12),
+	    range->entries_lba, range->entry_count, range->entry_size,
+	    range->first_usable, range->last_usable, range->backup_lba,
+	    range->array[0], range->array[1], range->array[2],
+	    range->array[3], range->array[4], range->array[5],
+	    range->array[6], range->array[7], range->array[8],
+	    range->array[9], range->array[10], range->array[11],
+	    range->array[12], range->array[13], range->array[14],
+	    range->array[15], range->array[16], range->array[17],
+	    range->array[18], range->array[19], range->array[20],
+	    range->first_usable, range->data_sum,
+	    range->backup_lba, range->last_sum,
 	    (unsigned int)regs->host_version,
 	    (unsigned int)host->cmd2_capture_valid,
 	    (unsigned int)host->cmd2_normal,
@@ -569,8 +722,10 @@ gta4l_emmc_probe_run(void)
 {
 	static uint8_t block0[GTA4L_EMMC_BLOCK_BYTES];
 	static uint8_t block1[GTA4L_EMMC_BLOCK_BYTES];
+	static uint8_t range_block[GTA4L_EMMC_BLOCK_BYTES];
 	struct gta4l_emmc_probe probe;
 	struct gta4l_emmc_probe_regs regs;
+	struct gta4l_emmc_probe_range range;
 	struct gta4l_emmc_host host;
 	vm_offset_t sdhci_mapping;
 	vm_offset_t gcc_mapping;
@@ -595,6 +750,8 @@ gta4l_emmc_probe_run(void)
 	uint32_t gcc_m;
 	uint32_t gcc_n;
 	uint32_t gcc_d;
+	uint32_t index;
+	uint32_t gate_mask;
 	int stage;
 	int result;
 
@@ -806,5 +963,53 @@ gta4l_emmc_probe_run(void)
 		    host.fail_step);
 	}
 
-	gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0, block1);
+	/* Stage-A content phase: gate the pinned LBA list on the live header
+	 * and then read the array, first usable sector and last sector. */
+	bzero(&range, sizeof(range));
+	gate_mask = gta4l_emmc_probe_gpt(&range, block1,
+	    host.capacity_blocks);
+	if (gate_mask != 0u) {
+		panic("GTA4L-EMMC PROBE FAILED: gpt gate bad=%08x cap=%u "
+		    "sig=%08x elba=%u n=%u sz=%u first=%u last=%u "
+		    "backup=%u sum=%08x step=%u", gate_mask,
+		    host.capacity_blocks, gta4l_emmc_probe_word(block1, 0),
+		    range.entries_lba, range.entry_count, range.entry_size,
+		    range.first_usable, range.last_usable, range.backup_lba,
+		    gta4l_emmc_probe_sum(block1, GTA4L_EMMC_BLOCK_BYTES),
+		    host.last_step);
+	}
+
+	host.last_step = GTA4L_EMMC_STEP_PROBE_ARRAY;
+	for (index = 0; index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
+		result = gta4l_emmc_read_block(&host,
+		    (uint64_t)range.entries_lba + index, range_block);
+		if (result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_read_failure(&host, "array",
+			    range.entries_lba + index, result);
+		}
+		range.array[index] = gta4l_emmc_probe_sum(range_block,
+		    GTA4L_EMMC_BLOCK_BYTES);
+	}
+
+	host.last_step = GTA4L_EMMC_STEP_PROBE_DATA;
+	result = gta4l_emmc_read_block(&host, range.first_usable,
+	    range_block);
+	if (result != GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_report_read_failure(&host, "data",
+		    range.first_usable, result);
+	}
+	range.data_sum = gta4l_emmc_probe_sum(range_block,
+	    GTA4L_EMMC_BLOCK_BYTES);
+
+	host.last_step = GTA4L_EMMC_STEP_PROBE_LAST;
+	result = gta4l_emmc_read_block(&host, range.backup_lba, range_block);
+	if (result != GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_report_read_failure(&host, "last",
+		    range.backup_lba, result);
+	}
+	range.last_sum = gta4l_emmc_probe_sum(range_block,
+	    GTA4L_EMMC_BLOCK_BYTES);
+
+	gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0, block1,
+	    &range);
 }

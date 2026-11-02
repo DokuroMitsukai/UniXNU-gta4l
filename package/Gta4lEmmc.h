@@ -293,6 +293,12 @@
 #define GTA4L_EMMC_STEP_TRAN              13u
 #define GTA4L_EMMC_STEP_EXT_CSD           14u
 #define GTA4L_EMMC_STEP_READY             15u
+/* Probe-only content phases. The portable core never sets these; the
+ * diagnostic probe assigns them before each read so a failure record names
+ * the phase that faulted. */
+#define GTA4L_EMMC_STEP_PROBE_ARRAY       16u
+#define GTA4L_EMMC_STEP_PROBE_DATA        17u
+#define GTA4L_EMMC_STEP_PROBE_LAST        18u
 
 struct gta4l_emmc_ops {
 	uint8_t  (*read8)(void *context, uint32_t space, uint32_t offset);

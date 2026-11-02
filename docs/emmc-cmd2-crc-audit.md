@@ -941,6 +941,96 @@ The two full CIDs and `c2` windows are the same identifiers already reproduced
 with the owner's explicit approval in section 2.11; they are repeated here for
 the same units and add no new device identifier.
 
+### 2.13 Stage-A extended content-read result (2026-11-02)
+
+The stage-A image is the same `emmc-probe-1` diagnostic rebuilt from the
+working tree on top of `53753df` with the extended read phase. The build
+provenance is
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/build-provenance.json`:
+`Gta4lEmmc.c 874e6878…`, `Gta4lEmmc.h 7e063c08…`, `Gta4lEmmcProbe.c
+034571f1…`, probe archive `57ed9995…`, payload `fdd85d25…` (83,886,080 bytes,
+`gta4l-emmc-probe=1`, contract 7/7) and boot image `721e5c87…` (85,688,320
+bytes, gate 18/18 against the v5 baseline `ce4d76e8…`). The BOOT-only flash
+record is
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/flash-record.json`: pre-flash
+`421e8848…` (the §2.12 stage-1 image plus its unchanged tail), post-flash
+`d55c09bf…`, image-byte readback `721e5c87…`, tail `a28b4ea2…` unchanged,
+`RECOVERY` `14e11370…` unchanged, and the EFS/sec_efs backups unchanged; no
+other partition was written.
+
+The owner booted the image on the same SM-T505N and supplied a screen
+photograph (`photo_2026-11-01_23-40-58.jpg`, SHA-256 `663d2db3…`); the photo
+and the full transcription stay in the gitignored evidence directory. The
+report reached `GTA4L-EMMC PROBE REPORT: rc=0` with the §2.12 identification
+fields, `step=18 log=30`, and the new content lines (CID/CSD lines repeat
+§2.12 for the same unit and are omitted here):
+
+```text
+GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 cap=61071360 rev=8 bw=0
+ocr=c0ff8080 ext=000009cb hc2=0008 ven=00018a9c dll=6000642c
+dst=00000000 pst=00000000 step=18 log=30
+GTA4L-EMMC PROBE BLOCK0 sum=62084b66 words=00000000 00000000 000000ee 00000001
+GTA4L-EMMC PROBE BLOCK1 sum=84d0543e words=20494645 54524150 00010000 0000005c
+GTA4L-EMMC PROBE GPT elba=2 n=84 sz=128 first=34 last=61071326 backup=61071359
+GTA4L-EMMC PROBE BLOCKS 2=793877e4 3=01fcf835 4=393b7c13 5=0bfbefd5 6=57ac4bf5 7=82d4c9c9 8=2e16c705 9=adbc9085 10=2d26b02c 11=69ab5982 12=604856e0 13=7f3f196c 14=7e056798 15=d6926617 16=3d035910 17=5076cbb8 18=d40dca26 19=37f4be4f 20=057d3881 21=89457318 22=00000000
+GTA4L-EMMC PROBE DATA 34=f418cd33
+GTA4L-EMMC PROBE LSTLBA=61071359 sum=a89b26d5
+```
+
+The `CAPTURE fmt=4` block repeats the §2.12 field layout; the changed fields
+are normal run-to-run poll ticks (`c3l …155e`, `c7q …1581`, `c7c
+…1572/…1573`), `c7x=2/0` still reports no trace overflow, and the report
+source location moved to `Gta4lEmmcProbe.c:717` with the added code. The full
+CAPTURE block is in `probe-report.txt`.
+
+Decoding and bounds:
+
+- `step=18` is `GTA4L_EMMC_STEP_PROBE_LAST`; `log=30` is the stage-1 `log=7`
+  plus 23 reads (21 array + first usable + last sector).
+- The gate values match the live and pinned GPT header: entry array LBA 2,
+  84 entries of 128 bytes, first usable LBA 34, last usable LBA 61,071,326
+  and backup LBA 61,071,359. 84 × 128 = 10,752 bytes = 21 sectors, so the
+  primary array spans LBAs 2..22, not the 20 sectors the plan's draft guessed
+  before the live entry count was known. The gate refuses any other layout.
+- `BLOCKS 22=00000000` is expected: only entries 1..80 are populated; the
+  final four 128-byte entry slots (entries 81..84) are zero, so the last array
+  sector is zero. The same 20 nonzero array blocks appear in the backup array.
+- `DATA 34=f418cd33` is the first usable LBA the header names; `LSTLBA=
+  61071359 sum=a89b26d5` is the backup GPT header at the last sector.
+
+**Live recovery-side binding (2026-11-02, read-only):** while the owner's
+SM-T505N was in TWRP, the same session read LBAs 0..33, LBA 34 and LBAs
+61,071,326..61,071,359 with `dd bs=512`; each range was hashed on the device
+and captured with `adb exec-out`. No write, mount, format or partition change
+was issued. All 21 primary-array sums, the first-usable-sector sum and the
+last-sector sum in the report equal the live readback. The live 0..33 image
+(`0c7e9c03…`) is byte-identical to the pinned recovery GPT dump
+`device-dump/private/gta4l-dump/gta4l-gpt.bin`; the live backup tail
+(`41912e59…`) is byte-identical to the pinned backup dump; LBA 0/1 hashes are
+the §2.12 values; both the primary and backup GPT header CRCs are valid
+(`41c874ee`/`fde724e6`); the backup array equals the primary array. The
+sector images and hashes stay in the gitignored
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/recovery-readback/` record.
+
+Supported by this section: the stage-A rung / F1 content claim. The driver
+issued repeated single-block CMD17 reads at the fixed identification clock
+(1-bit, CRC enabled) for the GPT header, the full 84-entry primary array, the
+first usable sector and the last sector, and every content sum is bound to
+live recovery bytes. This is multi-sector content evidence.
+
+Not supported: a multi-block CMD18/CMD12 transfer (F2), any bus-width change
+or bus-test (F3), high-speed timing (F4), block-device publication or mount
+(F5), any write (F6), filesystem or partition semantics beyond the GPT bytes,
+media-reliability claims, or DMA/CQE/ICE. The `DATA 34` sum binds a content
+fingerprint; it is not interpreted as a filesystem or partition object.
+
+Host verification for this rung: `scripts/test-gta4l-emmc.py` passes 98
+scenarios and 55 mutation controls; `scripts/test-gta4l-emmc-probe.py` passes
+38 scenarios and 26 mutation controls, including the GPT gate, the 21-sector
+array phase, the first-usable/last-sector reads and the four stage-A loop
+mutation controls (duplicate LBA, continued error, block-count off-by-one,
+wrong last LBA).
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout

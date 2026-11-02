@@ -55,6 +55,16 @@ void gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset,
 #define SIM_BRANCH_APPS   1
 #define SIM_BRANCH_AHB    2
 
+/* Synthetic GPT model. The production probe gates these values against the
+ * live header, so the harness header must carry the same layout. These are
+ * not copies of a real disk GUID or partition entry. */
+#define SIM_GPT_ARRAY_LBA       2u
+#define SIM_GPT_ARRAY_BLOCKS    21u
+#define SIM_GPT_ENTRY_COUNT     84u
+#define SIM_GPT_ENTRY_SIZE      128u
+#define SIM_GPT_FIRST_USABLE    34u
+#define SIM_GPT_BACKUP_SECTORS  33u
+
 /* Independent expectations for the offsets the failure report samples. The
  * production constants are also checked here so a wrong constant cannot make
  * a read-count assertion agree with itself. */
@@ -146,6 +156,11 @@ static int cmd9_timeout;
 static unsigned int cmd17_fail_on;
 static uint16_t cmd17_fail_error;
 static unsigned int cmd17_count;
+static unsigned int cmd17_index;
+static int gpt_bad_field;
+static int bad_command_argument;
+static const uint32_t *expected_lbas;
+static unsigned int expected_lba_count;
 static unsigned int cmd3_normal_reads;
 static uint32_t ext_csd_count = 0x01000000u;
 /* CMD7 R1b modeling. Event times are microseconds from command issue against
@@ -194,6 +209,7 @@ static uint32_t sim_load(const unsigned char *window, uint32_t offset,
     uint32_t width);
 static void sim_store(unsigned char *window, uint32_t offset, uint32_t width,
     uint32_t value);
+static void check(int condition, const char *message);
 
 static void
 sim_set_long_response(const uint32_t words[4])
@@ -226,15 +242,115 @@ sim_fill_buffer_words(const uint8_t *bytes)
 }
 
 static void
+sim_put32(uint8_t *bytes, uint32_t offset, uint32_t value)
+{
+	bytes[offset] = (uint8_t)(value & 0xFFu);
+	bytes[offset + 1u] = (uint8_t)((value >> 8) & 0xFFu);
+	bytes[offset + 2u] = (uint8_t)((value >> 16) & 0xFFu);
+	bytes[offset + 3u] = (uint8_t)((value >> 24) & 0xFFu);
+}
+
+static void
+sim_put64(uint8_t *bytes, uint32_t offset, uint64_t value)
+{
+	sim_put32(bytes, offset, (uint32_t)value);
+	sim_put32(bytes, offset + 4u, (uint32_t)(value >> 32));
+}
+
+/* Synthetic protective GPT header for LBA 1. The backup and last-usable
+ * values follow the simulated capacity; the array and first-usable values
+ * are the pinned layout the production gate accepts. gpt_bad_field mutates
+ * the entry count so the gate-refusal scenario has a live mismatch. */
+static void
+sim_gpt_block(uint8_t *bytes)
+{
+	uint64_t backup_lba = (uint64_t)ext_csd_count - 1u;
+	uint64_t last_usable = backup_lba - SIM_GPT_BACKUP_SECTORS;
+	uint32_t index;
+
+	memset(bytes, 0, GTA4L_EMMC_BLOCK_BYTES);
+	for (index = 0; index < 8u; index++) {
+		bytes[index] = (uint8_t)"EFI PART"[index];
+	}
+	sim_put32(bytes, 0x08u, 0x00010000u);
+	sim_put32(bytes, 0x0Cu, 92u);
+	sim_put32(bytes, 0x10u, 0x5A5A5A5Au);
+	sim_put64(bytes, 0x18u, 1u);
+	sim_put64(bytes, 0x20u, backup_lba);
+	sim_put64(bytes, 0x28u, SIM_GPT_FIRST_USABLE);
+	sim_put64(bytes, 0x30u, last_usable);
+	for (index = 0; index < 16u; index++) {
+		bytes[0x38u + index] = (uint8_t)(0x11u * (index + 1u));
+	}
+	sim_put64(bytes, 0x48u, SIM_GPT_ARRAY_LBA);
+	sim_put32(bytes, 0x50u,
+	    (gpt_bad_field != 0) ? (SIM_GPT_ENTRY_COUNT - 1u) :
+	    SIM_GPT_ENTRY_COUNT);
+	sim_put32(bytes, 0x54u, SIM_GPT_ENTRY_SIZE);
+	sim_put32(bytes, 0x58u, 0x12345678u);
+}
+
+static void
 sim_fill_block(uint32_t lba)
 {
 	uint8_t bytes[GTA4L_EMMC_BLOCK_BYTES];
 	uint32_t index;
 
-	for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
-		bytes[index] = (uint8_t)((lba * 7u) + (index * 13u));
+	if (lba == 1u) {
+		sim_gpt_block(bytes);
+	} else {
+		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+			bytes[index] = (uint8_t)((lba * 7u) + (index * 13u));
+		}
 	}
 	sim_fill_buffer_words(bytes);
+}
+
+static uint32_t
+sim_block_sum(uint32_t lba)
+{
+	uint8_t bytes[GTA4L_EMMC_BLOCK_BYTES];
+	uint32_t sum = 0;
+	uint32_t index;
+
+	if (lba == 1u) {
+		sim_gpt_block(bytes);
+	} else {
+		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+			bytes[index] = (uint8_t)((lba * 7u) + (index * 13u));
+		}
+	}
+	for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+		sum = (sum * 31u) + bytes[index];
+	}
+	return sum;
+}
+
+/* Expected substring for the per-LBA content line. */
+static void
+sim_expected_blocks(char *buffer, size_t size)
+{
+	size_t used;
+	uint32_t index;
+	int written;
+
+	written = snprintf(buffer, size, "GTA4L-EMMC PROBE BLOCKS");
+	if ((written < 0) || ((size_t)written >= size)) {
+		check(0, "the expected BLOCKS line does not fit its buffer");
+		return;
+	}
+	used = (size_t)written;
+	for (index = 0; index < SIM_GPT_ARRAY_BLOCKS; index++) {
+		uint32_t lba = SIM_GPT_ARRAY_LBA + index;
+
+		written = snprintf(buffer + used, size - used, " %u=%08x",
+		    lba, sim_block_sum(lba));
+		if ((written < 0) || ((size_t)written >= (size - used))) {
+			check(0, "the expected BLOCKS line does not fit its buffer");
+			return;
+		}
+		used += (size_t)written;
+	}
 }
 
 static uint32_t
@@ -525,6 +641,11 @@ sim_command(uint16_t command)
 			sim_fill_buffer_words(ext_csd);
 		} else {
 			cmd17_count++;
+			if ((cmd17_index >= expected_lba_count) ||
+			    (last_argument != expected_lbas[cmd17_index])) {
+				bad_command_argument = 1;
+			}
+			cmd17_index++;
 			if (cmd17_count == cmd17_fail_on) {
 				error_int |= cmd17_fail_error;
 				return;
@@ -904,6 +1025,8 @@ sim_init(void)
 	cmd7_cc_delay = -1;
 	cmd7_tc_delay = -1;
 	cmd7_error_delay = -1;
+	cmd17_index = 0;
+	bad_command_argument = 0;
 	sim_init_ext_csd();
 }
 
@@ -921,14 +1044,39 @@ static const uint8_t order_ident[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8
 };
-static const uint8_t order_probe[] = {
+static const uint8_t order_probe_block0[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17
+};
+static const uint8_t order_probe_block1[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17
 };
-static const uint8_t order_probe_block0[] = {
+static const uint8_t order_probe_block2[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17
+};
+static const uint8_t order_probe_block8[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17
+};
+static const uint8_t order_probe_full[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17
 };
 static const uint8_t order_cmd7[] = {
@@ -936,11 +1084,40 @@ static const uint8_t order_cmd7[] = {
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7
 };
 
+/* Expected CMD17 argument sequence for each success or failure path. */
+static const uint32_t lbas_block0[] = {
+	0u
+};
+static const uint32_t lbas_block1[] = {
+	0u, 1u
+};
+static const uint32_t lbas_array_first[] = {
+	0u, 1u, 2u
+};
+static const uint32_t lbas_array_mid[] = {
+	0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u
+};
+static const uint32_t lbas_full[] = {
+	0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u,
+	14u, 15u, 16u, 17u, 18u, 19u, 20u, 21u, 22u, 34u, 61071359u
+};
+static const uint32_t lbas_full_max[] = {
+	0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u,
+	14u, 15u, 16u, 17u, 18u, 19u, 20u, 21u, 22u, 34u, 0xFFFFFFFEu
+};
+
 static void
 set_expected_order(const uint8_t *order, unsigned int count)
 {
 	expected_order = order;
 	expected_order_count = count;
+}
+
+static void
+set_expected_lbas(const uint32_t *lbas, unsigned int count)
+{
+	expected_lbas = lbas;
+	expected_lba_count = count;
 }
 
 int
@@ -1149,8 +1326,39 @@ main(int argc, char **argv)
 		cmd7_tc_delay = (int)(GTA4L_EMMC_CMD_TIMEOUT_US -
 		    GTA4L_EMMC_POLL_STEP_US);
 		cmd7_toggle_status = 1;
-		set_expected_order(order_probe,
-		    (unsigned int)(sizeof(order_probe) / sizeof(order_probe[0])));
+		set_expected_order(order_probe_full,
+		    (unsigned int)(sizeof(order_probe_full) /
+		    sizeof(order_probe_full[0])));
+		set_expected_lbas(lbas_full_max,
+		    (unsigned int)(sizeof(lbas_full_max) /
+		    sizeof(lbas_full_max[0])));
+	} else if (strcmp(scenario, "probe-full") == 0) {
+		/* Device-capacity success form: block 0/1, the 21-sector
+		 * primary GPT array, the first usable sector and the last
+		 * sector. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_probe_full,
+		    (unsigned int)(sizeof(order_probe_full) /
+		    sizeof(order_probe_full[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-gpt-mismatch") == 0) {
+		/* Live header entry count differs from the pinned list. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		gpt_bad_field = 1;
+		set_expected_order(order_probe_block1,
+		    (unsigned int)(sizeof(order_probe_block1) /
+		    sizeof(order_probe_block1[0])));
+		set_expected_lbas(lbas_block1,
+		    (unsigned int)(sizeof(lbas_block1) /
+		    sizeof(lbas_block1[0])));
 	} else if (strcmp(scenario, "probe-read-crc") == 0) {
 		/* Identification succeeds; the first sector read fails its
 		 * data CRC check. */
@@ -1161,14 +1369,63 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_block0,
 		    (unsigned int)(sizeof(order_probe_block0) /
 		    sizeof(order_probe_block0[0])));
+		set_expected_lbas(lbas_block0,
+		    (unsigned int)(sizeof(lbas_block0) /
+		    sizeof(lbas_block0[0])));
 	} else if (strcmp(scenario, "probe-read-timeout") == 0) {
 		/* Block 0 is read; block 1 fails its data timeout. */
 		stage = 1;
 		cmd7_tc_immediate = 1;
 		cmd17_fail_on = 2;
 		cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_TIMEOUT;
-		set_expected_order(order_probe,
-		    (unsigned int)(sizeof(order_probe) / sizeof(order_probe[0])));
+		set_expected_order(order_probe_block1,
+		    (unsigned int)(sizeof(order_probe_block1) /
+		    sizeof(order_probe_block1[0])));
+		set_expected_lbas(lbas_block1,
+		    (unsigned int)(sizeof(lbas_block1) /
+		    sizeof(lbas_block1[0])));
+	} else if (strcmp(scenario, "probe-array-crc") == 0) {
+		/* Block 0/1 pass; the first array block fails its data CRC. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		cmd17_fail_on = 3;
+		cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		set_expected_order(order_probe_block2,
+		    (unsigned int)(sizeof(order_probe_block2) /
+		    sizeof(order_probe_block2[0])));
+		set_expected_lbas(lbas_array_first,
+		    (unsigned int)(sizeof(lbas_array_first) /
+		    sizeof(lbas_array_first[0])));
+	} else if (strcmp(scenario, "probe-mid-loop-error") == 0) {
+		/* The sixth array block (LBA 7) fails its data timeout. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		cmd17_fail_on = 8;
+		cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_TIMEOUT;
+		set_expected_order(order_probe_block8,
+		    (unsigned int)(sizeof(order_probe_block8) /
+		    sizeof(order_probe_block8[0])));
+		set_expected_lbas(lbas_array_mid,
+		    (unsigned int)(sizeof(lbas_array_mid) /
+		    sizeof(lbas_array_mid[0])));
+	} else if (strcmp(scenario, "probe-last-error") == 0) {
+		/* Every read passes except the last sector. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		cmd17_fail_on = 25;
+		cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		set_expected_order(order_probe_full,
+		    (unsigned int)(sizeof(order_probe_full) /
+		    sizeof(order_probe_full[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		/* Synthetic field-wise width bound, not a controller state. */
 		width_form = 1;
@@ -1692,6 +1949,8 @@ main(int argc, char **argv)
 		    "the maximum-width success report exceeds the 2048-byte "
 		    "panic-text budget");
 	} else if (strcmp(scenario, "report-max-width-probe") == 0) {
+		char expected[512];
+
 		check(panicked == 1, "the maximum-width probe did not report");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 "
@@ -1710,10 +1969,28 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC PROBE BLOCK0 sum=5c510100 words=271a0d00 "
 		    "cdc0b3a6 01f4e7da 35281b0e") != NULL,
 		    "the maximum-width probe report lost block 0");
-		check(strstr(panic_message,
-		    "GTA4L-EMMC PROBE BLOCK1 sum=ee0a9f00 words=2e211407 "
-		    "6255483b 96897c6f cabdb0a3") != NULL,
+		snprintf(expected, sizeof(expected),
+		    "GTA4L-EMMC PROBE BLOCK1 sum=%08x words=20494645 "
+		    "54524150 00010000 0000005c", sim_block_sum(1));
+		check(strstr(panic_message, expected) != NULL,
 		    "the maximum-width probe report lost block 1");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE GPT elba=2 n=84 sz=128 first=34 "
+		    "last=4294967261 backup=4294967294") != NULL,
+		    "the maximum-width probe report lost the GPT gate values");
+		sim_expected_blocks(expected, sizeof(expected));
+		check(strstr(panic_message, expected) != NULL,
+		    "the maximum-width probe report lost the array sums");
+		snprintf(expected, sizeof(expected),
+		    "GTA4L-EMMC PROBE DATA 34=%08x", sim_block_sum(34));
+		check(strstr(panic_message, expected) != NULL,
+		    "the maximum-width probe report lost the first-usable "
+		    "sector");
+		snprintf(expected, sizeof(expected),
+		    "GTA4L-EMMC PROBE LSTLBA=4294967294 sum=%08x",
+		    sim_block_sum(0xFFFFFFFEu));
+		check(strstr(panic_message, expected) != NULL,
+		    "the maximum-width probe report lost the last sector");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE CAPTURE fmt=4 hv=1234") != NULL,
 		    "the maximum-width probe report does not carry the "
@@ -1742,16 +2019,111 @@ main(int argc, char **argv)
 		    "2:0020:0000,3:0000:0000") != NULL,
 		    "the maximum-width probe report lost the four trace "
 		    "entries or the overflow count");
+		check(strstr(panic_message, "step=18 log=") != NULL,
+		    "the maximum-width probe report does not show the last "
+		    "content step");
 		check(bad_command_format == 0,
 		    "the maximum-width probe sent a command with the wrong "
 		    "flags");
 		check(bad_command_order == 0,
 		    "the maximum-width probe sent commands in the wrong order");
-		check(cmd_count == 10u,
-		    "the maximum-width probe did not complete the sector reads");
+		check(bad_command_argument == 0,
+		    "the maximum-width probe read the wrong LBA list");
+		check(cmd_count == 33u,
+		    "the maximum-width probe did not complete the content "
+		    "reads");
 		check(strlen(panic_message) < 2048u,
 		    "the maximum-width probe report exceeds the 2048-byte "
 		    "panic-text budget");
+	} else if (strcmp(scenario, "probe-full") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the full probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 "
+		    "cap=61071360 rev=8 bw=2") != NULL,
+		    "the full probe report does not carry the device capacity");
+		check(strstr(panic_message, "step=18 log=") != NULL,
+		    "the full probe report does not show the last content "
+		    "step");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE BLOCK0 sum=5c510100 words=271a0d00 "
+		    "cdc0b3a6 01f4e7da 35281b0e") != NULL,
+		    "the full probe report lost block 0");
+		snprintf(expected, sizeof(expected),
+		    "GTA4L-EMMC PROBE BLOCK1 sum=%08x words=20494645 "
+		    "54524150 00010000 0000005c", sim_block_sum(1));
+		check(strstr(panic_message, expected) != NULL,
+		    "the full probe report lost block 1");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE GPT elba=2 n=84 sz=128 first=34 "
+		    "last=61071326 backup=61071359") != NULL,
+		    "the full probe report lost the GPT gate values");
+		sim_expected_blocks(expected, sizeof(expected));
+		check(strstr(panic_message, expected) != NULL,
+		    "the full probe report lost the array sums");
+		snprintf(expected, sizeof(expected),
+		    "GTA4L-EMMC PROBE DATA 34=%08x", sim_block_sum(34));
+		check(strstr(panic_message, expected) != NULL,
+		    "the full probe report lost the first-usable sector");
+		snprintf(expected, sizeof(expected),
+		    "GTA4L-EMMC PROBE LSTLBA=61071359 sum=%08x",
+		    sim_block_sum(61071359u));
+		check(strstr(panic_message, expected) != NULL,
+		    "the full probe report lost the last sector");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE CAPTURE fmt=4 hv=1234") != NULL,
+		    "the full probe report does not carry the capture format");
+		check(bad_command_format == 0,
+		    "the full probe sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the full probe sent commands in the wrong order");
+		check(bad_command_argument == 0,
+		    "the full probe read the wrong LBA list");
+		check(cmd_count == 33u,
+		    "the full probe did not complete the content reads");
+		check(strlen(panic_message) < 2048u,
+		    "the full probe report exceeds the 2048-byte panic "
+		    "budget");
+	} else if (strcmp(scenario, "probe-gpt-mismatch") == 0) {
+		check(panicked == 1, "a GPT gate mismatch did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: gpt gate bad=00000020 "
+		    "cap=61071360 sig=20494645 elba=2 n=83 sz=128 first=34 "
+		    "last=61071326 backup=61071359") != NULL,
+		    "the gate refusal does not name the mismatched field");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "the gate refusal still emitted the success report");
+		check(bad_command_argument == 0,
+		    "the gate probe read the wrong LBA list");
+		check(cmd_count == 10u,
+		    "the gate let the probe read past the header");
+	} else if (strcmp(scenario, "probe-array-crc") == 0) {
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: array read lba=2 rc=-12 "
+		    "step=16 fail=1/17/2/0000113a/0020/0000/00000000/16")
+		    != NULL,
+		    "the array data-CRC report lost the failure record");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a failed array read still emitted the success report");
+		check(cmd_count == 11u,
+		    "the probe did not stop at the first array failure");
+	} else if (strcmp(scenario, "probe-mid-loop-error") == 0) {
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: array read lba=7 rc=-11 "
+		    "step=16 fail=1/17/7/0000113a/0010/0000/00000000/16")
+		    != NULL,
+		    "the mid-loop timeout report lost the failure record");
+		check(cmd_count == 16u,
+		    "the probe did not stop at the mid-loop failure");
+	} else if (strcmp(scenario, "probe-last-error") == 0) {
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: last read lba=61071359 rc=-12 "
+		    "step=18 fail=1/17/61071359/0000113a/0020/0000/00000000/18")
+		    != NULL,
+		    "the last-sector report lost the failure record");
+		check(cmd_count == 33u,
+		    "the probe did not issue the full content sequence");
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		check(panicked == 1, "the synthetic width failure did not panic");
 		check(strstr(panic_message, "stage=3") != NULL,
@@ -1900,7 +2272,7 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=ffffffff rca=1 "
 		    "cap=4294967295 rev=255 bw=15 ocr=ffffffff ext=ffffffff "
 		    "hc2=ffff ven=ffffffff dll=ffffffff dst=ffffffff "
-		    "pst=ffffffff step=15 log=99999") != NULL,
+		    "pst=ffffffff step=18 log=99999") != NULL,
 		    "the synthetic width probe report lost the field-wise "
 		    "header bounds");
 		check(strstr(panic_message,
@@ -1914,6 +2286,25 @@ main(int argc, char **argv)
 		check(strstr(panic_message,
 		    "words=ffffffff ffffffff ffffffff ffffffff") != NULL,
 		    "the synthetic width probe report lost the block words");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE GPT elba=2 n=84 sz=128 first=34 "
+		    "last=4294967261 backup=4294967294") != NULL,
+		    "the synthetic width probe report lost the GPT gate "
+		    "bounds");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE BLOCKS 2=ffffffff 3=ffffffff "
+		    "4=ffffffff 5=ffffffff 6=ffffffff 7=ffffffff "
+		    "8=ffffffff 9=ffffffff 10=ffffffff 11=ffffffff "
+		    "12=ffffffff 13=ffffffff 14=ffffffff 15=ffffffff "
+		    "16=ffffffff 17=ffffffff 18=ffffffff 19=ffffffff "
+		    "20=ffffffff 21=ffffffff 22=ffffffff") != NULL,
+		    "the synthetic width probe report lost the array sums");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE DATA 34=ffffffff\n"
+		    "GTA4L-EMMC PROBE LSTLBA=4294967294 sum=ffffffff\n")
+		    != NULL,
+		    "the synthetic width probe report lost the first-usable "
+		    "or last-sector bound");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE CAPTURE fmt=4 hv=ffff "
 		    "c2=1/ffff/ffff/ffffffff,ffffffff,ffffffff,ffffffff") != NULL,

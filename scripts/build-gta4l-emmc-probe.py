@@ -8,8 +8,10 @@ that calls them. The archive contains no framework or vendor code.
 
 The probe is disabled unless the boot argument "gta4l-emmc-probe=1" is present.
 It performs controller reset, GCC 400 kHz setup, the retained-rail power
-handshake, eMMC enumeration and two single-block PIO reads. It does not publish
-a block device, mount a filesystem, write the card or touch the PMIC.
+handshake, eMMC enumeration and single-block CMD17 PIO reads of blocks 0/1,
+the primary GPT array, the first-usable sector and the last sector. It does
+not publish a block device, mount a filesystem, write the card or touch the
+PMIC.
 """
 import hashlib
 import json
@@ -117,7 +119,9 @@ report = {
     'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
     'compile_record': str(record_path),
     'mode': ('opt-in controller reset, GCC 400 kHz, retained-rail power '
-             'handshake, eMMC enumeration and two single-block PIO reads; no '
+             'handshake, eMMC enumeration, CMD17 reads of blocks 0/1, the '
+             'primary GPT array, the first usable sector and the last '
+             'sector; no '
              'block-device publication, filesystem mount, card write, DMA, '
              'CQE, ICE or PMIC access'),
     'runtime_qualified': False,

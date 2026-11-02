@@ -38,7 +38,7 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
 | `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 98 scenarios and 55 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 33 scenarios and 22 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 38 scenarios and 26 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -1035,6 +1035,51 @@ reliability; the separate recovery-side readback in
 CRC. The full transcription and field comparison are in
 `docs/emmc-cmd2-crc-audit.md` §2.12.
 
+### 5.3.6 Stage-A extended content-read result (2026-11-02)
+
+The stage-A image rebuilds the same `emmc-probe-1` diagnostic on top of
+`53753df` with the extended read phase. The build provenance is
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/build-provenance.json`:
+`Gta4lEmmc.c 874e6878…`, `Gta4lEmmc.h 7e063c08…`, `Gta4lEmmcProbe.c
+034571f1…`, probe archive `57ed9995…`, payload `fdd85d25…` (83,886,080 bytes,
+`gta4l-emmc-probe=1`, contract 7/7) and boot image `721e5c87…` (85,688,320
+bytes, gate 18/18 against the v5 baseline `ce4d76e8…`). The BOOT-only flash
+record is
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/flash-record.json`: pre-flash
+`421e8848…` (the §5.3.5 image plus its unchanged tail), post-flash
+`d55c09bf…`, image-byte readback `721e5c87…`, tail `a28b4ea2…` unchanged,
+`RECOVERY` `14e11370…` unchanged, EFS and sec_efs unchanged, and no other
+partition written.
+
+The owner booted it on the same SM-T505N. The report reached
+`GTA4L-EMMC PROBE REPORT: rc=0` with `step=18 log=30`, the §5.3.5
+identification fields and the new content lines: `BLOCKS 2=793877e4 …
+21=89457318 22=00000000`, `DATA 34=f418cd33` and `LSTLBA=61071359
+sum=a89b26d5`. The GPT gate reported `elba=2 n=84 sz=128 first=34
+last=61071326 backup=61071359`; those are exactly the live and pinned header
+values. `step=18` is `GTA4L_EMMC_STEP_PROBE_LAST`, and `log=30` is the stage-1
+`log=7` plus 23 reads (21 array + first usable + last sector).
+
+The 84 × 128-byte primary array is 10,752 bytes = 21 sectors, so the probe
+reads LBAs 2..22. `BLOCKS 22=00000000` is expected because only entries 1..80
+are populated and the last four 128-byte entry slots are zero; the backup
+array has the same 20 nonzero blocks. The live recovery readback in
+`out/gta4l/ram-root-emmc-probe-stage2-evidence/recovery-readback/` read LBAs
+0..33, LBA 34 and the last 34 sectors from `/dev/block/mmcblk0` in TWRP and
+matched every report sum: all 21 array sums, `DATA 34` and `LSTLBA`. The live
+0..33 image is byte-identical to the pinned recovery GPT dump
+(`0c7e9c03…`), the live backup tail is byte-identical to the pinned backup
+dump (`41912e59…`), both GPT header CRCs are valid, the backup array equals
+the primary array, and LBA 0/1 match the §5.3.5 readback. The full
+transcription and decoding are in `docs/emmc-cmd2-crc-audit.md` §2.13.
+
+This closes the Stage-A / F1 content claim: repeated single-block CMD17 reads
+at the fixed identification clock (1-bit, CRC enabled) returned the GPT
+header, the full primary array, the first usable sector and the last sector,
+and every content sum is bound to live recovery bytes. It is not an F2
+multi-block transfer, an F3/F4 width or speed result, an F5 publication, an F6
+write, a filesystem result or a media-reliability test.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
@@ -1044,13 +1089,19 @@ On a full success the probe panics with a report containing:
   power status;
 - CID and CSD words;
 - block 0 and block 1 sums and selected words, including the protective MBR
-  signature area and the GPT header fields.
+  signature area and the GPT header fields;
+- the gated GPT values `elba=2 n=84 sz=128 first=34 last=61071326
+  backup=61071359`, the per-LBA probes for the 21 primary-array blocks
+  (LBAs 2..22), the first usable LBA (`DATA 34`) and the last sector
+  (`LSTLBA=61071359`), and the `step=18`/`log=30` stage-A counters.
 
 Stage 2 stops with `GTA4L-EMMC HOST REPORT` and stage 3 with
 `GTA4L-EMMC IDENT REPORT`. The §5.3.4 candidate completed the stage-3
 identification report on three units; the §5.3.5 stage-1 image then completed
 the full report, including the block 0/block 1 reads, on the owner's SM-T505N
-and one SM-T505. On failure the probe reports the
+and one SM-T505; the §5.3.6 stage-A image completed the extended content
+phase on the owner's SM-T505N and matched the live recovery readback. On
+failure the probe reports the
 stage, result code,
 the `clocks` flag, MCI version, power/clock/`HOST_CONTROL2`/vendor/DLL registers,
 power-control status, GCC CFG/CMD/BCR/APPS-CBCR/AHB-CBCR, the last completed
@@ -1078,9 +1129,12 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   not exercise the CMD7 capture `[C]`; the 2026-11-01 `cmd1gap` candidate
   completed identification, including CC+TC on CMD7, on three units `[C]`; the
   2026-11-02 stage-1 image completed identification and the read-only block 0
-  and block 1 `CMD17` reads on the owner's SM-T505N and one SM-T505 `[C]`.
-  Multi-block reads, a filesystem/partition-table verification and
-  block-device publication have not run `[U]`.
+  and block 1 `CMD17` reads on the owner's SM-T505N and one SM-T505 `[C]`; the
+  §5.3.6 stage-A image then read the full 84-entry GPT array, the first usable
+  sector and the last sector on the owner's SM-T505N, and every sum matched a
+  same-session live recovery readback `[C]`. A filesystem,
+  block-device publication, multi-block transfer and reliability test have not
+  run `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
   levels, and it does not prove retention across suspend or shutdown `[U]`.
 - The 1.8 V signalling and pad-switch selection is a documented board policy
@@ -1125,8 +1179,9 @@ test that executes the probe failure report with simulated MMIO and requires
 zero SDHCI accesses when the clocks are off. The `fmt=2` missing-CC CMD7
 timeout did not reproduce on the candidate: the CMD7 poll/response capture
 completed with CC and TC on three units, so the capture gap is closed but the
-historical timeout is still unexplained. The next device step is a bounded,
-read-only sector/block probe under separate owner approval, followed by
-read-only `IOBlockStorageDevice` publication over the same core, multi-block
-reads and a documented stop/recovery policy. No block-device or sector-read
-result exists yet.
+historical timeout is still unexplained. The stage-A extended content read is
+complete: repeated CMD17 reads covered the GPT header and the full 84-entry
+primary array, and the live recovery readback bound every sum. The ladder's
+next rungs are the optional A2/F2 multi-block CMD18+CMD12 read and Stage B
+(bus width and speed); no filesystem, block-device publication, mount, write,
+DMA, CQE or ICE result exists yet.

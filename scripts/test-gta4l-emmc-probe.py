@@ -89,8 +89,13 @@ SCENARIOS = [
     'report-max-width-failure',
     'report-max-width-success',
     'report-max-width-probe',
+    'probe-full',
+    'probe-gpt-mismatch',
     'probe-read-crc',
     'probe-read-timeout',
+    'probe-array-crc',
+    'probe-mid-loop-error',
+    'probe-last-error',
     'report-width-failure',
     'report-width-ident',
     'report-width-probe',
@@ -504,6 +509,36 @@ MUTATIONS = [
      '\t\t    0u,\n',
      'probe-read-crc',
      'the block 0 data-CRC report lost the failure record'),
+    ('array-duplicate-lba',
+     '\t\tresult = gta4l_emmc_read_block(&host,\n'
+     '\t\t    (uint64_t)range.entries_lba + index, range_block);\n',
+     '\t\tresult = gta4l_emmc_read_block(&host,\n'
+     '\t\t    (uint64_t)range.entries_lba, range_block);\n',
+     'probe-full',
+     'the full probe read the wrong LBA list'),
+    ('array-error-continued',
+     '\t\tif (result != GTA4L_EMMC_OK) {\n'
+     '\t\t\tgta4l_emmc_probe_report_read_failure(&host, "array",\n'
+     '\t\t\t    range.entries_lba + index, result);\n'
+     '\t\t}\n',
+     '\t\tif (result != GTA4L_EMMC_OK) {\n'
+     '\t\t\tcontinue;\n'
+     '\t\t}\n',
+     'probe-array-crc',
+     'the array data-CRC report lost the failure record'),
+    ('array-blocks-off-by-one',
+     '#define GTA4L_EMMC_PROBE_ARRAY_BLOCKS    21u\n',
+     '#define GTA4L_EMMC_PROBE_ARRAY_BLOCKS    20u\n',
+     'probe-full',
+     'the full probe did not complete the content reads'),
+    ('last-read-uses-last-usable',
+     '\thost.last_step = GTA4L_EMMC_STEP_PROBE_LAST;\n'
+     '\tresult = gta4l_emmc_read_block(&host, range.backup_lba, range_block);\n',
+     '\thost.last_step = GTA4L_EMMC_STEP_PROBE_LAST;\n'
+     '\tresult = gta4l_emmc_read_block(&host, range.last_usable, '
+     'range_block);\n',
+     'probe-full',
+     'the full probe read the wrong LBA list'),
 ]
 
 

@@ -63,7 +63,15 @@ partition layout, payload policy and packaging.
   An owner-authorized read-only recovery-side readback of blocks 0 and 1 on
   the owner's SM-T505N independently reproduces the MBR signature and GPT
   header CRC (`docs/emmc-cmd2-crc-audit.md` §2.12; sector hashes stay in
-  `out/`).
+  `out/`). On the same day the stage-A image read the full 84-entry primary
+  GPT array (LBAs 2..22), the first usable sector (LBA 34) and the backup GPT
+  header (LBA 61,071,359) with repeated `CMD17` reads at the identification
+  clock. The report (`step=18`, `log=30`) matched a same-session read-only
+  TWRP readback of the same sectors and the pinned recovery GPT dumps; the
+  84 × 128-byte array spans 21 sectors, and the all-zero LBA 22 reflects the
+  four unused trailing entry slots. This closes the stage-A/F1 content claim;
+  it is not a multi-block (`CMD18`), bus-width/high-speed, publication,
+  filesystem or write result.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and
