@@ -159,8 +159,10 @@ SCENARIOS = [
     'bus-test-read-status',
     'bus-test-mismatch-4',
     'bus-test-mismatch-8',
+    'bus-test-mismatch-1',
     'bus-test-width',
     'bus-test-1bit',
+    'bus-test-1bit-width',
 ]
 
 FORBIDDEN_CORE = [
@@ -1074,6 +1076,26 @@ def main() -> int:
              '\t\tif ((uint8_t)(pattern[index] ^ actual[index]) != 0xFFu) {\n',
              '\t\tif (0) {\n',
              'Gta4lEmmc.c', (), 'bus-test-mismatch-4'),
+            ('bw-1bit-guard',
+             '\tcode = gta4l_emmc_bus_width_code(bits);\n'
+             '\tif (code == 0xFFFFFFFFu) {\n'
+             '\t\treturn GTA4L_EMMC_ERR_ARG;\n'
+             '\t}\n'
+             '\t/* The card field and the SDHCI HOST_CONTROL width must both already\n',
+             '\tcode = gta4l_emmc_bus_width_code(bits);\n'
+             '\tif ((code == 0xFFFFFFFFu) || (bits == 1u)) {\n'
+             '\t\treturn GTA4L_EMMC_ERR_ARG;\n'
+             '\t}\n'
+             '\t/* The card field and the SDHCI HOST_CONTROL width must both already\n',
+             'Gta4lEmmc.c', (), 'bus-test-1bit'),
+            ('bw-pattern-1',
+             'GTA4L_EMMC_BUS_TEST_PATTERN_1      0x5Au',
+             'GTA4L_EMMC_BUS_TEST_PATTERN_1      0xA5u',
+             'Gta4lEmmc.h', (), 'bus-test-1bit'),
+            ('bw-test-len-1',
+             'GTA4L_EMMC_BUS_TEST_1_BYTES        4u',
+             'GTA4L_EMMC_BUS_TEST_1_BYTES        8u',
+             'Gta4lEmmc.h', (), 'bus-test-1bit'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -1164,6 +1186,12 @@ def main() -> int:
                 'failed readback left HOST_CONTROL on the failed width',
             'bw-no-test-compare':
                 '4-bit pattern mismatch was not reported',
+            'bw-1bit-guard':
+                'one-bit bus test failed',
+            'bw-pattern-1':
+                '1-bit bus-test pattern is not 0x5a',
+            'bw-test-len-1':
+                'one-bit bus test failed',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)

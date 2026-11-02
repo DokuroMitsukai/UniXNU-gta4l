@@ -224,7 +224,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	 * results stay inside the production error codes; the sums and first
 	 * differing LBA take the full 32-bit range. */
 	base.attempted = 1u;
-	base.tested = 0u;
+	base.tested = 1u;
 	base.same = 1u;
 	base.div = 0u;
 	base.result.requested = 1u;

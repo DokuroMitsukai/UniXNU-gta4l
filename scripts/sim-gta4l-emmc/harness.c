@@ -1044,7 +1044,11 @@ sim_bus_test_width_ok(const struct sim *sim, uint32_t size)
 	    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT);
 
 	/* Both the card field and the SDHCI host width must select the same
-	 * lane count as the programmed block size. */
+	 * lane count as the programmed block size. The 1-bit form uses the
+	 * 4-byte PIO block and no HOST_CONTROL width bits. */
+	if ((width == 0u) && (size == SIM_BUS_TEST_4_BYTES)) {
+		return control == 0u;
+	}
 	if ((width == 1u) && (size == SIM_BUS_TEST_4_BYTES)) {
 		return control == SIM_HOST_CONTROL_4BIT;
 	}
@@ -2541,6 +2545,9 @@ main(int argc, char **argv)
 		 * failure is bound to the exact returned word 0x54AA. */
 		sim.bus_test_corrupt_word = 0;
 		sim.bus_test_corrupt_xor = 0x00000100u;
+	} else if (scenario_is(scenario, "bus-test-mismatch-1")) {
+		sim.bus_test_corrupt_word = 0;
+		sim.bus_test_corrupt_xor = 0x00000001u;
 	}
 
 	sim.trace_armed = 1;
@@ -2594,8 +2601,10 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "bus-test-read-status") ||
 	    scenario_is(scenario, "bus-test-mismatch-4") ||
 	    scenario_is(scenario, "bus-test-mismatch-8") ||
+	    scenario_is(scenario, "bus-test-mismatch-1") ||
 	    scenario_is(scenario, "bus-test-width") ||
 	    scenario_is(scenario, "bus-test-1bit") ||
+	    scenario_is(scenario, "bus-test-1bit-width") ||
 	    scenario_is(scenario, "power-delayed-bus") ||
 	    scenario_is(scenario, "power-bus-then-io") ||
 	    scenario_is(scenario, "power-wrong-io-then-correct") ||
@@ -3663,6 +3672,24 @@ main(int argc, char **argv)
 		check(bus.test_word == 0x000054AAu &&
 		    bus.test_expected == 0x000055AAu,
 		    "8-bit failing word was not bound exactly");
+	} else if (scenario_is(scenario, "bus-test-mismatch-1")) {
+		result = gta4l_emmc_bus_test(&host, 1u, &bus);
+		check(result == GTA4L_EMMC_ERR_BUS_TEST,
+		    "1-bit pattern mismatch was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_BUS_TEST,
+		    "1-bit mismatch result field mismatch");
+		check(bus.test_word == 0x000000A4u &&
+		    bus.test_expected == 0x000000A5u,
+		    "1-bit failing word was not bound exactly");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "1-bit mismatch command counts mismatch");
+	} else if (scenario_is(scenario, "bus-test-1bit-width")) {
+		host.bus_width = 1u;
+		result = gta4l_emmc_bus_test(&host, 1u, &bus);
+		check(result == GTA4L_EMMC_ERR_BUS_WIDTH,
+		    "1-bit test ran with a 4-bit card width");
+		check(sim.cmd19_count == 0u,
+		    "1-bit width-mismatched test issued CMD19");
 	} else if (scenario_is(scenario, "bus-test-width")) {
 		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
 		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
@@ -3673,10 +3700,15 @@ main(int argc, char **argv)
 		    "width-mismatched bus test issued CMD19");
 	} else if (scenario_is(scenario, "bus-test-1bit")) {
 		result = gta4l_emmc_bus_test(&host, 1u, &bus);
-		check(result == GTA4L_EMMC_ERR_ARG,
-		    "one-bit bus test was not refused");
-		check(sim.cmd19_count == 0u,
-		    "one-bit bus test issued CMD19");
+		check(result == GTA4L_EMMC_OK,
+		    "one-bit bus test failed");
+		check(bus.test_word == 0x000000A5u &&
+		    bus.test_expected == 0x000000A5u,
+		    "1-bit bus-test pattern is not 0x5a");
+		check(bus.requested == 1u && bus.switched == 0u,
+		    "one-bit bus-test width was not recorded");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "one-bit bus test did not complete CMD19/CMD14");
 	} else if (scenario_is(scenario, "multi-stop-tc-only") ||
 	    scenario_is(scenario, "multi-stop-late-cc") ||
 	    scenario_is(scenario, "multi-stop-busy-timeout") ||

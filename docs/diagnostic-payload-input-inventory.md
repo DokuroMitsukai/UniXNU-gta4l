@@ -231,16 +231,16 @@ payload hash. Replay inputs:
 
 | Script | SHA-256 |
 | --- | --- |
-| `scripts/build-gta4l-diagnostic-payload.py` | `ea8c63c1ff62b2fe0b1c43e54d1180700ddcb124deec8ac292ee466a33efa297` |
-| `scripts/package-gta4l-diagnostic.py` | `d4c97f946828781529d75f18c0c7d63c87a98801e110d483cddea4175eabae10` |
+| `scripts/build-gta4l-diagnostic-payload.py` | `bb7c0b3385b1cbd55882dc089d64f220e1671777bcc86ab0c91f7a8efc3ad83a` |
+| `scripts/package-gta4l-diagnostic.py` | `20abadd7201c3d10315ae8830ffdb0ae0150ccebdb89f5478c340e95f1fda033` |
 | `scripts/check-gta4l-boot-image.py` | `879ee0ede5ddbebe4e24915c8720fa40a7b1e253642f6fd2a4d4dff937586bf4` |
-| `scripts/check-gta4l-payload.py` | `1706a023651c8ad18a1cfc4acfd247ffb04e4ae0e6145679bc484d9cfb5c6d9f` |
+| `scripts/check-gta4l-payload.py` | `5a7c3b17ea8027af92feb47ffd177e768f90c23bf25c7833204acc1ea7d3768c` |
 
 The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2`,
-`emmc-probe-3`, `emmc-probe-4` and `emmc-probe-5`, mapping to
-`gta4l-emmc-probe=1/2/3/4/5` (the `emmc-probe-4` mapping was added for the
-2026-11-02 Stage-B1 build and `emmc-probe-5` for the Stage-B1C continuation
-build). The stage-2 image built on
+`emmc-probe-3`, `emmc-probe-4`, `emmc-probe-5` and `emmc-probe-6`, mapping
+to `gta4l-emmc-probe=1/2/3/4/5/6` (the `emmc-probe-4` mapping was added for
+the 2026-11-02 Stage-B1 build, `emmc-probe-5` for the Stage-B1C continuation
+build and `emmc-probe-6` for the 1-bit CMD19/CMD14 discriminator build). The stage-2 image built on
 2026-10-31 is
 `out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img`
 (85,688,320 bytes, SHA-256

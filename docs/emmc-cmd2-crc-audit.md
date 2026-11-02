@@ -1767,7 +1767,9 @@ auto-advance) is a 1-bit CMD19/CMD14 bus test before any width switch
 (`gta4l-emmc-probe=6`): if 1-bit passes, the timeout is width-caused; if
 1-bit fails the same way, the write path is broken independent of width. It
 issues no CMD6 and keeps the same non-persistent bus-test-pattern write class
-already approved for B1C.
+already approved for B1C. The host batch for this candidate is now implemented
+and host-tested (`docs/emmc-driver.md` §5.3.15); no build, flash or boot of it
+has occurred.
 
 Supported by this section: the image identity and BOOT-only flash record; the
 seven owner-stated boots and per-boot methods; the p69 re-read and the

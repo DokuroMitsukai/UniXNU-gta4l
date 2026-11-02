@@ -64,6 +64,15 @@ mutations reject a continuation entered on a non-entering tuple, a
 continuation that does not stop, a wrong content baseline, a skipped
 host-width restore and a wrong continue marker.
 
+The stage-6 scenarios add the 1-bit CMD19/CMD14 discriminator before the
+first CMD6: a pass that falls through to the normal B1 escalation, a pass
+that reaches the observed 4-bit tuple and runs the B1C continuation, a
+1-bit CMD19 write-phase timeout (CC and BufferWriteReady latch, no TC, no
+error, present `0x03f801f6`) and a 1-bit pattern mismatch. Each failure must
+stop with `stop=9` and issue no CMD6; the pass cases must carry the 1-bit
+words on the `BW=1` line. Three mutations reject a skipped discriminator, a
+failure that continues to the width switch and a wrong stop code.
+
 Nothing here touches a device, maps real MMIO or executes firmware.
 """
 import argparse
@@ -133,6 +142,10 @@ SCENARIOS = [
     'probe-b1-switch8-stuck',
     'probe-b1-bustest8-fail',
     'probe-b1-content8-div',
+    'probe-b1-1bit-pass',
+    'probe-b1-1bit-timeout',
+    'probe-b1-1bit-mismatch',
+    'probe-b1-1bit-continue',
     'probe-b1c-success',
     'probe-b1c-pass',
     'probe-b1c-late-commit',
@@ -671,6 +684,26 @@ MUTATIONS = [
      '\t\t\t\tw4.continued = 0u;\n',
      'probe-b1c-pass',
      'the B1C pass report lost the continuation marker or the re-read fields'),
+    ('b1-1bit-skipped',
+     '\t\tif (stage == 6) {\n',
+     '\t\tif (0) {\n',
+     'probe-b1-1bit-pass',
+     'the 1-bit discriminator did not record its passing words'),
+    ('b1-1bit-failure-continues',
+     '\t\t\tif (result != GTA4L_EMMC_OK) {\n'
+     '\t\t\t\tgta4l_emmc_probe_report_b1(&host, &probe,\n'
+     '\t\t\t\t    &range, &base, &w4, &w8, result, 9);\n'
+     '\t\t\t}\n',
+     '\t\t\t(void)result;\n',
+     'probe-b1-1bit-timeout',
+     'the 1-bit timeout does not name the data timeout and the '
+     'discriminator stop'),
+    ('b1-1bit-wrong-stop',
+     '\t\t\t\t    &range, &base, &w4, &w8, result, 9);\n',
+     '\t\t\t\t    &range, &base, &w4, &w8, result, 1);\n',
+     'probe-b1-1bit-timeout',
+     'the 1-bit timeout does not name the data timeout and the '
+     'discriminator stop'),
 ]
 
 

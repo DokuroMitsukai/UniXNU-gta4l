@@ -389,7 +389,10 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * identification without sector reads, 4 = stage-B1 bus-width switch and
  * CMD19/CMD14 bus test with a per-width content pass, 5 = stage-B1C, which
  * adds the continue-past-readback continuation on the exact observed 4-bit
- * tuple (4-bit only; 8-bit remains untouched). */
+ * tuple, 6 = stage-B1C plus a 1-bit CMD19/CMD14 discriminator that runs
+ * after the stage-A pass and before any width switch. On stage 6 a failed
+ * 1-bit test stops the rung (report stop=9) and issues no CMD6; a passing
+ * 1-bit test falls through to the stage-5 flow unchanged. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -398,7 +401,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 5)) {
+	if ((value < 1) || (value > 6)) {
 		return 0;
 	}
 	return value;
@@ -1013,8 +1016,8 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 
 	panic("GTA4L-EMMC B1 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
 	    "rev=%u hci=%02x step=%u log=%u\n"
-	    "GTA4L-EMMC B1 BW=1 att=%u req=1 sw=%u swrc=0 tt=0 "
-	    "tw=00000000 te=00000000 trc=0 hc=%02x es=%08x b0=%08x b1=%08x "
+	    "GTA4L-EMMC B1 BW=1 att=%u req=1 sw=%u swrc=0 tt=%u "
+	    "tw=%08x te=%08x trc=%d hc=%02x es=%08x b0=%08x b1=%08x "
 	    "same=1 div=0\n"
 	    "GTA4L-EMMC B1 BW=4 att=%u req=%u sw=%u swrc=%d tt=%u "
 	    "tw=%08x te=%08x trc=%d hc=%02x hb=%02x ha=%02x c6=%08x "
@@ -1041,7 +1044,9 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 	    (unsigned int)host->ext_csd_rev,
 	    (unsigned int)base->result.host_control,
 	    host->last_step, probe->log_count,
-	    base->attempted, base->result.switched,
+	    base->attempted, base->result.switched, base->tested,
+	    base->test.test_word, base->test.test_expected,
+	    base->test.test_result,
 	    (unsigned int)base->result.host_control, host->ext_csd_sum,
 	    base->block0_sum, base->block1_sum,
 	    w4->attempted, w4->result.requested, w4->result.switched,
@@ -1522,7 +1527,7 @@ gta4l_emmc_probe_run(void)
 		bzero(&base, sizeof(base));
 		bzero(&w4, sizeof(w4));
 		bzero(&w8, sizeof(w8));
-		w4.b1c_enabled = (stage == 5) ? 1u : 0u;
+		w4.b1c_enabled = (stage >= 5) ? 1u : 0u;
 		base.result.requested = 1u;
 		base.result.switched = host.bus_width;
 		base.result.switch_result = GTA4L_EMMC_OK;
@@ -1547,11 +1552,32 @@ gta4l_emmc_probe_run(void)
 		base.pad_dst = gta4l_emmc_probe_read32(&probe,
 		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
 
+		/* Stage-B1C 1-bit discriminator: before any width switch,
+		 * exercise the same CMD19 write / CMD14 read direction at the
+		 * identification width. A pass means the write path completes
+		 * at 1-bit, so a later 4-bit write timeout is width-caused; a
+		 * timeout or mismatch here means the write path is broken
+		 * independently of width. The failure stops the rung before
+		 * any CMD6 (no persistent card-state write) with stop=9. */
+		if (stage == 6) {
+			base.tested = 1u;
+			result = gta4l_emmc_bus_test(&host, 1u,
+			    &base.test);
+			if ((result != GTA4L_EMMC_OK) &&
+			    (base.test.test_result == GTA4L_EMMC_OK)) {
+				base.test.test_result = result;
+			}
+			if (result != GTA4L_EMMC_OK) {
+				gta4l_emmc_probe_report_b1(&host, &probe,
+				    &range, &base, &w4, &w8, result, 9);
+			}
+		}
+
 		w4.attempted = 1u;
 		set_result = gta4l_emmc_set_bus_width(&host, 4u, &w4.result);
 		if (set_result != GTA4L_EMMC_OK) {
 			result = set_result;
-			if ((stage == 5) &&
+			if ((stage >= 5) &&
 			    (gta4l_emmc_probe_b1c_enter(&host, &w4) != 0)) {
 				/* B1C: the verification failed with exactly the
 				 * observed tuple. Continue read-only at 4-bit

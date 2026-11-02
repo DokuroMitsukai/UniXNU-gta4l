@@ -128,8 +128,15 @@ partition layout, payload policy and packaging.
   (four CMD17 TC-only timeouts, one CMD3 timeout), and the same-session BOOT
   re-read matched the post-flash hash. The 4-bit read paradox is unchanged
   (`es=000009cb` at the attempted width). F3 remains unproven
-  (`docs/emmc-driver.md` §5.3.12–5.3.14,
-  `docs/emmc-cmd2-crc-audit.md` §2.18–2.20).
+  (`docs/emmc-driver.md` §5.3.12–5.3.15,
+  `docs/emmc-cmd2-crc-audit.md` §2.18–2.20). The stage-6 1-bit CMD19/CMD14
+  discriminator (`gta4l-emmc-probe=6`) is implemented and host-tested (core
+  138/83, probe 71/42) but not built, flashed or booted: it runs one 1-bit
+  bus-test round trip after the stage-A pass and before any CMD6, stops with
+  `stop=9` if that fails, and otherwise falls through to the stage-5 flow, so
+  it separates a width-caused 4-bit write timeout from an independent
+  first-write property. The device run needs a fresh explicit BOOT-only
+  approval.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

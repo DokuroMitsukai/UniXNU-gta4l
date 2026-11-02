@@ -169,6 +169,7 @@ static unsigned int cmd8_fail_on_after_cmd6;
 static uint16_t cmd8_fail_error;
 static int bus_test_bad;
 static uint8_t bus_test_bad_width;
+static int cmd19_1bit_timeout;
 static uint8_t bus_test_written[GTA4L_EMMC_BUS_TEST_8_BYTES];
 static unsigned int bus_test_written_count;
 static uint16_t bus_test_width;
@@ -867,6 +868,20 @@ sim_command(uint16_t command)
 		}
 		bus_test_width = block_size;
 		bus_test_written_count = 0;
+		if ((cmd19_1bit_timeout != 0) && (cmd6_count == 0u)) {
+			/* Model the observed 1-bit write-phase timeout: the
+			 * command is accepted, CC and BufferWriteReady latch,
+			 * but TC never follows and no error bit is set. The
+			 * present state is the observed write-direction
+			 * sample, stored at the terminal point only. */
+			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+			    0x00000900u);
+			sim_store(sdhci, GTA4L_EMMC_REG_PRESENT_STATE, 4u,
+			    0x03f801f6u);
+			normal_int |= GTA4L_EMMC_INT_CC |
+			    GTA4L_EMMC_INT_BWR;
+			return;
+		}
 		if (cmd19_error != 0) {
 			error_int |= (uint16_t)cmd19_error;
 			return;
@@ -878,6 +893,7 @@ sim_command(uint16_t command)
 	if (index == GTA4L_EMMC_CMD14) {
 		uint8_t payload[GTA4L_EMMC_BUS_TEST_8_BYTES];
 		uint32_t index2;
+		uint32_t width_code;
 
 		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
@@ -895,14 +911,16 @@ sim_command(uint16_t command)
 			bad_command_format = 1;
 			bus_test_width = GTA4L_EMMC_BUS_TEST_8_BYTES;
 		}
+		/* The width code follows the CMD6 count: no switch yet is the
+		 * 1-bit discriminator, one switch is the 4-bit rung and two
+		 * switches are the 8-bit rung. This keeps the 1-bit and 4-bit
+		 * tests (both a 4-byte block) distinguishable. */
+		width_code = (cmd6_count == 0u) ? 0u :
+		    (cmd6_count == 1u) ? 1u : 2u;
 		for (index2 = 0; index2 < bus_test_width; index2++) {
 			if ((bus_test_bad != 0) &&
 			    ((bus_test_bad_width == 0u) ||
-			    (bus_test_bad_width ==
-			    (uint8_t)ext_csd[
-			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF]) ||
-			    (bus_test_bad_width ==
-			    (uint8_t)(bus_test_width / 4u)))) {
+			    (bus_test_bad_width == width_code))) {
 				payload[index2] = bus_test_written[index2];
 			} else {
 				payload[index2] =
@@ -1329,9 +1347,18 @@ gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset, uint32_t value)
 				bus_test_written_count += 4u;
 				if (bus_test_written_count >=
 				    bus_test_width) {
-					normal_int &= (uint16_t)
-					    ~GTA4L_EMMC_INT_BWR;
-					normal_int |= GTA4L_EMMC_INT_TC;
+					if ((cmd19_1bit_timeout != 0) &&
+					    (cmd6_count == 0u)) {
+						/* 1-bit write-phase timeout:
+						 * BufferWriteReady stays
+						 * latched and TC never
+						 * follows. */
+					} else {
+						normal_int &= (uint16_t)
+						    ~GTA4L_EMMC_INT_BWR;
+						normal_int |=
+						    GTA4L_EMMC_INT_TC;
+					}
 				}
 			}
 			return;
@@ -1626,6 +1653,70 @@ static const uint8_t order_probe_b1c[] = {
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD8
+};
+/* Stage B1C with the stage-6 1-bit discriminator: one extra CMD19/CMD14
+ * round trip after the stage-A pass and before the first CMD6. */
+static const uint8_t order_probe_b1_1bit[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17
+};
+static const uint8_t order_probe_b1c_1bit[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
 	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
 	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
@@ -2157,6 +2248,41 @@ main(int argc, char **argv)
 		    "probe-b1-content8-div") == 0) {
 			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
 			width_corrupt_code = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;
+		}
+	} else if ((strcmp(scenario, "probe-b1-1bit-pass") == 0) ||
+	    (strcmp(scenario, "probe-b1-1bit-timeout") == 0) ||
+	    (strcmp(scenario, "probe-b1-1bit-mismatch") == 0) ||
+	    (strcmp(scenario, "probe-b1-1bit-continue") == 0)) {
+		/* Stage 6: the stage-B1C flow plus one 1-bit CMD19/CMD14
+		 * round trip after the stage-A pass and before the first
+		 * CMD6. A failed 1-bit test stops with stop=9; a passing one
+		 * falls through to the stage-5 flow. */
+		stage = 6;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		if (strcmp(scenario, "probe-b1-1bit-continue") == 0) {
+			set_expected_order(order_probe_b1c_1bit,
+			    (unsigned int)(sizeof(order_probe_b1c_1bit) /
+			    sizeof(order_probe_b1c_1bit[0])));
+		} else {
+			set_expected_order(order_probe_b1_1bit,
+			    (unsigned int)(sizeof(order_probe_b1_1bit) /
+			    sizeof(order_probe_b1_1bit[0])));
+		}
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-b1-1bit-timeout") == 0) {
+			cmd19_1bit_timeout = 1;
+		} else if (strcmp(scenario,
+		    "probe-b1-1bit-mismatch") == 0) {
+			bus_test_bad = 1;
+			bus_test_bad_width = 0u;
+		} else if (strcmp(scenario,
+		    "probe-b1-1bit-continue") == 0) {
+			cmd6_ignore = 1;
 		}
 	} else if ((strcmp(scenario, "probe-b1c-success") == 0) ||
 	    (strcmp(scenario, "probe-b1c-pass") == 0) ||
@@ -3490,6 +3616,105 @@ main(int argc, char **argv)
 		    "report plus zero B1C fields");
 		check(cmd_count == 36u,
 		    "the lost-host-width row did not stop at the read");
+	} else if (strcmp(scenario, "probe-b1-1bit-pass") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the 1-bit pass run did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=0 stop=0") != NULL,
+		    "the 1-bit pass report does not carry the result");
+		snprintf(expected, sizeof(expected),
+		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=00 es=%08x",
+		    sim_ext_csd_sum() - 2u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the 1-bit discriminator did not record its passing words");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=02") != NULL,
+		    "the 1-bit pass report lost the 4-bit escalation");
+		check(strstr(panic_message,
+		    "BW=8 att=1 req=8 sw=2 swrc=0 tt=1") != NULL,
+		    "the 1-bit pass report lost the 8-bit escalation");
+		check(strstr(panic_message,
+		    "same=1 div=0 bc=0 e183a=00000000 esa=00000000") != NULL,
+		    "the 1-bit pass report invented a continuation");
+		check(cmd6_count == 2u,
+		    "the 1-bit pass run did not issue one CMD6 per width");
+		check(cmd_count == 95u,
+		    "the 1-bit pass run did not run the discriminator and both "
+		    "content passes");
+	} else if (strcmp(scenario, "probe-b1-1bit-continue") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the 1-bit continuation did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-19 stop=1") != NULL,
+		    "the 1-bit continuation does not keep the verification "
+		    "stop");
+		snprintf(expected, sizeof(expected),
+		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=00 es=%08x",
+		    sim_ext_csd_sum());
+		check(strstr(panic_message, expected) != NULL,
+		    "the 1-bit continuation lost the discriminator pass");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=00 hb=00 ha=02 "
+		    "c6=00000900") != NULL,
+		    "the 1-bit continuation lost the failed-verification "
+		    "tuple or the 4-bit bus test");
+		snprintf(expected, sizeof(expected),
+		    "same=1 div=0 bc=1 e183a=00000000 esa=%08x",
+		    sim_ext_csd_sum());
+		check(strstr(panic_message, expected) != NULL,
+		    "the 1-bit continuation lost the marker or invented a "
+		    "byte-183 value");
+		check(strstr(panic_message,
+		    "BW=8 att=0 req=0 sw=0 swrc=0 tt=0") != NULL,
+		    "the 1-bit continuation attempted 8-bit");
+		check(cmd6_count == 1u,
+		    "the 1-bit continuation issued more than one CMD6");
+		check(cmd_count == 66u,
+		    "the 1-bit continuation did not run the discriminator and "
+		    "exactly one continuation");
+	} else if (strcmp(scenario, "probe-b1-1bit-timeout") == 0) {
+		check(panicked == 1, "the 1-bit timeout did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-11 stop=9") != NULL,
+		    "the 1-bit timeout does not name the data timeout and the "
+		    "discriminator stop");
+		check(strstr(panic_message,
+		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=1 "
+		    "tw=00000000 te=00000000 trc=-11 hc=00") != NULL,
+		    "the 1-bit timeout did not record the write-phase result");
+		check(strstr(panic_message,
+		    "BW=4 att=0 req=0 sw=0 swrc=0 tt=0") != NULL,
+		    "the 1-bit timeout continued to the width switch");
+		check(strstr(panic_message,
+		    "FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/18") != NULL,
+		    "the 1-bit timeout lost the terminal write-phase record");
+		check(cmd6_count == 0u,
+		    "the 1-bit timeout issued a CMD6");
+		check(cmd_count == 34u,
+		    "the 1-bit timeout did not stop at CMD19");
+	} else if (strcmp(scenario, "probe-b1-1bit-mismatch") == 0) {
+		check(panicked == 1, "the 1-bit mismatch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-20 stop=9") != NULL,
+		    "the 1-bit mismatch does not name the pattern error and the "
+		    "discriminator stop");
+		check(strstr(panic_message,
+		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=1 "
+		    "tw=0000005a te=000000a5 trc=-20 hc=00") != NULL,
+		    "the 1-bit mismatch did not bind the failing pattern word");
+		check(strstr(panic_message,
+		    "BW=4 att=0 req=0 sw=0 swrc=0 tt=0") != NULL,
+		    "the 1-bit mismatch continued to the width switch");
+		check(cmd6_count == 0u,
+		    "the 1-bit mismatch issued a CMD6");
+		check(cmd_count == 35u,
+		    "the 1-bit mismatch did not stop at CMD14");
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		check(panicked == 1, "the synthetic width failure did not panic");
 		check(strstr(panic_message, "stage=3") != NULL,
@@ -3747,8 +3972,8 @@ main(int argc, char **argv)
 		    "cap=4294967295 rev=255 hci=ff step=21 log=99999") != NULL,
 		    "the synthetic width B1 report lost the widest header");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC B1 BW=1 att=1 req=1 sw=15 swrc=0 tt=0 "
-		    "tw=00000000 te=00000000 trc=0 hc=ff es=ffffffff "
+		    "GTA4L-EMMC B1 BW=1 att=1 req=1 sw=15 swrc=0 tt=1 "
+		    "tw=ffffffff te=ffffffff trc=0 hc=ff es=ffffffff "
 		    "b0=ffffffff b1=ffffffff same=1 div=0") != NULL,
 		    "the synthetic width B1 report lost the 1-bit baseline");
 		check(strstr(panic_message,
@@ -4183,7 +4408,8 @@ main(int argc, char **argv)
 		    "the report did not sample HOST_VERSION");
 	}
 
-	if (strncmp(scenario, "probe-b1c-", 10u) == 0) {
+	if ((strncmp(scenario, "probe-b1c-", 10u) == 0) ||
+	    (strncmp(scenario, "probe-b1-1bit-", 15u) == 0)) {
 		check(bad_command_format == 0,
 		    "a B1C command used the wrong flags");
 		check(bad_command_order == 0,

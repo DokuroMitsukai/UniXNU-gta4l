@@ -1734,7 +1734,9 @@ gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
 
 /* CMD19/CMD14 bus test. Patterns and the comparison follow Linux
  * mmc_send_bus_test(): only the first len/4 bytes are checked, because they
- * carry the first two bits of every selected data line. */
+ * carry the first two bits of every selected data line. The 1-bit port form
+ * writes a 4-byte block (the PIO port is 32-bit) and compares its first
+ * byte, which carries the first two pattern bits on the single line. */
 int
 gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_result *result)
@@ -1754,7 +1756,7 @@ gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
 		return GTA4L_EMMC_ERR_ARG;
 	}
 	code = gta4l_emmc_bus_width_code(bits);
-	if ((code == 0xFFFFFFFFu) || (bits == 1u)) {
+	if (code == 0xFFFFFFFFu) {
 		return GTA4L_EMMC_ERR_ARG;
 	}
 	/* The card field and the SDHCI HOST_CONTROL width must both already
@@ -1765,7 +1767,12 @@ gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
 	if (host->bus_width != (uint8_t)code) {
 		return GTA4L_EMMC_ERR_BUS_WIDTH;
 	}
-	if (bits == 4u) {
+	if (bits == 1u) {
+		if ((control & (GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT)) != 0u) {
+			return GTA4L_EMMC_ERR_BUS_WIDTH;
+		}
+	} else if (bits == 4u) {
 		if ((control & (GTA4L_EMMC_HOST_CONTROL_4BIT |
 		    GTA4L_EMMC_HOST_CONTROL_8BIT)) !=
 		    GTA4L_EMMC_HOST_CONTROL_4BIT) {
@@ -1785,13 +1792,16 @@ gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
 		result->host_control = control;
 	}
 
-	length = (bits == 4u) ? GTA4L_EMMC_BUS_TEST_4_BYTES :
-	    GTA4L_EMMC_BUS_TEST_8_BYTES;
+	length = (bits == 8u) ? GTA4L_EMMC_BUS_TEST_8_BYTES :
+	    (bits == 1u) ? GTA4L_EMMC_BUS_TEST_1_BYTES :
+	    GTA4L_EMMC_BUS_TEST_4_BYTES;
 	for (index = 0; index < GTA4L_EMMC_BUS_TEST_8_BYTES; index++) {
 		pattern[index] = 0;
 		actual[index] = 0;
 	}
-	if (bits == 4u) {
+	if (bits == 1u) {
+		pattern[0] = GTA4L_EMMC_BUS_TEST_PATTERN_1;
+	} else if (bits == 4u) {
 		pattern[0] = GTA4L_EMMC_BUS_TEST_PATTERN_4;
 	} else {
 		pattern[0] = GTA4L_EMMC_BUS_TEST_PATTERN_8_0;

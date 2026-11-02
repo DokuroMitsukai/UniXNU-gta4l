@@ -47,9 +47,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 136 scenarios and 80 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 138 scenarios and 83 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 67 scenarios and 39 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 71 scenarios and 42 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -1757,6 +1757,42 @@ width switch (`gta4l-emmc-probe=6`), which issues no CMD6 and keeps the same
 non-persistent bus-test-pattern write class; it needs a fresh explicit
 BOOT-only flash approval.
 
+### 5.3.15 Stage-B1C 1-bit CMD19/CMD14 discriminator (2026-11-03)
+
+The `gta4l-emmc-probe=6` host rung adds one CMD19/CMD14 round trip at the
+identification width (1-bit) after the stage-A content pass and before the
+first CMD6. Its purpose is to separate the two live models for the CMD19
+write-phase timeout: a passing 1-bit test shows the write path completes at
+1-bit, so the 4-bit timeout is width-caused; a 1-bit timeout or pattern
+mismatch shows the write path is broken independently of width.
+
+The core now accepts `bits == 1` in `gta4l_emmc_bus_test()`. Because the
+SDHCI PIO buffer is 32-bit, the 1-bit form writes a 4-byte block with the
+first byte `0x5A` and compares the first returned byte (`0xA5`); that byte
+carries the first two pattern bits on the single line. The 1-bit test issues no CMD6 and keeps the same
+non-persistent bus-test-pattern write class already approved for B1C.
+
+On stage 6, a failed 1-bit test stops the rung with `stop=9` and the report
+carries the completed 1-bit fields plus the terminal `FAIL` record; no width
+switch or content pass follows. A passing 1-bit test falls through to the
+stage-5 flow unchanged, so every stage-6 boot that reaches the rung also
+records the 1-bit `tt`/`tw`/`te`/`trc` on the `BW=1` line. For stages 4 and
+5 the `BW=1` line stays byte-identical (`tt=0 tw=00000000 te=00000000
+trc=0`) because the discriminator fields are zero.
+
+Host checks: the core suite is 138 scenarios and 83 mutation controls (136/80
+before), adding the 1-bit success, pattern-mismatch and wrong-width cases and
+three mutation controls (the 1-bit guard, pattern and length). The probe
+suite is 71 scenarios and 42 mutation controls (67/39 before), adding
+`probe-b1-1bit-pass`, `probe-b1-1bit-timeout`,
+`probe-b1-1bit-mismatch` and `probe-b1-1bit-continue` plus three mutation
+controls (skipped discriminator, failure that continues to the switch, wrong
+stop code). The `report-width-b1` fixture now materializes the 1-bit fields
+and still fits the 2048-byte panic buffer. No build, flash or boot was
+performed; the device run needs a fresh explicit BOOT-only flash approval.
+Expected pre-B1 stops on the current image remain about 5 of 7 boots, so
+several boots may be needed to reach the rung.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
@@ -1920,7 +1956,10 @@ F3 remains unestablished. The B1C continuation (§5.3.13.1) was then flashed
 BOOT-only and booted seven times (§5.3.14): both boots that reached the
 continuation timed out in the CMD19 write phase (CC + BufferWriteReady
 latched, no TC, no error), so the data-write direction is now the blocking
-observation and F3 remains `[U]`. Any further B1/B2 step is owner-gated, and
-the pre-B1 H8/CMD17 failures also need a plan decision. No filesystem,
+observation and F3 remains `[U]`. The stage-6 1-bit CMD19/CMD14 discriminator
+(§5.3.15) is implemented and host-tested (core 138/83, probe 71/42) but not
+built, flashed or booted; it is the next device step and needs a fresh
+explicit BOOT-only approval. Any further B1/B2 step is owner-gated, and the
+pre-B1 H8/CMD17 failures also need a plan decision. No filesystem,
 block-device publication, mount, storage write, DMA, CQE or ICE result exists
 yet.

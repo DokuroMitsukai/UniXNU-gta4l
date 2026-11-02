@@ -261,9 +261,14 @@
 
 /* CMD19/CMD14 bus-test data lengths and patterns (Linux
  * mmc_send_bus_test()). The card returns the complement of the first
- * len/4 bytes; only those bits cover the first two bits per data line. */
+ * len/4 bytes; only those bits cover the first two bits per data line.
+ * The 1-bit form uses a 4-byte block because the SDHCI PIO buffer is
+ * 32-bit; only its first returned byte is compared, and that byte carries
+ * the first two pattern bits on the single line. */
+#define GTA4L_EMMC_BUS_TEST_1_BYTES        4u
 #define GTA4L_EMMC_BUS_TEST_4_BYTES        4u
 #define GTA4L_EMMC_BUS_TEST_8_BYTES        8u
+#define GTA4L_EMMC_BUS_TEST_PATTERN_1      0x5Au
 #define GTA4L_EMMC_BUS_TEST_PATTERN_4      0x5Au
 #define GTA4L_EMMC_BUS_TEST_PATTERN_8_0    0x55u
 #define GTA4L_EMMC_BUS_TEST_PATTERN_8_1    0xAAu
@@ -540,9 +545,13 @@ struct gta4l_emmc_bus_result {
 int gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_result *result);
 
-/* CMD19/CMD14 bus-test round trip at the active width. The host must already
- * be in the same width as the card. A pattern disagreement returns
- * GTA4L_EMMC_ERR_BUS_TEST and still fills the observed words. */
+/* CMD19/CMD14 bus-test round trip at the active width. `bits` may be 1, 4
+ * or 8. The host must already be in the same width as the card. A pattern
+ * disagreement returns GTA4L_EMMC_ERR_BUS_TEST and still fills the observed
+ * words; a data-phase timeout returns the mapped terminal error and leaves
+ * the observed words untouched. The 1-bit form is the stage-B1C
+ * discriminator: a passing 1-bit test means the CMD19 write path works at
+ * the identification width. */
 int gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_result *result);
 
