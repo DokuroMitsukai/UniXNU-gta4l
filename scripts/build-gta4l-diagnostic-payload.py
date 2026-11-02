@@ -29,6 +29,7 @@ DIAGNOSTICS = {
     'emmc-probe-1': 'gta4l-emmc-probe=1',
     'emmc-probe-2': 'gta4l-emmc-probe=2',
     'emmc-probe-3': 'gta4l-emmc-probe=3',
+    'emmc-probe-4': 'gta4l-emmc-probe=4',
 }
 
 

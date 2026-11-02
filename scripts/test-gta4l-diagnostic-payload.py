@@ -192,8 +192,35 @@ def test_missing_kernel(base):
     print('PASS missing kernel is rejected before the build')
 
 
+def test_emmc_probe_4(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    record = base / 'argv.json'
+    os.environ['FAKE_UNIXNU_RECORD'] = str(record)
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-probe-4'
+    code = run(module, [
+        *args,
+        '--kernel', str(kernel),
+        '--output', str(output),
+        '--manifest', str(manifest),
+    ])
+    assert code == 0
+    argv = json.loads(record.read_text())
+    kernel_args = [argv[index + 1] for index, value in enumerate(argv)
+                   if value == '--kernel-arg']
+    assert kernel_args[-1] == 'gta4l-emmc-probe=4'
+    assert json.loads(manifest.read_text())['diagnostic_argument'] == \
+        'gta4l-emmc-probe=4'
+    print('PASS emmc-probe-4 maps to gta4l-emmc-probe=4')
+
+
 def main():
-    tests = (test_explicit_kernel, test_default_kernel, test_missing_kernel)
+    tests = (test_explicit_kernel, test_default_kernel, test_missing_kernel,
+             test_emmc_probe_4)
     for test in tests:
         with tempfile.TemporaryDirectory(prefix='gta4l-payload-test-') as tmp:
             test(Path(tmp))
