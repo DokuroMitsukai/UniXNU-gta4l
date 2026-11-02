@@ -82,7 +82,11 @@ partition layout, payload policy and packaging.
   error, no `TC`), and the explicit `CMD12` stop did not report `CC` or `TC`
   within its bound. This exercises the multi-block data phase beyond one block
   but does not establish F2: no established 21/21 transfer, completed stop or
-  content comparison exists (`docs/emmc-driver.md` §5.3.7).
+  content comparison exists (`docs/emmc-driver.md` §5.3.7). A third
+  2026-11-02 boot of the post-bound-drain image stopped again during
+  identification at the same CMD3-completion timeout, before any `CMD18`; the
+  drain was not exercised and F2 remains unproven (`docs/emmc-driver.md`
+  §5.3.8).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

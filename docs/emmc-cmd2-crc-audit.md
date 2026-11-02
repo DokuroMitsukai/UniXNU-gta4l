@@ -1153,11 +1153,45 @@ the current record is a partial multi-block result only. The transcription is
 `out/gta4l/ram-root-emmc-probe-stage2b-attempt2-evidence/stage2b-attempt2-failure.txt`;
 the owner photo file is not in this tree and has no hash here.
 
+**Attempt 3 (2026-11-02).** The bounded post-bound drain build (`Gta4lEmmc.c
+367978fd…`, `Gta4lEmmc.h d6be3022…`, `Gta4lEmmcProbe.c c344b35e…`, kernel
+`f034dda2…`, payload `0048962c…`, boot image `f85c18d9…`) was committed as
+`9ed12bd`, flashed to BOOT only and booted by the owner. The flash record and
+pulled gates are in
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/`; pre-flash BOOT was
+`4ca40951…`, post-flash `d652a8b5…`, image-byte readback `f85c18d9…`, tail
+`a28b4ea2…`, and `RECOVERY`/EFS/sec_efs were unchanged. The boot stopped
+during identification with:
+
+```text
+GTA4L-EMMC PROBE FAILED: stage=1 rc=4294967289
+fail=1/3/65536/0000031a/0000/0000/03f800f0/9
+c3p=1/0000/0000/03f800f0/0023/07ff
+c3t=1/3/031a/00010000/1/00000500,<CID words>
+c3l=1/3/0000/0000/100000/0000000014c343d/19200000
+step=9 log=5/8/3/0
+```
+
+`rc=-7` (`ERR_CMD_TIMEOUT`), `step=9` is `STEP_CMD2`, `fail` names CMD3 (index
+3, argument `0x00010000`, command `0x031a`) with no error/normal bits, `c3p` is
+a valid pre-CMD3 sample with no error, `c3t` is valid/stable and holds a
+plausible CMD3 R1 status in `RESPONSE0` with CID words in `RESPONSE1..3`, and
+`c3l` exhausted 100,000 iterations at 19.2 MHz (`0x14c343d` ticks, about
+1.134 s) with first/last normal 0. `c7p`–`c7x` are all invalid/zero, so CMD7
+never ran and no CMD18/CMD12/sector read occurred. This is the §6 H8
+CMD3-completion signature, field-for-field the same as attempt 1 except the
+fresh panic context and tick count. The drain code is in
+`gta4l_emmc_read_multi()` and did not execute; the run neither supports nor
+refutes it. The transcription is
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-failure.txt`;
+the raw CID is kept there and not repeated here.
+
 F2 remains unproven. Attempt 2 shows the CMD18 data phase is no longer limited
-to one block but does not establish a complete transfer or a clean stop. A
-further attempt with a fresh owner approval is required before F2 can be
-claimed; without a 21/21 report and matching sums, the MD abort condition still
-does not apply.
+to one block but does not establish a complete transfer or a clean stop.
+Attempt 3 did not reach the MD phase, so it adds no multi-block result and the
+drain remains untested on hardware. A further attempt with a fresh owner
+approval is required before F2 can be claimed; without a 21/21 report and
+matching sums, the MD abort condition still does not apply.
 
 ---
 
@@ -1857,6 +1891,17 @@ then appeared at CMD7, the first R1b command: `error=0`, `normal=0x0002` (TC),
 `CC` absent, and the driver returned its software timeout. The broader
 "completion is not observed" question therefore moves to the CMD7/R1b path; it
 is not confirmed for CMD3. See `docs/emmc-cmd7-timeout-finding.md`.
+
+**2026-11-02 attempt-3 update:** The CMD3-specific H8 signature recurred on
+the attempt-3 drain build (`step=9`, `fail` CMD3, valid/stable `c3t`, no
+`CC`/error) after the earlier `cmd1gap` and attempt-2 runs had completed
+identification. The attempt-3 change is in the MD read path and did not run,
+so the recurrence is not attributable to it. H8 remains an open, recurrent
+CMD3-completion failure mode; whether it is intermittent or build/layout
+sensitive is not established by these runs, and the cause of the missing CMD3
+completion is still open. The fmt=2 observation above (a different run failing
+at CMD7/R1b) also stands. The report is transcribed in
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-failure.txt`.
 
 ---
 

@@ -1176,7 +1176,7 @@ the owner photo file is not in this tree and has no hash here. A further
 attempt needs a fresh owner approval; a marginal-bound versus stalled-block
 follow-up is not in this tree.
 
-### 5.3.8 Attempt 3: bounded post-bound drain (host-side, 2026-11-02)
+### 5.3.8 Attempt 3: bounded post-bound drain and hardware run (2026-11-02)
 
 Attempt 3 keeps the 1,000,000 µs primary data bound unchanged and adds one
 bounded secondary window, `GTA4L_EMMC_DATA_DRAIN_US` (500,000 µs), in
@@ -1203,9 +1203,66 @@ drains but `TC` never arrives (the window is exhausted and the CMD18 result
 remains `-11`). The core suite is 116 scenarios with 67 mutation controls and
 the probe suite is 48 scenarios with 34 mutation controls, including drain
 mutation controls for the window entry, `TC` re-check, drained-block count,
-error mapping and resolution flag. Attempt 3 has not been flashed or run on
-hardware; no owner approval for that exists in this tree, so this section
-records a host-side candidate only.
+error mapping and resolution flag.
+
+Attempt 3 was committed as `9ed12bd` and built from it: kernel `f034dda2…`,
+payload `0048962c…` (contract 7/7) and boot image `f85c18d9…` (gate 18/18
+against the v5 baseline `ce4d76e8…`). The owner approved a BOOT-only flash;
+the pre-flash partition `4ca40951…` (the attempt-2 image `115e5c63…` plus the
+unchanged tail `a28b4ea2…`) was backed up and hash-verified, and the post-flash
+partition is `d652a8b5…` with image prefix `f85c18d9…`, tail `a28b4ea2…`, and
+`RECOVERY` `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` unchanged.
+The pulled boot-image gate is 18/18 and the pulled payload contract is 7/7.
+The record is
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/flash-record.json`.
+
+The owner booted the image. It did not reach the MD phase; the full-probe
+stage stopped during identification with the same CMD3-completion signature as
+attempt 1. The report's key fields decode as follows; the raw CID and response
+words are kept only in the untracked transcript and are not repeated here.
+
+| Field | Report value | Decode |
+| --- | --- | --- |
+| `stage` | `1` | full-probe stage |
+| `rc` | `4294967289` | `-7`, `GTA4L_EMMC_ERR_CMD_TIMEOUT` |
+| `fail` | `1/3/65536/0000031a/0000/0000/03f800f0/9` | valid 1, index 3 (CMD3), argument `0x00010000`, command `0x031a`, error 0, normal 0, present `0x03f800f0`, step 9 |
+| `rsp` | `00000500,<CID words>` | `RESPONSE0` is a plausible CMD3 R1 status; `RESPONSE1..3` are the CID words |
+| `c3p` | `1/0000/0000/03f800f0/0023/07ff` | valid pre-CMD3 sample, no error |
+| `c3t` | `1/3/031a/00010000/1/00000500,<CID words>` | valid, stable CMD3 timeout capture |
+| `c3l` | `1/3/0000/0000/100000/0000000014c343d/19200000` | 100,000 iterations, `0x14c343d` ticks at 19.2 MHz (about 1.134 s), first/last normal 0 |
+| `step`/`log` | `9`/`5/8/3/0` | `STEP_CMD2` last completed |
+| `c7p`–`c7x` | all invalid/zero | CMD7 never attempted |
+| `drain` | absent | MD phase never reached |
+
+`step=9` is `STEP_CMD2`, so CMD2 completed and CMD3 did not; `fail` names CMD3
+(index 3, argument `0x00010000`, command `0x031a`) with no error or normal bits
+latched. `c3p` is a valid pre-CMD3 sample with no error; `c3t` is valid,
+stable, and holds a plausible CMD3 R1 status in `RESPONSE0` with the CID words
+in `RESPONSE1..3`; `c3l` exhausted its 100,000-iteration, 1,000,000 µs / 10 µs
+poll bound at 19.2 MHz with neither `CC` nor an error observed. The `c7` block
+is invalid/zero, so CMD7 never ran and no CMD18, CMD12 or sector read occurred.
+This is the documented H8 CMD3-completion signature, field-for-field the same
+as the attempt-1 stage-1 failure except for the panic frame/page/free context
+and the `c3l` tick count (a fresh run).
+
+The report therefore does not exercise or refute the attempt-3 drain: the
+drain is entered only in `gta4l_emmc_read_multi()` after a CMD18 primary-bound
+expiry, and the `step=9`/zero `c7` record shows the boot stopped before CMD7.
+The attempt-3 change cannot be assigned a role in this failure from the report;
+the previous attempt-2 boot did reach the MD phase, so this is a recurrence of
+the open CMD3/H8 behavior rather than an MD/drain result. F2 remains
+unestablished and no on-device `drain=` value exists. The transcription is
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-failure.txt`;
+the owner photo file and hash are not in this tree.
+
+The report's panic frames, `pages`/`free` and `c3l` ticks differ from the
+attempt-1 record, so the report is a new run rather than a copy of the earlier
+transcript. The source line marker `Gta4lEmmcProbe.c:588` is the unchanged
+failure-report call site. The attempt-3 image was not re-read after this boot,
+so the run is bound by the verified flash/readback record, not by a post-boot
+partition re-read. A second boot of the same image is a no-write discriminator
+between an intermittent H8 occurrence and a repeatable identification failure;
+it still needs owner approval and is not part of this record.
 
 ## 6. Expected report
 
@@ -1235,9 +1292,10 @@ the full report, including the block 0/block 1 reads, on the owner's SM-T505N
 and one SM-T505; the §5.3.6 stage-A image completed the extended content
 phase on the owner's SM-T505N and matched the live recovery readback; the
 first §5.3.7 MD-mode attempt then stopped in identification before the MD
-phase, and the corrected second attempt reached the MD phase but timed out at
-block ordinal 20 with an incomplete `CMD12` stop, so no multi-block report
-exists yet. On
+phase, the corrected second attempt reached the MD phase but timed out at
+block ordinal 20 with an incomplete `CMD12` stop, and the §5.3.8 drain
+attempt again stopped in identification at CMD3 before the MD phase, so no
+multi-block report or on-device `drain=` value exists yet. On
 failure the probe reports the
 stage, result code,
 the `clocks` flag, MCI version, power/clock/`HOST_CONTROL2`/vendor/DLL registers,
@@ -1272,8 +1330,9 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   same-session live recovery readback `[C]`; the §5.3.7 attempt 2 then
   stopped at block ordinal 20 in one open-ended `CMD18` (at least 20 of 21
   blocks drained) before the data bound expired, but the transfer and the
-  `CMD12` stop did not complete `[C]`. The §5.3.8 post-bound drain candidate
-  is host-side only and has not run on hardware `[U]`. A
+  `CMD12` stop did not complete `[C]`; the §5.3.8 attempt 3 was flashed and
+  booted but stopped during identification at the CMD3-completion timeout
+  before any `CMD18`, so the post-bound drain was not exercised `[C]/[U]`. A
   complete multi-block transfer, a filesystem, block-device publication and a
   reliability test have not run `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
@@ -1299,8 +1358,10 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   and stopped at block ordinal 20 in one `CMD18` before the data bound
   expired, and the `CMD12` stop did not report `CC` or `TC`, so a complete
   multi-block transfer result still does not exist `[C]/[S]/[U]`. Attempt 3
-  (5.3.8) adds a bounded post-bound drain and host simulator coverage; it has
-  not been flashed or run on hardware, so its on-device result is `[U]`.
+  (5.3.8) adds a bounded post-bound drain and host simulator coverage; it was
+  flashed and booted, but the boot stopped at CMD3 during identification
+  before the MD phase, so the drain has not been exercised and its on-device
+  result remains `[U]`.
 - An 8-us CMD1-to-CMD2 timing candidate is specified in
   `docs/emmc-cmd1-gap-candidate.md` and was built, flashed and run on
   2026-11-01; it completed identification on three units (5.3.4) `[C]`. The
