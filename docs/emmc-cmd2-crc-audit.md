@@ -959,8 +959,8 @@ record is
 other partition was written.
 
 The owner booted the image on the same SM-T505N and supplied a screen
-photograph (`photo_2026-11-01_23-40-58.jpg`, SHA-256 `663d2db3…`); the photo
-and the full transcription stay in the gitignored evidence directory. The
+photograph, stored as `probe-report-photo.jpg` (SHA-256 `663d2db3…`); the
+photo and the full transcription stay in the gitignored evidence directory. The
 report reached `GTA4L-EMMC PROBE REPORT: rc=0` with the §2.12 identification
 fields, `step=18 log=30`, and the new content lines (CID/CSD lines repeat
 §2.12 for the same unit and are omitted here):
@@ -978,10 +978,12 @@ GTA4L-EMMC PROBE LSTLBA=61071359 sum=a89b26d5
 ```
 
 The `CAPTURE fmt=4` block repeats the §2.12 field layout; the changed fields
-are normal run-to-run poll ticks (`c3l …155e`, `c7q …1581`, `c7c
-…1572/…1573`), `c7x=2/0` still reports no trace overflow, and the report
-source location moved to `Gta4lEmmcProbe.c:717` with the added code. The full
-CAPTURE block is in `probe-report.txt`.
+are normal run-to-run poll counters (`c3l …155e`, `c7q …1581`, `c7c
+…1572/…1573`), the first panic frame (`fffffff0079d7654` vs `fffffff0079d72a4`)
+and `pages`/`free` (`…79eaa`/`…7944e` vs `…79eae`/`…79472`); `c7x=2/0` still
+reports no trace overflow, and the report source location moved to
+`Gta4lEmmcProbe.c:717` with the added code. The full CAPTURE block is in
+`probe-report.txt`.
 
 Decoding and bounds:
 
@@ -1024,12 +1026,73 @@ or bus-test (F3), high-speed timing (F4), block-device publication or mount
 media-reliability claims, or DMA/CQE/ICE. The `DATA 34` sum binds a content
 fingerprint; it is not interpreted as a filesystem or partition object.
 
-Host verification for this rung: `scripts/test-gta4l-emmc.py` passes 98
-scenarios and 55 mutation controls; `scripts/test-gta4l-emmc-probe.py` passes
-38 scenarios and 26 mutation controls, including the GPT gate, the 21-sector
-array phase, the first-usable/last-sector reads and the four stage-A loop
+Host verification for this rung: `scripts/test-gta4l-emmc.py` passes 112
+scenarios and 62 mutation controls; `scripts/test-gta4l-emmc-probe.py` passes
+44 scenarios and 34 mutation controls, including the GPT gate, the 21-sector
+array phase, the first-usable/last-sector reads, the four stage-A loop
 mutation controls (duplicate LBA, continued error, block-count off-by-one,
-wrong last LBA).
+wrong last LBA) and the optional A2/F2 multi-block cases recorded in
+§2.14.
+
+### 2.14 A2/F2 multi-block design, CMD12 response decode and attempt 1 (2026-11-02)
+
+The optional A2/F2 rung adds one open-ended `CMD18` read of the 21 primary GPT
+array sectors (LBAs 2..22) and an explicit `CMD12` stop behind
+`gta4l-emmc-probe=1` plus `gta4l-emmc-mb=1`; the default image is unchanged.
+The transfer-mode word is `TM_READ | TM_BLOCK_COUNT_EN | TM_MULTI`. The
+Multi/Single Block Select bit is required: the pinned Samsung
+`drivers/mmc/host/sdhci.c:1172-1175` programs
+`SDHCI_TRNS_BLK_CNT_EN | SDHCI_TRNS_MULTI` whenever the request is multi-block
+or has more than one block. Without it the controller performs a single-block
+transfer and the helper times out after one sector. A checker audit found the
+bit missing in the first working-tree implementation; the header, core, both
+simulators and both suites now enforce it, including a mutation control that
+removes it (core 112/62, probe 44/34).
+
+**CMD12 response decode.** The pinned Linux header labels CMD12 as
+`ac ... R1b` (`/tmp/opencode/lfg4l-audit/files/LinuxForGta4l_linux__c91d0e94385f75a8788cfc9d8a4f532b3994e6da__include_linux_mmc_mmc.h:43`).
+The core recovery path sends it as `R1B` with a bounded busy timeout
+(`/tmp/opencode/lfg4l-audit/cbd-drivers_mmc_core_core.c:1457-1460`, matching
+Samsung CXG1 `core.c:1457-1459`). The tuning-abort path sends CMD12 as `R1`
+and explicitly notes that drivers which override R1 to R1b must set a busy
+timeout (`/tmp/opencode/lfg4l-audit/cbd-drivers_mmc_core_mmc_ops.c:702-709`),
+and the downstream `sdhci_send_command()` adds `MMC_RSP_BUSY` for CMD12 under
+`SDHCI_QUIRK2_STOP_WITH_TC`
+(`/tmp/opencode/lfg4l-audit/cbd-drivers_mmc_host_sdhci.c:1351-1354`). The port
+therefore keeps `R1b` (`CMD_RESP_SHORT_BUSY`) with CRC and index checks,
+requires both `CC` and `TC` with a bounded busy poll, and captures the
+terminal state before clearing. `R1` would return without observing the
+busy/TC phase; the open-ended transfer's stop needs that phase, so `R1b` is
+the conservative decode and no source-supported change to it was found. CRC
+checking stays enabled.
+
+**Attempt 1 (2026-11-02).** The pre-correction image (`Gta4lEmmc.c 009f0eb9…`,
+`Gta4lEmmc.h 6f3ff335…`, `Gta4lEmmcProbe.c e67ad2bc…`, payload `198dc393…`,
+boot image `cac4356b…`) reached identification and then stopped before any MD
+code ran:
+
+```text
+GTA4L-EMMC PROBE FAILED: stage=1 rc=4294967289
+fail=1/3/65536/0000031a/0000/0000/03f800f0/9
+rsp=00000500,5836384d,42009005,f4661978
+c3l=1/3/0000/0000/100000/0000000014c2e0f/19200000
+step=9 log=5/8/3/0
+```
+
+`stage=1` is the full-probe boot argument, `rc` is `-7`
+(`GTA4L_EMMC_ERR_CMD_TIMEOUT`), `step=9` is `STEP_CMD2` (the last completed
+step), `fail` names CMD3 (index 3, argument `0x00010000`, command `0x031a`)
+with no error/normal bits latched, and `c3l` exhausted the 1,000,000 µs /
+10 µs poll bound. RESPONSE0 `0x00000500` is a plausible CMD3 R1 status and
+words 1..3 are CID words, so the command was accepted and its completion was
+not observed. This is the §6 H8 CMD3-completion signature, not an MD/F2
+result: no CMD18, no CMD12 and no sector read occurred. The transcription is
+`out/gta4l/ram-root-emmc-probe-stage2b-evidence/stage2b-attempt1-failure.txt`;
+the owner photo is still pending.
+
+F2 remains unproven. A corrected build and a separately approved BOOT-only
+attempt are required; a second pre-MD stop is still not an MD verdict and does
+not trigger the MD abort condition, which applies to an actual MD report.
 
 ---
 
@@ -2312,7 +2375,12 @@ working-tree counts are in section 10.
 - `/tmp/opencode/linux-pin/sdhci-msm.c:2596-2598`: `DDR_CONFIG_POR_VAL`
 - `/tmp/opencode/linux-pin/sdhci-msm.c:2827-2828`: `updated_ddr_cfg` for minor `>= 0x49`
 - `/tmp/opencode/samsung-src/CXG1/drivers/mmc/host/sdhci.c:1442-1460`: R2 shift
+- `/tmp/opencode/samsung-src/CXG1/drivers/mmc/host/sdhci.c:1172-1175`: multi-block transfer-mode encoding (`BLK_CNT_EN | MULTI`)
 - `/tmp/opencode/samsung-src/CXG1/drivers/mmc/host/sdhci-msm.c:101`: Samsung POR `0xA1C`
+- `/tmp/opencode/lfg4l-audit/files/LinuxForGta4l_linux__c91d0e94385f75a8788cfc9d8a4f532b3994e6da__include_linux_mmc_mmc.h:43`: CMD12 is R1b
+- `/tmp/opencode/lfg4l-audit/cbd-drivers_mmc_core_core.c:1457-1460`: CQE recovery stop is R1B
+- `/tmp/opencode/lfg4l-audit/cbd-drivers_mmc_core_mmc_ops.c:702-709`: tuning-abort CMD12 is R1 with an R1b-override note
+- `/tmp/opencode/lfg4l-audit/cbd-drivers_mmc_host_sdhci.c:1351-1354`: `STOP_WITH_TC` adds `MMC_RSP_BUSY`
 - `/tmp/opencode/linux-verify/gcc-sm6115.c:1248-1258`: SDCC1 apps table
 - `/tmp/opencode/linux-verify/gcc-sm6115.c:1261`: `cmd_rcgr = 0x38028`
 

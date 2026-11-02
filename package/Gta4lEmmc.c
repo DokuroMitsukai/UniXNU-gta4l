@@ -298,6 +298,19 @@ gta4l_emmc_clear_failure(struct gta4l_emmc_host *host)
 	host->cmd7_term_command = 0;
 	host->cmd7_term_argument = 0;
 	host->cmd7_term_capture_valid = 0;
+	host->multi_block = 0;
+	host->multi_stop_result = 0;
+	host->multi_stop_normal = 0;
+	host->multi_stop_error = 0;
+	host->multi_stop_present = 0;
+	host->multi_stop_command = 0;
+	host->multi_stop_argument = 0;
+	host->multi_stop_response[0] = 0;
+	host->multi_stop_response[1] = 0;
+	host->multi_stop_response[2] = 0;
+	host->multi_stop_response[3] = 0;
+	host->multi_stop_valid = 0;
+	host->multi_stop_capture_valid = 0;
 }
 
 static uint32_t
@@ -1634,4 +1647,318 @@ gta4l_emmc_read_block(struct gta4l_emmc_host *host, uint64_t block,
 	gta4l_emmc_log(host, GTA4L_EMMC_LOG_READ, (uint32_t)block,
 	    response);
 	return GTA4L_EMMC_OK;
+}
+
+static void
+gta4l_emmc_capture_stop_terminal(struct gta4l_emmc_host *host,
+    uint16_t normal, uint16_t error, uint32_t present)
+{
+	host->multi_stop_normal = normal;
+	host->multi_stop_error = error;
+	host->multi_stop_present = present;
+	host->multi_stop_command = gta4l_emmc_read16(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_COMMAND);
+	host->multi_stop_argument = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_ARGUMENT);
+	gta4l_emmc_read_raw_response(host, host->multi_stop_response);
+	host->multi_stop_capture_valid = 1;
+}
+
+/* End an open-ended CMD18 transfer. The stop reuses the CMD7 R1b policy:
+ * CC and TC are both required, the poll is bounded and the terminal state is
+ * captured before the status clear. The data-inhibit bit is deliberately not
+ * part of the entry wait because an aborted data transfer can retain it while
+ * the command line is free; Linux sdhci likewise skips DATA_INHIBIT for the
+ * stop command. */
+static int
+gta4l_emmc_send_stop(struct gta4l_emmc_host *host)
+{
+	uint16_t command;
+	uint16_t normal = 0;
+	uint16_t error = 0;
+	uint32_t present = 0;
+	uint32_t response = 0;
+	uint32_t iterations;
+	uint32_t step;
+	int cc_seen = 0;
+	int tc_seen = 0;
+	int result;
+
+	command = (uint16_t)((GTA4L_EMMC_CMD12 << 8) |
+	    GTA4L_EMMC_CMD_RESP_SHORT_BUSY | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX);
+	host->multi_stop_command = command;
+	host->multi_stop_argument = 0;
+	host->multi_stop_valid = 1;
+
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_CMD_TIMEOUT_US);
+	for (step = 0; step < iterations; step++) {
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		if ((present & GTA4L_EMMC_PRESENT_CMD_INHIBIT) == 0) {
+			break;
+		}
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+	}
+	if (step == iterations) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		gta4l_emmc_capture_stop_terminal(host, normal, error, present);
+		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD12, 0, command,
+		    error, normal, present);
+		host->multi_stop_result = GTA4L_EMMC_ERR_INHIBIT;
+		return GTA4L_EMMC_ERR_INHIBIT;
+	}
+
+	/* A data error may still be latched. It is already in the failure
+	 * record, so clear the latches before the stop is submitted and only
+	 * the CMD12 completion is observed below. */
+	gta4l_emmc_clear_interrupts(host);
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ARGUMENT, 0);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_COMMAND, command);
+	gta4l_emmc_barrier(host);
+
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_CMD_TIMEOUT_US);
+	for (step = 0; step < iterations; step++) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			normal = gta4l_emmc_read16(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			gta4l_emmc_capture_stop_terminal(host, normal, error,
+			    present);
+			gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD12, 0,
+			    command, error, normal, present);
+			gta4l_emmc_clear_interrupts(host);
+			result = gta4l_emmc_map_error(error, 0);
+			host->multi_stop_result = result;
+			return result;
+		}
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		if ((cc_seen == 0) && ((normal & GTA4L_EMMC_INT_CC) != 0)) {
+			cc_seen = 1;
+			response = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE);
+		}
+		if ((normal & GTA4L_EMMC_INT_TC) != 0) {
+			tc_seen = 1;
+		}
+		if ((cc_seen != 0) && (tc_seen != 0)) {
+			break;
+		}
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+	}
+	if ((cc_seen == 0) || (tc_seen == 0)) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		gta4l_emmc_capture_stop_terminal(host, normal, error, present);
+		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD12, 0, command,
+		    error, normal, present);
+		gta4l_emmc_clear_interrupts(host);
+		host->multi_stop_result = GTA4L_EMMC_ERR_CMD_TIMEOUT;
+		return GTA4L_EMMC_ERR_CMD_TIMEOUT;
+	}
+
+	error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+	normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+	present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_PRESENT_STATE);
+	gta4l_emmc_capture_stop_terminal(host, normal, error, present);
+	if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD12, 0, command,
+		    error, normal, present);
+		gta4l_emmc_clear_interrupts(host);
+		result = gta4l_emmc_map_error(error, 0);
+		host->multi_stop_result = result;
+		return result;
+	}
+	if ((response & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
+		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD12, 0, command,
+		    error, normal, present);
+		gta4l_emmc_clear_interrupts(host);
+		host->multi_stop_result = GTA4L_EMMC_ERR_CARD_STATUS;
+		return GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+	gta4l_emmc_clear_interrupts(host);
+	host->multi_stop_result = GTA4L_EMMC_OK;
+	return GTA4L_EMMC_OK;
+}
+
+int
+gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
+    uint32_t count, void *buffer)
+{
+	uint8_t *bytes = (uint8_t *)buffer;
+	uint16_t command;
+	uint16_t normal = 0;
+	uint16_t error = 0;
+	uint32_t present;
+	uint32_t iterations;
+	uint32_t step;
+	uint32_t done = 0;
+	uint32_t response = 0;
+	uint32_t byte;
+	uint32_t word;
+	int command_done = 0;
+	int completed = 0;
+	int result;
+	int stop_result;
+
+	if ((host == 0) || (buffer == 0) || (host->initialized == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if ((count == 0u) || (count > 0xFFFFu)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if ((host->capacity_blocks == 0u) ||
+	    (start_lba >= (uint64_t)host->capacity_blocks) ||
+	    (start_lba > 0xFFFFFFFFu) ||
+	    ((uint64_t)count >
+	    ((uint64_t)host->capacity_blocks - start_lba))) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	host->multi_block = 0;
+	host->multi_stop_result = 0;
+	host->multi_stop_valid = 0;
+	host->multi_stop_capture_valid = 0;
+	command = (uint16_t)((GTA4L_EMMC_CMD18 << 8) |
+	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX | GTA4L_EMMC_CMD_DATA);
+	if (gta4l_emmc_wait_inhibit(host) != GTA4L_EMMC_OK) {
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,
+		    (uint32_t)start_lba, command, 0, 0, present);
+		return GTA4L_EMMC_ERR_INHIBIT;
+	}
+	gta4l_emmc_clear_interrupts(host);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_BLOCK_SIZE, GTA4L_EMMC_BLOCK_BYTES);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_TRANSFER_MODE,
+	    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |
+	    GTA4L_EMMC_TM_MULTI);
+	gta4l_emmc_barrier(host);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_COMMAND, command);
+	gta4l_emmc_barrier(host);
+
+	result = GTA4L_EMMC_OK;
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
+	for (step = 0; step < iterations; step++) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			normal = gta4l_emmc_read16(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			host->multi_block = (done < count) ? done : count - 1u;
+			gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,
+			    (uint32_t)start_lba, command, error, normal,
+			    present);
+			result = gta4l_emmc_map_error(error, 1);
+			break;
+		}
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		if ((command_done == 0) &&
+		    ((normal & GTA4L_EMMC_INT_CC) != 0)) {
+			response = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE);
+			command_done = 1;
+		}
+		if (((normal & GTA4L_EMMC_INT_BRR) != 0) &&
+		    (done < count)) {
+			for (byte = 0; byte < GTA4L_EMMC_BLOCK_BYTES;
+			    byte += 4u) {
+				word = gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_BUFFER_DATA_PORT);
+				bytes[(done * GTA4L_EMMC_BLOCK_BYTES) + byte] =
+				    (uint8_t)(word & 0xFFu);
+				bytes[(done * GTA4L_EMMC_BLOCK_BYTES) + byte +
+				    1u] = (uint8_t)((word >> 8) & 0xFFu);
+				bytes[(done * GTA4L_EMMC_BLOCK_BYTES) + byte +
+				    2u] = (uint8_t)((word >> 16) & 0xFFu);
+				bytes[(done * GTA4L_EMMC_BLOCK_BYTES) + byte +
+				    3u] = (uint8_t)((word >> 24) & 0xFFu);
+			}
+			gta4l_emmc_log(host, GTA4L_EMMC_LOG_READ,
+			    (uint32_t)(start_lba + done), response);
+			done++;
+		}
+		if ((command_done != 0) && (done == count) &&
+		    ((normal & GTA4L_EMMC_INT_TC) != 0)) {
+			error = gta4l_emmc_read16(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+			if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+				normal = gta4l_emmc_read16(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+				present = gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_PRESENT_STATE);
+				host->multi_block = count - 1u;
+				gta4l_emmc_record_failure(host,
+				    GTA4L_EMMC_CMD18, (uint32_t)start_lba,
+				    command, error, normal, present);
+				result = gta4l_emmc_map_error(error, 1);
+				break;
+			}
+			host->multi_block = count - 1u;
+			completed = 1;
+			break;
+		}
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+	}
+	if ((completed == 0) && (result == GTA4L_EMMC_OK)) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		host->multi_block = (done < count) ? done : count - 1u;
+		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,
+		    (uint32_t)start_lba, command, error, normal, present);
+		result = GTA4L_EMMC_ERR_DATA_TIMEOUT;
+	}
+	if ((result == GTA4L_EMMC_OK) &&
+	    ((response & GTA4L_EMMC_R1_ERROR_MASK) != 0)) {
+		/* The R1 status is a card-level result; the open-ended
+		 * transfer still has to be stopped below. */
+		gta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, 3, response);
+		result = GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+
+	stop_result = gta4l_emmc_send_stop(host);
+	if ((result == GTA4L_EMMC_OK) && (stop_result != GTA4L_EMMC_OK)) {
+		result = stop_result;
+	}
+	return result;
 }

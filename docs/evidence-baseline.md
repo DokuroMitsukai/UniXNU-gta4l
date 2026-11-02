@@ -110,8 +110,8 @@ and update the table.
 | Twenty-seventh fail-closed hardware-run paths at this snapshot | 7 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Twenty-eighth cmd1gap hardware-run paths at this snapshot | 8 modified (`README.md`, `docs/emmc-cmd1-gap-candidate.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Twenty-ninth stage-1 hardware-run paths at this snapshot | 6 modified (`README.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
-| Thirtieth stage-A content-read paths at this snapshot | 11 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `scripts/build-gta4l-emmc-probe.py`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/test-gta4l-emmc-probe.py`) |
-| Dirty entries at the hash snapshot | 11, exactly the thirtieth paths above |
+| Thirtieth stage-A content-read paths at this snapshot | 12 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/build-gta4l-emmc-probe.py`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/test-gta4l-emmc-probe.py`) |
+| Dirty entries at the hash snapshot | 12, exactly the thirtieth paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
 The hash table describes the thirtieth working-tree snapshot: the
@@ -531,19 +531,19 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `ba7fefdc723c74de391596bb213d89483e5aa5845a42843ac711dff08c46e746` |
+| Repository README | `README.md` | `77ac33fb586940602d8c97dbe7a141fca6594353b966eeb225c8c593a1811198` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `8a78f1b7492ce791676e5e3f69aeda5ce0034e620ae941dacb16ab8674537868` |
+| Porting record | `porting.toml` | `bf999aa62d432d10de67c2879e1040dfca9605c6ca59ef81079c2b49967a4e9b` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `33219cb81580732289271ec745e2eee8b81e4f1a1dcd46b1fb6a6f39554901c7` |
-| eMMC core header | `package/Gta4lEmmc.h` | `7e063c08da1725f939e2d0fabfd6421d8f5e759a11763dd53b8ed5ef73fa9bf4` |
-| eMMC core source | `package/Gta4lEmmc.c` | `874e687813bf9a8bbd8aeefa6533ba3edd35f74cd5126add85647f480fbd9def` |
-| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `034571f107697798b9c94f9dd8ec49435a265b239a49bee1938edec95c79a1e4` |
-| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `7fa4b57ca270c0cb72121d4e1d2096d406cbd9453aee6346a1154f016115ee94` |
-| eMMC host test | `scripts/test-gta4l-emmc.py` | `12169faa63af21071b66e2ebe2610bf9ab45dfebd20169bb6f4ec415380b2734` |
-| eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `06d63380b539282611c389efe706cf9086989da02732b5d9ced2eb11390a6a0c` |
+| eMMC driver record | `docs/emmc-driver.md` | `fda03c42b324f05ee5900c3e158a93486a52a50898d44af90a5eb9f57584ccfe` |
+| eMMC core header | `package/Gta4lEmmc.h` | `dce8a4288c61ab37570635fe20e0434548809406cff016057bc8fa24133c4c79` |
+| eMMC core source | `package/Gta4lEmmc.c` | `942117eb3e7a43f3f7fbf7df0d9cc4fe603d06c01091ffb98801a0c8c76553cc` |
+| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `e67ad2bce17fbfc3b95752c007dbd4eeb7cbecce81eaf3a5ba98deb77a47ac86` |
+| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `57ea2cc39b4003c56a2754ea289a1b6900af2219c4027b2ee444cb7552e3f306` |
+| eMMC host test | `scripts/test-gta4l-emmc.py` | `a6eb3c5268bcfac5c66a7d200363432e4eea80f481dfabb7e9dee427a3038e1c` |
+| eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `ce5e4cd35a1164d78642abba3db7c9d34d383f58d08f7c5d6bb3a5087209e1f1` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `b92d452c2a5d413e30672ec9181821c04b4f4ccc2ad540c8ea7c8e5731f19d08` |
@@ -557,6 +557,9 @@ row. The seventeenth batch refreshed the eight changed-file hashes without
 adding a row. The stage-A batch refreshed six rows (`README.md`,
 `docs/emmc-driver.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
 `scripts/build-gta4l-emmc-probe.py` and `porting.toml`) without adding a row.
+The A2/F2 batch refreshed nine rows (the same six plus `package/Gta4lEmmc.c`,
+`scripts/sim-gta4l-emmc/harness.c` and `scripts/test-gta4l-emmc.py`) without
+adding a row.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
@@ -820,8 +823,8 @@ width-closure and terminal-read observation-boundary edits, run from
 
 | Check | Result |
 | --- | --- |
-| Current native eMMC core test | PASS: 98 simulator scenarios and 55 mutation controls |
-| Current eMMC probe report test | PASS: 38 scenarios and 26 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1493 bytes), three width-bound materializations, two width-fixture narrowing controls, two full-probe block-read failure controls, the stage-A GPT gate and 21-sector array content phase, four stage-A loop mutation controls (duplicate LBA, continued error, block-count off-by-one, wrong last LBA) and the oversized-report rejection control |
+| Current native eMMC core test | PASS: 112 simulator scenarios and 62 mutation controls |
+| Current eMMC probe report test | PASS: 44 scenarios and 34 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1493 bytes), four width-bound materializations, two width-fixture narrowing controls, two full-probe block-read failure controls, the stage-A GPT gate and 21-sector array content phase, four stage-A loop mutation controls (duplicate LBA, continued error, block-count off-by-one, wrong last LBA), the optional A2/F2 CMD18+CMD12 success, mismatch, mid-transfer failure, stop-timeout and bare-argument refusal cases, a missing CMD18 Multi/Single Block Select bit, and the oversized-report rejection control |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |

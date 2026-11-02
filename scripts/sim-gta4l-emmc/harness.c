@@ -19,6 +19,7 @@
 #define SIM_TLMM_WORDS 0x04u
 #define SIM_MAX_LOG    128u
 #define SIM_MAX_RESPONSE_READS 64u
+#define SIM_MB_TEST_BLOCKS 21u
 
 /* Independent copies of the SDHCI semantics the simulator enforces. These
  * are deliberately not taken from the production header, so a mutated header
@@ -29,6 +30,8 @@
 #define SIM_CMD_CRC_NONE        0xFFu
 #define SIM_TM_BLOCK_COUNT_EN   0x0002u
 #define SIM_TM_READ             0x0010u
+#define SIM_TM_MULTI            0x0020u
+#define SIM_TM_AUTO_CMD12       0x0004u
 #define SIM_CTRL_VDD_180        0x0008u
 #define SIM_PAD_PWR_SWITCH_EN   0x00008000u
 #define SIM_PAD_PWR_SWITCH      0x00010000u
@@ -149,6 +152,23 @@ struct sim {
 	int data_sector_size_code;
 	int data_late_error_words;
 	int data_late_error_emitted;
+	/* Multi-block CMD18/CMD12 model. The data phase runs until the
+	 * configured block count has been drained, then the stop is required
+	 * to release the modeled DAT line. */
+	int mb_active;
+	int mb_dat_inhibit;
+	int mb_done;
+	int mb_no_cc;
+	int mb_stop_no_tc;
+	int mb_late_cc;
+	int mb_stop_count;
+	int auto_cmd12_seen;
+	int mb_response_error;
+	uint32_t mb_count;
+	uint32_t mb_argument;
+	uint32_t mb_issued_block_size;
+	uint32_t mb_issued_block_count;
+	uint32_t mb_stop_normal_reads;
 	uint32_t cmd_late_error_index;
 	int cmd_late_error_emitted;
 	int power_written;
@@ -398,6 +418,15 @@ sim_read16(void *context, uint32_t space, uint32_t offset)
 					sim->normal_int |= GTA4L_EMMC_INT_CC;
 				}
 			}
+			if ((sim->mb_late_cc != 0) &&
+			    (sim->last_cmd == GTA4L_EMMC_CMD12)) {
+				sim->mb_stop_normal_reads++;
+				if (sim->mb_stop_normal_reads >
+				    (GTA4L_EMMC_CMD_TIMEOUT_US /
+				    GTA4L_EMMC_POLL_STEP_US)) {
+					sim->normal_int |= GTA4L_EMMC_INT_CC;
+				}
+			}
 			if (sim->last_cmd == GTA4L_EMMC_CMD7) {
 				sim->cmd7_normal_reads++;
 				sim_apply_cmd7_events(sim);
@@ -491,6 +520,9 @@ sim_read16(void *context, uint32_t space, uint32_t offset)
 	return 0;
 }
 
+static void
+sim_fill_block(struct sim *sim, uint32_t lba);
+
 static uint32_t
 sim_read32(void *context, uint32_t space, uint32_t offset)
 {
@@ -565,6 +597,25 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 				    GTA4L_EMMC_INT_ERR_DATA_CRC;
 				sim->data_late_error_emitted = 1;
 			}
+			if ((sim->mb_active != 0) &&
+			    ((sim->buffer_index %
+			    (GTA4L_EMMC_BLOCK_BYTES / 4u)) == 0u)) {
+				/* One full multi-block sector was drained.
+				 * Stage the next sector or raise the data
+				 * transfer completion after the last one. */
+				sim->mb_done++;
+				if (sim->mb_done < (int)sim->mb_count) {
+					sim_fill_block(sim,
+					    sim->mb_argument +
+					    (uint32_t)sim->mb_done);
+				} else {
+					sim->mb_active = 0;
+					sim->normal_int &=
+					    (uint16_t)~GTA4L_EMMC_INT_BRR;
+					sim->normal_int |=
+					    GTA4L_EMMC_INT_TC;
+				}
+			}
 			return value;
 		}
 		if ((offset >= GTA4L_EMMC_REG_RESPONSE) &&
@@ -610,7 +661,8 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			    ((uint32_t)sim->sdhci[offset + 2u] << 16) |
 			    ((uint32_t)sim->sdhci[offset + 3u] << 24);
 
-			if (sim->cmd7_busy != 0) {
+			if ((sim->cmd7_busy != 0) ||
+			    (sim->mb_dat_inhibit != 0)) {
 				value |= GTA4L_EMMC_PRESENT_DAT_INHIBIT;
 			}
 			return value;
@@ -877,6 +929,7 @@ sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
 	int read = (sim->transfer_mode & SIM_TM_READ) != 0;
 	int block_count_en =
 	    (sim->transfer_mode & SIM_TM_BLOCK_COUNT_EN) != 0;
+	int multi = (sim->transfer_mode & SIM_TM_MULTI) != 0;
 
 	switch (index) {
 	case GTA4L_EMMC_CMD0:
@@ -914,6 +967,18 @@ sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
 		    block_count_en && sim->block_size == 512u &&
 		    sim->block_count == 1u &&
 		    argument < sim->sector_count;
+	case GTA4L_EMMC_CMD18:
+		return response_type == 2u && data != 0 && read && multi &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
+		    block_count_en && sim->block_size == 512u &&
+		    sim->block_count > 1u &&
+		    argument < sim->sector_count &&
+		    ((uint64_t)argument + sim->block_count) <=
+		    (uint64_t)sim->sector_count;
+	case GTA4L_EMMC_CMD12:
+		return response_type == 3u && data == 0 &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
+		    argument == 0u;
 	default:
 		return 0;
 	}
@@ -964,6 +1029,14 @@ sim_command(struct sim *sim, uint16_t command)
 	}
 	if (index == GTA4L_EMMC_CMD2) {
 		sim->cmd2_time_us = sim->time_us;
+	}
+	if (index == GTA4L_EMMC_CMD12) {
+		/* Count the stop attempt even when the encoding or an injected
+		 * error rejects it, and end the modeled data phase. */
+		sim->mb_stop_count++;
+		sim->mb_stop_normal_reads = 0;
+		sim->mb_active = 0;
+		sim->mb_dat_inhibit = 0;
 	}
 
 	if (!sim_command_ok(sim, index, argument, (uint16_t)flags)) {
@@ -1135,6 +1208,41 @@ sim_command(struct sim *sim, uint16_t command)
 			}
 		}
 		break;
+	case GTA4L_EMMC_CMD18:
+		sim->mb_argument = argument;
+		sim->mb_issued_block_size = sim->block_size;
+		sim->mb_issued_block_count = sim->block_count;
+		sim->mb_count = sim->block_count;
+		sim->mb_done = 0;
+		sim->mb_dat_inhibit = 1;
+		sim->mb_active = 0;
+		sim->normal_int &= (uint16_t)~GTA4L_EMMC_INT_BRR;
+		sim->normal_int |= GTA4L_EMMC_INT_CC;
+		if (sim->mb_response_error != 0) {
+			response |= 0x00000080u;
+		}
+		sim_set_response(sim, &response, 1);
+		if (sim->data_crc != 0) {
+			sim->error_int |= GTA4L_EMMC_INT_ERR_DATA_CRC;
+			break;
+		}
+		if (sim->data_timeout == 0) {
+			sim->mb_active = 1;
+			if (sim->no_brr == 0) {
+				sim_fill_block(sim, argument);
+				sim->normal_int |= GTA4L_EMMC_INT_BRR;
+			}
+		}
+		break;
+	case GTA4L_EMMC_CMD12:
+		if ((sim->mb_no_cc == 0) && (sim->mb_late_cc == 0)) {
+			sim->normal_int |= GTA4L_EMMC_INT_CC;
+		}
+		if (sim->mb_stop_no_tc == 0) {
+			sim->normal_int |= GTA4L_EMMC_INT_TC;
+		}
+		sim_set_response(sim, &response, 1);
+		break;
 	case GTA4L_EMMC_CMD8:
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		sim_set_response(sim, &response, 1);
@@ -1195,6 +1303,9 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 	}
 	if (offset == GTA4L_EMMC_REG_TRANSFER_MODE) {
 		sim->transfer_mode = value;
+		if ((value & SIM_TM_AUTO_CMD12) != 0) {
+			sim->auto_cmd12_seen = 1;
+		}
 	}
 	if (offset == GTA4L_EMMC_REG_COMMAND) {
 		sim->sdhci[offset] = (uint8_t)(value & 0xFFu);
@@ -1597,6 +1708,27 @@ check_block(const struct sim *sim, uint32_t lba, const uint8_t *buffer,
 	}
 }
 
+static void
+check_multi_block(const uint8_t *buffer, uint32_t start, uint32_t count,
+    const char *label)
+{
+	uint32_t block;
+	uint32_t index;
+
+	for (block = 0; block < count; block++) {
+		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+			if (buffer[(block * GTA4L_EMMC_BLOCK_BYTES) + index] !=
+			    sim_block_byte(start + block, index)) {
+				fprintf(stderr,
+				    "FAIL: %s block %u byte %u mismatch\n",
+				    label, block, index);
+				failures++;
+				return;
+			}
+		}
+	}
+}
+
 static int
 scenario_is(const char *name, const char *expected)
 {
@@ -1668,6 +1800,7 @@ main(int argc, char **argv)
 	uint8_t block1[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t block5[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t ext[GTA4L_EMMC_EXT_CSD_BYTES];
+	static uint8_t mb_blocks[SIM_MB_TEST_BLOCKS * GTA4L_EMMC_BLOCK_BYTES];
 	int result;
 	int expected;
 
@@ -2038,6 +2171,23 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario, "version")) {
 		sim_write32(&sim, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_MCI_VERSION, 0x20000000u);
+	} else if (scenario_is(scenario, "multi-late-error")) {
+		/* The error becomes visible during the fourth block's drain,
+		 * so four complete blocks are observed before it is sampled. */
+		sim.data_late_error_words =
+		    (int)((GTA4L_EMMC_BLOCK_BYTES / 4u) * 4u);
+	} else if (scenario_is(scenario, "multi-stop-tc-only")) {
+		sim.mb_no_cc = 1;
+	} else if (scenario_is(scenario, "multi-stop-late-cc")) {
+		sim.mb_late_cc = 1;
+	} else if (scenario_is(scenario, "multi-stop-busy-timeout")) {
+		sim.mb_stop_no_tc = 1;
+	} else if (scenario_is(scenario, "multi-stop-crc")) {
+		sim.cmd_crc_index = GTA4L_EMMC_CMD12;
+	} else if (scenario_is(scenario, "multi-stop-late-error")) {
+		sim.cmd_late_error_index = GTA4L_EMMC_CMD12;
+	} else if (scenario_is(scenario, "multi-card-status")) {
+		sim.mb_response_error = 1;
 	}
 
 	sim.trace_armed = 1;
@@ -2055,6 +2205,20 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "read-ext-csd") ||
 	    scenario_is(scenario, "read-out-of-range") ||
 	    scenario_is(scenario, "read-last-block") ||
+	    scenario_is(scenario, "multi-args") ||
+	    scenario_is(scenario, "multi-without-init") ||
+	    scenario_is(scenario, "multi-last-block") ||
+	    scenario_is(scenario, "multi-success") ||
+	    scenario_is(scenario, "multi-repeat") ||
+	    scenario_is(scenario, "multi-data-timeout") ||
+	    scenario_is(scenario, "multi-data-crc") ||
+	    scenario_is(scenario, "multi-late-error") ||
+	    scenario_is(scenario, "multi-stop-tc-only") ||
+	    scenario_is(scenario, "multi-stop-late-cc") ||
+	    scenario_is(scenario, "multi-stop-busy-timeout") ||
+	    scenario_is(scenario, "multi-stop-crc") ||
+	    scenario_is(scenario, "multi-stop-late-error") ||
+	    scenario_is(scenario, "multi-card-status") ||
 	    scenario_is(scenario, "power-delayed-bus") ||
 	    scenario_is(scenario, "power-bus-then-io") ||
 	    scenario_is(scenario, "power-wrong-io-then-correct") ||
@@ -2638,6 +2802,217 @@ main(int argc, char **argv)
 		check(result == GTA4L_EMMC_OK, "second read failed");
 		if (result == GTA4L_EMMC_OK) {
 			check_block(&sim, 5, block5, "block 5 second");
+		}
+	} else if (scenario_is(scenario, "multi-args")) {
+		uint32_t before = sim.cmd_count;
+
+		result = gta4l_emmc_read_multi(&host, 0x100000000ULL, 1u,
+		    mb_blocks);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "multi-block start overflow was accepted");
+		result = gta4l_emmc_read_multi(&host, host.capacity_blocks, 1u,
+		    mb_blocks);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "multi-block start at capacity was accepted");
+		result = gta4l_emmc_read_multi(&host,
+		    (uint64_t)host.capacity_blocks - 1u, 2u, mb_blocks);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "multi-block count past capacity was accepted");
+		result = gta4l_emmc_read_multi(&host, 2u, 0u, mb_blocks);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "zero-block multi-block read was accepted");
+		result = gta4l_emmc_read_multi(&host, 2u, 0x10000u, mb_blocks);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "oversized multi-block count was accepted");
+		check(sim.cmd_count == before,
+		    "a rejected multi-block argument issued a command");
+	} else if (scenario_is(scenario, "multi-without-init")) {
+		struct gta4l_emmc_host empty;
+
+		memset(&empty, 0, sizeof(empty));
+		empty.ops = &sim_ops;
+		empty.context = &sim;
+		result = gta4l_emmc_read_multi(&empty, 0, 1u, mb_blocks);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "multi-block read without init was accepted");
+	} else if (scenario_is(scenario, "multi-last-block")) {
+		result = gta4l_emmc_read_multi(&host,
+		    (uint64_t)host.capacity_blocks - 3u, 3u, mb_blocks);
+		check(result == GTA4L_EMMC_OK, "multi-block tail read failed");
+		if (result == GTA4L_EMMC_OK) {
+			check_multi_block(mb_blocks,
+			    host.capacity_blocks - 3u, 3u,
+			    "multi-block tail");
+			check(host.multi_block == 2u,
+			    "tail multi-block ordinal mismatch");
+			check(sim.mb_issued_block_count == 3u,
+			    "tail block count register mismatch");
+		}
+	} else if (scenario_is(scenario, "multi-success") ||
+	    scenario_is(scenario, "multi-repeat")) {
+		result = gta4l_emmc_read_multi(&host, 2u,
+		    SIM_MB_TEST_BLOCKS, mb_blocks);
+		check(result == GTA4L_EMMC_OK, "multi-block read failed");
+		if (result == GTA4L_EMMC_OK) {
+			check_multi_block(mb_blocks, 2u, SIM_MB_TEST_BLOCKS,
+			    "multi-block");
+			check(host.multi_block == SIM_MB_TEST_BLOCKS - 1u,
+			    "completed multi-block ordinal mismatch");
+			check(host.multi_stop_result == GTA4L_EMMC_OK,
+			    "clean CMD12 stop was not recorded as success");
+			check(host.multi_stop_valid == 1u,
+			    "CMD12 stop was not marked attempted");
+			check(host.multi_stop_capture_valid == 1u,
+			    "CMD12 terminal state was not captured");
+			check(host.multi_stop_command == 0x0C1Bu,
+			    "CMD12 encoding mismatch");
+			check(host.multi_stop_argument == 0u,
+			    "CMD12 argument is not zero");
+			check((host.multi_stop_normal &
+			    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC)) ==
+			    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC),
+			    "CMD12 terminal state lost CC or TC");
+			check(sim.mb_stop_count == 1,
+			    "the explicit CMD12 stop was not issued");
+			check(sim.mb_issued_block_size == 512u,
+			    "multi-block sector size register mismatch");
+			check(sim.mb_issued_block_count ==
+			    SIM_MB_TEST_BLOCKS,
+			    "multi-block count register mismatch");
+			check(sim.mb_argument == 2u,
+			    "multi-block start LBA mismatch");
+			check(sim.auto_cmd12_seen == 0,
+			    "AUTO_CMD12 was enabled");
+			check(sim.mb_dat_inhibit == 0,
+			    "DAT inhibit survived the CMD12 stop");
+		}
+		if (scenario_is(scenario, "multi-repeat")) {
+			uint32_t before = (uint32_t)sim.mb_stop_count;
+
+			memset(mb_blocks, 0, sizeof(mb_blocks));
+			result = gta4l_emmc_read_multi(&host, 5u, 4u,
+			    mb_blocks);
+			check(result == GTA4L_EMMC_OK,
+			    "second multi-block read failed");
+			if (result == GTA4L_EMMC_OK) {
+				check_multi_block(mb_blocks, 5u, 4u,
+				    "multi-block second");
+				check(sim.mb_stop_count == (int)(before + 1u),
+				    "second multi-block read did not stop");
+				check(host.multi_block == 3u,
+				    "second multi-block ordinal mismatch");
+			}
+		}
+	} else if (scenario_is(scenario, "multi-data-timeout") ||
+	    scenario_is(scenario, "multi-data-crc") ||
+	    scenario_is(scenario, "multi-late-error")) {
+		if (scenario_is(scenario, "multi-data-timeout")) {
+			sim.data_timeout = 1;
+		}
+		if (scenario_is(scenario, "multi-data-crc")) {
+			sim.data_crc = 1;
+		}
+		result = gta4l_emmc_read_multi(&host, 2u,
+		    SIM_MB_TEST_BLOCKS, mb_blocks);
+		if (scenario_is(scenario, "multi-data-timeout")) {
+			check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+			    "multi-block data timeout not reported");
+		} else {
+			check(result == GTA4L_EMMC_ERR_DATA_CRC,
+			    "multi-block data CRC not reported");
+		}
+		check(host.fail_valid == 1,
+		    "multi-block data failure was not captured");
+		check(host.fail_index == GTA4L_EMMC_CMD18,
+		    "multi-block data failure did not capture CMD18");
+		check(host.fail_command == 0x123Au,
+		    "CMD18 encoding mismatch");
+		check(host.fail_step == GTA4L_EMMC_STEP_READY,
+		    "multi-block data failure step is not READY");
+		check(host.multi_block ==
+		    (scenario_is(scenario, "multi-late-error") ? 4u : 0u),
+		    "multi-block failing ordinal mismatch");
+		check(host.multi_stop_result == GTA4L_EMMC_OK,
+		    "CMD12 attempt result was not recorded after data error");
+		check(sim.mb_stop_count == 1,
+		    "no stop attempt after the multi-block data error");
+	} else if (scenario_is(scenario, "multi-card-status")) {
+		result = gta4l_emmc_read_multi(&host, 2u,
+		    SIM_MB_TEST_BLOCKS, mb_blocks);
+		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "multi-block R1 card status was not reported");
+		check(host.multi_block == SIM_MB_TEST_BLOCKS - 1u,
+		    "card-status run did not complete the data phase");
+		check(host.multi_stop_result == GTA4L_EMMC_OK,
+		    "card-status run did not stop cleanly");
+		check(sim.mb_stop_count == 1,
+		    "card-status run did not issue the explicit stop");
+		check(host.fail_valid == 0u,
+		    "a card status error was recorded as a controller failure");
+	} else if (scenario_is(scenario, "multi-stop-tc-only") ||
+	    scenario_is(scenario, "multi-stop-late-cc") ||
+	    scenario_is(scenario, "multi-stop-busy-timeout") ||
+	    scenario_is(scenario, "multi-stop-crc") ||
+	    scenario_is(scenario, "multi-stop-late-error")) {
+		result = gta4l_emmc_read_multi(&host, 2u,
+		    SIM_MB_TEST_BLOCKS, mb_blocks);
+		if (scenario_is(scenario, "multi-stop-crc") ||
+		    scenario_is(scenario, "multi-stop-late-error")) {
+			check(result == GTA4L_EMMC_ERR_CMD_CRC,
+			    "CMD12 CRC not reported");
+			check((host.multi_stop_error &
+			    GTA4L_EMMC_INT_ERR_CMD_CRC) != 0,
+			    "CMD12 terminal capture lost the CRC error");
+		} else {
+			check(result == GTA4L_EMMC_ERR_CMD_TIMEOUT,
+			    "CMD12 completion timeout not reported");
+		}
+		check(host.fail_valid == 1,
+		    "CMD12 stop failure was not captured");
+		check(host.fail_index == GTA4L_EMMC_CMD12,
+		    "stop failure did not capture CMD12");
+		check(host.fail_command == 0x0C1Bu,
+		    "failed CMD12 encoding mismatch");
+		check(host.multi_block == SIM_MB_TEST_BLOCKS - 1u,
+		    "data completed but the ordinal was not the last block");
+		check(host.multi_stop_valid == 1u,
+		    "failed CMD12 was not marked attempted");
+		check(host.multi_stop_capture_valid == 1u,
+		    "failed CMD12 terminal state was not captured");
+		check(sim.mb_stop_count == 1,
+		    "failed stop was not attempted exactly once");
+		if (scenario_is(scenario, "multi-stop-tc-only")) {
+			check((host.multi_stop_normal &
+			    GTA4L_EMMC_INT_CC) == 0,
+			    "TC-only stop captured a command completion");
+			check((host.multi_stop_normal &
+			    GTA4L_EMMC_INT_TC) != 0,
+			    "TC-only stop lost the transfer completion");
+			check(host.multi_stop_result ==
+			    GTA4L_EMMC_ERR_CMD_TIMEOUT,
+			    "TC-only stop result mismatch");
+		}
+		if (scenario_is(scenario, "multi-stop-busy-timeout")) {
+			check((host.multi_stop_normal &
+			    GTA4L_EMMC_INT_CC) != 0,
+			    "busy-timeout stop lost the command completion");
+			check((host.multi_stop_normal &
+			    GTA4L_EMMC_INT_TC) == 0,
+			    "busy-timeout stop captured a transfer completion");
+			check(host.multi_stop_result ==
+			    GTA4L_EMMC_ERR_CMD_TIMEOUT,
+			    "busy-timeout stop result mismatch");
+		}
+		if (scenario_is(scenario, "multi-stop-late-cc")) {
+			check(host.multi_stop_result ==
+			    GTA4L_EMMC_ERR_CMD_TIMEOUT,
+			    "late-CC stop result mismatch");
+		}
+		if (scenario_is(scenario, "multi-stop-crc") ||
+		    scenario_is(scenario, "multi-stop-late-error")) {
+			check(host.multi_stop_result ==
+			    GTA4L_EMMC_ERR_CMD_CRC,
+			    "CRC stop result mismatch");
 		}
 	} else if (scenario_is(scenario, "read-ext-csd")) {
 		result = gta4l_emmc_read_ext_csd(&host, ext);

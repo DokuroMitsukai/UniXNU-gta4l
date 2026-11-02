@@ -9,9 +9,12 @@ that calls them. The archive contains no framework or vendor code.
 The probe is disabled unless the boot argument "gta4l-emmc-probe=1" is present.
 It performs controller reset, GCC 400 kHz setup, the retained-rail power
 handshake, eMMC enumeration and single-block CMD17 PIO reads of blocks 0/1,
-the primary GPT array, the first-usable sector and the last sector. It does
-not publish a block device, mount a filesystem, write the card or touch the
-PMIC.
+the primary GPT array, the first-usable sector and the last sector. With
+"gta4l-emmc-mb=1" alongside "gta4l-emmc-probe=1" it also re-reads the 21
+primary-array sectors as one open-ended CMD18 transfer and stops it with an
+explicit CMD12, reporting the per-LBA sums and the in-device comparison. It
+does not publish a block device, mount a filesystem, write the card or touch
+the PMIC.
 """
 import hashlib
 import json
@@ -121,7 +124,8 @@ report = {
     'mode': ('opt-in controller reset, GCC 400 kHz, retained-rail power '
              'handshake, eMMC enumeration, CMD17 reads of blocks 0/1, the '
              'primary GPT array, the first usable sector and the last '
-             'sector; no '
+             'sector, plus an opt-in open-ended CMD18 re-read of the 21 '
+             'array sectors stopped by one explicit CMD12; no '
              'block-device publication, filesystem mount, card write, DMA, '
              'CQE, ICE or PMIC access'),
     'runtime_qualified': False,

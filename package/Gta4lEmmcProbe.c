@@ -99,6 +99,12 @@ struct gta4l_emmc_probe_range {
 	uint32_t backup_lba;
 	uint32_t data_sum;
 	uint32_t last_sum;
+	/* CMD18 pass: per-LBA sums and the in-device comparison against the
+	 * CMD17 pass. mb_same is 1 when every sum agrees (mb_div is then 0)
+	 * and 0 on the first differing LBA, reported as mb_div. */
+	uint32_t mb[GTA4L_EMMC_PROBE_ARRAY_BLOCKS];
+	uint32_t mb_same;
+	uint32_t mb_div;
 };
 
 /* CMD7 R1b capture block shared by the failure and success reports. The field
@@ -371,10 +377,30 @@ gta4l_emmc_probe_conflict(void)
 	    gta4l_emmc_probe_parse("gta4l-sdhci-host-init", &value);
 }
 
+/* Multi-block mode is a modifier of the probe, never a diagnostic on its
+ * own. A bare gta4l-emmc-mb argument is refused before any MMIO is mapped. */
+static int
+gta4l_emmc_probe_mb(void)
+{
+	int value = 0;
+
+	return gta4l_emmc_probe_parse("gta4l-emmc-mb", &value);
+}
+
+static void
+gta4l_emmc_probe_refuse_mb(void)
+{
+	panic("GTA4L-EMMC PROBE REFUSED: conflicting diagnostic arguments "
+	    "(gta4l-emmc-mb requires gta4l-emmc-probe)");
+}
+
 void
 gta4l_emmc_probe_preflight(void)
 {
 	if (gta4l_emmc_probe_stage() == 0) {
+		if (gta4l_emmc_probe_mb() != 0) {
+			gta4l_emmc_probe_refuse_mb();
+		}
 		return;
 	}
 	if (gta4l_emmc_probe_conflict()) {
@@ -630,28 +656,103 @@ gta4l_emmc_probe_report_read_failure(const struct gta4l_emmc_host *host,
 	    host->fail_step);
 }
 
+/* Small fixed-buffer decimal writer for the mbdiv field. The probe links no
+ * formatter and the field is the only decimal value that is not a direct
+ * format argument. */
+static uint32_t
+gta4l_emmc_probe_append_decimal(char *buffer, uint32_t offset, uint32_t value)
+{
+	char digits[10];
+	uint32_t count = 0;
+	uint32_t index;
+
+	do {
+		digits[count] = (char)('0' + (value % 10u));
+		count++;
+		value /= 10u;
+	} while ((value != 0u) && (count < sizeof(digits)));
+	for (index = 0; index < count; index++) {
+		buffer[offset + index] = digits[count - 1u - index];
+	}
+	return offset + count;
+}
+
+static uint32_t
+gta4l_emmc_probe_append_text(char *buffer, uint32_t offset, const char *text)
+{
+	uint32_t index = 0;
+
+	while (text[index] != '\0') {
+		buffer[offset + index] = text[index];
+		index++;
+	}
+	return offset + index;
+}
+
+static void
+gta4l_emmc_probe_report_multi_failure(const struct gta4l_emmc_host *host,
+    const struct gta4l_emmc_probe_range *range, int result)
+{
+	panic("GTA4L-EMMC PROBE FAILED: mb read lba=%u n=%u rc=%d step=%u "
+	    "mb=%u stop=%d/%u/%u/%04x/%04x/%08x/%08x/%08x "
+	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    range->entries_lba, GTA4L_EMMC_PROBE_ARRAY_BLOCKS, result,
+	    host->last_step, host->multi_block,
+	    (int)host->multi_stop_result,
+	    (unsigned int)host->multi_stop_valid,
+	    (unsigned int)host->multi_stop_capture_valid,
+	    (unsigned int)host->multi_stop_normal,
+	    (unsigned int)host->multi_stop_error,
+	    host->multi_stop_present,
+	    (unsigned int)host->multi_stop_command,
+	    host->multi_stop_argument,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
 static void
 gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe *probe,
     const struct gta4l_emmc_probe_regs *regs,
     const uint8_t *block0, const uint8_t *block1,
-    const struct gta4l_emmc_probe_range *range)
+    const struct gta4l_emmc_probe_range *range, int mb_mode)
 {
+	const uint32_t *content = (mb_mode != 0) ? range->mb : range->array;
+	char mb_suffix[32];
+	uint32_t mb_suffix_length = 0;
+
+	mb_suffix[0] = '\0';
+	if (mb_mode != 0) {
+		if (range->mb_same != 0) {
+			mb_suffix_length = gta4l_emmc_probe_append_text(mb_suffix,
+			    mb_suffix_length, " mbsame=1");
+		} else {
+			mb_suffix_length = gta4l_emmc_probe_append_text(mb_suffix,
+			    mb_suffix_length, " mbsame=0 mbdiv=");
+			mb_suffix_length = gta4l_emmc_probe_append_decimal(
+			    mb_suffix, mb_suffix_length, range->mb_div);
+		}
+	}
+	mb_suffix[mb_suffix_length] = '\0';
+
 	panic("GTA4L-EMMC PROBE REPORT: rc=0 mci=%08x rca=%u cap=%u rev=%u "
 	    "bw=%u ocr=%08x ext=%08x hc2=%04x ven=%08x dll=%08x "
-	    "dst=%08x pst=%08x step=%u log=%u\n"
+	    "dst=%08x pst=%08x step=%u log=%u%s\n"
 	    "GTA4L-EMMC PROBE CID %08x %08x %08x %08x\n"
 	    "GTA4L-EMMC PROBE CSD %08x %08x %08x %08x\n"
 	    "GTA4L-EMMC PROBE BLOCK0 sum=%08x words=%08x %08x %08x %08x\n"
 	    "GTA4L-EMMC PROBE BLOCK1 sum=%08x words=%08x %08x %08x %08x\n"
 	    "GTA4L-EMMC PROBE GPT elba=%u n=%u sz=%u first=%u last=%u "
 	    "backup=%u\n"
-	    "GTA4L-EMMC PROBE BLOCKS"
+	    "GTA4L-EMMC PROBE %s"
 	    " 2=%08x 3=%08x 4=%08x 5=%08x 6=%08x 7=%08x 8=%08x 9=%08x"
 	    " 10=%08x 11=%08x 12=%08x 13=%08x 14=%08x 15=%08x 16=%08x"
 	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
 	    "GTA4L-EMMC PROBE DATA %u=%08x\n"
-	    "GTA4L-EMMC PROBE LSTLBA=%u sum=%08x\n"
+	    "GTA4L-EMMC PROBE LSTLBA=%u sum=%08x%s\n"
 	    "GTA4L-EMMC PROBE CAPTURE fmt=4 hv=%04x "
 	    "c2=%u/%04x/%04x/%08x,%08x,%08x,%08x "
 	    "c3p=%u/%04x/%04x/%08x/%04x/%04x "
@@ -663,6 +764,7 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 	    host->ocr, host->ext_csd_sum, (unsigned int)regs->host_control2,
 	    regs->vendor_spec, regs->dll_config, regs->dll_status,
 	    regs->pwr_status, host->last_step, probe->log_count,
+	    (mb_mode != 0) ? " mb=1" : "",
 	    host->cid[0], host->cid[1], host->cid[2], host->cid[3],
 	    host->csd[0], host->csd[1], host->csd[2], host->csd[3],
 	    gta4l_emmc_probe_sum(block0, GTA4L_EMMC_BLOCK_BYTES),
@@ -677,15 +779,16 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 	    gta4l_emmc_probe_word(block1, 12),
 	    range->entries_lba, range->entry_count, range->entry_size,
 	    range->first_usable, range->last_usable, range->backup_lba,
-	    range->array[0], range->array[1], range->array[2],
-	    range->array[3], range->array[4], range->array[5],
-	    range->array[6], range->array[7], range->array[8],
-	    range->array[9], range->array[10], range->array[11],
-	    range->array[12], range->array[13], range->array[14],
-	    range->array[15], range->array[16], range->array[17],
-	    range->array[18], range->array[19], range->array[20],
+	    (mb_mode != 0) ? "MBLOCKS" : "BLOCKS",
+	    content[0], content[1], content[2],
+	    content[3], content[4], content[5],
+	    content[6], content[7], content[8],
+	    content[9], content[10], content[11],
+	    content[12], content[13], content[14],
+	    content[15], content[16], content[17],
+	    content[18], content[19], content[20],
 	    range->first_usable, range->data_sum,
-	    range->backup_lba, range->last_sum,
+	    range->backup_lba, range->last_sum, mb_suffix,
 	    (unsigned int)regs->host_version,
 	    (unsigned int)host->cmd2_capture_valid,
 	    (unsigned int)host->cmd2_normal,
@@ -723,6 +826,8 @@ gta4l_emmc_probe_run(void)
 	static uint8_t block0[GTA4L_EMMC_BLOCK_BYTES];
 	static uint8_t block1[GTA4L_EMMC_BLOCK_BYTES];
 	static uint8_t range_block[GTA4L_EMMC_BLOCK_BYTES];
+	static uint8_t mb_blocks[GTA4L_EMMC_PROBE_ARRAY_BLOCKS *
+	    GTA4L_EMMC_BLOCK_BYTES];
 	struct gta4l_emmc_probe probe;
 	struct gta4l_emmc_probe_regs regs;
 	struct gta4l_emmc_probe_range range;
@@ -753,6 +858,7 @@ gta4l_emmc_probe_run(void)
 	uint32_t index;
 	uint32_t gate_mask;
 	int stage;
+	int mb_mode;
 	int result;
 
 	if (gta4l_emmc_probe_ran != 0) {
@@ -760,12 +866,16 @@ gta4l_emmc_probe_run(void)
 	}
 	stage = gta4l_emmc_probe_stage();
 	if (stage == 0) {
+		if (gta4l_emmc_probe_mb() != 0) {
+			gta4l_emmc_probe_refuse_mb();
+		}
 		return;
 	}
 	if (gta4l_emmc_probe_conflict()) {
 		panic("GTA4L-EMMC PROBE REFUSED: conflicting diagnostic "
 		    "arguments");
 	}
+	mb_mode = gta4l_emmc_probe_mb();
 	gta4l_emmc_probe_ran = 1;
 
 	sdhci_mapping = ml_io_map(GTA4L_EMMC_PROBE_SDHCI_BASE,
@@ -1010,6 +1120,36 @@ gta4l_emmc_probe_run(void)
 	range.last_sum = gta4l_emmc_probe_sum(range_block,
 	    GTA4L_EMMC_BLOCK_BYTES);
 
+	/* Optional MD pass: re-read the same 21 sectors as one open-ended
+	 * CMD18 transfer and stop it explicitly. A read failure stops here
+	 * with the terminal failure record, the failing block ordinal and
+	 * the CMD12 attempt result. A content mismatch is not a hardware
+	 * failure: it is reported as mbsame=0 and the offline comparison
+	 * decides. There is no on-device retry. */
+	if (mb_mode != 0) {
+		host.last_step = GTA4L_EMMC_STEP_PROBE_MB;
+		result = gta4l_emmc_read_multi(&host, range.entries_lba,
+		    GTA4L_EMMC_PROBE_ARRAY_BLOCKS, mb_blocks);
+		if (result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_multi_failure(&host, &range,
+			    result);
+		}
+		range.mb_same = 1;
+		range.mb_div = 0;
+		for (index = 0;
+		    index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
+			range.mb[index] = gta4l_emmc_probe_sum(
+			    mb_blocks +
+			    (index * GTA4L_EMMC_BLOCK_BYTES),
+			    GTA4L_EMMC_BLOCK_BYTES);
+			if ((range.mb[index] != range.array[index]) &&
+			    (range.mb_same != 0)) {
+				range.mb_same = 0;
+				range.mb_div = range.entries_lba + index;
+			}
+		}
+	}
+
 	gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0, block1,
-	    &range);
+	    &range, mb_mode);
 }

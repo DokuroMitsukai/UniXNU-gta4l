@@ -31,7 +31,14 @@ success report forms with the widest values the simulator can produce: a
 10-digit capacity, both poll budgets at their limit, 16-hex-digit tick fields,
 a full four-entry CMD7 trace and its overflow count. Two full-probe failure
 scenarios fail the first and second CMD17 with a data CRC and a data timeout
-and require the block-read failure report and command stop. The report-width
+and require the block-read failure report and command stop. The MD scenarios
+add the optional CMD18 pass: a matching success, a content mismatch that must
+stay rc=0 and name the first differing LBA, a mid-transfer data timeout that
+must report the block ordinal and the explicit CMD12 result, and a CMD12 that
+never completes. They also require AUTO_CMD12 to stay clear, exactly one
+explicit stop and the step=19/log=51 row, while the default full probe keeps
+the stage-A step=18/log=30 row with no MD tokens. A bare gta4l-emmc-mb
+argument must refuse before any MMIO access. The report-width
 scenarios instead invoke the production formatters from
 scripts/sim-gta4l-emmc-probe/report-width-fixture.c with synthetic field-wise
 extremes, assert every bounded field and require the measured length plus margin
@@ -96,9 +103,15 @@ SCENARIOS = [
     'probe-array-crc',
     'probe-mid-loop-error',
     'probe-last-error',
+    'probe-md-success',
+    'probe-md-mismatch',
+    'probe-md-mid-fail',
+    'probe-md-stop-no-tc',
+    'probe-mb-bare-refuse',
     'report-width-failure',
     'report-width-ident',
     'report-width-probe',
+    'report-width-md',
     'report-width-budget-control',
 ]
 
@@ -106,6 +119,7 @@ WIDTH_SCENARIOS = (
     'report-width-failure',
     'report-width-ident',
     'report-width-probe',
+    'report-width-md',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'
@@ -539,6 +553,59 @@ MUTATIONS = [
      'range_block);\n',
      'probe-full',
      'the full probe read the wrong LBA list'),
+    ('md-default-enabled',
+     '\tmb_mode = gta4l_emmc_probe_mb();\n',
+     '\tmb_mode = 1;\n',
+     'probe-full',
+     'the default probe report invented the MD mode marker'),
+    ('md-marker-suppressed',
+     '\t    (mb_mode != 0) ? " mb=1" : "",\n',
+     '\t    "",\n',
+     'probe-md-success',
+     'the MD probe report does not name the MD step and log counts'),
+    ('md-sum-substituted',
+     '\tconst uint32_t *content = (mb_mode != 0) ? range->mb : '
+     'range->array;\n',
+     '\tconst uint32_t *content = range->array;\n',
+     'probe-md-mismatch',
+     'the MD mismatch report lost the CMD18 sums'),
+    ('md-div-suppressed',
+     '\t\t\t\trange.mb_div = range.entries_lba + index;\n',
+     '\t\t\t\trange.mb_div = range.entries_lba;\n',
+     'probe-md-mismatch',
+     'the MD mismatch report does not name the first differing LBA'),
+    ('md-step-suppressed',
+     '\t\thost.last_step = GTA4L_EMMC_STEP_PROBE_MB;\n',
+     '\t\thost.last_step = GTA4L_EMMC_STEP_PROBE_LAST;\n',
+     'probe-md-success',
+     'the MD probe report does not name the MD step and log counts'),
+    ('md-block-ordinal-suppressed',
+     '\t    host->last_step, host->multi_block,\n',
+     '\t    host->last_step, 0u,\n',
+     'probe-md-mid-fail',
+     'the mid-CMD18 failure report lost the block ordinal, the stop '
+     'result or the terminal record'),
+    ('md-bare-refusal-suppressed',
+     '\tpanic("GTA4L-EMMC PROBE REFUSED: conflicting diagnostic arguments "\n'
+     '\t    "(gta4l-emmc-mb requires gta4l-emmc-probe)");\n',
+     '\treturn;\n',
+     'probe-mb-bare-refuse',
+     'a bare MD argument was not refused'),
+    ('md-no-multi',
+     '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+     '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+     '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+     '\t    GTA4L_EMMC_TM_MULTI);\n',
+     '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+     '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+     '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN);\n',
+     'probe-md-success',
+     'the MD probe used the wrong CMD18/CMD12 form',
+     'core'),
 ]
 
 
@@ -560,12 +627,13 @@ def rewrite(text: str) -> str:
     return text
 
 
-def build(compiler: str, directory: Path, source: Path) -> Path:
+def build(compiler: str, directory: Path, source: Path,
+          core: Path = CORE) -> Path:
     output = directory / 'emmc-probe-sim'
     command = [
         compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-O1',
         f'-I{INCLUDE}', f'-I{ROOT / "package"}', f'-I{HARNESS.parent}',
-        str(source), str(CORE), str(HARNESS), '-o', str(output),
+        str(source), str(core), str(HARNESS), '-o', str(output),
     ]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
@@ -678,27 +746,37 @@ def main() -> int:
         if not run_oversized(binary):
             return 1
 
+        core_text = CORE.read_text()
         for mutation in MUTATIONS:
             name, old, new, scenario, expected = mutation[:5]
             target = mutation[5] if len(mutation) > 5 else 'probe'
+            mutated = directory / name
+            mutated.mkdir()
+            mutated_core = CORE
             if target == 'probe':
                 assert source.count(old) == 1, (
                     f'{name} mutation is not unique')
                 mutated_source = source.replace(old, new)
                 mutated_fixture = fixture
-            else:
-                assert target == 'fixture', (
-                    f'{name} mutation has an unknown target')
+            elif target == 'fixture':
                 assert fixture.count(old) == 1, (
                     f'{name} mutation is not unique')
                 mutated_source = source
                 mutated_fixture = fixture.replace(old, new)
-            mutated = directory / name
-            mutated.mkdir()
+            elif target == 'core':
+                assert core_text.count(old) == 1, (
+                    f'{name} mutation is not unique')
+                mutated_source = source
+                mutated_fixture = fixture
+                mutated_core = mutated / 'Gta4lEmmc.c'
+                mutated_core.write_text(core_text.replace(old, new))
+            else:
+                raise AssertionError(
+                    f'{name} mutation has an unknown target')
             probe = mutated / 'Gta4lEmmcProbe.c'
             probe.write_text(mutated_source)
             (mutated / 'report-width-fixture.c').write_text(mutated_fixture)
-            binary = build(compiler, mutated, probe)
+            binary = build(compiler, mutated, probe, mutated_core)
             if not run(binary, scenario, expect_success=False,
                        expect_failure_text=expected):
                 print(f'mutation {name} was accepted')

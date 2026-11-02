@@ -71,7 +71,12 @@ partition layout, payload policy and packaging.
   84 × 128-byte array spans 21 sectors, and the all-zero LBA 22 reflects the
   four unused trailing entry slots. This closes the stage-A/F1 content claim;
   it is not a multi-block (`CMD18`), bus-width/high-speed, publication,
-  filesystem or write result.
+  filesystem or write result. An optional multi-block mode
+  (`gta4l-emmc-mb=1`) is implemented and host-tested, but its first
+  2026-11-02 boot stopped during identification, before any `CMD18` transfer,
+  at the known CMD3-completion timeout, so F2 is not claimed. The
+  post-attempt audit fixed a missing SDHCI Multi/Single Block Select bit in
+  the `CMD18` mode word (`docs/emmc-driver.md` §5.3.7).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

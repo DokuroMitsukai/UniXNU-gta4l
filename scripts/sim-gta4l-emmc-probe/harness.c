@@ -54,6 +54,9 @@ void gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset,
 #define SIM_VERSION_BAD   0x20000000u
 #define SIM_BRANCH_APPS   1
 #define SIM_BRANCH_AHB    2
+/* Independent copy of the SDHCI AUTO_CMD12 transfer-mode bit. The port must
+ * leave it clear and issue CMD12 explicitly. */
+#define SIM_TM_AUTO_CMD12 0x0004u
 
 /* Synthetic GPT model. The production probe gates these values against the
  * live header, so the harness header must carry the same layout. These are
@@ -163,6 +166,23 @@ static const uint32_t *expected_lbas;
 static unsigned int expected_lba_count;
 static unsigned int cmd3_normal_reads;
 static uint32_t ext_csd_count = 0x01000000u;
+/* Multi-block CMD18/CMD12 modeling. mb_fail_done injects a data error after
+ * that many fully drained sectors (0 disables it); mb_corrupt_lba changes the
+ * CMD18 bytes for one sector so the in-device CMD17/CMD18 comparison can
+ * differ; mb_stop_no_tc omits the CMD12 transfer completion. */
+static int mb_mode_arg;
+static int mb_fail_done;
+static uint16_t mb_fail_error;
+static uint32_t mb_argument;
+static uint32_t mb_count;
+static uint32_t mb_done;
+static int mb_active;
+static int mb_stop_no_tc;
+static int mb_r1_error;
+static uint32_t mb_corrupt_lba = 0xFFFFFFFFu;
+static unsigned int mb_stop_count;
+static int auto_cmd12_seen;
+static int bad_mb_command;
 /* CMD7 R1b modeling. Event times are microseconds from command issue against
  * the simulated counter; -1 means the event never occurs. Status-read counts
  * are not the event clock. */
@@ -306,6 +326,25 @@ sim_fill_block(uint32_t lba)
 	sim_fill_buffer_words(bytes);
 }
 
+/* CMD18 payload. Only the selected sector differs from the CMD17 pass, so a
+ * report that substitutes the CMD17 sums for the CMD18 sums is caught. */
+static void
+sim_fill_mb_block(uint32_t lba)
+{
+	uint8_t bytes[GTA4L_EMMC_BLOCK_BYTES];
+	uint32_t index;
+
+	if (lba == mb_corrupt_lba) {
+		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+			bytes[index] =
+			    (uint8_t)((lba * 7u) + (index * 13u) + 1u);
+		}
+		sim_fill_buffer_words(bytes);
+		return;
+	}
+	sim_fill_block(lba);
+}
+
 static uint32_t
 sim_block_sum(uint32_t lba)
 {
@@ -326,15 +365,38 @@ sim_block_sum(uint32_t lba)
 	return sum;
 }
 
+/* CMD18-pass sum for one LBA, including the optional corruption. */
+static uint32_t
+sim_mb_block_sum(uint32_t lba)
+{
+	uint8_t bytes[GTA4L_EMMC_BLOCK_BYTES];
+	uint32_t sum = 0;
+	uint32_t index;
+
+	if (lba == mb_corrupt_lba) {
+		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+			bytes[index] =
+			    (uint8_t)((lba * 7u) + (index * 13u) + 1u);
+		}
+	} else {
+		return sim_block_sum(lba);
+	}
+	for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+		sum = (sum * 31u) + bytes[index];
+	}
+	return sum;
+}
+
 /* Expected substring for the per-LBA content line. */
 static void
-sim_expected_blocks(char *buffer, size_t size)
+sim_expected_blocks_label(char *buffer, size_t size, const char *label,
+    int cmd18)
 {
 	size_t used;
 	uint32_t index;
 	int written;
 
-	written = snprintf(buffer, size, "GTA4L-EMMC PROBE BLOCKS");
+	written = snprintf(buffer, size, "GTA4L-EMMC PROBE %s", label);
 	if ((written < 0) || ((size_t)written >= size)) {
 		check(0, "the expected BLOCKS line does not fit its buffer");
 		return;
@@ -342,15 +404,23 @@ sim_expected_blocks(char *buffer, size_t size)
 	used = (size_t)written;
 	for (index = 0; index < SIM_GPT_ARRAY_BLOCKS; index++) {
 		uint32_t lba = SIM_GPT_ARRAY_LBA + index;
+		uint32_t sum = (cmd18 != 0) ? sim_mb_block_sum(lba) :
+		    sim_block_sum(lba);
 
 		written = snprintf(buffer + used, size - used, " %u=%08x",
-		    lba, sim_block_sum(lba));
+		    lba, sum);
 		if ((written < 0) || ((size_t)written >= (size - used))) {
 			check(0, "the expected BLOCKS line does not fit its buffer");
 			return;
 		}
 		used += (size_t)written;
 	}
+}
+
+static void
+sim_expected_blocks(char *buffer, size_t size)
+{
+	sim_expected_blocks_label(buffer, size, "BLOCKS", 0);
 }
 
 static uint32_t
@@ -623,6 +693,55 @@ sim_command(uint16_t command)
 		normal_int |= GTA4L_EMMC_INT_CC;
 		return;
 	}
+	if (index == GTA4L_EMMC_CMD18) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
+		    GTA4L_EMMC_CMD_DATA)) {
+			bad_command_format = 1;
+		}
+		if ((block_size != GTA4L_EMMC_BLOCK_BYTES) ||
+		    (block_count != SIM_GPT_ARRAY_BLOCKS) ||
+		    (last_argument != SIM_GPT_ARRAY_LBA) ||
+		    ((transfer_mode & (GTA4L_EMMC_TM_READ |
+		    GTA4L_EMMC_TM_BLOCK_COUNT_EN |
+		    GTA4L_EMMC_TM_MULTI)) !=
+		    (GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |
+		    GTA4L_EMMC_TM_MULTI))) {
+			bad_mb_command = 1;
+		}
+		if ((transfer_mode & SIM_TM_AUTO_CMD12) != 0) {
+			auto_cmd12_seen = 1;
+		}
+		mb_argument = last_argument;
+		mb_count = block_count;
+		mb_done = 0;
+		mb_active = 1;
+		buffer_index = 0;
+		sim_fill_mb_block(mb_argument);
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+		    (mb_r1_error != 0) ? 0x00000080u : 0x00000900u);
+		normal_int |= GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_BRR;
+		return;
+	}
+	if (index == GTA4L_EMMC_CMD12) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT_BUSY |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX)) {
+			bad_command_format = 1;
+		}
+		if ((last_argument != 0u) ||
+		    (mb_count != SIM_GPT_ARRAY_BLOCKS) ||
+		    (mb_argument != SIM_GPT_ARRAY_LBA)) {
+			bad_mb_command = 1;
+		}
+		mb_stop_count++;
+		mb_active = 0;
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
+		normal_int |= GTA4L_EMMC_INT_CC;
+		if (mb_stop_no_tc == 0) {
+			normal_int |= GTA4L_EMMC_INT_TC;
+		}
+		return;
+	}
 	if ((index == GTA4L_EMMC_CMD8) || (index == GTA4L_EMMC_CMD17)) {
 		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
@@ -764,6 +883,31 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 				word = buffer_data[buffer_index];
 			}
 			buffer_index++;
+			if ((mb_active != 0) &&
+			    (buffer_index >=
+			    (GTA4L_EMMC_BLOCK_BYTES / 4u))) {
+				/* One full CMD18 sector was drained. Stage the
+				 * next sector, inject the configured data
+				 * error, or raise the transfer completion
+				 * after the last sector. */
+				buffer_index = 0;
+				mb_done++;
+				if ((mb_fail_done != 0) &&
+				    (mb_done == (uint32_t)mb_fail_done)) {
+					mb_active = 0;
+					normal_int &= (uint16_t)
+					    ~GTA4L_EMMC_INT_BRR;
+					error_int |= mb_fail_error;
+				} else if (mb_done < mb_count) {
+					sim_fill_mb_block(mb_argument +
+					    mb_done);
+				} else {
+					mb_active = 0;
+					normal_int &= (uint16_t)
+					    ~GTA4L_EMMC_INT_BRR;
+					normal_int |= GTA4L_EMMC_INT_TC;
+				}
+			}
 			return word;
 		}
 	} else if (space == GTA4L_EMMC_SPACE_GCC) {
@@ -922,6 +1066,10 @@ PE_parse_boot_argn(const char *arg, void *value, int size)
 		*(int *)value = stage;
 		return 1;
 	}
+	if (strcmp(arg, "gta4l-emmc-mb") == 0) {
+		*(int *)value = mb_mode_arg;
+		return 1;
+	}
 	if (conflict != 0) {
 		if ((strcmp(arg, "gta4l-sdhci-audit") == 0) ||
 		    (strcmp(arg, "gta4l-sdhci-snapshot") == 0) ||
@@ -1078,6 +1226,21 @@ static const uint8_t order_probe_full[] = {
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17
+};
+/* The MD pass replaces nothing in the CMD17 sequence: the same 33 commands,
+ * then one open-ended CMD18 and one explicit CMD12. */
+static const uint8_t order_probe_md[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD18, GTA4L_EMMC_CMD12
 };
 static const uint8_t order_cmd7[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
@@ -1426,6 +1589,72 @@ main(int argc, char **argv)
 		set_expected_lbas(lbas_full,
 		    (unsigned int)(sizeof(lbas_full) /
 		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-md-success") == 0) {
+		/* Full probe plus the optional MD pass: the same 21 sectors
+		 * read as one CMD18 transfer and stopped explicitly. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-md-mismatch") == 0) {
+		/* One CMD18 sector differs from its CMD17 counterpart. This
+		 * is a content mismatch, not a hardware failure: the report
+		 * keeps rc=0 and names the first differing LBA. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_corrupt_lba = 7u;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-md-mid-fail") == 0) {
+		/* Three CMD18 sectors drain, then the data timeout fires. The
+		 * CMD18 stop is still attempted and succeeds. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_fail_done = 3;
+		mb_fail_error = GTA4L_EMMC_INT_ERR_DATA_TIMEOUT;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-md-stop-no-tc") == 0) {
+		/* Every sector drains, but CMD12 returns CC without TC, so
+		 * the stop times out and the report names the stop result. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_stop_no_tc = 1;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-mb-bare-refuse") == 0) {
+		/* The modifier cannot stand alone: no probe argument means no
+		 * MMIO mapping and an explicit refusal. */
+		stage = 0;
+		mb_mode_arg = 1;
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		/* Synthetic field-wise width bound, not a controller state. */
 		width_form = 1;
@@ -1433,6 +1662,8 @@ main(int argc, char **argv)
 		width_form = 2;
 	} else if (strcmp(scenario, "report-width-probe") == 0) {
 		width_form = 3;
+	} else if (strcmp(scenario, "report-width-md") == 0) {
+		width_form = 4;
 	} else if (strcmp(scenario, "report-width-budget-control") == 0) {
 		/* Negative control for the report-budget predicate: the last
 		 * byte that still leaves room for the NUL must be accepted and
@@ -2046,6 +2277,15 @@ main(int argc, char **argv)
 		check(strstr(panic_message, "step=18 log=") != NULL,
 		    "the full probe report does not show the last content "
 		    "step");
+		check(strstr(panic_message, "mb=1") == NULL,
+		    "the default probe report invented the MD mode marker");
+		check(strstr(panic_message, "MBLOCKS") == NULL,
+		    "the default probe report replaced the CMD17 sums");
+		check(strstr(panic_message, "mbsame") == NULL,
+		    "the default probe report invented the MD comparison");
+		check(strstr(panic_message, "step=18 log=30") != NULL,
+		    "the default probe report does not match the stage-A "
+		    "step and log counts");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE BLOCK0 sum=5c510100 words=271a0d00 "
 		    "cdc0b3a6 01f4e7da 35281b0e") != NULL,
@@ -2124,6 +2364,104 @@ main(int argc, char **argv)
 		    "the last-sector report lost the failure record");
 		check(cmd_count == 33u,
 		    "the probe did not issue the full content sequence");
+	} else if (strcmp(scenario, "probe-md-success") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the MD probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 "
+		    "cap=61071360 rev=8 bw=2") != NULL,
+		    "the MD probe report does not carry the device capacity");
+		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
+		    "the MD probe report does not name the MD step and log "
+		    "counts");
+		sim_expected_blocks_label(expected, sizeof(expected),
+		    "MBLOCKS", 1);
+		check(strstr(panic_message, expected) != NULL,
+		    "the MD probe report lost the CMD18 sums");
+		check(strstr(panic_message, "mbsame=1") != NULL,
+		    "the MD probe report lost the matching comparison");
+		check(strstr(panic_message, "mbsame=0") == NULL,
+		    "the MD probe report reported a mismatch for equal sums");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE BLOCKS") == NULL,
+		    "the MD probe report kept the CMD17 sum line");
+		check(bad_command_format == 0,
+		    "the MD probe sent a command with the wrong flags");
+		check(bad_command_order == 0,
+		    "the MD probe sent commands in the wrong order");
+		check(bad_command_argument == 0,
+		    "the MD probe read the wrong CMD17 LBA list");
+		check(bad_mb_command == 0,
+		    "the MD probe used the wrong CMD18/CMD12 form");
+		check(auto_cmd12_seen == 0,
+		    "the MD probe left AUTO_CMD12 enabled");
+		check(mb_stop_count == 1u,
+		    "the MD probe did not issue exactly one explicit stop");
+		check(cmd_count == 35u,
+		    "the MD probe did not issue CMD18 and one CMD12");
+		check(strlen(panic_message) < 2048u,
+		    "the MD probe report exceeds the 2048-byte panic budget");
+	} else if (strcmp(scenario, "probe-md-mismatch") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the MD mismatch probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE REPORT: rc=0") != NULL,
+		    "a content mismatch was reported as a hardware failure");
+		check(strstr(panic_message, "mbsame=0 mbdiv=7") != NULL,
+		    "the MD mismatch report does not name the first differing "
+		    "LBA");
+		sim_expected_blocks_label(expected, sizeof(expected),
+		    "MBLOCKS", 1);
+		check(strstr(panic_message, expected) != NULL,
+		    "the MD mismatch report lost the CMD18 sums");
+		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
+		    "the MD mismatch report does not name the MD step and log "
+		    "counts");
+		check(mb_stop_count == 1u,
+		    "the MD mismatch probe did not issue exactly one stop");
+		check(cmd_count == 35u,
+		    "the MD mismatch probe did not issue CMD18 and one CMD12");
+	} else if (strcmp(scenario, "probe-md-mid-fail") == 0) {
+		check(panicked == 1, "a mid-CMD18 data error did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-11 "
+		    "step=19 mb=3 stop=0/1/1/0003/0000/00000000/00000c1b/"
+		    "00000000 fail=1/18/2/0000123a/0010/0001/00000000/19")
+		    != NULL,
+		    "the mid-CMD18 failure report lost the block ordinal, the "
+		    "stop result or the terminal record");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a failed CMD18 still emitted the success report");
+		check(mb_stop_count == 1u,
+		    "the failed CMD18 transfer was not stopped explicitly");
+		check(cmd_count == 35u,
+		    "the mid-CMD18 failure did not reach the explicit stop");
+	} else if (strcmp(scenario, "probe-md-stop-no-tc") == 0) {
+		check(panicked == 1, "a CMD12 timeout did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-7 "
+		    "step=19 mb=20 stop=-7/1/1/0001/0000/00000000/00000c1b/"
+		    "00000000 fail=1/12/0/00000c1b/0000/0001/00000000/19")
+		    != NULL,
+		    "the CMD12 timeout report lost the stop capture or the "
+		    "terminal record");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a failed stop still emitted the success report");
+		check(mb_stop_count == 1u,
+		    "the probe did not issue exactly one explicit stop");
+		check(cmd_count == 35u,
+		    "the stop-timeout sequence did not finish");
+	} else if (strcmp(scenario, "probe-mb-bare-refuse") == 0) {
+		check(panicked == 1, "a bare MD argument was not refused");
+		check(strstr(panic_message, "REFUSED") != NULL,
+		    "the bare MD refusal does not name the conflict");
+		check(strstr(panic_message, "gta4l-emmc-mb") != NULL,
+		    "the bare MD refusal does not name the modifier");
+		check(sdhci_accesses == 0ul,
+		    "a bare MD argument touched SDHCI");
+		check(gcc_accesses == 0ul,
+		    "a bare MD argument touched GCC");
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		check(panicked == 1, "the synthetic width failure did not panic");
 		check(strstr(panic_message, "stage=3") != NULL,
@@ -2348,6 +2686,29 @@ main(int argc, char **argv)
 		    "trace index or the overflow bound");
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width probe report does not fit the "
+		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-md") == 0) {
+		check(panicked == 1, "the synthetic width MD report did not "
+		    "panic");
+		check(strstr(panic_message,
+		    "pst=ffffffff step=19 log=99999 mb=1") != NULL,
+		    "the synthetic width MD report lost the MD step, log count "
+		    "or mode marker");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE MBLOCKS 2=ffffffff 3=ffffffff "
+		    "4=ffffffff 5=ffffffff 6=ffffffff 7=ffffffff "
+		    "8=ffffffff 9=ffffffff 10=ffffffff 11=ffffffff "
+		    "12=ffffffff 13=ffffffff 14=ffffffff 15=ffffffff "
+		    "16=ffffffff 17=ffffffff 18=ffffffff 19=ffffffff "
+		    "20=ffffffff 21=ffffffff 22=ffffffff") != NULL,
+		    "the synthetic width MD report lost the CMD18 sums");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE LSTLBA=4294967294 sum=ffffffff "
+		    "mbsame=0 mbdiv=4294967295\n") != NULL,
+		    "the synthetic width MD report lost the widest mismatch "
+		    "suffix");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width MD report does not fit the "
 		    "2048-byte panic buffer including the NUL");
 	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
 	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
@@ -2722,6 +3083,7 @@ main(int argc, char **argv)
 	    (strcmp(scenario, "stage-off") != 0) &&
 	    (strcmp(scenario, "map-fail") != 0) &&
 	    (strcmp(scenario, "conflict") != 0) &&
+	    (strcmp(scenario, "probe-mb-bare-refuse") != 0) &&
 	    (strcmp(scenario, "branch-apps") != 0) &&
 	    (strcmp(scenario, "branch-ahb") != 0)) {
 		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_VERSION] == 1u,

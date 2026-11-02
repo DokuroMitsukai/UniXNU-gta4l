@@ -36,9 +36,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 98 scenarios and 55 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 112 scenarios and 62 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 38 scenarios and 26 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 44 scenarios and 34 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -204,8 +204,10 @@ returns `GTA4L_EMMC_ERR_UNSUPPORTED` before any sector read.
   diagnostics only; they do not enforce an exact wall-clock deadline, because
   each iteration also performs MMIO and optional diagnostic work.
 - `CMD17` is rejected when the block is at or beyond the discovered capacity.
-- The core never submits `CMD12`, `CMD18`, `CMD24`, `CMD25`, DMA, CQE, ICE or
-  tuning operations.
+- The default path submits only `CMD17` sector reads. The optional
+  `gta4l-emmc-mb=1` mode additionally submits one open-ended `CMD18` read and
+  an explicit `CMD12` stop; the host `AUTO_CMD12` enable bit stays clear. There
+  is no `CMD24`/`CMD25`, DMA, CQE, ICE or tuning operation.
 
 ## 4. Host tests
 
@@ -1080,6 +1082,46 @@ and every content sum is bound to live recovery bytes. It is not an F2
 multi-block transfer, an F3/F4 width or speed result, an F5 publication, an F6
 write, a filesystem result or a media-reliability test.
 
+### 5.3.7 Optional A2/F2 multi-block mode and attempt 1 (2026-11-02)
+
+The same diagnostic build adds an opt-in multi-block mode: `gta4l-emmc-mb=1`
+alongside `gta4l-emmc-probe=1`. Without the modifier the image still reports
+the stage-A row (`step=18 log=30`, `BLOCKS`) byte for byte. With both
+arguments the probe runs the same stage-A pass, then issues one open-ended
+`CMD18` over LBAs 2..22 (21 sectors, 512-byte blocks, block count 21), polls
+for command and data completion, and ends the transfer with an explicit
+`CMD12` (`R1b`, CRC and index checks, CC and TC required, bounded busy poll,
+terminal capture before the clear). The transfer-mode word is `TM_READ |
+TM_BLOCK_COUNT_EN | TM_MULTI`; the Multi/Single Block Select bit is required
+and matches the pinned Samsung multi-block encoding
+(`SDHCI_TRNS_BLK_CNT_EN | SDHCI_TRNS_MULTI`,
+`drivers/mmc/host/sdhci.c:1172-1175`). `AUTO_CMD12` stays clear. The MD report
+is `step=19 log=51 mb=1`, replaces `BLOCKS` with `MBLOCKS 2=… 22=…`, and adds
+`mbsame=1` or `mbsame=0 mbdiv=<first differing LBA>` to the `LSTLBA` line.
+
+The first hardware attempt (2026-11-02, the pre-correction build:
+`Gta4lEmmc.c 009f0eb9…`, `Gta4lEmmc.h 6f3ff335…`, `Gta4lEmmcProbe.c
+e67ad2bc…`, payload `198dc393…`, boot image `cac4356b…`) did not reach the MD
+phase. It stopped during identification with `GTA4L-EMMC PROBE FAILED:
+stage=1 rc=4294967289` (`-7`, `ERR_CMD_TIMEOUT`), `step=9` (`STEP_CMD2`
+completed) and `c3l` at the 1,000,000 µs / 10 µs poll bound. The response
+window held `00000500,5836384d,42009005,f4661978`: RESPONSE0 is a plausible
+CMD3 R1 status and words 1..3 are the CID words, so the command was accepted
+but its completion was not observed. That is the documented H8 CMD3-completion
+signature (`docs/emmc-cmd2-crc-audit.md` §6 H8), not an MD/F2 verdict: no
+CMD18, no CMD12 and no sector read occurred. The transcription and build
+record are in `out/gta4l/ram-root-emmc-probe-stage2b-evidence/`.
+
+The audit after that attempt found that the transfer-mode word omitted
+`TM_MULTI`; the controller would have treated the open-ended CMD18 as a
+single-block transfer and the helper would have timed out after one sector.
+The working tree now sets the bit, both simulators reject a CMD18 whose mode
+word lacks it, and both suites carry a mutation control that removes it (core
+112/62, probe 44/34). The attempt-1 image never exercised the defect because
+it stopped before the MD phase. A corrected image must be built and the owner
+must approve a new BOOT-only attempt before F2 can be claimed; a second
+pre-MD stop would still not be an MD verdict.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
@@ -1094,13 +1136,19 @@ On a full success the probe panics with a report containing:
   backup=61071359`, the per-LBA probes for the 21 primary-array blocks
   (LBAs 2..22), the first usable LBA (`DATA 34`) and the last sector
   (`LSTLBA=61071359`), and the `step=18`/`log=30` stage-A counters.
+- In the optional MD mode (`gta4l-emmc-mb=1`) the header line gains ` mb=1`,
+  `BLOCKS` is replaced by `MBLOCKS 2=… 22=…` carrying the CMD18 pass sums, and
+  the `LSTLBA` line gains `mbsame=1` or `mbsame=0 mbdiv=<first differing LBA>`;
+  the counters are `step=19`/`log=51`.
 
 Stage 2 stops with `GTA4L-EMMC HOST REPORT` and stage 3 with
 `GTA4L-EMMC IDENT REPORT`. The §5.3.4 candidate completed the stage-3
 identification report on three units; the §5.3.5 stage-1 image then completed
 the full report, including the block 0/block 1 reads, on the owner's SM-T505N
 and one SM-T505; the §5.3.6 stage-A image completed the extended content
-phase on the owner's SM-T505N and matched the live recovery readback. On
+phase on the owner's SM-T505N and matched the live recovery readback; the
+first §5.3.7 MD-mode attempt then stopped in identification before the MD
+phase, so no multi-block report exists yet. On
 failure the probe reports the
 stage, result code,
 the `clocks` flag, MCI version, power/clock/`HOST_CONTROL2`/vendor/DLL registers,
@@ -1152,8 +1200,10 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   `HOST_CONTROL2`, and it fails if the power loop is exhausted. A *new* power
   request raised after both completions and after the card clock starts still
   has no interrupt path `[U]`.
-- No DMA, SMMU programming, CQE, ICE, tuning, high-speed mode, multi-block read
-  or write path exists `[U]`.
+- No DMA, SMMU programming, CQE, ICE, tuning, high-speed mode or write path
+  exists `[U]`. The optional A2/F2 multi-block mode is implemented and
+  host-tested (5.3.7); its 2026-11-02 hardware attempt stopped before the MD
+  phase, so no multi-block transfer result exists `[S]/[U]`.
 - An 8-us CMD1-to-CMD2 timing candidate is specified in
   `docs/emmc-cmd1-gap-candidate.md` and was built, flashed and run on
   2026-11-01; it completed identification on three units (5.3.4) `[C]`. The

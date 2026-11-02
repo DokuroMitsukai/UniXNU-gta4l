@@ -8,8 +8,9 @@
 // diagnostic callbacks. The host simulator and the XNU probe compile the same
 // source.
 //
-// Scope: one-bit bus, legacy timing, polling, single 512-byte block reads. No
-// DMA, CQE, ICE, tuning, high-speed mode or card writes.
+// Scope: one-bit bus, legacy timing, polling, single-block and open-ended
+// multi-block 512-byte PIO reads with an explicit CMD12 stop. No DMA, CQE,
+// ICE, tuning, high-speed mode or card writes.
 
 #ifndef GTA4L_EMMC_H
 #define GTA4L_EMMC_H
@@ -163,6 +164,7 @@
 /* Transfer-mode fields. */
 #define GTA4L_EMMC_TM_BLOCK_COUNT_EN       0x0002u
 #define GTA4L_EMMC_TM_READ                 0x0010u
+#define GTA4L_EMMC_TM_MULTI                0x0020u
 
 /* Qualcomm power-control bits. */
 #define GTA4L_EMMC_PWRCTL_BUS_OFF          0x01u
@@ -223,8 +225,10 @@
 #define GTA4L_EMMC_CMD7                    7u
 #define GTA4L_EMMC_CMD8                    8u
 #define GTA4L_EMMC_CMD9                    9u
+#define GTA4L_EMMC_CMD12                   12u
 #define GTA4L_EMMC_CMD13                   13u
 #define GTA4L_EMMC_CMD17                   17u
+#define GTA4L_EMMC_CMD18                   18u
 
 #define GTA4L_EMMC_BLOCK_BYTES             512u
 #define GTA4L_EMMC_OCR_VALUE               0x40FF8080u
@@ -299,6 +303,7 @@
 #define GTA4L_EMMC_STEP_PROBE_ARRAY       16u
 #define GTA4L_EMMC_STEP_PROBE_DATA        17u
 #define GTA4L_EMMC_STEP_PROBE_LAST        18u
+#define GTA4L_EMMC_STEP_PROBE_MB          19u
 
 struct gta4l_emmc_ops {
 	uint8_t  (*read8)(void *context, uint32_t space, uint32_t offset);
@@ -425,6 +430,21 @@ struct gta4l_emmc_host {
 	uint32_t cmd7_term_argument;
 	uint32_t cmd7_term_response[4]; /* terminal raw RESPONSE0..3 */
 	uint8_t  cmd7_term_capture_valid;
+	/* Multi-block CMD18/CMD12 capture (diagnostics only). The ordinal is
+	 * the number of fully transferred 512-byte blocks observed when the
+	 * transfer ended, clamped to count - 1 for the failure report. The
+	 * stop samples use the same sequential-read caveat as the CMD7
+	 * capture. */
+	uint32_t multi_block;       /* failing/completed block ordinal */
+	int32_t  multi_stop_result; /* CMD12 result; 0 after a clean stop */
+	uint32_t multi_stop_normal;
+	uint32_t multi_stop_error;
+	uint32_t multi_stop_present;
+	uint32_t multi_stop_command;
+	uint32_t multi_stop_argument;
+	uint32_t multi_stop_response[4];
+	uint8_t  multi_stop_valid;
+	uint8_t  multi_stop_capture_valid;
 };
 
 /* Controller reset, GCC 400 kHz setup, retained-rail power handshake, pads. */
@@ -436,6 +456,11 @@ int gta4l_emmc_init(struct gta4l_emmc_host *host);
 /* One 512-byte PIO read. `block` is a logical 512-byte block address. */
 int gta4l_emmc_read_block(struct gta4l_emmc_host *host, uint64_t block,
     void *buffer);
+
+/* Open-ended multi-block PIO read with an explicit CMD12 stop. `count` is
+ * the number of 512-byte blocks; `buffer` must hold count * 512 bytes. */
+int gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
+    uint32_t count, void *buffer);
 
 /* Read the 512-byte EXT_CSD into `buffer`. */
 int gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer);

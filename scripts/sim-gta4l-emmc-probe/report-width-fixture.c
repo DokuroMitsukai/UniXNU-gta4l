@@ -214,9 +214,18 @@ gta4l_emmc_probe_width_fixture(int form)
 		    GTA4L_EMMC_ERR_UNSUPPORTED, &regs);
 	} else if (form == 1) {
 		gta4l_emmc_probe_report_ident(&host, &probe, &regs);
-	} else {
+	} else if (form == 2) {
 		host.last_step = GTA4L_EMMC_STEP_PROBE_LAST;
 		gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0,
-		    block1, &range);
+		    block1, &range, 0);
+	} else {
+		/* MD form: step 19, all CMD18 sums at their field bound and
+		 * the widest mismatch suffix. */
+		host.last_step = GTA4L_EMMC_STEP_PROBE_MB;
+		range.mb_same = 0;
+		range.mb_div = 0xFFFFFFFFu;
+		memset(range.mb, 0xFF, sizeof(range.mb));
+		gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0,
+		    block1, &range, 1);
 	}
 }

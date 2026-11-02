@@ -51,7 +51,7 @@ global delay.
 
 ## Host tests
 
-`scripts/test-gta4l-emmc.py` runs 98 scenarios and 55 mutation controls. The
+`scripts/test-gta4l-emmc.py` runs 112 scenarios and 62 mutation controls. The
 timing candidate adds:
 
 - `cmd1-crc-retire`: the hypothetical controller needs 8 us after ready CMD1;

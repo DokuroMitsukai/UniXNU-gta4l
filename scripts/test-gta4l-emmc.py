@@ -123,6 +123,20 @@ SCENARIOS = [
     'cmd7-trace-return',
     'small-card',
     'partition-access',
+    'multi-args',
+    'multi-without-init',
+    'multi-last-block',
+    'multi-success',
+    'multi-repeat',
+    'multi-data-timeout',
+    'multi-data-crc',
+    'multi-late-error',
+    'multi-stop-tc-only',
+    'multi-stop-late-cc',
+    'multi-stop-busy-timeout',
+    'multi-stop-crc',
+    'multi-stop-late-error',
+    'multi-card-status',
 ]
 
 FORBIDDEN_CORE = [
@@ -131,8 +145,6 @@ FORBIDDEN_CORE = [
     'panic(',
     'printf(',
     'kprintf(',
-    'GTA4L_EMMC_CMD12',
-    'GTA4L_EMMC_CMD18',
     'GTA4L_EMMC_CMD24',
     'GTA4L_EMMC_CMD25',
     'CQE',
@@ -889,6 +901,65 @@ def main() -> int:
              '\t\t}\n',
              '\t\t/* non-busy final error sample removed by mutation */\n',
              'Gta4lEmmc.c', (), 'cmd9-late-error'),
+            ('mb-block-count-off-by-one',
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n',
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)(count - 1u));\n',
+             'Gta4lEmmc.c', (), 'multi-success'),
+            ('mb-lba-off-by-one',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba + 1u);\n',
+             'Gta4lEmmc.c', (), 'multi-success'),
+            ('mb-stop-suppressed',
+             '\tstop_result = gta4l_emmc_send_stop(host);\n',
+             '\tstop_result = GTA4L_EMMC_OK;\n',
+             'Gta4lEmmc.c', ('-Wno-unused-function',), 'multi-success'),
+            ('mb-auto-cmd12',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI | 0x0004u);\n',
+             'Gta4lEmmc.c', (), 'multi-success'),
+            ('mb-no-multi',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN);\n',
+             'Gta4lEmmc.c', (), 'multi-success'),
+            ('mb-failing-ordinal',
+             '\t\t\thost->multi_block = (done < count) ? done : count - 1u;\n'
+             '\t\t\tgta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,\n',
+             '\t\t\thost->multi_block = done + 1u;\n'
+             '\t\t\tgta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,\n',
+             'Gta4lEmmc.c', (), 'multi-late-error'),
+            ('mb-block-size',
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_BLOCK_SIZE, GTA4L_EMMC_BLOCK_BYTES);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n',
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_BLOCK_SIZE, (uint16_t)count);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n',
+             'Gta4lEmmc.c', (), 'multi-success'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -931,6 +1002,18 @@ def main() -> int:
                 'a command was submitted before the busy release',
             'data-final-error-sample-removed':
                 'late FIFO error not reported',
+            'mb-block-count-off-by-one':
+                'multi-block read failed',
+            'mb-lba-off-by-one':
+                'multi-block block 0 byte 0 mismatch',
+            'mb-stop-suppressed':
+                'CMD12 stop was not marked attempted',
+            'mb-auto-cmd12':
+                'AUTO_CMD12 was enabled',
+            'mb-failing-ordinal':
+                'multi-block failing ordinal mismatch',
+            'mb-block-size':
+                'multi-block read failed',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)
