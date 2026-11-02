@@ -1688,6 +1688,98 @@ the card-side cause of the BUS_WIDTH no-op; that the cold session would
 change any other report field; that the B1C rung will pass; or that F3 is
 established.
 
+### 2.20 Stage-B1C continuation session: CMD19 write-phase timeout (2026-11-03)
+
+The B1C image (`gta4l-emmc-probe=5`, boot image `370b962f…`, payload
+`18f15dd0…`, kernel `2879f5e3…`) was built from clean `5ad1dd6` and flashed
+BOOT-only to `/dev/block/mmcblk0p69` from the remote flash host. The
+pre-flash partition was `ac356ef1…` (the B1R2 post-flash hash), the post-flash
+partition is `c6a9f8e0…`, and the image prefix read back as `370b962f…`; the
+unchanged tail is `a28b4ea2…`, and `RECOVERY` `14e11370…`, EFS `51fa824c…`
+and sec_efs `3a265d58…` were unchanged. The pulled gates are 18/18 (boot
+image) and 7/7 (payload contract). The flash record is
+`out/gta4l/ram-root-emmc-probe-b1r3-evidence/flash-record.json`.
+
+The owner booted the same image seven times without reflashing and supplied
+every report as text (no photo file or hash in the tree). Boots 1 and 4 were
+cold boots (full power-down then power-on); the other five were power +
+volume-down force reboots (warm resets). After boot 3 and before the sampling
+batch the owner re-read BOOT read-only in the same TWRP session:
+
+    $ adb shell sha256sum /dev/block/mmcblk0p69
+    c6a9f8e08ffb28245605638c4899072969dbc5540b1f57f3a27a6d4ae5da5538  /dev/block/mmcblk0p69
+
+which matches the flash record's post-flash hash, so
+`partition_verified_again_after_boot` is true and boots 1–3 are bound to the
+flashed bytes. Boots 4–7 ran on the same un-reflashed image by the owner's
+statement; the partition was not re-read after them.
+
+| Boot | Method | Reached B1C? | Result |
+| --- | --- | --- | --- |
+| 1 | cold | no | Block-1 CMD17 `rc=-11`, `step=15`, `fail=1/17/1/0000113a/0000/0002/03f800f0/15` at `:1465`; another instance of the TC-only/no-error signature. |
+| 2 | warm | no | H8 CMD3-completion timeout `fail=1/3/65536/031a/0000/0000/03f800f0/9` at `:835`, `stage=5`, `c3l` 100,000 iterations exhausted (`0x14c340d` ticks at 19.2 MHz). |
+| 3 | warm | yes | The first B1C report: the pinned tuple was entered (`bc=1`, `c6=00000900`, `hb=00`→`ha=02`, `es=000009cb`, `sw=0`, `swrc=-19`), then the CMD19 write phase timed out (`tt=1 tw=00000000 te=00000000 trc=-11`); `FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/18` at `:1085`; report `rc=-11 stop=1 step=18 log=31`, `hc=00`, `BW=8 att=0`. |
+| 4 | cold | no | The same block-1 CMD17 tuple as boot 1; the stack counters differ. |
+| 5 | warm | no | The same block-1 CMD17 tuple. |
+| 6 | warm | yes | The second B1C report: the protocol and content fields are identical to boot 3, including the same `trc=-11` and FAIL tuple; only the stack `pages`/`free` counters differ (`0x79eaa`/`0x7944e` versus `0x79ea8`/`0x7944c`). |
+| 7 | warm | no | The same block-1 CMD17 tuple. |
+
+The fifth outcome class. CMD19 was accepted and both `CC` and
+`BufferWriteReady` were latched (`normal=0x0011`), but the block never
+completed: no `TC` and no error bit. The terminal sample is
+`fail=1/19/0/0000133a/0000/0011/03f801f6/18`, with present state
+`0x03f801f6` — the first data-write-direction terminal sample in the
+project; every read sample in the record is `0x03f800f0`. The predicted
+read-back mismatch class (`trc=-20`) never fired. The continuation handled
+the hard error as designed: the content pass and the post-continuation
+EXT_CSD re-read were skipped, so `b0`/`b1`/`same`/`div` and
+`e183a`/`esa` are placeholders (`00000000`), not observed values; `hc=00` is
+the restored host width, `BW=8 att=0` is untouched, and the `PAD` line is
+identical before and after (`qdsd=00009fe4`, `dll=6000642c`,
+`dst=00000000`, `bif=none`).
+
+The two reports agree field-for-field except for the stack counters, and a
+full cold power cycle occurred between them. The cold boot did not itself
+reach the continuation, so the write-phase timeout is deterministic
+conditional on reaching the rung; it is not caused by card state retained
+from an earlier interrupted CMD19. This is the only new outcome class of the
+session, and it does not resolve the 4-bit question: the "wire never left
+1-bit, so the write timeout is an independent first-write property" and
+"the card switched, byte 183 is stale, and the card rejects the 4-byte
+write" models both remain alive.
+
+The 4-bit read paradox is unchanged. Both reports again returned EXT_CSD byte
+183 = 0 and the byte-exact 1-bit sum (`es=000009cb`) at the attempted 4-bit
+width; these are two more instances of the complete stop tuple (the B1
+image's earlier instance predates the `c6`/`hb`/`ha`/`es` fields).
+
+The pre-B1 failure rate on this image was 5 of 7 boots: four byte-identical
+block-1 CMD17 TC-only/no-error timeouts and one H8 CMD3 timeout. The CMD17
+tuple is the same one recorded in §2.18–2.19 (now spanning a third image),
+and the H8 sample carries a fresh `c3l` tick. The ~71% stop rate is higher
+than the earlier ~40% estimate, but the sample is small and no cause is
+assigned.
+
+Verdict: F3 remains `[U]`. The bus test did not pass, no per-width content
+pass ran, no 8-bit attempt was made, and the byte-183 divergence remains an
+owner-scoring decision. The next rung candidate (owner decision, no
+auto-advance) is a 1-bit CMD19/CMD14 bus test before any width switch
+(`gta4l-emmc-probe=6`): if 1-bit passes, the timeout is width-caused; if
+1-bit fails the same way, the write path is broken independent of width. It
+issues no CMD6 and keeps the same non-persistent bus-test-pattern write class
+already approved for B1C.
+
+Supported by this section: the image identity and BOOT-only flash record; the
+seven owner-stated boots and per-boot methods; the p69 re-read and the
+binding of boots 1–3 (and, with the no-reflash statement, 4–7); the two
+identical CMD19 write-phase timeouts and their field values; the
+skipped-field placeholders; the unchanged pad samples; the CMD17 and H8
+pre-B1 samples; and the deterministic-conditional conclusion. Not supported:
+the pad-level width; the card-side cause of the byte-183 readback; whether
+the timeout is width-caused or an independent first-write property; a
+bus-test or content pass; that a cold boot reaches B1C; that `trc=-20` can
+occur; or that F3 is established.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout

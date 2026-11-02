@@ -1696,9 +1696,66 @@ mutation controls (continue entered on a non-entering tuple, a continuation
 that does not stop, a wrong content baseline, a skipped host-width restore
 and a wrong continue marker). The core suite is unchanged at 136/80. The
 `report-width-b1` fixture materializes `bc=1`, `e183a=ffffffff` and
-`esa=ffffffff`, and the report still fits the 2048-byte panic buffer. No
-build, flash or boot was performed; F3 remains `[U]`, and the device run is
-§5.3.14 after a fresh explicit BOOT-only flash approval.
+`esa=ffffffff`, and the report still fits the 2048-byte panic buffer. The device run followed
+the approval and is recorded in §5.3.14; F3 remains `[U]`.
+
+### 5.3.14 Stage-B1C hardware run: CMD19 write-phase timeout (2026-11-03)
+
+The B1C image was built from clean `5ad1dd6`: kernel `2879f5e3…`, payload
+`18f15dd0…` (contract 7/7) and boot image `370b962f…` (gate 18/18 against the
+`ce4d76e8…` v5 baseline). The write was BOOT-only: pre-flash p69 was
+`ac356ef1…`, post-flash p69 is `c6a9f8e0…`, the image prefix read back as
+`370b962f…`, the unchanged tail is `a28b4ea2…`, and `RECOVERY`
+`14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` were unchanged. The
+flash record is
+`out/gta4l/ram-root-emmc-probe-b1r3-evidence/flash-record.json`; the results
+are in `out/gta4l/ram-root-emmc-probe-b1c-evidence/`
+(`hardware-run-record.json` and eight transcripts).
+
+The owner booted the same flashed image seven times without reflashing: boots
+1 and 4 were cold boots and the other five were warm force reboots. Boots 3
+and 6 reached the B1C continuation. Both entered it on exactly the pinned
+tuple (`bc=1`, `c6=00000900`, `hb=00`→`ha=02`, `es=000009cb`, `sw=0`,
+`swrc=-19`), then timed out in the CMD19 write phase:
+
+    tt=1 tw=00000000 te=00000000 trc=-11
+    fail=1/19/0/0000133a/0000/0011/03f801f6/18 @Gta4lEmmcProbe.c:1085
+
+CMD19 was accepted and both `CC` and `BufferWriteReady` were latched
+(`normal=0x0011`), but the block never completed: no `TC`, no error bit. The
+present state `0x03f801f6` is the project's first data-write-direction
+terminal sample; every read sample is `0x03f800f0`. The two reports are
+identical field-for-field except for the stack `pages`/`free` counters, and a
+full cold power cycle occurred between them, so the timeout is deterministic
+conditional on reaching the rung and is not caused by card state retained
+from an earlier interrupted CMD19. The cold boot itself did not reach the
+continuation. The `PAD` samples are unchanged
+(`0x00009fe4`/`0x6000642c`/`0x00000000`).
+
+On the hard error the rung skipped the content pass and the post-continuation
+EXT_CSD re-read, so `b0`/`b1`/`same`/`div` and `e183a`/`esa` are
+placeholders, not observed values; `hc=00` is the restored host width and
+`BW=8 att=0` is untouched. Both reports again read byte 183 = 0 and the
+byte-exact 1-bit sum at the attempted 4-bit width.
+
+The other five boots stopped before B1: four byte-identical block-1 CMD17
+TC-only/no-error timeouts (boots 1, 4, 5 and 7) and one H8 CMD3-completion
+timeout (boot 2, `stage=5`). The same-session read-only p69 re-read after
+boot 3 matched the post-flash hash, binding boots 1–3; boots 4–7 ran on the
+same un-reflashed image by the owner's statement, and the partition was not
+re-read after them.
+
+Status: the CMD19 write-phase timeout is a new, deterministic terminal class
+conditional on reaching the rung. It does not separate a width-caused timeout
+from an independent first-write property: the "wire never left 1-bit" and
+"the card switched but rejects the 4-byte write" models both remain alive,
+and the `trc=-20` read-back-mismatch class remains unobserved. F3 remains
+`[U]`; no per-width content pass or 8-bit attempt ran. Host checks are
+unchanged (core 136/80, probe 67/39). No code change follows from this
+record. The next rung candidate is a 1-bit CMD19/CMD14 bus test before any
+width switch (`gta4l-emmc-probe=6`), which issues no CMD6 and keeps the same
+non-persistent bus-test-pattern write class; it needs a fresh explicit
+BOOT-only flash approval.
 
 ## 6. Expected report
 
@@ -1859,6 +1916,11 @@ bus-width rung is implemented and host-tested (§5.3.9) and ran on 2026-11-02
 rebuilt image five times: two boots reproduced the 4-bit stop with a clean
 CMD6 R1, the host width bit set and an EXT_CSD readback still at 1-bit, and
 three stopped before B1 (two TC-only CMD17 timeouts, one CMD3 timeout), so
-F3 remains unestablished. Any further B1/B2 step is owner-gated, and the
-pre-B1 H8/CMD17 failures also need a plan decision. No filesystem, block-device publication, mount, write, DMA, CQE or
-ICE result exists yet.
+F3 remains unestablished. The B1C continuation (§5.3.13.1) was then flashed
+BOOT-only and booted seven times (§5.3.14): both boots that reached the
+continuation timed out in the CMD19 write phase (CC + BufferWriteReady
+latched, no TC, no error), so the data-write direction is now the blocking
+observation and F3 remains `[U]`. Any further B1/B2 step is owner-gated, and
+the pre-B1 H8/CMD17 failures also need a plan decision. No filesystem,
+block-device publication, mount, storage write, DMA, CQE or ICE result exists
+yet.

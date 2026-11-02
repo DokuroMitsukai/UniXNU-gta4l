@@ -111,13 +111,25 @@ partition layout, payload policy and packaging.
   post-flash hash. The 4-bit stop is therefore 4/4 across warm and cold
   boots, a retained warm-reset card state is excluded as its cause, and all
   eight boots are bound to the flashed bytes. Stage B1C
-  (`gta4l-emmc-probe=5`) is implemented and host-tested but not built or
-  booted: on exactly the observed 4-bit tuple it continues read-only at
-  4-bit (one CMD19/CMD14 bus test, the stage-A content pass, then an
-  EXT_CSD byte-183 re-read), restores the host width and emits one report
-  with `bc=`/`e183a=`/`esa=`; the 8-bit rung is not attempted. F3 remains
-  unproven (`docs/emmc-driver.md` §5.3.12–5.3.13 and §5.3.13.1,
-  `docs/emmc-cmd2-crc-audit.md` §2.18–2.19).
+  (`gta4l-emmc-probe=5`) was then flashed BOOT only and booted seven times
+  (two cold, five warm) without reflashing: both boots that reached the
+  continuation entered on exactly the observed 4-bit tuple (`bc=1`,
+  `c6=00000900`, `hb=00`→`ha=02`, `es=000009cb`, `sw=0`, `swrc=-19`) and
+  both timed out in the CMD19 write phase (`tt=1`, `trc=-11`,
+  `tw=00000000`, `te=00000000`;
+  `FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/18`), with CC and
+  BufferWriteReady latched but no TC and no error bit — the project's first
+  data-write-direction terminal sample. The two reports are identical except
+  for the stack counters, and a full cold power cycle occurred between them,
+  so the timeout is deterministic conditional on reaching the rung and is
+  not caused by card state retained from an earlier interrupted CMD19. The
+  content pass and byte-183 re-read were skipped after the hard error;
+  `e183a`/`esa` are placeholders. The other five boots stopped before B1
+  (four CMD17 TC-only timeouts, one CMD3 timeout), and the same-session BOOT
+  re-read matched the post-flash hash. The 4-bit read paradox is unchanged
+  (`es=000009cb` at the attempted width). F3 remains unproven
+  (`docs/emmc-driver.md` §5.3.12–5.3.14,
+  `docs/emmc-cmd2-crc-audit.md` §2.18–2.20).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and
