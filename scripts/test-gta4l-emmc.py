@@ -131,6 +131,10 @@ SCENARIOS = [
     'multi-data-timeout',
     'multi-data-crc',
     'multi-late-error',
+    'multi-drain-tc',
+    'multi-drain-brr',
+    'multi-drain-error',
+    'multi-drain-stall',
     'multi-stop-tc-only',
     'multi-stop-late-cc',
     'multi-stop-busy-timeout',
@@ -960,6 +964,41 @@ def main() -> int:
              '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
              '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n',
              'Gta4lEmmc.c', (), 'multi-success'),
+            ('mb-drain-window-suppressed',
+             '\tif ((completed == 0) && (result == GTA4L_EMMC_OK)) {\n'
+             '\t\t/* The primary bound expired without an error or TC. '
+             'Attempt 2\n',
+             '\tif (0) {\n'
+             '\t\t/* The primary bound expired without an error or TC. '
+             'Attempt 2\n',
+             'Gta4lEmmc.c', (), 'multi-drain-tc'),
+            ('mb-drain-tc-recheck-removed',
+             '\t\t\tif ((command_done != 0) && (done == count) &&\n'
+             '\t\t\t    ((normal & GTA4L_EMMC_INT_TC) != 0)) {\n',
+             '\t\t\tif (0) {\n',
+             'Gta4lEmmc.c', (), 'multi-drain-tc'),
+            ('mb-drain-block-not-counted',
+             '\t\t\t\thost->multi_drain_blocks++;\n',
+             '',
+             'Gta4lEmmc.c', (), 'multi-drain-brr'),
+            ('mb-drain-error-unmapped',
+             '\t\t\t\thost->multi_block = (done < count) ?\n'
+             '\t\t\t\t    done : count - 1u;\n'
+             '\t\t\t\tgta4l_emmc_record_failure(host,\n'
+             '\t\t\t\t    GTA4L_EMMC_CMD18, (uint32_t)start_lba,\n'
+             '\t\t\t\t    command, error, normal, present);\n'
+             '\t\t\t\tresult = gta4l_emmc_map_error(error, 1);\n',
+             '\t\t\t\thost->multi_block = (done < count) ?\n'
+             '\t\t\t\t    done : count - 1u;\n'
+             '\t\t\t\tgta4l_emmc_record_failure(host,\n'
+             '\t\t\t\t    GTA4L_EMMC_CMD18, (uint32_t)start_lba,\n'
+             '\t\t\t\t    command, error, normal, present);\n'
+             '\t\t\t\tresult = GTA4L_EMMC_OK;\n',
+             'Gta4lEmmc.c', (), 'multi-drain-error'),
+            ('mb-drain-resolved-suppressed',
+             '\t\thost->multi_drain_resolved = (completed != 0) ? 1 : 0;\n',
+             '\t\thost->multi_drain_resolved = 0;\n',
+             'Gta4lEmmc.c', (), 'multi-drain-tc'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -1014,6 +1053,16 @@ def main() -> int:
                 'multi-block failing ordinal mismatch',
             'mb-block-size':
                 'multi-block read failed',
+            'mb-drain-window-suppressed':
+                'drained multi-block read failed',
+            'mb-drain-tc-recheck-removed':
+                'drained multi-block read failed',
+            'mb-drain-block-not-counted':
+                'late-BRR drain did not count the drained block',
+            'mb-drain-error-unmapped':
+                'drain-window data error was not reported',
+            'mb-drain-resolved-suppressed':
+                'drain-resolved transfer did not record its resolution',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)

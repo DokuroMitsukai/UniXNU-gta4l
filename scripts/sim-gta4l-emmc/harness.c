@@ -169,6 +169,22 @@ struct sim {
 	uint32_t mb_issued_block_size;
 	uint32_t mb_issued_block_count;
 	uint32_t mb_stop_normal_reads;
+	/* Delayed CMD18 events for the post-bound drain model. Delays are
+	 * microseconds from the event's scheduling point (the issue for an
+	 * error, the penultimate drain for the last BRR, the final drain for
+	 * TC); -1 keeps the immediate model. mb_no_tc withholds completion so
+	 * the drain window can be exhausted. */
+	int mb_tc_delay_us;
+	int mb_last_brr_delay_us;
+	int mb_error_delay_us;
+	int mb_error_status;
+	int mb_no_tc;
+	int mb_tc_pending;
+	int mb_last_brr_pending;
+	int mb_error_pending;
+	uint64_t mb_tc_due_us;
+	uint64_t mb_last_brr_due_us;
+	uint64_t mb_error_due_us;
 	uint32_t cmd_late_error_index;
 	int cmd_late_error_emitted;
 	int power_written;
@@ -365,6 +381,8 @@ sim_apply_cmd7_events(struct sim *sim)
 	}
 }
 
+static void sim_apply_mb_events(struct sim *sim);
+
 static uint8_t
 sim_read8(void *context, uint32_t space, uint32_t offset)
 {
@@ -409,6 +427,7 @@ sim_read16(void *context, uint32_t space, uint32_t offset)
 		if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
 			uint16_t value;
 
+			sim_apply_mb_events(sim);
 			if ((sim->cmd3_late_cc != 0) &&
 			    (sim->last_cmd == GTA4L_EMMC_CMD3)) {
 				sim->cmd3_normal_reads++;
@@ -474,6 +493,7 @@ sim_read16(void *context, uint32_t space, uint32_t offset)
 		if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
 			uint16_t value;
 
+			sim_apply_mb_events(sim);
 			if (sim->last_cmd == GTA4L_EMMC_CMD7) {
 				sim->cmd7_error_reads++;
 				sim_apply_cmd7_events(sim);
@@ -522,6 +542,38 @@ sim_read16(void *context, uint32_t space, uint32_t offset)
 
 static void
 sim_fill_block(struct sim *sim, uint32_t lba);
+
+/* Delayed CMD18 events for the post-bound drain scenarios. A scheduled error
+ * wins over pending data and completion events. */
+static void
+sim_apply_mb_events(struct sim *sim)
+{
+	if (sim->last_cmd != GTA4L_EMMC_CMD18) {
+		return;
+	}
+	if ((sim->mb_error_pending != 0) &&
+	    (sim->time_us >= sim->mb_error_due_us)) {
+		sim->mb_error_pending = 0;
+		sim->mb_tc_pending = 0;
+		sim->mb_last_brr_pending = 0;
+		sim->mb_active = 0;
+		sim->normal_int &= (uint16_t)~GTA4L_EMMC_INT_BRR;
+		sim->error_int |= (uint16_t)sim->mb_error_status;
+		return;
+	}
+	if ((sim->mb_last_brr_pending != 0) &&
+	    (sim->time_us >= sim->mb_last_brr_due_us)) {
+		sim->mb_last_brr_pending = 0;
+		sim_fill_block(sim, sim->mb_argument +
+		    (uint32_t)sim->mb_done);
+		sim->normal_int |= GTA4L_EMMC_INT_BRR;
+	}
+	if ((sim->mb_tc_pending != 0) &&
+	    (sim->time_us >= sim->mb_tc_due_us)) {
+		sim->mb_tc_pending = 0;
+		sim->normal_int |= GTA4L_EMMC_INT_TC;
+	}
+}
 
 static uint32_t
 sim_read32(void *context, uint32_t space, uint32_t offset)
@@ -605,15 +657,40 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 				 * transfer completion after the last one. */
 				sim->mb_done++;
 				if (sim->mb_done < (int)sim->mb_count) {
-					sim_fill_block(sim,
-					    sim->mb_argument +
-					    (uint32_t)sim->mb_done);
+					if ((sim->mb_done ==
+					    ((int)sim->mb_count - 1)) &&
+					    (sim->mb_last_brr_delay_us >= 0)) {
+						/* Withhold the last sector
+						 * until the drain window. */
+						sim->normal_int &=
+						    (uint16_t)
+						    ~GTA4L_EMMC_INT_BRR;
+						sim->mb_last_brr_pending = 1;
+						sim->mb_last_brr_due_us =
+						    sim->time_us +
+						    (uint64_t)sim->
+						    mb_last_brr_delay_us;
+					} else {
+						sim_fill_block(sim,
+						    sim->mb_argument +
+						    (uint32_t)sim->mb_done);
+					}
 				} else {
 					sim->mb_active = 0;
 					sim->normal_int &=
 					    (uint16_t)~GTA4L_EMMC_INT_BRR;
-					sim->normal_int |=
-					    GTA4L_EMMC_INT_TC;
+					if (sim->mb_no_tc == 0) {
+						if (sim->mb_tc_delay_us >= 0) {
+							sim->mb_tc_pending = 1;
+							sim->mb_tc_due_us =
+							    sim->time_us +
+							    (uint64_t)sim->
+							    mb_tc_delay_us;
+						} else {
+							sim->normal_int |=
+							    GTA4L_EMMC_INT_TC;
+						}
+					}
 				}
 			}
 			return value;
@@ -1216,6 +1293,14 @@ sim_command(struct sim *sim, uint16_t command)
 		sim->mb_done = 0;
 		sim->mb_dat_inhibit = 1;
 		sim->mb_active = 0;
+		sim->mb_tc_pending = 0;
+		sim->mb_last_brr_pending = 0;
+		sim->mb_error_pending = 0;
+		if (sim->mb_error_delay_us >= 0) {
+			sim->mb_error_pending = 1;
+			sim->mb_error_due_us = sim->time_us +
+			    (uint64_t)sim->mb_error_delay_us;
+		}
 		sim->normal_int &= (uint16_t)~GTA4L_EMMC_INT_BRR;
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		if (sim->mb_response_error != 0) {
@@ -1605,6 +1690,7 @@ sim_delay_us(void *context, uint32_t microseconds)
 	struct sim *sim = (struct sim *)context;
 
 	sim->time_us += microseconds;
+	sim_apply_mb_events(sim);
 }
 
 static uint64_t
@@ -1654,6 +1740,9 @@ sim_init(struct sim *sim)
 	sim->cmd7_cc_delay = -1;
 	sim->cmd7_tc_delay = -1;
 	sim->cmd7_error_delay = -1;
+	sim->mb_tc_delay_us = -1;
+	sim->mb_last_brr_delay_us = -1;
+	sim->mb_error_delay_us = -1;
 	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_MCI_VERSION,
 	    0x10000072u);
 	/* The observed stage-3 vendor value: MCLK default, HC_SELECT_IN=6
@@ -2176,6 +2265,25 @@ main(int argc, char **argv)
 		 * so four complete blocks are observed before it is sampled. */
 		sim.data_late_error_words =
 		    (int)((GTA4L_EMMC_BLOCK_BYTES / 4u) * 4u);
+	} else if (scenario_is(scenario, "multi-drain-tc")) {
+		/* Every sector drains, but completion arrives only inside the
+		 * post-bound window. */
+		sim.mb_tc_delay_us = (int)GTA4L_EMMC_DATA_TIMEOUT_US + 1000;
+	} else if (scenario_is(scenario, "multi-drain-brr")) {
+		/* The last sector becomes buffer-read ready only inside the
+		 * post-bound window; completion follows its drain. */
+		sim.mb_last_brr_delay_us =
+		    (int)GTA4L_EMMC_DATA_TIMEOUT_US + 1000;
+	} else if (scenario_is(scenario, "multi-drain-error")) {
+		/* Completion never arrives and a data CRC error becomes
+		 * visible inside the post-bound window. */
+		sim.mb_no_tc = 1;
+		sim.mb_error_delay_us = (int)GTA4L_EMMC_DATA_TIMEOUT_US + 1000;
+		sim.mb_error_status = GTA4L_EMMC_INT_ERR_DATA_CRC;
+	} else if (scenario_is(scenario, "multi-drain-stall")) {
+		/* Attempt-2 replay: every sector drains and completion never
+		 * arrives, so the secondary window is exhausted. */
+		sim.mb_no_tc = 1;
 	} else if (scenario_is(scenario, "multi-stop-tc-only")) {
 		sim.mb_no_cc = 1;
 	} else if (scenario_is(scenario, "multi-stop-late-cc")) {
@@ -2213,6 +2321,10 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "multi-data-timeout") ||
 	    scenario_is(scenario, "multi-data-crc") ||
 	    scenario_is(scenario, "multi-late-error") ||
+	    scenario_is(scenario, "multi-drain-tc") ||
+	    scenario_is(scenario, "multi-drain-brr") ||
+	    scenario_is(scenario, "multi-drain-error") ||
+	    scenario_is(scenario, "multi-drain-stall") ||
 	    scenario_is(scenario, "multi-stop-tc-only") ||
 	    scenario_is(scenario, "multi-stop-late-cc") ||
 	    scenario_is(scenario, "multi-stop-busy-timeout") ||
@@ -2936,6 +3048,75 @@ main(int argc, char **argv)
 		    "CMD12 attempt result was not recorded after data error");
 		check(sim.mb_stop_count == 1,
 		    "no stop attempt after the multi-block data error");
+	} else if (scenario_is(scenario, "multi-drain-tc") ||
+	    scenario_is(scenario, "multi-drain-brr") ||
+	    scenario_is(scenario, "multi-drain-error") ||
+	    scenario_is(scenario, "multi-drain-stall")) {
+		uint32_t expected_blocks = 0u;
+
+		if (scenario_is(scenario, "multi-drain-brr")) {
+			expected_blocks = 1u;
+		}
+		result = gta4l_emmc_read_multi(&host, 2u,
+		    SIM_MB_TEST_BLOCKS, mb_blocks);
+		if (scenario_is(scenario, "multi-drain-error")) {
+			check(result == GTA4L_EMMC_ERR_DATA_CRC,
+			    "drain-window data error was not reported");
+			check(host.fail_valid == 1,
+			    "drain-window data error was not captured");
+			check(host.fail_index == GTA4L_EMMC_CMD18,
+			    "drain-window data error did not capture CMD18");
+			check((host.fail_error &
+			    GTA4L_EMMC_INT_ERR_DATA_CRC) != 0,
+			    "drain-window captured error is not DATA_CRC");
+		} else if (scenario_is(scenario, "multi-drain-stall")) {
+			check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+			    "an exhausted drain window was not reported as a "
+			    "data timeout");
+			check(host.fail_valid == 1,
+			    "an exhausted drain window was not captured");
+			check(host.fail_index == GTA4L_EMMC_CMD18,
+			    "drain exhaustion did not capture CMD18");
+		} else {
+			check(result == GTA4L_EMMC_OK,
+			    "drained multi-block read failed");
+			if (result == GTA4L_EMMC_OK) {
+				check_multi_block(mb_blocks, 2u,
+				    SIM_MB_TEST_BLOCKS,
+				    "drained multi-block");
+				check(host.multi_block ==
+				    SIM_MB_TEST_BLOCKS - 1u,
+				    "drained multi-block ordinal mismatch");
+			}
+		}
+		check(host.multi_drain_used == 1u,
+		    "post-bound drain window was not entered");
+		check(host.multi_drain_resolved ==
+		    ((scenario_is(scenario, "multi-drain-error") ||
+		    scenario_is(scenario, "multi-drain-stall")) ? 0u : 1u),
+		    "drain-resolved transfer did not record its resolution");
+		check(host.multi_drain_blocks == expected_blocks,
+		    "late-BRR drain did not count the drained block");
+		if (scenario_is(scenario, "multi-drain-stall")) {
+			check(host.multi_drain_iterations ==
+			    GTA4L_EMMC_DATA_DRAIN_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "exhausted drain iteration count mismatch");
+		} else {
+			check(host.multi_drain_iterations > 0u &&
+			    host.multi_drain_iterations <=
+			    GTA4L_EMMC_DATA_DRAIN_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "drain iteration count is out of bounds");
+		}
+		check(host.multi_stop_result == GTA4L_EMMC_OK,
+		    "CMD12 result was not recorded after the drain");
+		check(sim.mb_stop_count == 1,
+		    "the drain path did not issue exactly one stop");
+		check(host.multi_stop_command == 0x0C1Bu,
+		    "drain-path CMD12 encoding mismatch");
+		check(sim.mb_dat_inhibit == 0,
+		    "DAT inhibit survived the drain-path stop");
 	} else if (scenario_is(scenario, "multi-card-status")) {
 		result = gta4l_emmc_read_multi(&host, 2u,
 		    SIM_MB_TEST_BLOCKS, mb_blocks);

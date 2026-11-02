@@ -180,6 +180,20 @@ static int mb_active;
 static int mb_stop_no_tc;
 static int mb_r1_error;
 static uint32_t mb_corrupt_lba = 0xFFFFFFFFu;
+/* Delayed multi-block events. Each delay is measured from the moment the
+ * event is scheduled: mb_last_brr_delay_us from the penultimate sector drain,
+ * mb_tc_delay_us from the final sector drain, and mb_error_delay_us from the
+ * CMD18 issue. A negative delay keeps the immediate model. */
+static int mb_tc_delay_us = -1;
+static int mb_last_brr_delay_us = -1;
+static int mb_error_delay_us = -1;
+static int mb_no_tc;
+static int mb_tc_pending;
+static int mb_last_brr_pending;
+static int mb_error_pending;
+static uint64_t mb_tc_due;
+static uint64_t mb_last_brr_due;
+static uint64_t mb_error_due;
 static unsigned int mb_stop_count;
 static int auto_cmd12_seen;
 static int bad_mb_command;
@@ -541,6 +555,36 @@ sim_apply_cmd7_events(void)
 	}
 }
 
+/* Delayed CMD18 events used by the post-bound drain scenarios. A scheduled
+ * error wins over pending data and completion events. */
+static void
+sim_apply_mb_events(void)
+{
+	if (last_index != GTA4L_EMMC_CMD18) {
+		return;
+	}
+	if ((mb_error_pending != 0) &&
+	    (counter_value >= mb_error_due)) {
+		mb_error_pending = 0;
+		mb_tc_pending = 0;
+		mb_last_brr_pending = 0;
+		mb_active = 0;
+		normal_int &= (uint16_t)~GTA4L_EMMC_INT_BRR;
+		error_int |= mb_fail_error;
+		return;
+	}
+	if ((mb_last_brr_pending != 0) &&
+	    (counter_value >= mb_last_brr_due)) {
+		mb_last_brr_pending = 0;
+		sim_fill_mb_block(mb_argument + mb_done);
+		normal_int |= GTA4L_EMMC_INT_BRR;
+	}
+	if ((mb_tc_pending != 0) && (counter_value >= mb_tc_due)) {
+		mb_tc_pending = 0;
+		normal_int |= GTA4L_EMMC_INT_TC;
+	}
+}
+
 /* Minimal command engine for the stage-3 scenarios. CMD0 and CMD1 complete
  * normally; CMD2 can fail with CMD_CRC and synthetic R2 words, CMD3 can omit
  * or delay its completion, and the identification sequence can complete so the
@@ -716,6 +760,14 @@ sim_command(uint16_t command)
 		mb_count = block_count;
 		mb_done = 0;
 		mb_active = 1;
+		mb_tc_pending = 0;
+		mb_last_brr_pending = 0;
+		mb_error_pending = 0;
+		if (mb_error_delay_us >= 0) {
+			mb_error_pending = 1;
+			mb_error_due = counter_value +
+			    (uint64_t)mb_error_delay_us;
+		}
 		buffer_index = 0;
 		sim_fill_mb_block(mb_argument);
 		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
@@ -807,6 +859,7 @@ gta4l_emmc_probe_test_read16(uint32_t space, uint32_t offset)
 			sdhci_read_count[offset]++;
 		}
 		if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
+			sim_apply_mb_events();
 			if (last_index == GTA4L_EMMC_CMD3) {
 				cmd3_normal_reads++;
 				if ((cmd3_late_cc != 0) &&
@@ -830,6 +883,7 @@ gta4l_emmc_probe_test_read16(uint32_t space, uint32_t offset)
 			return normal_int;
 		}
 		if (offset == GTA4L_EMMC_REG_ERROR_INT_STATUS) {
+			sim_apply_mb_events();
 			if (last_index == GTA4L_EMMC_CMD7) {
 				sim_apply_cmd7_events();
 			}
@@ -899,13 +953,31 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 					    ~GTA4L_EMMC_INT_BRR;
 					error_int |= mb_fail_error;
 				} else if (mb_done < mb_count) {
-					sim_fill_mb_block(mb_argument +
-					    mb_done);
+					if ((mb_done == (mb_count - 1u)) &&
+					    (mb_last_brr_delay_us >= 0)) {
+						normal_int &= (uint16_t)
+						    ~GTA4L_EMMC_INT_BRR;
+						mb_last_brr_pending = 1;
+						mb_last_brr_due = counter_value +
+						    (uint64_t)mb_last_brr_delay_us;
+					} else {
+						sim_fill_mb_block(mb_argument +
+						    mb_done);
+					}
 				} else {
 					mb_active = 0;
 					normal_int &= (uint16_t)
 					    ~GTA4L_EMMC_INT_BRR;
-					normal_int |= GTA4L_EMMC_INT_TC;
+					if (mb_no_tc == 0) {
+						if (mb_tc_delay_us >= 0) {
+							mb_tc_pending = 1;
+							mb_tc_due = counter_value +
+							    (uint64_t)mb_tc_delay_us;
+						} else {
+							normal_int |=
+							    GTA4L_EMMC_INT_TC;
+						}
+					}
 				}
 			}
 			return word;
@@ -1048,6 +1120,7 @@ gta4l_emmc_probe_test_delay_us(uint32_t microseconds)
 	counter_value += ((uint64_t)microseconds * SIM_COUNTER_HZ +
 	    999999u) / 1000000u;
 	sim_apply_cmd7_events();
+	sim_apply_mb_events();
 }
 
 uint64_t
@@ -1644,6 +1717,70 @@ main(int argc, char **argv)
 		cmd7_tc_immediate = 1;
 		mb_mode_arg = 1;
 		mb_stop_no_tc = 1;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-md-drain-tc") == 0) {
+		/* Every sector drains, but TC arrives only inside the
+		 * post-bound window; the pass succeeds and reports the drain
+		 * resolution. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_tc_delay_us = (int)GTA4L_EMMC_DATA_TIMEOUT_US + 1000;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-md-drain-brr") == 0) {
+		/* The last sector becomes buffer-read ready only inside the
+		 * post-bound window; the drain reads it and TC follows. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_last_brr_delay_us = (int)GTA4L_EMMC_DATA_TIMEOUT_US + 1000;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-md-drain-error") == 0) {
+		/* Every sector drains but TC is withheld; a data CRC error
+		 * becomes visible inside the post-bound window and keeps its
+		 * own result code. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_no_tc = 1;
+		mb_error_delay_us = (int)GTA4L_EMMC_DATA_TIMEOUT_US + 1000;
+		mb_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+	} else if (strcmp(scenario, "probe-md-stall-tc") == 0) {
+		/* Attempt-2 replay: every sector drains and TC never comes;
+		 * the pass reports an exhausted post-bound window. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_no_tc = 1;
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
@@ -2426,7 +2563,8 @@ main(int argc, char **argv)
 		check(panicked == 1, "a mid-CMD18 data error did not panic");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-11 "
-		    "step=19 mb=3 stop=0/1/1/0003/0000/00000000/00000c1b/"
+		    "step=19 mb=3 drain=0/0/0/0 "
+		    "stop=0/1/1/0003/0000/00000000/00000c1b/"
 		    "00000000 fail=1/18/2/0000123a/0010/0001/00000000/19")
 		    != NULL,
 		    "the mid-CMD18 failure report lost the block ordinal, the "
@@ -2441,7 +2579,8 @@ main(int argc, char **argv)
 		check(panicked == 1, "a CMD12 timeout did not panic");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-7 "
-		    "step=19 mb=20 stop=-7/1/1/0001/0000/00000000/00000c1b/"
+		    "step=19 mb=20 drain=0/0/0/0 "
+		    "stop=-7/1/1/0001/0000/00000000/00000c1b/"
 		    "00000000 fail=1/12/0/00000c1b/0000/0001/00000000/19")
 		    != NULL,
 		    "the CMD12 timeout report lost the stop capture or the "
@@ -2452,6 +2591,79 @@ main(int argc, char **argv)
 		    "the probe did not issue exactly one explicit stop");
 		check(cmd_count == 35u,
 		    "the stop-timeout sequence did not finish");
+	} else if (strcmp(scenario, "probe-md-drain-tc") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the drained MD probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE REPORT: rc=0") != NULL,
+		    "a drain-resolved transfer was reported as a failure");
+		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
+		    "the drained MD report does not name the MD step and log "
+		    "counts");
+		sim_expected_blocks_label(expected, sizeof(expected),
+		    "MBLOCKS", 1);
+		check(strstr(panic_message, expected) != NULL,
+		    "the drained MD report lost the CMD18 sums");
+		check(strstr(panic_message, "mbsame=1 drain=1/1/0/121") != NULL,
+		    "the drained MD report lost the completion-only drain "
+		    "resolution");
+		check(mb_stop_count == 1u,
+		    "the drained MD probe did not issue exactly one stop");
+		check(cmd_count == 35u,
+		    "the drained MD probe did not issue CMD18 and one CMD12");
+	} else if (strcmp(scenario, "probe-md-drain-brr") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the late-BRR MD probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE REPORT: rc=0") != NULL,
+		    "a pending-BRR drain was reported as a failure");
+		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
+		    "the late-BRR MD report does not name the MD step and log "
+		    "counts");
+		sim_expected_blocks_label(expected, sizeof(expected),
+		    "MBLOCKS", 1);
+		check(strstr(panic_message, expected) != NULL,
+		    "the late-BRR MD report lost the CMD18 sums");
+		check(strstr(panic_message, "mbsame=1 drain=1/1/1/121") != NULL,
+		    "the late-BRR MD report lost the block-drain resolution");
+		check(mb_stop_count == 1u,
+		    "the late-BRR MD probe did not issue exactly one stop");
+		check(cmd_count == 35u,
+		    "the late-BRR MD probe did not issue CMD18 and one CMD12");
+	} else if (strcmp(scenario, "probe-md-drain-error") == 0) {
+		check(panicked == 1, "a drain-window data error did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-12 "
+		    "step=19 mb=20 drain=1/0/0/101 "
+		    "stop=0/1/1/0003/0000/00000000/00000c1b/"
+		    "00000000 fail=1/18/2/0000123a/0020/0001/00000000/19")
+		    != NULL,
+		    "the drain-window error report lost the drain outcome, the "
+		    "error result or the terminal record");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a drain-window error still emitted the success report");
+		check(mb_stop_count == 1u,
+		    "the drain-window error transfer was not stopped");
+		check(cmd_count == 35u,
+		    "the drain-window error did not reach the explicit stop");
+	} else if (strcmp(scenario, "probe-md-stall-tc") == 0) {
+		check(panicked == 1, "an exhausted drain window did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-11 "
+		    "step=19 mb=20 drain=1/0/0/50000 "
+		    "stop=0/1/1/0003/0000/00000000/00000c1b/"
+		    "00000000 fail=1/18/2/0000123a/0000/0001/00000000/19")
+		    != NULL,
+		    "the exhausted drain report lost the drain outcome or the "
+		    "terminal record");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "an exhausted drain still emitted the success report");
+		check(mb_stop_count == 1u,
+		    "the exhausted drain transfer was not stopped");
+		check(cmd_count == 35u,
+		    "the exhausted drain did not reach the explicit stop");
 	} else if (strcmp(scenario, "probe-mb-bare-refuse") == 0) {
 		check(panicked == 1, "a bare MD argument was not refused");
 		check(strstr(panic_message, "REFUSED") != NULL,
@@ -2704,9 +2916,10 @@ main(int argc, char **argv)
 		    "the synthetic width MD report lost the CMD18 sums");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE LSTLBA=4294967294 sum=ffffffff "
-		    "mbsame=0 mbdiv=4294967295\n") != NULL,
+		    "mbsame=0 mbdiv=4294967295 "
+		    "drain=1/1/65535/100000\n") != NULL,
 		    "the synthetic width MD report lost the widest mismatch "
-		    "suffix");
+		    "and drain suffix");
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width MD report does not fit the "
 		    "2048-byte panic buffer including the NUL");

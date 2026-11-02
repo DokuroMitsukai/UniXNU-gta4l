@@ -141,6 +141,13 @@ gta4l_emmc_probe_width_fixture(int form)
 	host.cmd1_attempts = 20u;
 	host.cmd1_timeouts = 20u;
 
+	/* Post-bound drain bound: the block field can reach the 16-bit
+	 * transfer count and the iteration field the poll cap. */
+	host.multi_drain_used = 1;
+	host.multi_drain_resolved = 1;
+	host.multi_drain_blocks = 0xFFFFu;
+	host.multi_drain_iterations = GTA4L_EMMC_MAX_POLL_ITERATIONS;
+
 	/* CMD7 capture: a valid late CC and TC at the last poll iteration,
 	 * a full trace with a late stored entry, and a field-wise overflow
 	 * bound (one observed change per poll iteration at most). */

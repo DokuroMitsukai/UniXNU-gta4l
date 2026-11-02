@@ -205,6 +205,10 @@
 #define GTA4L_EMMC_CMD1_ATTEMPT_US         100000u
 #define GTA4L_EMMC_CMD13_ATTEMPT_US        100000u
 #define GTA4L_EMMC_DATA_TIMEOUT_US         1000000u
+/* One bounded secondary window after an error-free data-bound expiry: ready
+ * blocks are drained and TC is re-checked. It is reported separately so an
+ * exhausted window stays distinguishable from the primary bound. */
+#define GTA4L_EMMC_DATA_DRAIN_US           500000u
 #define GTA4L_EMMC_CMD1_TIMEOUT_US         2000000u
 #define GTA4L_EMMC_RCG_TIMEOUT_US          100000u
 #define GTA4L_EMMC_POLL_STEP_US            10u
@@ -445,6 +449,13 @@ struct gta4l_emmc_host {
 	uint32_t multi_stop_response[4];
 	uint8_t  multi_stop_valid;
 	uint8_t  multi_stop_capture_valid;
+	/* Post-bound drain (diagnostics only). The secondary window is entered
+	 * only when the primary data poll bound expires without an error or
+	 * TC; it drains ready blocks and re-checks TC. */
+	uint32_t multi_drain_blocks;     /* blocks drained in that window */
+	uint32_t multi_drain_iterations; /* poll iterations it consumed */
+	uint8_t  multi_drain_used;
+	uint8_t  multi_drain_resolved;   /* transfer completion observed */
 };
 
 /* Controller reset, GCC 400 kHz setup, retained-rail power handshake, pads. */

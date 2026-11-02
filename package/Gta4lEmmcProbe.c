@@ -694,10 +694,14 @@ gta4l_emmc_probe_report_multi_failure(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe_range *range, int result)
 {
 	panic("GTA4L-EMMC PROBE FAILED: mb read lba=%u n=%u rc=%d step=%u "
-	    "mb=%u stop=%d/%u/%u/%04x/%04x/%08x/%08x/%08x "
+	    "mb=%u drain=%u/%u/%u/%u "
+	    "stop=%d/%u/%u/%04x/%04x/%08x/%08x/%08x "
 	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
 	    range->entries_lba, GTA4L_EMMC_PROBE_ARRAY_BLOCKS, result,
 	    host->last_step, host->multi_block,
+	    (unsigned int)host->multi_drain_used,
+	    (unsigned int)host->multi_drain_resolved,
+	    host->multi_drain_blocks, host->multi_drain_iterations,
 	    (int)host->multi_stop_result,
 	    (unsigned int)host->multi_stop_valid,
 	    (unsigned int)host->multi_stop_capture_valid,
@@ -721,7 +725,7 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe_range *range, int mb_mode)
 {
 	const uint32_t *content = (mb_mode != 0) ? range->mb : range->array;
-	char mb_suffix[32];
+	char mb_suffix[64];
 	uint32_t mb_suffix_length = 0;
 
 	mb_suffix[0] = '\0';
@@ -735,6 +739,22 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 			mb_suffix_length = gta4l_emmc_probe_append_decimal(
 			    mb_suffix, mb_suffix_length, range->mb_div);
 		}
+		mb_suffix_length = gta4l_emmc_probe_append_text(mb_suffix,
+		    mb_suffix_length, " drain=");
+		mb_suffix_length = gta4l_emmc_probe_append_decimal(mb_suffix,
+		    mb_suffix_length, (uint32_t)host->multi_drain_used);
+		mb_suffix_length = gta4l_emmc_probe_append_text(mb_suffix,
+		    mb_suffix_length, "/");
+		mb_suffix_length = gta4l_emmc_probe_append_decimal(mb_suffix,
+		    mb_suffix_length, (uint32_t)host->multi_drain_resolved);
+		mb_suffix_length = gta4l_emmc_probe_append_text(mb_suffix,
+		    mb_suffix_length, "/");
+		mb_suffix_length = gta4l_emmc_probe_append_decimal(mb_suffix,
+		    mb_suffix_length, host->multi_drain_blocks);
+		mb_suffix_length = gta4l_emmc_probe_append_text(mb_suffix,
+		    mb_suffix_length, "/");
+		mb_suffix_length = gta4l_emmc_probe_append_decimal(mb_suffix,
+		    mb_suffix_length, host->multi_drain_iterations);
 	}
 	mb_suffix[mb_suffix_length] = '\0';
 

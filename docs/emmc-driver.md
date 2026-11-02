@@ -39,9 +39,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 112 scenarios and 62 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 116 scenarios and 67 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 44 scenarios and 34 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 48 scenarios and 34 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -1120,8 +1120,8 @@ The audit after that attempt found that the transfer-mode word omitted
 single-block transfer and the helper would have timed out after one sector.
 The working tree now sets the bit, both simulators reject a CMD18 whose mode
 word lacks it, and both suites carry a mutation control that removes it (core
-112/62, probe 44/34). The attempt-1 image never exercised the defect because
-it stopped before the MD phase.
+112/62, probe 44/34 at that attempt). The attempt-1 image never exercised the
+defect because it stopped before the MD phase.
 
 Attempt 2 (2026-11-02) used the corrected build from clean `209766c4` with
 `Gta4lEmmc.c 942117eb…`, `Gta4lEmmc.h dce8a428…`, `Gta4lEmmcProbe.c
@@ -1176,6 +1176,37 @@ the owner photo file is not in this tree and has no hash here. A further
 attempt needs a fresh owner approval; a marginal-bound versus stalled-block
 follow-up is not in this tree.
 
+### 5.3.8 Attempt 3: bounded post-bound drain (host-side, 2026-11-02)
+
+Attempt 3 keeps the 1,000,000 µs primary data bound unchanged and adds one
+bounded secondary window, `GTA4L_EMMC_DATA_DRAIN_US` (500,000 µs), in
+`gta4l_emmc_read_multi()`. The window is entered only when the primary poll
+expires without either a latched error or `TC`; it drains every ready `BRR`
+sector into the caller's buffer and re-checks `TC`. An error that appears in
+the window is mapped exactly like an in-loop error and the first failing
+result is kept. The explicit `CMD12` stop still runs after either outcome, and
+the secondary window is capped by the same
+`GTA4L_EMMC_MAX_POLL_ITERATIONS` helper as every other poll, so it cannot
+extend the transfer without bound.
+
+Four diagnostics in `struct gta4l_emmc_host` make the outcome visible:
+`multi_drain_used`, `multi_drain_resolved`, `multi_drain_blocks` and
+`multi_drain_iterations`. The probe's MD failure line gains
+`drain=used/resolved/blocks/iterations` between `mb=` and `stop=`; the MD
+success `LSTLBA` line appends the same field after `mbsame`/`mbdiv`. The
+synthetic width fixture pins the field-wise maxima (1/1/65535/100000).
+
+Simulator coverage now includes completion arriving only inside the drain
+window, a last-sector `BRR` that arrives only inside the window, a data error
+that appears inside the window, and an attempt-2 replay where every sector
+drains but `TC` never arrives (the window is exhausted and the CMD18 result
+remains `-11`). The core suite is 116 scenarios with 67 mutation controls and
+the probe suite is 48 scenarios with 34 mutation controls, including drain
+mutation controls for the window entry, `TC` re-check, drained-block count,
+error mapping and resolution flag. Attempt 3 has not been flashed or run on
+hardware; no owner approval for that exists in this tree, so this section
+records a host-side candidate only.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
@@ -1192,8 +1223,10 @@ On a full success the probe panics with a report containing:
   (`LSTLBA=61071359`), and the `step=18`/`log=30` stage-A counters.
 - In the optional MD mode (`gta4l-emmc-mb=1`) the header line gains ` mb=1`,
   `BLOCKS` is replaced by `MBLOCKS 2=… 22=…` carrying the CMD18 pass sums, and
-  the `LSTLBA` line gains `mbsame=1` or `mbsame=0 mbdiv=<first differing LBA>`;
-  the counters are `step=19`/`log=51`.
+  the `LSTLBA` line gains `mbsame=1` or `mbsame=0 mbdiv=<first differing LBA>`
+  followed by `drain=used/resolved/blocks/iterations`; the counters are
+  `step=19`/`log=51`. An MD failure line carries the same `drain` field
+  between `mb=` and `stop=`.
 
 Stage 2 stops with `GTA4L-EMMC HOST REPORT` and stage 3 with
 `GTA4L-EMMC IDENT REPORT`. The §5.3.4 candidate completed the stage-3
@@ -1239,7 +1272,8 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   same-session live recovery readback `[C]`; the §5.3.7 attempt 2 then
   stopped at block ordinal 20 in one open-ended `CMD18` (at least 20 of 21
   blocks drained) before the data bound expired, but the transfer and the
-  `CMD12` stop did not complete `[C]`. A
+  `CMD12` stop did not complete `[C]`. The §5.3.8 post-bound drain candidate
+  is host-side only and has not run on hardware `[U]`. A
   complete multi-block transfer, a filesystem, block-device publication and a
   reliability test have not run `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
@@ -1264,7 +1298,9 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   host-tested (5.3.7); its corrected 2026-11-02 attempt reached the MD phase
   and stopped at block ordinal 20 in one `CMD18` before the data bound
   expired, and the `CMD12` stop did not report `CC` or `TC`, so a complete
-  multi-block transfer result still does not exist `[C]/[S]/[U]`.
+  multi-block transfer result still does not exist `[C]/[S]/[U]`. Attempt 3
+  (5.3.8) adds a bounded post-bound drain and host simulator coverage; it has
+  not been flashed or run on hardware, so its on-device result is `[U]`.
 - An 8-us CMD1-to-CMD2 timing candidate is specified in
   `docs/emmc-cmd1-gap-candidate.md` and was built, flashed and run on
   2026-11-01; it completed identification on three units (5.3.4) `[C]`. The
@@ -1293,6 +1329,7 @@ completed with CC and TC on three units, so the capture gap is closed but the
 historical timeout is still unexplained. The stage-A extended content read is
 complete: repeated CMD17 reads covered the GPT header and the full 84-entry
 primary array, and the live recovery readback bound every sum. The ladder's
-next rungs are the optional A2/F2 multi-block CMD18+CMD12 read and Stage B
-(bus width and speed); no filesystem, block-device publication, mount, write,
-DMA, CQE or ICE result exists yet.
+next rungs are the attempt-3 A2/F2 multi-block CMD18+CMD12 hardware read
+(owner approval and flash pending) and Stage B (bus width and speed); no
+filesystem, block-device publication, mount, write, DMA, CQE or ICE result
+exists yet.
