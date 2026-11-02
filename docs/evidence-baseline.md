@@ -626,7 +626,7 @@ bytes of the previously booted image `[S]`.
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `ce5e4cd35a1164d78642abba3db7c9d34d383f58d08f7c5d6bb3a5087209e1f1` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `12d9440c10ef936c76cab44eb4796391a2c79a92ce70b044965e309e45dc6cbe` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `3d3d6f007051f795baa6d1db1f115d2d51206449b7a055de10ba7b907111cef1` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
 | Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `6b43e86bbe4d21ba192fcad14c6db05397d8496933a761c21a66f3a7cc97df8d` |

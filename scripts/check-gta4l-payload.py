@@ -206,7 +206,8 @@ def main():
     parser.add_argument('--expect-diagnostic',
                         choices=('any', 'host-init', 'audit', 'snapshot',
                                  'emmc-probe-1', 'emmc-probe-2',
-                                 'emmc-probe-3', 'emmc-probe-4'),
+                                 'emmc-probe-3', 'emmc-probe-4',
+                                 'emmc-probe-5'),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

@@ -234,7 +234,7 @@ payload hash. Replay inputs:
 | `scripts/build-gta4l-diagnostic-payload.py` | `ea8c63c1ff62b2fe0b1c43e54d1180700ddcb124deec8ac292ee466a33efa297` |
 | `scripts/package-gta4l-diagnostic.py` | `d4c97f946828781529d75f18c0c7d63c87a98801e110d483cddea4175eabae10` |
 | `scripts/check-gta4l-boot-image.py` | `879ee0ede5ddbebe4e24915c8720fa40a7b1e253642f6fd2a4d4dff937586bf4` |
-| `scripts/check-gta4l-payload.py` | `07044376c192418f2fd6f238c06468d21e60da9f782eca509d30e94a5a3e5fc8` |
+| `scripts/check-gta4l-payload.py` | `1706a023651c8ad18a1cfc4acfd247ffb04e4ae0e6145679bc484d9cfb5c6d9f` |
 
 The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2`,
 `emmc-probe-3`, `emmc-probe-4` and `emmc-probe-5`, mapping to
