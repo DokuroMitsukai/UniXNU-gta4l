@@ -93,13 +93,19 @@ partition layout, payload policy and packaging.
   host-tested: it switches the card EXT_CSD BUS_WIDTH to 4-bit and then
   8-bit, verifies the byte-183 readback and the SDHCI `HOST_CONTROL` bit,
   runs the CMD19/CMD14 bus test at each width, and repeats the stage-A
-  content sums against the 1-bit baseline. The B1 image was flashed to BOOT
-  only and booted three times on 2026-11-02. Only one boot reached B1; it
+  content sums against the 1-bit baseline. The first B1 image was flashed to
+  BOOT only and booted three times on 2026-11-02. Only one boot reached B1; it
   stopped at the 4-bit byte-183 readback (`sw=0`, `swrc=-19`, stop=1), before
   CMD19/CMD14 or any per-width content pass. The other two boots stopped
   before B1 at the CMD3-completion timeout and a block-1 CMD17 data timeout.
-  F3 remains unproven (`docs/emmc-driver.md` §5.3.10,
-  `docs/emmc-cmd2-crc-audit.md` §2.16).
+  A rebuilt image with the report-completeness fields was then flashed to
+  BOOT only and booted five times (warm resets): two boots reached B1 and
+  reproduced the same 4-bit stop with a clean CMD6 R1 (`c6=00000900`), the
+  host width bit set and read back (`ha=02`), and an EXT_CSD read at the
+  attempted width that returned the 1-bit content (`es=000009cb`, byte 183
+  still 0). The other three boots failed before B1 at two TC-only/no-error
+  CMD17 timeouts and one CMD3-completion timeout. F3 remains unproven
+  (`docs/emmc-driver.md` §5.3.12, `docs/emmc-cmd2-crc-audit.md` §2.18).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

@@ -98,7 +98,18 @@ and a lost-host-width model. That change refreshes the `docs/emmc-driver.md`,
 `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c` and
 `porting.toml` rows, adds no manifest row, and keeps the table at 45 rows; the
 probe simulator, width fixture, probe test, CMD7 finding and CMD2 audit are
-outside the table. This document's
+outside the table. A further refresh on `2026-11-02` records the Stage-B1R2
+diagnostic re-run (`docs/emmc-driver.md` §5.3.12,
+`docs/emmc-cmd2-crc-audit.md` §2.18): the rebuilt image (base `24f8c9d`) was
+flashed BOOT only and booted five times as warm force reboots. Two boots
+reached B1 and reproduced the 4-bit stop with a clean CMD6 R1, the host width
+bit set and read back, and an EXT_CSD read at the attempted width returning
+the 1-bit content (byte 183 still 0); three stopped before B1 (two
+TC-only/no-error CMD17 timeouts and the H8 CMD3 timeout), so F3 remains
+`[U]`. That change refreshes the `README.md`, `docs/emmc-driver.md` and
+`porting.toml` rows, adds no manifest row, and keeps the table at 45 rows;
+`docs/emmc-cmd2-crc-audit.md` and this document are outside the table. This
+document's
 own hash
 is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
@@ -150,10 +161,11 @@ and update the table.
 | Thirty-first Stage-B1 host-side paths at this snapshot | 14 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc-probe.py`, `scripts/test-gta4l-emmc.py`) |
 | Thirty-second Stage-B1 hardware-run paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Thirty-third Stage-B1 report-completeness paths at this snapshot | 12 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/test-gta4l-emmc-probe.py`) |
-| Dirty entries at the hash snapshot | 12, exactly the thirty-third paths above |
+| Thirty-fourth Stage-B1R2 hardware-run paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
+| Dirty entries at the hash snapshot | 5, exactly the thirty-fourth paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
-The hash table describes the thirty-third working-tree snapshot: the
+The hash table describes the thirty-fourth working-tree snapshot: the
 `60817c3` base, the twenty-fourth CMD7-diagnostics batch, the twenty-fifth
 PixelExperience-provenance paths, the LinuxForGta4l organization source audit,
 the 2026-11-01 `fmt=4` fail-closed hardware runs on two units, the
@@ -161,7 +173,9 @@ the 2026-11-01 `fmt=4` fail-closed hardware runs on two units, the
 full-probe runs on two units, the stage-A extended content read on the
 owner's SM-T505N, the Stage-B1 host-side bus-width/bus-test rung, the
 2026-11-02 Stage-B1 hardware run (three boots; one B1 stop at the 4-bit
-readback), and the host-only Stage-B1 report-completeness audit. The stage-A
+readback), the host-only Stage-B1 report-completeness audit, and the
+Stage-B1R2 diagnostic re-run (five boots; two B1 stops with the new fields).
+The stage-A
 batch refreshed the `README.md`,
 `docs/emmc-driver.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
 `scripts/build-gta4l-emmc-probe.py` and `porting.toml` rows;
@@ -170,9 +184,11 @@ batch refreshed the `README.md`,
 `docs/evidence-baseline.md` are outside this hash table or not listed. The
 report-completeness batch refreshed the `docs/emmc-driver.md`,
 `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c` and
-`porting.toml` rows; it left the `README.md` bytes unchanged.
+`porting.toml` rows and left the `README.md` bytes unchanged; the Stage-B1R2
+batch then refreshed the `README.md`, `docs/emmc-driver.md` and
+`porting.toml` rows.
 Historical batch rows remain as recorded. The current snapshot is taken on top
-of `5cf8565`; the `60817c3` base row is retained as the historical base for the
+of `24f8c9d`; the `60817c3` base row is retained as the historical base for the
 batches below. The eleventh correction commit `4c447b9`
 contains exactly the five paths in its row. The
 tenth correction commit `07a36e6`
@@ -576,13 +592,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `fea88dd998b0ad18aaba634baee11da2f27ddcea68e2e63d7634cd1cb9ade193` |
+| Repository README | `README.md` | `440f22f0b9118aa2fc32c63f0f20096e11d51898ae407332c54d4876785ad264` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `a1add67721e9d74bb574f633a4ef254e3f0078528d1bb0192c8fa70b646f0937` |
+| Porting record | `porting.toml` | `8083642adab530e9611a63aee09d997604e8a70d7b0db70443f6032c280c6ebe` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `346ec13ad706ed1960ce2a1c73d2b8c3c49274c6d8989de8b3866543f8296bcc` |
+| eMMC driver record | `docs/emmc-driver.md` | `b31cdc1872fbddea871b14292f6caafa7b878ce2403d7970ed58aa6c675efc6e` |
 | eMMC core header | `package/Gta4lEmmc.h` | `57b2a53fc513cecb1f7d0ac1582b95f461dfe7b96089ed3af7c633e6c1d5ff0f` |
 | eMMC core source | `package/Gta4lEmmc.c` | `270a53aec4385073bc87c7a3dcd22980ca9d3fbd9525472798eeecf566255b6a` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `7e6e209af567d535107bca8c90b85da1cf8e27cd17cce4f46e469d087b0ab05b` |
@@ -625,7 +641,10 @@ listed. The Stage-B1 report-completeness batch refreshed five rows
 (`docs/emmc-driver.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`,
 `package/Gta4lEmmcProbe.c` and `porting.toml`) without adding a row; the probe
 simulator, width fixture, probe test, CMD7 finding and CMD2 audit are outside
-the table or not listed.
+the table or not listed. The Stage-B1R2 hardware-run batch refreshed three
+rows (`README.md`, `docs/emmc-driver.md` and `porting.toml`) without adding a
+row; `docs/emmc-cmd2-crc-audit.md` and this document are outside the table or
+not listed.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
@@ -895,6 +914,7 @@ terminal-read observation-boundary edits), run from
 | Stage-B1 bus-width/bus-test implementation | HOST-TESTED: CMD6 byte-183 switch to 4/8-bit with readback and `HOST_CONTROL` bits, CMD19/CMD14 pattern round trip, per-width stage-A content comparison, CMD6 status plus host-before/host-after and EXT_CSD readback sum, before/after pad-DLL samples, 2048-byte report bound; hardware run recorded in the next row |
 | Stage-B1 report-completeness audit (2026-11-02) | HOST-TESTED ONLY: `probe-b1-stuck-width` (card ignored the CMD6), `probe-b1-zero-readback` (empty EXT_CSD read) and `probe-b1-host-width-stuck` (lost `HOST_CONTROL` width) assert distinct `c6`/`hb`/`ha`/`es` tuples; the success case asserts each width's readback sum; the field-wise fixture still fits 2048 bytes. No build, flash or boot; F3 remains `[U]` |
 | eMMC Stage-B1 hardware run (2026-11-02) | RECORDED: three boots of the verified B1 image; attempt 1 stopped pre-B1 at the H8 CMD3-completion timeout (`stage=4`, `rc=-7`, `step=9`), attempt 2 reached B1 and stopped at the 4-bit switch readback (`sw=0`, `swrc=-19`, `stop=1`), attempt 3 stopped pre-B1 at the block-1 CMD17 (`rc=-11`, `normal=0x0002`, TC only). No CMD19/CMD14 or per-width content pass ran; F3 remains `[U]` |
+| eMMC Stage-B1R2 hardware run (2026-11-02) | RECORDED: five owner boots of the rebuilt `24f8c9d` image (warm force reboots only). Boots 1-2 reached B1 and reproduced the 4-bit stop with a clean CMD6 R1 (`c6=00000900`), the host width bit set and read back (`hb=00`, `ha=02`) and a successful EXT_CSD read returning the 1-bit content (`es=000009cb`, byte 183 still 0); boots 3-4 were TC-only/no-error CMD17 timeouts (block 1, array LBA 2) and boot 5 the H8 CMD3 timeout. No CMD19/CMD14 or content pass ran; F3 remains `[U]` |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |

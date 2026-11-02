@@ -1537,6 +1537,100 @@ that the widened report has run on a device, or that 4-bit or 8-bit transfer
 works. The old attempt-2 transcript remains ambiguous because it predates the
 fields; F3 remains `[U]`.
 
+### 2.18 Stage-B1R2 diagnostic re-run: five boots (2026-11-02)
+
+The report-completeness batch (`24f8c9d`) was built into a new B1 image from
+that commit: kernel `346ff1e0…`, payload `37ff0a62…` (contract 7/7) and boot
+image `e6d9d402…` (gate 18/18 against the `ce4d76e8…` v5 baseline). The write
+was BOOT-only: pre-flash p69 `1c64333a…`, post-flash p69 `ac356ef1…`, the
+image prefix read back as `e6d9d402…`, the unchanged tail is `a28b4ea2…`, and
+`RECOVERY` `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` were
+unchanged. The pulled boot-image gate is 18/18 and the pulled payload contract
+is 7/7. The flash record is
+`out/gta4l/ram-root-emmc-probe-b1r2-evidence/flash-record.json`; the results
+below and `hardware-run-record.json` supersede its pre-boot status. The owner
+booted the same flashed image five times without reflashing and supplied the
+reports as text (no photo file or hash in the tree). All five boots were warm
+force reboots (power + volume-down); no full shutdown or power cycle was
+performed between boots. The BOOT partition was not re-read after the boots
+at record time, so the reports are bound by the verified flash/readback
+record and the owner statement.
+
+| Boot | Reached B1? | Result |
+| --- | --- | --- |
+| 1 | **yes** | `GTA4L-EMMC B1 REPORT rc=-19 stop=1 step=18 log=30`: the stage-A 1-bit pass completed (`b0=62084b66 b1=84d0543e same=1`, `BW=1 es=000009cb`); the 4-bit rung stopped at the readback with `sw=0 swrc=-19 tt=0 hc=00 hb=00 ha=02 c6=00000900 es=000009cb`; no 8-bit attempt (`att=0`), no CMD19/CMD14 and no per-width content pass; `FAIL` all zero. |
+| 2 | **yes** | Identical tuple to boot 1; only the stack `pages`/`free` values differ. |
+| 3 | no | Block-1 CMD17 `rc=-11` (`ERR_DATA_TIMEOUT`), `step=15` (`STEP_READY`), `fail=1/17/1/0000113a/0000/0002/03f800f0/15`: `error=0`, `normal=0x0002` (`TC` only, no `CC`/`BRR`), before the GPT gate. |
+| 4 | no | Array LBA 2 CMD17 `rc=-11`, `step=16` (`STEP_PROBE_ARRAY`), `fail=1/17/2/0000113a/0000/0002/03f800f0/16`: the same TC-only/no-error terminal sample, after the GPT gate. |
+| 5 | no | H8 CMD3-completion timeout: `stage=4`, `rc=-7`, `step=9` (`STEP_CMD2`), `fail=1/3/65536/0000031a/0000/0000/03f800f0/9`; `c3l` exhausted 100,000 iterations (ticks `0x14c2bdf`), `c3t` stable; `c7*` invalid/zero; no CMD7 or width command. The full CID and the CMD3 response words were captured and match the recovery-known CID; the raw values stay in the out/ transcript. |
+
+Decode of the two B1 tuples:
+
+- `c6=00000900` is a clean R1: state TRAN (bits 12:9 = 4) and
+  READY_FOR_DATA, with the `GTA4L_EMMC_R1_ERROR_MASK` bits clear, so CMD6 was
+  accepted and `gta4l_emmc_wait_tran()` observed the card leave busy in TRAN.
+- `hb=00`/`ha=02`: `HOST_CONTROL` read 0 before the width write and the
+  4-bit bit `0x02` immediately after it, so the host register write took
+  effect; `hc=00` is the restored pre-attempt value after the failed
+  readback. This is the `gta4l_emmc_set_bus_width()` order (CMD6, CMD13
+  wait, host width, readback).
+- `es=000009cb` on both the `BW=1` and `BW=4` lines: the EXT_CSD read at the
+  attempted width succeeded (a failed read returns a non-OK error, for
+  example `-8`/`-11`/`-12`, and produces no sum) and returned the same 512
+  bytes as the 1-bit baseline.
+  The masked byte 183 was 0 (`sw=0`), so the card-visible BUS_WIDTH was
+  still 1-bit; a successful switch would set byte 183 to 1 and the sum to
+  `000009cc`.
+- The `BW=4` content fields (`b0`/`b1`/`same`/`div`, and
+  `BLOCKS 4`/`DATA 4`/`LSTLBA 4`) are zero-initialized because the rung
+  stopped before the content pass; they are not content results. The `BW=8`
+  line shows `att=0`, so the rung never reached 8-bit.
+- The `PAD` pre-rung (`pqdsd`/`pdll`/`pdst`) and end-of-run
+  (`qdsd`/`dll`/`dst`) samples are identical
+  (`00009fe4`/`6000642c`/`00000000`), so no register-level pad/DLL
+  divergence was observed across the attempt; `bif=none` remains a not-read
+  marker.
+
+Interpretation: the two B1 boots reproduce the stop exactly and match the
+card-ignored/stale-readback row of the plan's §3.1.2 decision table: CMD6 R1
+clean, the host width bit set and read back, and a successful EXT_CSD read at
+the attempted width returning 1-bit content with BUS_WIDTH = 0. For these
+boots the empty-readback tuple (`es=00000000`) and the lost-host-width tuple
+(`ha` without the width bit, `swrc=-12`) are excluded, and no pad/DLL
+register drift accompanied the stop. The report cannot observe the pad-level
+width: the readback succeeding with the exact 1-bit content is consistent
+with the transfer still running at 1-bit, so a card-side no-op and a data
+path that did not apply the new width cannot be separated from this record.
+It does show that the card's BUS_WIDTH field did not change and that the
+readback was not empty.
+
+The pre-B1 failures are unchanged in character. Boots 3 and 4 are two further
+instances of the intermittent TC-only/no-error single-block CMD17 signature
+(earlier: the A2/F2 attempt-3 boot 3 at array LBA 2 and the first B1 attempt 3
+at block 1). It still has no field-for-field simulator case: the simulator's
+`probe-read-timeout` expects a latched `DATA_TIMEOUT` (`error=0x0010`,
+`normal=0`), while these records have `error=0` and `normal=0x0002`. Boot 5
+is the H8 CMD3-completion timeout with a fresh `c3l` tick value
+(`0x14c2bdf`). Three of five boots therefore stopped before B1, so the
+report-completeness batch did not reduce the pre-B1 flakiness.
+
+Verdict: F3 remains `[U]`. The 4-bit stop is now repeatable (2/2
+B1-reaching boots) and its report-level cause is narrowed to the BUS_WIDTH
+no-op, with the empty-read and lost-register-write causes excluded for these
+boots. No code change follows from this record. The warm-reboot-only method
+is a recorded limitation: a full shutdown/power cycle was not tried, so a
+card state retained across warm resets cannot be excluded.
+
+Supported by this section: the image identity and BOOT-only flash; five
+owner-supplied boots; the warm-reboot method; the field decode; the
+repeatable 4-bit stop tuple and its exclusions; the absence of register-level
+pad/DLL drift; two further TC-only CMD17 instances; the H8 recurrence; and
+that F3 is unproven. Not supported: that the pad actually switched to 4-bit
+or stayed 1-bit; that the card rejected the switch for a specific reason;
+that the host width bit was ineffective; that a full power cycle would change
+the result; that any width transfer works; or that the TC-only/no-error
+signature has a simulator model.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout

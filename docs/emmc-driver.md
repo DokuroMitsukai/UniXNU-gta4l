@@ -18,9 +18,12 @@ the owner's SM-T505N and one of those SM-T505s `[C]`; the corrected A2/F2
 attempt then reached block ordinal 20 in one open-ended `CMD18` before the
 data bound expired `[C]`, and the §5.3.8 bounded drain reproduced the same
 stall on a later boot without resolving it `[C]`. Stage B1 (§5.3.9) is
-implemented and host-tested; the B1 image was flashed and booted three times
-(§5.3.10), but only one boot reached B1 and it stopped at the 4-bit byte-183
-readback, so F3 remains `[U]`. Card identification,
+implemented and host-tested; the first B1 image was flashed and booted three
+times (§5.3.10), and only one boot reached B1 before stopping at the 4-bit
+byte-183 readback. The B1R2 report-completeness re-run (§5.3.12) then booted
+the rebuilt image five times: two boots reproduced the 4-bit stop with the
+new fields and three stopped before B1, so F3 remains `[U]`. Card
+identification,
 single-block sector reads and
 a partial multi-block data phase are therefore observed; a complete
 multi-block read, a filesystem, block-device publication and the later stages
@@ -1425,6 +1428,8 @@ host-tested `[S]`; the B1 hardware result is a failing stop, so F3 remains
 `[U]`. On hardware, a 4-bit CMD19/CMD14 success plus a matching 4-bit content
 pass is the plan's F3 PASS; an 8-bit failure is a separate, exact binding
 (`swrc`, `trc`/`tw`/`te`, or `div`) and does not invalidate the 4-bit result.
+The B1R2 re-run of this rung (five boots, two B1 stops with the
+report-completeness fields) is recorded in §5.3.12.
 
 ### 5.3.10 Stage-B1 hardware run: three boots (2026-11-02)
 
@@ -1569,6 +1574,60 @@ performed. The old attempt-2 transcript cannot be retroactively decoded: it
 predates these fields. A future boot of a rebuilt B1 image would separate the
 three readback causes directly. F3 remains `[U]`, and the next device step
 still requires explicit owner approval.
+
+### 5.3.12 Stage-B1R2 diagnostic run: five boots (2026-11-02)
+
+The `24f8c9d` report-completeness build was packaged as kernel `346ff1e0…`,
+payload `37ff0a62…` (contract 7/7) and boot image `e6d9d402…` (gate 18/18
+against the `ce4d76e8…` v5 baseline), then flashed BOOT-only: pre-flash p69
+`1c64333a…`, post-flash p69 `ac356ef1…`, the image prefix read back as
+`e6d9d402…`, the unchanged tail `a28b4ea2…`, and `RECOVERY` `14e11370…`,
+EFS `51fa824c…` and sec_efs `3a265d58…` unchanged. The pulled gates pass
+18/18 and 7/7. The owner booted the same image five times without
+reflashing and supplied the reports as text (no photo file or hash in the
+tree). Every reboot was a power + volume-down warm reset; no full shutdown or
+power cycle was performed. The BOOT partition was not re-read after the
+boots at record time; the reports are bound by the verified flash/readback
+record and the owner statement. Evidence:
+`out/gta4l/ram-root-emmc-probe-b1r2-evidence/` (`flash-record.json`,
+`hardware-run-record.json`, five transcripts).
+
+| Boot | B1? | Result |
+| --- | --- | --- |
+| 1 | yes | `B1 REPORT rc=-19 stop=1 step=18 log=30`; `BW=1` pass (`es=000009cb`, `b0=62084b66`, `b1=84d0543e`, `same=1`); `BW=4` stop `sw=0 swrc=-19 tt=0 hc=00 hb=00 ha=02 c6=00000900 es=000009cb`; `BW=8 att=0`; `FAIL` all zero. |
+| 2 | yes | Identical tuple to boot 1 (stack `pages`/`free` differ only). |
+| 3 | no | Block-1 CMD17 `-11`, `step=15`, `fail=1/17/1/0000113a/0000/0002/03f800f0/15` (`TC` only, `error=0`), before the GPT gate. |
+| 4 | no | Array LBA 2 CMD17 `-11`, `step=16`, `fail=1/17/2/0000113a/0000/0002/03f800f0/16`, after the GPT gate. |
+| 5 | no | H8 CMD3 timeout `-7`, `step=9`, `fail=1/3/65536/0000031a/0000/0000/03f800f0/9`; `c3l` 100,000 iterations (ticks `0x14c2bdf`); no CMD7 or width command. |
+
+Wire semantics of the two B1 tuples:
+
+- `c6=00000900` is a clean R1 (TRAN + READY_FOR_DATA, error mask clear) and
+  the CMD13 TRAN wait passed, so CMD6 was accepted.
+- `hb=00`/`ha=02`: `HOST_CONTROL` read 0 before the width write and the
+  4-bit bit `0x02` after it, so the host register write took effect; `hc=00`
+  is the restored pre-attempt value after the failed readback.
+- `es=000009cb` equals the 1-bit baseline sum on both lines: the EXT_CSD
+  read at the attempted width succeeded and returned the same 512 bytes.
+  Byte 183 was 0 (`sw=0`), so the card-visible BUS_WIDTH stayed 1-bit; a
+  successful switch would read `000009cc`.
+- The failed width's content fields and its `BLOCKS`/`DATA`/`LSTLBA` lines
+  are zero-initialized (no content pass ran); the `BW=8` line shows `att=0`.
+- The `PAD` pre-rung and end-of-run samples are identical
+  (`00009fe4`/`6000642c`/`00000000`), so no register-level pad/DLL drift was
+  observed.
+
+Status: F3 remains `[U]`. The 4-bit stop is repeatable (2/2 B1-reaching
+boots) and its report-level cause is narrowed to the card-visible BUS_WIDTH
+no-op; the empty-readback and lost-host-width causes are excluded for these
+boots, and no pad/DLL register drift accompanied the stop. The report cannot
+observe the pad-level width, so a card-side no-op and a data path that did
+not apply the new width stay indistinguishable; the warm-only reboot method
+also leaves a retained card state open. Three of five boots stopped before
+B1 (two TC-only/no-error CMD17 timeouts, one H8 CMD3 timeout); the TC-only
+signature still has no field-for-field simulator case. Host checks are
+unchanged (core 136/80, probe 57/34). No code change follows from this
+record; any further device step needs an explicit owner approval.
 
 ## 6. Expected report
 
@@ -1721,8 +1780,10 @@ open-ended CMD18 is proven beyond one block, but the ordinal-20 stall
 reproduced and the bounded drain did not resolve it, so F2 is not established.
 The ladder's next rung is Stage B (bus width and speed); the Stage-B1
 bus-width rung is implemented and host-tested (§5.3.9) and ran on 2026-11-02
-(§5.3.10). Only one of three boots reached B1, and it stopped at the 4-bit
-byte-183 readback, so F3 remains unestablished; a B1 diagnostic, not B2, is
-the next owner-gated step. The pre-B1 H8/CMD17 failures also need a plan
-decision. No filesystem, block-device publication, mount, write, DMA, CQE or
+(§5.3.10). The B1R2 report-completeness re-run (§5.3.12) then booted the
+rebuilt image five times: two boots reproduced the 4-bit stop with a clean
+CMD6 R1, the host width bit set and an EXT_CSD readback still at 1-bit, and
+three stopped before B1 (two TC-only CMD17 timeouts, one CMD3 timeout), so
+F3 remains unestablished. Any further B1/B2 step is owner-gated, and the
+pre-B1 H8/CMD17 failures also need a plan decision. No filesystem, block-device publication, mount, write, DMA, CQE or
 ICE result exists yet.
