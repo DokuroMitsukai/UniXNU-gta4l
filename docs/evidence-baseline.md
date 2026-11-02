@@ -63,7 +63,11 @@ SM-T505N, and every per-LBA sum matched a same-session read-only recovery
 readback; it refreshes the `README.md`, `docs/emmc-driver.md`,
 `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
 `scripts/build-gta4l-emmc-probe.py` and `porting.toml` rows, adds no manifest
-row, and keeps the table at 45 rows. This document's own hash
+row, and keeps the table at 45 rows. A further refresh on `2026-11-02` records
+the corrected A2/F2 attempt 2: the image entered the MD phase, stopped at
+block ordinal 20 and then hit the helper's data bound, and the `CMD12` stop
+did not complete; it refreshes the `README.md` and `docs/emmc-driver.md` rows,
+adds no manifest row, and keeps the table at 45 rows. This document's own hash
 is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
@@ -531,13 +535,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `77ac33fb586940602d8c97dbe7a141fca6594353b966eeb225c8c593a1811198` |
+| Repository README | `README.md` | `7618e157d7d2086ed2c2e734560ed5b0b522f4c03a569a0ddfaf2d8ceaf8f8b7` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
 | Porting record | `porting.toml` | `bf999aa62d432d10de67c2879e1040dfca9605c6ca59ef81079c2b49967a4e9b` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `fda03c42b324f05ee5900c3e158a93486a52a50898d44af90a5eb9f57584ccfe` |
+| eMMC driver record | `docs/emmc-driver.md` | `42144f8f66548cbefa3c7eae2e13d5304dc9b717904b77e4187630c398ee4c3f` |
 | eMMC core header | `package/Gta4lEmmc.h` | `dce8a4288c61ab37570635fe20e0434548809406cff016057bc8fa24133c4c79` |
 | eMMC core source | `package/Gta4lEmmc.c` | `942117eb3e7a43f3f7fbf7df0d9cc4fe603d06c01091ffb98801a0c8c76553cc` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `e67ad2bce17fbfc3b95752c007dbd4eeb7cbecce81eaf3a5ba98deb77a47ac86` |
@@ -1083,6 +1087,77 @@ full transcription and decoding are in `docs/emmc-cmd2-crc-audit.md` §2.13 and
 | `porting.toml` parse with `tomllib` | 13 areas |
 | `git diff --check` | PASS: clean |
 
+#### A2/F2 multi-block attempt-2 hardware-run record (2026-11-02)
+
+The attempt-2 image is the corrected optional multi-block build
+(`gta4l-emmc-probe=1` plus `gta4l-emmc-mb=1`) from clean `209766c4` with
+`Gta4lEmmc.c 942117eb…`, `Gta4lEmmc.h dce8a428…` and `Gta4lEmmcProbe.c
+e67ad2bc…`; probe archive `7c08c6fb…`, kernel `5132f235…`, payload `a5d9e63f…`
+(83,886,080 bytes, contract 7/7) and boot image `115e5c63…` (85,688,320
+bytes, gate 18/18 against the v5 baseline `ce4d76e8…`). The build provenance
+is `out/gta4l/ram-root-emmc-probe-stage2b-attempt2-evidence/build-provenance.json`.
+
+The BOOT-only flash record for the owner's SM-T505N is
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt2-evidence/flash-record.json`:
+pre-flash partition `64fa7190…` (the attempt-1 image `cac4356b…` plus its
+unchanged tail `a28b4ea2…`), post-flash `4ca40951…`, image-byte readback
+`115e5c63…`, tail `a28b4ea2…` unchanged, `RECOVERY` `14e11370…` unchanged,
+EFS `51fa824c…` and sec_efs `3a265d58…` unchanged; no other partition was
+written. A re-read on the still-connected device after the owner's boot
+returned the same partition and prefix hashes, so the panic belongs to this
+image.
+
+The owner booted the image and supplied a screen OCR text; the attached photo
+file and hash are not in this tree. The transcription is
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt2-evidence/stage2b-attempt2-failure.txt`.
+The report entered the MD phase (`step=19`, `STEP_PROBE_MB`) and failed:
+
+```text
+GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=4294967285 step=19
+mb=20 stop=4294967289/1/1/0000/0000/03f80af6/00000c1b/00000000
+fail=1/18/2/0000123a/0000/0021/03f80af6/19
+```
+
+`rc=-11` (`GTA4L_EMMC_ERR_DATA_TIMEOUT`). The CMD18 record (index 18,
+argument 2, command `0x123a`, `normal=0x0021` = `CC | BRR`, `error=0`,
+present `0x03f80af6`, step 19) shows the command was accepted, the buffer-read
+path was active, no error was latched and `TC` was never observed. `mb=20` is
+the failing/completed block ordinal (0-based; `Gta4lEmmc.h:438`), not a block
+count: the helper sets it to `done` while blocks are pending and to
+`count - 1` when all blocks were drained but `TC` was missing. The ordinal
+shows at least 20 of the 21 requested blocks were drained before the
+1,000,000 µs / 10 µs data-completion poll expired, and cannot distinguish
+"20 drained with the ordinal-20 block pending" from "all 21 drained with only
+`TC` missing"; the terminal sample still showed `CC | BRR`.
+The CMD12 stop record
+`-7/1/1/0000/0000/03f80af6/00000c1b/00000000` is CMD12 `R1b` with stop-valid
+and terminal-capture-valid 1, `normal=0`, `error=0`, and no `CC` or `TC`
+observed within its 1,000,000 µs bound; the capture flags record the terminal
+state, not completion. The read helper keeps the first failing result, so the
+report's `rc` remains the CMD18 data timeout.
+
+This is the first hardware evidence of a multi-block data phase beyond one
+block: at least 20 consecutive blocks were consumed under one open-ended
+CMD18, consistent with the `TM_MULTI` correction. It does not establish F2:
+the report does not establish 21/21 completion or `TC`, no `MBLOCKS` sums or
+content comparison exist, and the stop did not complete. The record does not distinguish a marginal data bound from a
+stalled block 21.
+
+| Check | Result |
+| --- | --- |
+| eMMC A2/F2 attempt-2 BOOT write and readback | PASS: BOOT-only write; image-byte readback `115e5c63…`, full partition `4ca40951…`, tail `a28b4ea2…` unchanged, `RECOVERY` `14e11370…` unchanged, EFS/sec_efs unchanged |
+| eMMC A2/F2 attempt-2 pulled-image gate | PASS: 18/18 on the pulled 85,688,320-byte image; 7/7 on the 83,886,080-byte payload extraction |
+| eMMC A2/F2 attempt-2 on-device report | RECORDED: owner-supplied OCR text; `step=19`, `mb=20`, CMD18 `rc=-11`, stop `-7`; no established 21/21 completion, `TC`, MB sums or content comparison |
+| `scripts/test-gta4l-emmc.py` | PASS: 112 simulator scenarios and 62 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | PASS: 44 scenarios, 34 mutation controls and 1 oversized-report control |
+| `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
+| `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
+| `scripts/test-gta4l-ram-root-fixture-recipe.py` | PASS: input and failure checks |
+| `scripts/check-gta4l.py` | PASS: SM6115 (gta4l) board layout verified |
+| Hash-table self-check in §6 | `rows=45 mismatches=0` |
+| `porting.toml` parse with `tomllib` | 13 areas |
+| `git diff --check` | PASS: clean |
+
 ## 7. Limits
 
 - The hashes are a snapshot of a dirty tree; any later edit invalidates them.
@@ -1107,6 +1182,16 @@ full transcription and decoding are in `docs/emmc-cmd2-crc-audit.md` §2.13 and
   region, not a multi-block transfer, bus-width/high-speed result, reliability
   test, filesystem claim or write capability. The SM-T505 unit from the stage-1
   batch was not re-run with the stage-A image.
+- The 2026-11-02 A2/F2 attempt-2 record is an owner-supplied OCR text; the
+  attached photo file and hash are not in this tree. The BOOT-only write and
+  readback were verified on the still-connected device after the failed boot.
+  The run establishes a partial open-ended CMD18 data phase (at least 20 of
+  the 21 blocks; `mb=20` is an ordinal, not a count) on the owner's SM-T505N,
+  not a completed multi-block transfer, a completed CMD12 stop, a content
+  match, a reliability result or F2. The terminal
+  `CC | BRR` sample means a buffer-read-ready condition was present when
+  polling stopped; it does not show that the remaining block or the stop would
+  have completed.
 - The pinned Linux cache has no `.git`; its revision is documented provenance,
   not a verifiable git checkout `[U]`.
 - The booted image is not tracked; the copy in the gitignored output tree

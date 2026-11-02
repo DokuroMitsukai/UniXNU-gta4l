@@ -14,9 +14,12 @@ candidate added only an 8-us post-ready-CMD1 delay and completed full stage-3
 identification on the owner's SM-T505N and two owner-reported SM-T505s,
 including the CMD7 CC+TC capture `[C]`. The 2026-11-02 stage-1 image then
 completed identification and both read-only `CMD17` reads (blocks 0 and 1) on
-the owner's SM-T505N and one of those SM-T505s `[C]`. Card identification and
-single-block sector reads are therefore observed; multi-block reads, a
-filesystem, block-device publication and the later stages remain `[U]`. The
+the owner's SM-T505N and one of those SM-T505s `[C]`; the corrected A2/F2
+attempt then reached block ordinal 20 in one open-ended `CMD18` before the
+data bound expired `[C]`. Card identification, single-block sector reads and
+a partial multi-block data phase are therefore observed; a complete
+multi-block read, a filesystem, block-device publication and the later stages
+remain `[U]`. The
 core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
@@ -1082,7 +1085,7 @@ and every content sum is bound to live recovery bytes. It is not an F2
 multi-block transfer, an F3/F4 width or speed result, an F5 publication, an F6
 write, a filesystem result or a media-reliability test.
 
-### 5.3.7 Optional A2/F2 multi-block mode and attempt 1 (2026-11-02)
+### 5.3.7 Optional A2/F2 multi-block mode and attempts 1–2 (2026-11-02)
 
 The same diagnostic build adds an opt-in multi-block mode: `gta4l-emmc-mb=1`
 alongside `gta4l-emmc-probe=1`. Without the modifier the image still reports
@@ -1118,9 +1121,60 @@ single-block transfer and the helper would have timed out after one sector.
 The working tree now sets the bit, both simulators reject a CMD18 whose mode
 word lacks it, and both suites carry a mutation control that removes it (core
 112/62, probe 44/34). The attempt-1 image never exercised the defect because
-it stopped before the MD phase. A corrected image must be built and the owner
-must approve a new BOOT-only attempt before F2 can be claimed; a second
-pre-MD stop would still not be an MD verdict.
+it stopped before the MD phase.
+
+Attempt 2 (2026-11-02) used the corrected build from clean `209766c4` with
+`Gta4lEmmc.c 942117eb…`, `Gta4lEmmc.h dce8a428…`, `Gta4lEmmcProbe.c
+e67ad2bc…`, archive `7c08c6fb…`, kernel `5132f235…`, payload `a5d9e63f…`
+(contract 7/7) and boot image `115e5c63…` (gate 18/18). The BOOT-only flash
+record is in `out/gta4l/ram-root-emmc-probe-stage2b-attempt2-evidence/`:
+pre-flash partition `64fa7190…` (the attempt-1 image `cac4356b…` plus the
+unchanged tail `a28b4ea2…`), post-flash `4ca40951…`, image-byte readback
+`115e5c63…`, tail and `RECOVERY` `14e11370…` unchanged, and EFS/sec_efs
+unchanged. A re-read after the boot confirmed the same image was still on
+BOOT.
+
+The image entered the MD phase and failed with the data phase stopped at
+block ordinal 20 of the 21-block request:
+
+```text
+GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=4294967285 step=19
+mb=20 stop=4294967289/1/1/0000/0000/03f80af6/00000c1b/00000000
+fail=1/18/2/0000123a/0000/0021/03f80af6/19
+```
+
+`step=19` is `STEP_PROBE_MB` and `rc` is `-11`
+(`GTA4L_EMMC_ERR_DATA_TIMEOUT`). The CMD18 record (index 18, argument 2,
+command `0x123a`, `normal=0x0021` = `CC | BRR`, `error=0`, present
+`0x03f80af6`, step 19) shows the command was accepted and the buffer-read path
+was active with no error latched and no `TC`. `mb=20` is the
+failing/completed block ordinal (0-based; `Gta4lEmmc.h:438`), not a block
+count: the helper sets it to `done` while blocks are pending and to
+`count - 1` when all blocks were drained but `TC` was missing. The ordinal
+therefore shows at least 20 of the 21 blocks were drained and cannot
+distinguish "20 drained with the ordinal-20 block pending" from "all 21
+drained with only `TC` missing". The helper's 1,000,000 µs / 10 µs
+data-completion poll expired; the terminal sample still showed `CC | BRR`, so
+a buffer-read-ready condition was present when polling stopped, but the record
+cannot tell whether draining it would have completed the transfer.
+
+The stop record `stop=-7/1/1/0000/0000/03f80af6/00000c1b/00000000` is CMD12
+(`0x0c1b`, `R1b`, CRC and index checks, argument 0) with stop-valid 1 and
+terminal-capture-valid 1, `normal=0`, `error=0` and the same present state.
+The capture flags do not mean completion: neither `CC` nor `TC` was observed in
+the stop's 1,000,000 µs bound. `gta4l_emmc_read_multi()` keeps the first
+failing result, so the reported `rc` remains the CMD18 data timeout.
+
+This is the first hardware evidence of a multi-block data phase beyond one
+block: at least 20 consecutive 512-byte blocks were consumed under one
+open-ended CMD18, consistent with `TM_MULTI` taking effect. F2 is not
+established because the report does not establish 21/21 data completion or
+`TC`, the probe panicked before printing the `MBLOCKS` sums, the stop did not
+complete, and no content comparison exists. The transcript is
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt2-evidence/stage2b-attempt2-failure.txt`;
+the owner photo file is not in this tree and has no hash here. A further
+attempt needs a fresh owner approval; a marginal-bound versus stalled-block
+follow-up is not in this tree.
 
 ## 6. Expected report
 
@@ -1148,7 +1202,9 @@ the full report, including the block 0/block 1 reads, on the owner's SM-T505N
 and one SM-T505; the §5.3.6 stage-A image completed the extended content
 phase on the owner's SM-T505N and matched the live recovery readback; the
 first §5.3.7 MD-mode attempt then stopped in identification before the MD
-phase, so no multi-block report exists yet. On
+phase, and the corrected second attempt reached the MD phase but timed out at
+block ordinal 20 with an incomplete `CMD12` stop, so no multi-block report
+exists yet. On
 failure the probe reports the
 stage, result code,
 the `clocks` flag, MCI version, power/clock/`HOST_CONTROL2`/vendor/DLL registers,
@@ -1180,9 +1236,12 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   and block 1 `CMD17` reads on the owner's SM-T505N and one SM-T505 `[C]`; the
   §5.3.6 stage-A image then read the full 84-entry GPT array, the first usable
   sector and the last sector on the owner's SM-T505N, and every sum matched a
-  same-session live recovery readback `[C]`. A filesystem,
-  block-device publication, multi-block transfer and reliability test have not
-  run `[U]`.
+  same-session live recovery readback `[C]`; the §5.3.7 attempt 2 then
+  stopped at block ordinal 20 in one open-ended `CMD18` (at least 20 of 21
+  blocks drained) before the data bound expired, but the transfer and the
+  `CMD12` stop did not complete `[C]`. A
+  complete multi-block transfer, a filesystem, block-device publication and a
+  reliability test have not run `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
   levels, and it does not prove retention across suspend or shutdown `[U]`.
 - The 1.8 V signalling and pad-switch selection is a documented board policy
@@ -1202,8 +1261,10 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   has no interrupt path `[U]`.
 - No DMA, SMMU programming, CQE, ICE, tuning, high-speed mode or write path
   exists `[U]`. The optional A2/F2 multi-block mode is implemented and
-  host-tested (5.3.7); its 2026-11-02 hardware attempt stopped before the MD
-  phase, so no multi-block transfer result exists `[S]/[U]`.
+  host-tested (5.3.7); its corrected 2026-11-02 attempt reached the MD phase
+  and stopped at block ordinal 20 in one `CMD18` before the data bound
+  expired, and the `CMD12` stop did not report `CC` or `TC`, so a complete
+  multi-block transfer result still does not exist `[C]/[S]/[U]`.
 - An 8-us CMD1-to-CMD2 timing candidate is specified in
   `docs/emmc-cmd1-gap-candidate.md` and was built, flashed and run on
   2026-11-01; it completed identification on three units (5.3.4) `[C]`. The

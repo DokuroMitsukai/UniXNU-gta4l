@@ -1034,7 +1034,7 @@ mutation controls (duplicate LBA, continued error, block-count off-by-one,
 wrong last LBA) and the optional A2/F2 multi-block cases recorded in
 §2.14.
 
-### 2.14 A2/F2 multi-block design, CMD12 response decode and attempt 1 (2026-11-02)
+### 2.14 A2/F2 multi-block design, CMD12 response decode and attempts 1–2 (2026-11-02)
 
 The optional A2/F2 rung adds one open-ended `CMD18` read of the 21 primary GPT
 array sectors (LBAs 2..22) and an explicit `CMD12` stop behind
@@ -1090,9 +1090,74 @@ result: no CMD18, no CMD12 and no sector read occurred. The transcription is
 `out/gta4l/ram-root-emmc-probe-stage2b-evidence/stage2b-attempt1-failure.txt`;
 the owner photo is still pending.
 
-F2 remains unproven. A corrected build and a separately approved BOOT-only
-attempt are required; a second pre-MD stop is still not an MD verdict and does
-not trigger the MD abort condition, which applies to an actual MD report.
+**Attempt 2 (2026-11-02).** The corrected image
+(`Gta4lEmmc.c 942117eb…`, `Gta4lEmmc.h dce8a428…`, `Gta4lEmmcProbe.c
+e67ad2bc…`, archive `7c08c6fb…`, kernel `5132f235…`, payload `a5d9e63f…`, boot
+image `115e5c63…`) was built from `209766c4` (clean), gated 7/7 and 18/18,
+flashed to BOOT only and booted by the owner. Pre-flash BOOT was the attempt-1
+image (`cac4356b…`) plus the unchanged tail (`a28b4ea2…`); after the write the
+full partition was `4ca40951…`, the image-byte readback `115e5c63…`, and the
+tail and `RECOVERY` (`14e11370…`) were unchanged. A re-read on the
+still-connected device after the failed boot returned the same partition and
+prefix hashes, so the report belongs to this image.
+
+The image reached the MD phase and failed with the data phase stopped at
+block ordinal 20 of the 21-block request:
+
+```text
+GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=4294967285 step=19
+mb=20 stop=4294967289/1/1/0000/0000/03f80af6/00000c1b/00000000
+fail=1/18/2/0000123a/0000/0021/03f80af6/19
+```
+
+`step=19` is `STEP_PROBE_MB`, so the stage-A pass completed and the optional MD
+pass started. `rc` is `-11` (`GTA4L_EMMC_ERR_DATA_TIMEOUT`). The failure record
+is CMD18 (index 18, argument 2, command `0x123a` =
+`RESP_SHORT | DATA | CRC | INDEX`) with `normal=0x0021` (`CC | BRR`),
+`error=0`, present `0x03f80af6` and step 19: the command was accepted and the
+buffer-read path was active, no controller error was latched, and `TC` was
+never observed. `mb=20` is `host->multi_block`, the failing/completed block
+ordinal (0-based; `Gta4lEmmc.h:438`). The helper sets it to `done` when the
+timeout leaves blocks pending and to `count - 1` when all blocks were drained
+but `TC` was never observed. With `mb=20` and `count=21`, the record shows at
+least 20 of the 21 blocks were drained and does not distinguish "20 drained,
+the ordinal-20 block became ready only at the terminal sample" from "all 21
+drained, only `TC` missing". The helper polls for
+command and data completion for 1,000,000 µs in 10 µs steps; the terminal
+sample after the bound still showed `CC | BRR`, i.e. a buffer-read-ready
+condition was present when polling stopped. The record does not show whether
+draining it would have completed the transfer, and no MB content sums were
+reported.
+
+The explicit stop was then issued. `stop` is
+`-7/1/1/0000/0000/03f80af6/00000c1b/00000000`: stop result `-7`
+(`GTA4L_EMMC_ERR_CMD_TIMEOUT`), stop-valid 1, terminal-capture-valid 1,
+`normal=0`, `error=0`, present `0x03f80af6`, command `0x0c1b` (CMD12 `R1b`,
+CRC and index checks) and argument 0. The `1/1` flags mean the stop was
+submitted and its terminal state captured, not that it completed: neither `CC`
+nor `TC` was observed within the 1,000,000 µs bound and no error bit latched.
+Because `gta4l_emmc_read_multi()` keeps the first failing result, the report's
+`rc` remains the CMD18 data timeout.
+
+This is the first hardware evidence that the corrected transfer-mode word
+produces a real multi-block data phase: at least 20 consecutive 512-byte
+blocks were consumed under one open-ended CMD18, whereas the uncorrected
+single-block interpretation would stop after one block. F2 is nevertheless not
+established: the report does not establish 21/21 data completion (the ordinal
+cannot distinguish 20 from 21 drained blocks) or `TC`, no MB sums were printed
+(the probe panics before the MB report), the `CMD12` stop did not complete
+within its bound, and no content comparison exists. A follow-up that
+distinguishes a marginal data bound from a stalled ordinal-20 block (a longer
+bound or an explicit drain of the pending `BRR` block) is not in this tree;
+the current record is a partial multi-block result only. The transcription is
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt2-evidence/stage2b-attempt2-failure.txt`;
+the owner photo file is not in this tree and has no hash here.
+
+F2 remains unproven. Attempt 2 shows the CMD18 data phase is no longer limited
+to one block but does not establish a complete transfer or a clean stop. A
+further attempt with a fresh owner approval is required before F2 can be
+claimed; without a 21/21 report and matching sums, the MD abort condition still
+does not apply.
 
 ---
 
