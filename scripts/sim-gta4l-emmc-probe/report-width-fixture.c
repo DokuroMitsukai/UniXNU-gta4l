@@ -234,6 +234,13 @@ gta4l_emmc_probe_width_fixture(int form)
 	base.result.test_word = 0xFFFFFFFFu;
 	base.result.test_expected = 0xFFFFFFFFu;
 	base.result.host_control = 0xFFu;
+	base.result.switch_status = 0xFFFFFFFFu;
+	base.result.host_before = 0xFFu;
+	base.result.host_after = 0xFFu;
+	base.result.readback_sum = 0xFFFFFFFFu;
+	base.pad_qdsd = 0xFFFFFFFFu;
+	base.pad_dll = 0xFFFFFFFFu;
+	base.pad_dst = 0xFFFFFFFFu;
 	base.block0_sum = 0xFFFFFFFFu;
 	base.block1_sum = 0xFFFFFFFFu;
 	base.data_sum = 0xFFFFFFFFu;
@@ -251,6 +258,10 @@ gta4l_emmc_probe_width_fixture(int form)
 	w4.result.test_word = 0xFFFFFFFFu;
 	w4.result.test_expected = 0xFFFFFFFFu;
 	w4.result.host_control = 0xFFu;
+	w4.result.switch_status = 0xFFFFFFFFu;
+	w4.result.host_before = 0xFFu;
+	w4.result.host_after = 0xFFu;
+	w4.result.readback_sum = 0xFFFFFFFFu;
 	w4.block0_sum = 0xFFFFFFFFu;
 	w4.block1_sum = 0xFFFFFFFFu;
 	w4.data_sum = 0xFFFFFFFFu;

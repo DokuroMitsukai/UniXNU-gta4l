@@ -114,6 +114,8 @@ SCENARIOS = [
     'probe-mb-bare-refuse',
     'probe-b1-success',
     'probe-b1-stuck-width',
+    'probe-b1-zero-readback',
+    'probe-b1-host-width-stuck',
     'probe-b1-bustest-fail',
     'probe-b1-switch8-stuck',
     'probe-b1-bustest8-fail',

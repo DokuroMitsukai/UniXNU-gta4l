@@ -167,6 +167,14 @@ static unsigned int bus_test_written_count;
 static uint16_t bus_test_width;
 static uint32_t width_corrupt_lba = 0xFFFFFFFFu;
 static uint8_t width_corrupt_code;
+/* B1 readback-cause modeling. ext_csd_zero_width makes the CMD8 read at that
+ * card width return an all-zero buffer without an error, which models a
+ * data-path readback that never filled the buffer. host_width_ignore drops the
+ * SDHCI width bits from the HOST_CONTROL write and makes the CMD8 read at a
+ * switched width fail with a data CRC, which models a host width that did not
+ * take effect. */
+static uint8_t ext_csd_zero_width;
+static int host_width_ignore;
 static int cmd19_error;
 static int cmd2_crc_fail;
 static int cmd3_no_cc;
@@ -945,7 +953,18 @@ sim_command(uint16_t command)
 		}
 		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
 		if (index == GTA4L_EMMC_CMD8) {
-			sim_fill_buffer_words(ext_csd);
+			if ((host_width_ignore != 0) &&
+			    (ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] != 0u)) {
+				error_int |= GTA4L_EMMC_INT_ERR_DATA_CRC;
+				return;
+			}
+			if ((ext_csd_zero_width != 0u) &&
+			    (ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] ==
+			    ext_csd_zero_width)) {
+				memset(buffer_data, 0, sizeof(buffer_data));
+			} else {
+				sim_fill_buffer_words(ext_csd);
+			}
 		} else {
 			cmd17_count++;
 			if ((expected_lba_count == 0u) ||
@@ -1142,6 +1161,11 @@ gta4l_emmc_probe_test_write8(uint32_t space, uint32_t offset, uint8_t value)
 		 * completion so later stages can be exercised. */
 		if (offset == GTA4L_EMMC_REG_SOFTWARE_RESET) {
 			value = 0;
+		}
+		if ((offset == GTA4L_EMMC_REG_HOST_CONTROL) &&
+		    (host_width_ignore != 0)) {
+			value &= (uint8_t)~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+			    GTA4L_EMMC_HOST_CONTROL_8BIT);
 		}
 		if ((offset == GTA4L_EMMC_REG_POWER_CONTROL) &&
 		    ((value & GTA4L_EMMC_POWER_BUS_POWER) != 0)) {
@@ -1397,6 +1421,18 @@ sim_init_ext_csd(void)
 	    (uint8_t)((count >> 16) & 0xFFu);
 	ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 3] =
 	    (uint8_t)((count >> 24) & 0xFFu);
+}
+
+static uint32_t
+sim_ext_csd_sum(void)
+{
+	uint32_t sum = 0;
+	uint32_t index;
+
+	for (index = 0; index < GTA4L_EMMC_EXT_CSD_BYTES; index++) {
+		sum += ext_csd[index];
+	}
+	return sum;
 }
 
 static void
@@ -1996,6 +2032,8 @@ main(int argc, char **argv)
 		mb_mode_arg = 1;
 	} else if ((strcmp(scenario, "probe-b1-success") == 0) ||
 	    (strcmp(scenario, "probe-b1-stuck-width") == 0) ||
+	    (strcmp(scenario, "probe-b1-zero-readback") == 0) ||
+	    (strcmp(scenario, "probe-b1-host-width-stuck") == 0) ||
 	    (strcmp(scenario, "probe-b1-bustest-fail") == 0) ||
 	    (strcmp(scenario, "probe-b1-switch8-stuck") == 0) ||
 	    (strcmp(scenario, "probe-b1-bustest8-fail") == 0) ||
@@ -2016,6 +2054,11 @@ main(int argc, char **argv)
 		expected_lba_wrap = 1;
 		if (strcmp(scenario, "probe-b1-stuck-width") == 0) {
 			cmd6_ignore = 1;
+		} else if (strcmp(scenario, "probe-b1-zero-readback") == 0) {
+			ext_csd_zero_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-b1-host-width-stuck") == 0) {
+			host_width_ignore = 1;
 		} else if (strcmp(scenario, "probe-b1-bustest-fail") == 0) {
 			bus_test_bad = 1;
 			bus_test_bad_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
@@ -2930,14 +2973,34 @@ main(int argc, char **argv)
 		check(strstr(panic_message,
 		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=0") != NULL,
 		    "the B1 report lost the 1-bit baseline width");
+		snprintf(expected, sizeof(expected),
+		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=00 es=%08x",
+		    sim_ext_csd_sum() - 2u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the B1 report lost the 1-bit EXT_CSD sum");
 		check(strstr(panic_message,
 		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1 "
 		    "tw=000000a5 te=000000a5 trc=0 hc=02") != NULL,
 		    "the B1 report lost the 4-bit switch or bus-test words");
+		snprintf(expected, sizeof(expected),
+		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=02 hb=00 ha=02 "
+		    "c6=00000900 es=%08x", sim_ext_csd_sum() - 1u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the B1 report lost the 4-bit CMD6 status or host-width "
+		    "transition");
 		check(strstr(panic_message,
 		    "BW=8 att=1 req=8 sw=2 swrc=0 tt=1 "
 		    "tw=000055aa te=000055aa trc=0 hc=20") != NULL,
 		    "the B1 report lost the 8-bit switch or bus-test words");
+		snprintf(expected, sizeof(expected),
+		    "BW=8 att=1 req=8 sw=2 swrc=0 tt=1 "
+		    "tw=000055aa te=000055aa trc=0 hc=20 hb=02 ha=20 "
+		    "c6=00000900 es=%08x", sim_ext_csd_sum());
+		check(strstr(panic_message, expected) != NULL,
+		    "the B1 report lost the 8-bit CMD6 status or host-width "
+		    "transition");
 		check(strstr(panic_message, "same=1 div=0") != NULL,
 		    "the B1 report does not show the per-width content pass");
 		sim_expected_b1_blocks(expected, sizeof(expected), 4u);
@@ -2947,8 +3010,8 @@ main(int argc, char **argv)
 		check(strstr(panic_message, expected) != NULL,
 		    "the 8-bit content pass lost the stage-A sums");
 		check(strstr(panic_message,
-		    "PAD qdsd=") != NULL,
-		    "the B1 report lost the pad/DLL state");
+		    "PAD pqdsd=") != NULL,
+		    "the B1 report lost the before/after pad/DLL state");
 		check(cmd6_count == 2u,
 		    "the B1 run did not issue one CMD6 per width");
 		check(cmd6_argument == 0x03B70201u,
@@ -2964,6 +3027,8 @@ main(int argc, char **argv)
 		check(strlen(panic_message) < 2048u,
 		    "the B1 report exceeds the 2048-byte panic-text budget");
 	} else if (strcmp(scenario, "probe-b1-stuck-width") == 0) {
+		char expected[512];
+
 		check(panicked == 1, "a stuck 4-bit switch did not report");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC B1 REPORT: rc=-19 stop=1") != NULL,
@@ -2972,11 +3037,47 @@ main(int argc, char **argv)
 		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=0") != NULL,
 		    "the stuck-width report does not show the unchanged "
 		    "EXT_CSD value");
+		snprintf(expected, sizeof(expected),
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=00 hb=00 ha=02 c6=00000900 "
+		    "es=%08x", sim_ext_csd_sum());
+		check(strstr(panic_message, expected) != NULL,
+		    "the stuck-width report does not separate a card-ignored "
+		    "switch from a failed or empty readback");
 		check(strstr(panic_message,
 		    "BW=8 att=0 req=0 sw=0 swrc=0 tt=0") != NULL,
 		    "the stuck-width report kept asserting on 8-bit");
 		check(cmd_count == 36u,
 		    "the stuck-width run did not stop at the readback");
+	} else if (strcmp(scenario, "probe-b1-zero-readback") == 0) {
+		check(panicked == 1, "a zero-filled readback did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-19 stop=1") != NULL,
+		    "the zero-readback report does not name the readback "
+		    "error");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=00 hb=00 ha=02 c6=00000900 "
+		    "es=00000000") != NULL,
+		    "the zero-readback report does not show the empty EXT_CSD "
+		    "read after a taken host-width write");
+		check(cmd_count == 36u,
+		    "the zero-readback run did not stop at the readback");
+	} else if (strcmp(scenario,
+	    "probe-b1-host-width-stuck") == 0) {
+		check(panicked == 1, "a lost host width write did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-12 stop=1") != NULL,
+		    "the host-width-stuck report does not name the failed "
+		    "read");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-12 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=00 hb=00 ha=00 c6=00000900 "
+		    "es=00000000") != NULL,
+		    "the host-width-stuck report does not show the lost "
+		    "HOST_CONTROL width and the failed read");
+		check(cmd_count == 36u,
+		    "the host-width-stuck run did not stop at the read");
 	} else if (strcmp(scenario, "probe-b1-bustest-fail") == 0) {
 		check(panicked == 1, "a 4-bit bus-test mismatch did not report");
 		check(strstr(panic_message,
@@ -3293,19 +3394,21 @@ main(int argc, char **argv)
 		    "the synthetic width B1 report lost the widest header");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC B1 BW=1 att=1 req=1 sw=15 swrc=0 tt=0 "
-		    "tw=00000000 te=00000000 trc=0 hc=ff b0=ffffffff "
-		    "b1=ffffffff same=1 div=0") != NULL,
+		    "tw=00000000 te=00000000 trc=0 hc=ff es=ffffffff "
+		    "b0=ffffffff b1=ffffffff same=1 div=0") != NULL,
 		    "the synthetic width B1 report lost the 1-bit baseline");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC B1 BW=4 att=1 req=4 sw=15 swrc=-20 tt=1 "
-		    "tw=ffffffff te=ffffffff trc=-20 hc=ff b0=ffffffff "
-		    "b1=ffffffff same=0 div=4294967295") != NULL,
+		    "tw=ffffffff te=ffffffff trc=-20 hc=ff hb=ff ha=ff "
+		    "c6=ffffffff es=ffffffff b0=ffffffff b1=ffffffff "
+		    "same=0 div=4294967295") != NULL,
 		    "the synthetic width B1 report lost the widest 4-bit "
 		    "switch/test fields");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC B1 BW=8 att=1 req=8 sw=15 swrc=-20 tt=1 "
-		    "tw=ffffffff te=ffffffff trc=-20 hc=ff b0=ffffffff "
-		    "b1=ffffffff same=0 div=4294967294") != NULL,
+		    "tw=ffffffff te=ffffffff trc=-20 hc=ff hb=ff ha=ff "
+		    "c6=ffffffff es=ffffffff b0=ffffffff b1=ffffffff "
+		    "same=0 div=4294967294") != NULL,
 		    "the synthetic width B1 report lost the widest 8-bit "
 		    "switch/test fields");
 		check(strstr(panic_message,
@@ -3332,9 +3435,11 @@ main(int argc, char **argv)
 		    "the synthetic width B1 report lost the widest last "
 		    "sector");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC B1 PAD qdsd=ffffffff dll=ffffffff "
+		    "GTA4L-EMMC B1 PAD pqdsd=ffffffff pdll=ffffffff "
+		    "pdst=ffffffff qdsd=ffffffff dll=ffffffff "
 		    "dst=ffffffff bif=none") != NULL,
-		    "the synthetic width B1 report lost the pad/DLL state");
+		    "the synthetic width B1 report lost the before/after "
+		    "pad/DLL state");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC B1 FAIL fail=1/63/4294967295/0000ffff/ffff/"
 		    "ffff/ffffffff/21") != NULL,

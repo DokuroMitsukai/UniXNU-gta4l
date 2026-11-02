@@ -1588,6 +1588,18 @@ gta4l_emmc_bus_width_code(uint32_t bits)
 	return 0xFFFFFFFFu;
 }
 
+static uint32_t
+gta4l_emmc_ext_csd_sum(const uint8_t *ext)
+{
+	uint32_t sum = 0;
+	uint32_t index;
+
+	for (index = 0; index < GTA4L_EMMC_EXT_CSD_BYTES; index++) {
+		sum += ext[index];
+	}
+	return sum;
+}
+
 /* CMD6 write-byte switch plus the matching SDHCI HOST_CONTROL width. The
  * card switch is ordered exactly as Linux mmc_select_bus_width(): CMD6, wait
  * for the card to leave busy, change the host width, then verify the BUS_WIDTH
@@ -1620,6 +1632,10 @@ gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
 		result->test_word = 0;
 		result->test_expected = 0;
 		result->host_control = 0;
+		result->switch_status = 0;
+		result->host_before = 0;
+		result->host_after = 0;
+		result->readback_sum = 0;
 	}
 
 	argument = GTA4L_EMMC_SWITCH_ACCESS_WRITE |
@@ -1633,6 +1649,9 @@ gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
 			result->switch_result = rc;
 		}
 		return rc;
+	}
+	if (result != 0) {
+		result->switch_status = response[0];
 	}
 	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
 		host->card_status = response[0];
@@ -1653,6 +1672,9 @@ gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
 	control = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_HOST_CONTROL);
 	previous_control = control;
+	if (result != 0) {
+		result->host_before = (uint8_t)previous_control;
+	}
 	control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
 	    GTA4L_EMMC_HOST_CONTROL_8BIT);
 	if (bits == 4u) {
@@ -1663,6 +1685,11 @@ gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
 	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_HOST_CONTROL, control);
 	gta4l_emmc_barrier(host);
+	if (result != 0) {
+		result->host_after = gta4l_emmc_read8(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL);
+	}
 
 	/* Re-read EXT_CSD at the new width: this is both the card-side
 	 * confirmation and a data-path exercise at the switched width. On a
@@ -1678,6 +1705,9 @@ gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
 			result->host_control = previous_control;
 		}
 		return rc;
+	}
+	if (result != 0) {
+		result->readback_sum = gta4l_emmc_ext_csd_sum(ext_csd);
 	}
 	readback = (uint32_t)ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] & 0x0Fu;
 	if (result != 0) {
@@ -1828,14 +1858,9 @@ gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
 static void
 gta4l_emmc_parse_ext_csd(struct gta4l_emmc_host *host, const uint8_t *ext)
 {
-	uint32_t index;
-	uint32_t sum = 0;
 	uint32_t count;
 
-	for (index = 0; index < GTA4L_EMMC_EXT_CSD_BYTES; index++) {
-		sum += ext[index];
-	}
-	host->ext_csd_sum = sum;
+	host->ext_csd_sum = gta4l_emmc_ext_csd_sum(ext);
 	host->ext_csd_rev = ext[GTA4L_EMMC_EXT_CSD_REV_OFF];
 	host->bus_width = (uint8_t)(ext[183] & 0x0Fu);
 	host->partition_config = ext[GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF];

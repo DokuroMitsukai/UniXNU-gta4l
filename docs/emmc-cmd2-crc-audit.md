@@ -23,8 +23,11 @@ both completed identification and the read-only `CMD17` reads of blocks 0 and
 recorded flash records. The owner reports the first `fmt=4` run on an SM-T505
 and a later BOOT-only run on the owner's SM-T505N; the results agree 1:1 per the
 owner, and the second run's flash record, readback and photo are in section
-2.10. A host-only Stage-B1 section (2.15) records the 4/8-bit bus-width and
-CMD19/CMD14 bus-test implementation; no B1 hardware run exists yet.
+2.10. Section 2.15 records the host-side Stage-B1 4/8-bit bus-width and
+CMD19/CMD14 bus-test implementation; section 2.16 records the 2026-11-02
+three-boot hardware run of that image. The only boot that reached B1 stopped
+at the 4-bit byte-183 readback (`sw=0`, `swrc=-19`), and the other two stopped
+before B1, so F3 remains unproven.
 
 **Hardware-tested source (2026-10-31 image):** `Gta4lEmmc.c 722110a5…`,
 `Gta4lEmmc.h 7abc7d87…`, `Gta4lEmmcProbe.c d541514b…`, simulator
@@ -1299,12 +1302,240 @@ pattern mismatches, width mismatch and the 1-bit refusal.
 Supported by this section: the host-side implementation, its report layout
 and its simulator coverage, with the command ordering and register values
 cited to the pinned Linux references. Not supported: any on-device
-bus-width, bus-test, content-at-width, pad/DLL or timing claim. No B1 image
-build, flash or boot is recorded; no 4-bit or 8-bit switch or CMD19/CMD14
-round trip has run on the card; F3 remains `[U]`. A 4-bit hardware success
+bus-width, bus-test, content-at-width, pad/DLL or timing claim from the
+host-side work alone. The B1 image build, flash and three boots are recorded
+in section 2.16. No 4-bit or 8-bit switch completed on the card, no
+CMD19/CMD14 round trip ran, and F3 remains `[U]`. A 4-bit hardware success
 with a matching content pass is the plan's F3 PASS at 4-bit; an 8-bit
 failure is a separate exact binding and does not invalidate the 4-bit
 result.
+
+### 2.16 Stage-B1 hardware attempts 1–3 and audit (2026-11-02)
+
+The B1 image was built from `09b8f30` plus the `emmc-probe-4` payload mapping
+in `5cf8565`: kernel `f25d3cee…`, payload `cf08c1b2…` (contract 7/7) and boot
+image `327fe8c9…` (gate 18/18 against the `ce4d76e8…` v5 baseline). The BOOT
+partition was written only; pre-flash p69 was `d652a8b5…`, post-flash p69 is
+`1c64333a…`, the image prefix read back as `327fe8c9…`, the unchanged tail is
+`a28b4ea2…`, and `RECOVERY` `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` were unchanged. The pulled boot-image gate is 18/18 and the pulled
+payload contract is 7/7. The flash record is
+`out/gta4l/ram-root-emmc-probe-b1-evidence/flash-record.json`; it was written
+before the owner booted the image, so its `status` field says "owner boot
+pending". The boot results below and
+`out/gta4l/ram-root-emmc-probe-b1-evidence/hardware-run-record.json` supersede
+that status for the run history.
+
+The owner booted the same flashed image three times and supplied OCR text; no
+reflash occurred between the attempts. The BOOT partition was not re-read after
+any boot, so the three reports are bound by the verified flash/readback record
+and the owner's statement that they are boots of this image. No photo file is
+in the tree. Whether each reboot power-cycled the eMMC is not recorded;
+attempt 2 followed the attempt-1 H8 stop.
+
+**Attempt 1: H8 CMD3 timeout before B1.** The generic probe failure report was:
+
+```text
+GTA4L-EMMC PROBE FAILED: stage=4 rc=4294967289
+fail=1/3/65536/0000031a/0000/0000/03f800f0/9
+rsp=00000500,<CID words>
+c3l=1/3/0000/0000/100000/0000000014c3345/19200000
+step=9 log=5/8/3/0
+```
+
+The OCR text splits the command field as `0000/031a`; the format prints the
+command as `%08x`, so the quoted line rejoins it to `0000031a`. `stage=4` is
+the `gta4l-emmc-probe=4` boot argument, not a success marker.
+`rc` is `-7` (`GTA4L_EMMC_ERR_CMD_TIMEOUT`); `step=9` is `STEP_CMD2`, so CMD2
+completed and CMD3 did not. `fail` names CMD3 (index 3, argument `0x00010000`,
+command `0x0000031a`) with no error/normal bits; `c3l` exhausted the
+100,000-iteration, 1,000,000 µs / 10 µs poll at 19.2 MHz (`0x14c3345` ticks,
+about 1.134 s) with first/last normal 0. RESPONSE0 is a plausible CMD3 R1
+status and RESPONSE1..3 are CID words, so the command was accepted and its
+completion was not observed. The `c7` capture fields are all invalid/zero:
+CMD7 never ran, no BUS_WIDTH write was issued, no CMD19/CMD14 ran and no sector
+was read. This is the section 6 H8 signature, not a B1 result. The raw CID and
+response words stay in the untracked transcript
+`out/gta4l/ram-root-emmc-probe-b1-evidence/b1-attempt1-cmd3-timeout.txt`.
+The tick count differs from the earlier H8 runs (`0x14c343d` for attempt 3
+boot 1 and `0x14c2e0f` for attempt 1), so this is a fresh run, not a replayed
+transcript.
+
+**Attempt 2: the only B1 result.** This boot completed identification and the
+stage-A content pass, then stopped at the 4-bit switch:
+
+```text
+GTA4L-EMMC B1 REPORT: rc=4294967277 stop=1 mci=10000072 rca=1 cap=61071360 rev=8 hci=00 step=18 log=30
+GTA4L-EMMC B1 BW=1 att=1 req=1 sw=0 swrc=0 tt=0 tw=00000000 te=00000000 trc=0 hc=00 b0=62084b66 b1=84d0543e same=1 div=0
+GTA4L-EMMC B1 BW=4 att=1 req=4 sw=0 swrc=4294967277 tt=0 tw=00000000 te=00000000 trc=0 hc=00 b0=00000000 b1=00000000 same=0 div=0
+GTA4L-EMMC B1 BW=8 att=0 req=0 sw=0 swrc=0 tt=0 tw=00000000 te=00000000 trc=0 hc=00 b0=00000000 b1=00000000 same=0 div=0
+GTA4L-EMMC B1 PAD qdsd=00009fe4 dll=6000642c dst=00000000 bif=none
+GTA4L-EMMC B1 FAIL fail=0/0/0/00000000/0000/0000/00000000/0
+```
+
+The per-width `BLOCKS`/`DATA`/`LSTLBA` lines are all zero because the rung
+stopped at the first switch; they are zero-initialized, not observed content.
+The field decode is:
+
+| Field | Report value | Decode |
+| --- | --- | --- |
+| `rc` | `4294967277` | `-19`, `GTA4L_EMMC_ERR_BUS_WIDTH` |
+| `stop` | `1` | 4-bit switch stop |
+| `step` | `18` | `STEP_PROBE_LAST`; the stage-A 1-bit content pass completed |
+| `log` | `30` | unchanged from the stage-A pass; the failed switch adds no `LOG_BUS` event |
+| `hci` | `00` | 1-bit baseline `HOST_CONTROL` byte |
+| `BW=1` | `att=1 req=1 sw=0 swrc=0 tt=0 ... b0=62084b66 b1=84d0543e same=1 div=0` | `sw=0` is the 1-bit EXT_CSD code; `b0`/`b1` match the stage-A `BLOCK0`/`BLOCK1` sums exactly; the `same=1`/`div=0` fields are the fixed baseline values |
+| `BW=4` | `att=1 req=4 sw=0 swrc=-19 tt=0 ... hc=00 b0=0 b1=0 same=0 div=0` | CMD6 was issued, but the post-switch byte-183 readback was still 0 instead of 1; the host width was reverted and the bus test never ran |
+| `BW=8` | `att=0 ...` | not attempted; the first failure stopped the rung |
+| `FAIL` | all zero | no terminal command/data failure was recorded; the stop is the readback mismatch, not a command error |
+
+The `PAD qdsd=00009fe4` sample matches the configured active SDC1 pad value;
+`dll=6000642c` and `dst=00000000` match the low-speed DLL samples from prior
+runs. These are register reads, not pad-voltage, pull or timing measurements;
+`bif=none` means no `BUS_INTF` timing node was read. The report does not
+sample the pad state before and after the width write, so it cannot show
+whether the pad configuration changed.
+
+`gta4l_emmc_set_bus_width()` is the only producer of this result. A CMD6 or
+CMD13 error would have returned before the readback; `swrc=-19` specifically
+means the code reached `readback != code` after a successful `CMD8` EXT_CSD
+read at the new width. `sw=0` is the masked byte-183 value. `hc=00` is the
+previous `HOST_CONTROL` restored after the mismatch, not the 0x02 value driven
+during the attempted 4-bit read; the report does not retain that pre-revert
+value. `tt=0`/`trc=0` show the CMD19/CMD14 test never started. `b0`/`b1` are
+zero because the 4-bit content pass never ran; `same=0` is the zero-initialized
+default, not a content disagreement. `div=0` is likewise unset.
+
+The failure fields match the simulator's `probe-b1-stuck-width` case
+(`scripts/sim-gta4l-emmc-probe/harness.c`): expected `rc=-19 stop=1`, `BW=4
+att=1 req=4 sw=0 swrc=-19 tt=0`, `BW=8 att=0`, and no CMD19. It is therefore a
+covered simulator failure, not an undecodable or novel report. What it does
+**not** establish is the cause: the card may have ignored the CMD6 BUS_WIDTH
+write, the 4-bit readback may have returned the old value or zero, or the host
+width write may not have taken effect before the read. The report cannot
+distinguish these because it keeps neither the CMD6 response nor the
+pre-revert `HOST_CONTROL` value. The transcript is
+`out/gta4l/ram-root-emmc-probe-b1-evidence/b1-attempt2-switch-failure.txt`.
+
+**Attempt 3: block-1 CMD17 timeout before B1.** This boot completed
+identification and the block-0 read, then failed the block-1 read:
+
+```text
+GTA4L-EMMC PROBE FAILED: block 1 read rc=4294967285 step=15
+fail=1/17/1/0000113a/0000/0002/03f800f0/15
+```
+
+`rc` is `-11` (`GTA4L_EMMC_ERR_DATA_TIMEOUT`), `step=15` is `STEP_READY`
+(the last completed step; the early block read does not assign a probe phase),
+and `fail` is valid 1, index 17 (CMD17), argument 1 (LBA 1), command `0x113a`,
+error 0, normal `0x0002` (`TC` only; no `CC` or `BRR`), present `0x03f800f0`,
+step 15. Block 0 succeeded, so identification, CMD7 and the block-0 read path
+completed. The failure occurred before the GPT gate and before any B1 code:
+no BUS_WIDTH write, CMD19/CMD14 or per-width content pass ran. This is the same
+intermittent single-block TC-only/no-error signature recorded for the earlier
+attempt-3 boot 3 at array LBA 2, now at LBA 1. It is not the simulator's
+`probe-read-timeout` model, which expects a latched `DATA_TIMEOUT` error
+(`error=0x0010`, `normal=0`) and a terminal normal sample of zero; the hardware
+report has `error=0` and `normal=0x0002`. The existing docs already record
+that TC-only signature as a new failure mode, but the simulator has no
+field-for-field case for it. Under the plan's abort rule this is a pre-B1
+failure that must be recorded and referred to the owner, not treated as a B1
+verdict. The transcript is
+`out/gta4l/ram-root-emmc-probe-b1-evidence/b1-attempt3-block1-timeout.txt`.
+
+**Audit verdict.** The three results are not three contradictory B1 verdicts.
+They are one B1 result and two pre-B1 failures at different layers:
+
+1. Attempt 1 stopped at H8 before any B1 command.
+2. Attempt 2 reached B1 and stopped at the 4-bit CMD6 byte-183 readback
+   (`sw=0`, `swrc=-19`, stop 1), before CMD19/CMD14 or any per-width content
+   pass. The report matches the simulator's stuck-readback model exactly.
+3. Attempt 3 stopped at the single-block CMD17 block-1 data phase, with the
+   unmodeled TC-only/no-error terminal sample, before the GPT gate and B1.
+
+No attempt produced `rc=0 stop=0`, a 4-bit CMD19/CMD14 success, an 8-bit
+attempt or a per-width content comparison. F3 remains `[U]`. The B1 switch
+failure is one observation and is not yet shown to be repeatable; the H8 and
+single-block data-phase failures are already known to be intermittent across
+boots. The report cannot assign the readback failure to the card, the pad/DLL
+state or the host width path, and no code change follows from this record.
+The planning model must decide the next diagnostic before any further build,
+flash or boot.
+
+Supported by this section: the B1 image identity and BOOT-only flash record;
+three owner-supplied boot reports; the field decode; that attempt 2 reached the
+B1 rung and stopped at the 4-bit byte-183 readback mismatch; that attempts 1
+and 3 are pre-B1 failures; that attempt 2's failure fields match the simulator's
+stuck-readback case; and that F3 is unproven. Not supported: that the card
+rejected 4-bit, that 4-bit or 8-bit data transfer works or fails, that
+CMD19/CMD14 ran, that the pad/DLL state caused the readback failure, that the
+three reports are mutually inconsistent, or that a B1 code fix is known.
+
+### 2.17 Stage-B1 report-completeness audit (host-only) (2026-11-02)
+
+Attempt 2's report could not separate the readback causes because it kept no
+CMD6 status, no `HOST_CONTROL` value driven during the attempted width and no
+evidence that the EXT_CSD read returned data. This host-only batch extends the
+B1 result and report; it does not change the command order, the CMD6/CMD13/CMD8
+sequence, the width encoding, the host bits, the clock or power state, or any
+card write beyond the existing `BUS_WIDTH` byte and CMD19 pattern.
+
+| New field | Source | Purpose |
+| --- | --- | --- |
+| `switch_status` (`c6`) | CMD6 R1 captured before the readback | tells a clean switch from an R1 error |
+| `host_before` (`hb`) | `HOST_CONTROL` read before the width write | starting host width |
+| `host_after` (`ha`) | `HOST_CONTROL` read immediately after the write | whether the host bits took effect |
+| `readback_sum` (`es`) | byte sum of the 512-byte EXT_CSD read at the width | distinguishes a real readback from an empty one |
+| `pad_qdsd`/`pad_dll`/`pad_dst` (`pqdsd`/`pdll`/`pdst`) | TLMM QDSD, `CORE_DLL_CONFIG`, `CORE_DLL_STATUS` before the rung | before/after pad and DLL comparison |
+
+`gta4l_emmc_set_bus_width()` fills `switch_status` after a successful CMD6 and
+`host_before`/`host_after` around the `HOST_CONTROL` write. `readback_sum` is
+computed from the actual buffer after the read; the host width is still
+restored on a failed readback. `gta4l_emmc_ext_csd_sum()` is factored out and
+reused by `gta4l_emmc_parse_ext_csd()`, so the IDENT report's EXT_CSD sum and
+the B1 readback sum use the same byte-sum definition. The B1 probe stores the
+pre-rung pad/DLL samples once, immediately before the 4-bit rung, and the
+report prints both samples on one `PAD` line.
+
+The three readback outcomes now have distinct tuples; the old report printed
+the same `sw=0 swrc=-19` for all three:
+
+```text
+card ignored the switch:  c6=00000900 hb=00 ha=02 es=<1-bit sum>  sw=0 swrc=-19
+empty readback:           c6=00000900 hb=00 ha=02 es=00000000      sw=0 swrc=-19
+lost host width:          c6=00000900 hb=00 ha=00 es=00000000      sw=0 swrc=-12
+```
+
+The fourth old ambiguity, a pad/DLL disturbance, is now visible only as a
+difference between the `p*` and `q*` samples; it is not a simulated fault and
+the report still carries no timing measurement. The ordering and bits are
+pinned: `SDHCI_HOST_CONTROL` 0x28, `SDHCI_CTRL_4BITBUS` 0x02 and
+`SDHCI_CTRL_8BITBUS` 0x20 (`/tmp/opencode/linuxref/drivers_mmc_host_sdhci.h`),
+`mmc_select_bus_width()` at `drivers/mmc/core/mmc.c:1022` (switch, host width,
+then verify) and `mmc_compare_ext_csds()` at `:729` (re-read EXT_CSD at the
+width). The new fields are observations of that sequence, not a semantic
+change.
+
+Host evidence: `scripts/test-gta4l-emmc-probe.py` adds
+`probe-b1-zero-readback` (CMD8 at 4-bit returns an all-zero buffer with no
+error) and `probe-b1-host-width-stuck` (the `HOST_CONTROL` write drops the
+width bits and the CMD8 read at the switched card width fails with a data CRC),
+alongside the existing `probe-b1-stuck-width` card-ignored model. The three
+asserted tuples are the ones above; the success case asserts each width's
+EXT_CSD readback sum, and the field-wise `report-width-b1` fixture fills every
+new field at its 32-bit maximum and still requires the report to fit the
+2048-byte panic buffer. `scripts/test-gta4l-emmc.py` is unchanged at 136
+scenarios and 80 mutation controls; the probe suite is 57 scenarios and 34
+mutation controls (55/34 before this batch). No build, flash or boot was
+performed.
+
+Supported by this section: the four new fields and their sources, the
+distinct simulated tuples, the factored EXT_CSD sum, the widened field-wise
+bound and the two new host scenarios. Not supported: that any of the three
+causes is the attempt-2 cause, that the pad/DLL state is stable on hardware,
+that the widened report has run on a device, or that 4-bit or 8-bit transfer
+works. The old attempt-2 transcript remains ambiguous because it predates the
+fields; F3 remains `[U]`.
 
 ---
 
@@ -2018,6 +2249,15 @@ different run failing at CMD7/R1b) also stands. The boot-1 report is
 transcribed in
 `out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-failure.txt`.
 
+**2026-11-02 Stage-B1 update:** The first B1 boot reproduced H8 exactly
+(`stage=4`, `rc=-7`, `step=9`, CMD3 `fail`, 100,000-iteration `c3l`, no `c7`),
+while the second B1 boot completed identification and the stage-A pass before
+stopping at the 4-bit readback, and the third completed identification and the
+block-0 read before a block-1 `CMD17` data timeout with `error=0`/`normal=0x0002`
+(TC only). H8 therefore remains intermittent across boots, and the separate
+single-block TC-only/no-error signature now spans block 1 and array LBA 2.
+Neither pre-B1 failure is a B1 verdict; the full stage-B1 record is in §2.16.
+
 ---
 
 ## 7. Discriminating diagnostic plan (owner approval required)
@@ -2625,6 +2865,11 @@ working-tree counts are in section 10.
 - `out/gta4l/ram-root-emmc-probe-failclosed-rerun-evidence/stage3-failure-report.txt`: transcribed CMD2 failure
 - `out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/flash-record.json`: candidate BOOT flash, unchanged recovery and pulled readback (2.11)
 - `out/gta4l/ram-root-emmc-probe-cmd1gap-evidence/build-provenance.json`: candidate source/archive/kernel/payload/image identity (2.11)
+- `out/gta4l/ram-root-emmc-probe-b1-evidence/flash-record.json`: Stage-B1 BOOT-only flash and pulled gates (2.16)
+- `out/gta4l/ram-root-emmc-probe-b1-evidence/hardware-run-record.json`: Stage-B1 three-boot decode and verdict (2.16)
+- `out/gta4l/ram-root-emmc-probe-b1-evidence/b1-attempt1-cmd3-timeout.txt`: attempt-1 H8 OCR transcript (2.16)
+- `out/gta4l/ram-root-emmc-probe-b1-evidence/b1-attempt2-switch-failure.txt`: attempt-2 B1 switch-failure OCR transcript (2.16)
+- `out/gta4l/ram-root-emmc-probe-b1-evidence/b1-attempt3-block1-timeout.txt`: attempt-3 block-1 CMD17 OCR transcript (2.16)
 - `src/UniXNU-gta4l/docs/emmc-cmd1-gap-candidate.md`: candidate definition, build and three-unit result
 - `src/UniXNU-gta4l/docs/emmc-driver.md:328,360`: stage-2/3 kernel hash
 - `src/UniXNU-gta4l/docs/emmc-driver.md:383`: older failure-record kernel hash

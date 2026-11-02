@@ -123,6 +123,11 @@ struct gta4l_emmc_probe_bus {
 	uint32_t blocks[GTA4L_EMMC_PROBE_ARRAY_BLOCKS];
 	uint32_t data_sum;
 	uint32_t last_sum;
+	/* Pad/DLL samples taken immediately before the rung, so the report
+	 * can compare them with the post-run sample on its PAD line. */
+	uint32_t pad_qdsd;
+	uint32_t pad_dll;
+	uint32_t pad_dst;
 };
 
 /* The bus-width rung stops with a content disagreement that the per-width
@@ -859,12 +864,14 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 	panic("GTA4L-EMMC B1 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
 	    "rev=%u hci=%02x step=%u log=%u\n"
 	    "GTA4L-EMMC B1 BW=1 att=%u req=1 sw=%u swrc=0 tt=0 "
-	    "tw=00000000 te=00000000 trc=0 hc=%02x b0=%08x b1=%08x "
+	    "tw=00000000 te=00000000 trc=0 hc=%02x es=%08x b0=%08x b1=%08x "
 	    "same=1 div=0\n"
 	    "GTA4L-EMMC B1 BW=4 att=%u req=%u sw=%u swrc=%d tt=%u "
-	    "tw=%08x te=%08x trc=%d hc=%02x b0=%08x b1=%08x same=%u div=%u\n"
+	    "tw=%08x te=%08x trc=%d hc=%02x hb=%02x ha=%02x c6=%08x "
+	    "es=%08x b0=%08x b1=%08x same=%u div=%u\n"
 	    "GTA4L-EMMC B1 BW=8 att=%u req=%u sw=%u swrc=%d tt=%u "
-	    "tw=%08x te=%08x trc=%d hc=%02x b0=%08x b1=%08x same=%u div=%u\n"
+	    "tw=%08x te=%08x trc=%d hc=%02x hb=%02x ha=%02x c6=%08x "
+	    "es=%08x b0=%08x b1=%08x same=%u div=%u\n"
 	    "GTA4L-EMMC B1 BLOCKS 4"
 	    " 2=%08x 3=%08x 4=%08x 5=%08x 6=%08x 7=%08x 8=%08x 9=%08x"
 	    " 10=%08x 11=%08x 12=%08x 13=%08x 14=%08x 15=%08x 16=%08x"
@@ -877,24 +884,31 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
 	    "GTA4L-EMMC B1 DATA 8 %u=%08x\n"
 	    "GTA4L-EMMC B1 LSTLBA 8 %u=%08x\n"
-	    "GTA4L-EMMC B1 PAD qdsd=%08x dll=%08x dst=%08x bif=none\n"
+	    "GTA4L-EMMC B1 PAD pqdsd=%08x pdll=%08x pdst=%08x "
+	    "qdsd=%08x dll=%08x dst=%08x bif=none\n"
 	    "GTA4L-EMMC B1 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
 	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
 	    (unsigned int)host->ext_csd_rev,
 	    (unsigned int)base->result.host_control,
 	    host->last_step, probe->log_count,
 	    base->attempted, base->result.switched,
-	    (unsigned int)base->result.host_control,
+	    (unsigned int)base->result.host_control, host->ext_csd_sum,
 	    base->block0_sum, base->block1_sum,
 	    w4->attempted, w4->result.requested, w4->result.switched,
 	    w4->result.switch_result, w4->tested, w4->result.test_word,
 	    w4->result.test_expected, w4->result.test_result,
-	    (unsigned int)w4->result.host_control, w4->block0_sum,
+	    (unsigned int)w4->result.host_control,
+	    (unsigned int)w4->result.host_before,
+	    (unsigned int)w4->result.host_after, w4->result.switch_status,
+	    w4->result.readback_sum, w4->block0_sum,
 	    w4->block1_sum, w4->same, w4->div,
 	    w8->attempted, w8->result.requested, w8->result.switched,
 	    w8->result.switch_result, w8->tested, w8->result.test_word,
 	    w8->result.test_expected, w8->result.test_result,
-	    (unsigned int)w8->result.host_control, w8->block0_sum,
+	    (unsigned int)w8->result.host_control,
+	    (unsigned int)w8->result.host_before,
+	    (unsigned int)w8->result.host_after, w8->result.switch_status,
+	    w8->result.readback_sum, w8->block0_sum,
 	    w8->block1_sum, w8->same, w8->div,
 	    w4->blocks[0], w4->blocks[1], w4->blocks[2], w4->blocks[3],
 	    w4->blocks[4], w4->blocks[5], w4->blocks[6], w4->blocks[7],
@@ -912,6 +926,7 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 	    w8->blocks[20],
 	    range->first_usable, w8->data_sum,
 	    range->backup_lba, w8->last_sum,
+	    base->pad_qdsd, base->pad_dll, base->pad_dst,
 	    qdsd, dll, dst,
 	    (unsigned int)host->fail_valid, host->fail_index,
 	    host->fail_argument, host->fail_command,
@@ -1373,6 +1388,12 @@ gta4l_emmc_probe_run(void)
 		}
 		base.data_sum = range.data_sum;
 		base.last_sum = range.last_sum;
+		base.pad_qdsd = gta4l_emmc_probe_read32(&probe,
+		    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+		base.pad_dll = gta4l_emmc_probe_read32(&probe,
+		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+		base.pad_dst = gta4l_emmc_probe_read32(&probe,
+		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
 
 		w4.attempted = 1u;
 		result = gta4l_emmc_set_bus_width(&host, 4u, &w4.result);

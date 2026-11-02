@@ -515,7 +515,11 @@ int gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer);
 /* Evidence for one bus-width rung step. Every field is an observed value;
  * `switched` is the EXT_CSD BUS_WIDTH code read back after the CMD6 switch,
  * and `test_word`/`test_expected` are the first 32 bits of the CMD14 response
- * and of the complement the card must return. */
+ * and of the complement the card must return. The diagnostic fields separate
+ * a card that ignored the CMD6 write (`switch_status` clean, `readback_sum`
+ * matching the 1-bit read), a readback that returned no data
+ * (`readback_sum` zero) and a host width write that did not take effect
+ * (`host_after` without the requested width bits). */
 struct gta4l_emmc_bus_result {
 	uint32_t requested;      /* requested width in bits (1, 4 or 8) */
 	uint32_t switched;       /* BUS_WIDTH code read back (0, 1 or 2) */
@@ -524,6 +528,10 @@ struct gta4l_emmc_bus_result {
 	uint32_t test_word;      /* raw CMD14 response, little endian */
 	uint32_t test_expected;  /* expected CMD14 word, little endian */
 	uint32_t host_control;   /* HOST_CONTROL byte after the host switch */
+	uint32_t switch_status;  /* CMD6 R1 status before the readback */
+	uint8_t  host_before;    /* HOST_CONTROL before the width write */
+	uint8_t  host_after;     /* HOST_CONTROL read back after the write */
+	uint32_t readback_sum;   /* byte sum of the EXT_CSD read at the width */
 };
 
 /* Switch the card BUS_WIDTH (CMD6) and the SDHCI host width. `bits` may be 1,
