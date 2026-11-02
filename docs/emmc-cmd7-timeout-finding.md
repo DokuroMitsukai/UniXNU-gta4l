@@ -369,7 +369,7 @@ scenario must reject it, while the plateau scenario checks that repeated
 unchanged samples do not advance the overflow count. The CC-only case now ends
 in a bounded timeout because CC alone is not success while the busy completion is
 missing; a core mutation that restores CC-only success is rejected.
-Host counts are 116 core scenarios with 67 mutation controls and 48 probe
+Host counts are 136 core scenarios with 80 mutation controls and 55 probe
 scenarios with 34 mutation controls; the `fmt=4` report ran on 2026-11-01 on two
 units (an SM-T505 and the owner's SM-T505N, per the owner); both reproduced the
 CMD2 failure before the CMD7 capture. The later `cmd1gap` candidate reached CMD7

@@ -413,7 +413,8 @@ gta4l_emmc_enable_status(struct gta4l_emmc_host *host)
 {
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_NORMAL_INT_ENABLE,
-	    GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC | GTA4L_EMMC_INT_BRR);
+	    GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC | GTA4L_EMMC_INT_BWR |
+	    GTA4L_EMMC_INT_BRR);
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_ERROR_INT_ENABLE, GTA4L_EMMC_INT_ERR_MASK);
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
@@ -873,6 +874,117 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
 			 * FIFO reads so an error that became visible during
 			 * them is still recorded before the status clear. An
 			 * error after this sample remains unobserved. */
+			error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+			if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+				present = gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_PRESENT_STATE);
+				gta4l_emmc_record_failure(host, index, argument,
+				    command, error, normal, present);
+				gta4l_emmc_clear_interrupts(host);
+				return gta4l_emmc_map_error(error, 1);
+			}
+			gta4l_emmc_clear_interrupts(host);
+			return GTA4L_EMMC_OK;
+		}
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+	}
+
+	error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+	present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_PRESENT_STATE);
+	gta4l_emmc_record_failure(host, index, argument, command, error,
+	    normal, present);
+	gta4l_emmc_clear_interrupts(host);
+	return GTA4L_EMMC_ERR_DATA_TIMEOUT;
+}
+
+/* One bounded single-block PIO write. Only the CMD19 bus-test pattern uses
+ * this path; block-data write commands are outside the core's scope. */
+static int
+gta4l_emmc_write_data(struct gta4l_emmc_host *host, uint32_t index,
+    uint32_t argument, uint16_t flags, const void *buffer, uint32_t length,
+    uint32_t *response)
+{
+	uint16_t command;
+	uint16_t normal = 0;
+	uint16_t error = 0;
+	uint32_t present;
+	uint32_t iterations;
+	uint32_t step;
+	uint32_t byte;
+	const uint8_t *bytes = (const uint8_t *)buffer;
+	int command_done = 0;
+	int data_done = 0;
+
+	if ((buffer == 0) || ((length % 4) != 0) ||
+	    (length == 0) || (length > 0xFFFFu)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	command = (uint16_t)((index << 8) | flags | GTA4L_EMMC_CMD_DATA);
+	if (gta4l_emmc_wait_inhibit(host) != GTA4L_EMMC_OK) {
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		gta4l_emmc_record_failure(host, index, argument, command, 0, 0,
+		    present);
+		return GTA4L_EMMC_ERR_INHIBIT;
+	}
+	gta4l_emmc_clear_interrupts(host);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_BLOCK_SIZE, (uint16_t)length);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_BLOCK_COUNT, 1);
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ARGUMENT, argument);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_TRANSFER_MODE, GTA4L_EMMC_TM_BLOCK_COUNT_EN);
+	gta4l_emmc_barrier(host);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_COMMAND, command);
+	gta4l_emmc_barrier(host);
+
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
+	for (step = 0; step < iterations; step++) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			gta4l_emmc_record_failure(host, index, argument,
+			    command, error, normal, present);
+			gta4l_emmc_clear_interrupts(host);
+			return gta4l_emmc_map_error(error, 1);
+		}
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		if ((command_done == 0) &&
+		    ((normal & GTA4L_EMMC_INT_CC) != 0)) {
+			if (response != 0) {
+				response[0] = gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_RESPONSE);
+			}
+			command_done = 1;
+		}
+		if ((data_done == 0) && ((normal & GTA4L_EMMC_INT_BWR) != 0)) {
+			for (byte = 0; byte < length; byte += 4) {
+				uint32_t word = (uint32_t)bytes[byte] |
+				    ((uint32_t)bytes[byte + 1u] << 8) |
+				    ((uint32_t)bytes[byte + 2u] << 16) |
+				    ((uint32_t)bytes[byte + 3u] << 24);
+				gta4l_emmc_write32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_BUFFER_DATA_PORT, word);
+			}
+			data_done = 1;
+		}
+		if ((command_done != 0) && (data_done != 0) &&
+		    ((normal & GTA4L_EMMC_INT_TC) != 0)) {
 			error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 			    GTA4L_EMMC_REG_ERROR_INT_STATUS);
 			if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
@@ -1458,6 +1570,258 @@ gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer)
 	if ((response & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
 		return GTA4L_EMMC_ERR_CARD_STATUS;
 	}
+	return GTA4L_EMMC_OK;
+}
+
+static uint32_t
+gta4l_emmc_bus_width_code(uint32_t bits)
+{
+	if (bits == 1u) {
+		return GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
+	}
+	if (bits == 4u) {
+		return GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+	}
+	if (bits == 8u) {
+		return GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;
+	}
+	return 0xFFFFFFFFu;
+}
+
+/* CMD6 write-byte switch plus the matching SDHCI HOST_CONTROL width. The
+ * card switch is ordered exactly as Linux mmc_select_bus_width(): CMD6, wait
+ * for the card to leave busy, change the host width, then verify the BUS_WIDTH
+ * value by reading EXT_CSD back at the new width. */
+int
+gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_result *result)
+{
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t response[4];
+	uint32_t argument;
+	uint32_t code;
+	uint32_t readback;
+	uint32_t control;
+	uint32_t previous_control;
+	int rc;
+
+	if ((host == 0) || (host->initialized == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	code = gta4l_emmc_bus_width_code(bits);
+	if (code == 0xFFFFFFFFu) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if (result != 0) {
+		result->requested = bits;
+		result->switched = 0;
+		result->switch_result = GTA4L_EMMC_OK;
+		result->test_result = GTA4L_EMMC_OK;
+		result->test_word = 0;
+		result->test_expected = 0;
+		result->host_control = 0;
+	}
+
+	argument = GTA4L_EMMC_SWITCH_ACCESS_WRITE |
+	    (GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF << 16) |
+	    (code << 8) | GTA4L_EMMC_SWITCH_CMD_SET_NORMAL;
+	rc = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD6, argument,
+	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX, GTA4L_EMMC_CMD_TIMEOUT_US, response);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->switch_result = rc;
+		}
+		return rc;
+	}
+	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
+		host->card_status = response[0];
+		if (result != 0) {
+			result->switch_result = GTA4L_EMMC_ERR_CARD_STATUS;
+		}
+		return GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+	/* CMD13 observes SWITCH_ERROR and waits for TRAN/ready. */
+	rc = gta4l_emmc_wait_tran(host);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->switch_result = rc;
+		}
+		return rc;
+	}
+
+	control = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	previous_control = control;
+	control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT);
+	if (bits == 4u) {
+		control |= GTA4L_EMMC_HOST_CONTROL_4BIT;
+	} else if (bits == 8u) {
+		control |= GTA4L_EMMC_HOST_CONTROL_8BIT;
+	}
+	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL, control);
+	gta4l_emmc_barrier(host);
+
+	/* Re-read EXT_CSD at the new width: this is both the card-side
+	 * confirmation and a data-path exercise at the switched width. On a
+	 * failed readback the host width is returned to its previous value so
+	 * a failed width is not left driving the pad. */
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL, (uint8_t)previous_control);
+		gta4l_emmc_barrier(host);
+		if (result != 0) {
+			result->switch_result = rc;
+			result->host_control = previous_control;
+		}
+		return rc;
+	}
+	readback = (uint32_t)ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] & 0x0Fu;
+	if (result != 0) {
+		result->switched = readback;
+		result->host_control = control;
+	}
+	if (readback != code) {
+		gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL, (uint8_t)previous_control);
+		gta4l_emmc_barrier(host);
+		if (result != 0) {
+			result->switch_result = GTA4L_EMMC_ERR_BUS_WIDTH;
+			result->host_control = previous_control;
+		}
+		return GTA4L_EMMC_ERR_BUS_WIDTH;
+	}
+
+	host->bus_width = (uint8_t)code;
+	host->last_step = GTA4L_EMMC_STEP_BUS_WIDTH;
+	gta4l_emmc_log(host, GTA4L_EMMC_LOG_BUS, bits,
+	    (code << 8) | readback);
+	return GTA4L_EMMC_OK;
+}
+
+/* CMD19/CMD14 bus test. Patterns and the comparison follow Linux
+ * mmc_send_bus_test(): only the first len/4 bytes are checked, because they
+ * carry the first two bits of every selected data line. */
+int
+gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_result *result)
+{
+	uint8_t pattern[GTA4L_EMMC_BUS_TEST_8_BYTES];
+	uint8_t actual[GTA4L_EMMC_BUS_TEST_8_BYTES];
+	uint32_t response[4];
+	uint32_t length;
+	uint32_t code;
+	uint32_t control;
+	uint32_t index;
+	uint32_t test_word = 0;
+	uint32_t expected_word = 0;
+	int rc;
+
+	if ((host == 0) || (host->initialized == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	code = gta4l_emmc_bus_width_code(bits);
+	if ((code == 0xFFFFFFFFu) || (bits == 1u)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	/* The card field and the SDHCI HOST_CONTROL width must both already
+	 * describe the requested width; the test must not run on a mismatched
+	 * bus. */
+	control = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	if (host->bus_width != (uint8_t)code) {
+		return GTA4L_EMMC_ERR_BUS_WIDTH;
+	}
+	if (bits == 4u) {
+		if ((control & (GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT)) !=
+		    GTA4L_EMMC_HOST_CONTROL_4BIT) {
+			return GTA4L_EMMC_ERR_BUS_WIDTH;
+		}
+	} else if ((control & (GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT)) != GTA4L_EMMC_HOST_CONTROL_8BIT) {
+		return GTA4L_EMMC_ERR_BUS_WIDTH;
+	}
+	if (result != 0) {
+		result->requested = bits;
+		result->switched = code;
+		result->switch_result = GTA4L_EMMC_OK;
+		result->test_result = GTA4L_EMMC_OK;
+		result->test_word = 0;
+		result->test_expected = 0;
+		result->host_control = control;
+	}
+
+	length = (bits == 4u) ? GTA4L_EMMC_BUS_TEST_4_BYTES :
+	    GTA4L_EMMC_BUS_TEST_8_BYTES;
+	for (index = 0; index < GTA4L_EMMC_BUS_TEST_8_BYTES; index++) {
+		pattern[index] = 0;
+		actual[index] = 0;
+	}
+	if (bits == 4u) {
+		pattern[0] = GTA4L_EMMC_BUS_TEST_PATTERN_4;
+	} else {
+		pattern[0] = GTA4L_EMMC_BUS_TEST_PATTERN_8_0;
+		pattern[1] = GTA4L_EMMC_BUS_TEST_PATTERN_8_1;
+	}
+
+	rc = gta4l_emmc_write_data(host, GTA4L_EMMC_CMD19, 0,
+	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX, pattern, length, response);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->test_result = rc;
+		}
+		return rc;
+	}
+	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
+		host->card_status = response[0];
+		if (result != 0) {
+			result->test_result = GTA4L_EMMC_ERR_CARD_STATUS;
+		}
+		return GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+	rc = gta4l_emmc_read_data(host, GTA4L_EMMC_CMD14, 0,
+	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX, actual, length, response);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->test_result = rc;
+		}
+		return rc;
+	}
+	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
+		host->card_status = response[0];
+		if (result != 0) {
+			result->test_result = GTA4L_EMMC_ERR_CARD_STATUS;
+		}
+		return GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+
+	for (index = 0; index < length / 4u; index++) {
+		test_word |= (uint32_t)actual[index] << (index * 8u);
+		expected_word |=
+		    (uint32_t)(uint8_t)(~pattern[index]) << (index * 8u);
+	}
+	if (result != 0) {
+		result->test_word = test_word;
+		result->test_expected = expected_word;
+	}
+	host->last_step = GTA4L_EMMC_STEP_BUS_TEST;
+	for (index = 0; index < length / 4u; index++) {
+		if ((uint8_t)(pattern[index] ^ actual[index]) != 0xFFu) {
+			if (result != 0) {
+				result->test_result = GTA4L_EMMC_ERR_BUS_TEST;
+			}
+			gta4l_emmc_log(host, GTA4L_EMMC_LOG_BUS,
+			    0x80000000u | bits, test_word);
+			return GTA4L_EMMC_ERR_BUS_TEST;
+		}
+	}
+	gta4l_emmc_log(host, GTA4L_EMMC_LOG_BUS, bits, test_word);
 	return GTA4L_EMMC_OK;
 }
 

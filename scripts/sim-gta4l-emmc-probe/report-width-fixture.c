@@ -25,11 +25,17 @@ gta4l_emmc_probe_width_fixture(int form)
 	struct gta4l_emmc_probe probe;
 	struct gta4l_emmc_probe_regs regs;
 	struct gta4l_emmc_probe_range range;
+	struct gta4l_emmc_probe_bus base;
+	struct gta4l_emmc_probe_bus w4;
+	struct gta4l_emmc_probe_bus w8;
 	struct gta4l_emmc_host host;
 
 	memset(&probe, 0, sizeof(probe));
 	memset(&regs, 0, sizeof(regs));
 	memset(&range, 0, sizeof(range));
+	memset(&base, 0, sizeof(base));
+	memset(&w4, 0, sizeof(w4));
+	memset(&w8, 0, sizeof(w8));
 	memset(&host, 0, sizeof(host));
 	memset(block0, 0xFF, sizeof(block0));
 	memset(block1, 0xFF, sizeof(block1));
@@ -213,6 +219,48 @@ gta4l_emmc_probe_width_fixture(int form)
 	range.last_sum = 0xFFFFFFFFu;
 	memset(range.array, 0xFF, sizeof(range.array));
 
+	/* Stage-B1 field bounds. The switched width is the masked EXT_CSD
+	 * BUS_WIDTH value, so 0x0F is its widest readback; the switch and test
+	 * results stay inside the production error codes; the sums and first
+	 * differing LBA take the full 32-bit range. */
+	base.attempted = 1u;
+	base.tested = 0u;
+	base.same = 1u;
+	base.div = 0u;
+	base.result.requested = 1u;
+	base.result.switched = 0x0Fu;
+	base.result.switch_result = GTA4L_EMMC_OK;
+	base.result.test_result = GTA4L_EMMC_OK;
+	base.result.test_word = 0xFFFFFFFFu;
+	base.result.test_expected = 0xFFFFFFFFu;
+	base.result.host_control = 0xFFu;
+	base.block0_sum = 0xFFFFFFFFu;
+	base.block1_sum = 0xFFFFFFFFu;
+	base.data_sum = 0xFFFFFFFFu;
+	base.last_sum = 0xFFFFFFFFu;
+	memset(base.blocks, 0xFF, sizeof(base.blocks));
+
+	w4.attempted = 1u;
+	w4.tested = 1u;
+	w4.same = 0u;
+	w4.div = 0xFFFFFFFFu;
+	w4.result.requested = 4u;
+	w4.result.switched = 0x0Fu;
+	w4.result.switch_result = GTA4L_EMMC_ERR_BUS_TEST;
+	w4.result.test_result = GTA4L_EMMC_ERR_BUS_TEST;
+	w4.result.test_word = 0xFFFFFFFFu;
+	w4.result.test_expected = 0xFFFFFFFFu;
+	w4.result.host_control = 0xFFu;
+	w4.block0_sum = 0xFFFFFFFFu;
+	w4.block1_sum = 0xFFFFFFFFu;
+	w4.data_sum = 0xFFFFFFFFu;
+	w4.last_sum = 0xFFFFFFFFu;
+	memset(w4.blocks, 0xFF, sizeof(w4.blocks));
+
+	w8 = w4;
+	w8.result.requested = 8u;
+	w8.div = 0xFFFFFFFEu;
+
 	if (form == 0) {
 		/* stage 1..3 and the most negative result code, so the
 		 * signed-decimal field carries its widest production host
@@ -225,7 +273,7 @@ gta4l_emmc_probe_width_fixture(int form)
 		host.last_step = GTA4L_EMMC_STEP_PROBE_LAST;
 		gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0,
 		    block1, &range, 0);
-	} else {
+	} else if (form == 3) {
 		/* MD form: step 19, all CMD18 sums at their field bound and
 		 * the widest mismatch suffix. */
 		host.last_step = GTA4L_EMMC_STEP_PROBE_MB;
@@ -234,5 +282,13 @@ gta4l_emmc_probe_width_fixture(int form)
 		memset(range.mb, 0xFF, sizeof(range.mb));
 		gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0,
 		    block1, &range, 1);
+	} else {
+		/* Stage-B1 form: both width rungs present, every content sum
+		 * and the first differing LBA at their 32-bit bound, and the
+		 * widest switch/test result codes. */
+		host.fail_step = GTA4L_EMMC_STEP_BUS_TEST;
+		host.last_step = GTA4L_EMMC_STEP_BUS_TEST;
+		gta4l_emmc_probe_report_b1(&host, &probe, &range, &base, &w4,
+		    &w8, GTA4L_EMMC_PROBE_ERR_CONTENT, 8);
 	}
 }

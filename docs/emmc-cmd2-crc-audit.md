@@ -23,7 +23,8 @@ both completed identification and the read-only `CMD17` reads of blocks 0 and
 recorded flash records. The owner reports the first `fmt=4` run on an SM-T505
 and a later BOOT-only run on the owner's SM-T505N; the results agree 1:1 per the
 owner, and the second run's flash record, readback and photo are in section
-2.10.
+2.10. A host-only Stage-B1 section (2.15) records the 4/8-bit bus-width and
+CMD19/CMD14 bus-test implementation; no B1 hardware run exists yet.
 
 **Hardware-tested source (2026-10-31 image):** `Gta4lEmmc.c 722110a5…`,
 `Gta4lEmmc.h 7abc7d87…`, `Gta4lEmmcProbe.c d541514b…`, simulator
@@ -1156,11 +1157,12 @@ the owner photo file is not in this tree and has no hash here.
 **Attempt 3 (2026-11-02).** The bounded post-bound drain build (`Gta4lEmmc.c
 367978fd…`, `Gta4lEmmc.h d6be3022…`, `Gta4lEmmcProbe.c c344b35e…`, kernel
 `f034dda2…`, payload `0048962c…`, boot image `f85c18d9…`) was committed as
-`9ed12bd`, flashed to BOOT only and booted by the owner. The flash record and
+`9ed12bd`, flashed to BOOT only and booted three times by the owner (the
+image was not reflashed between boots). The flash record and
 pulled gates are in
 `out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/`; pre-flash BOOT was
 `4ca40951…`, post-flash `d652a8b5…`, image-byte readback `f85c18d9…`, tail
-`a28b4ea2…`, and `RECOVERY`/EFS/sec_efs were unchanged. The boot stopped
+`a28b4ea2…`, and `RECOVERY`/EFS/sec_efs were unchanged. The first boot stopped
 during identification with:
 
 ```text
@@ -1180,18 +1182,129 @@ plausible CMD3 R1 status in `RESPONSE0` with CID words in `RESPONSE1..3`, and
 1.134 s) with first/last normal 0. `c7p`–`c7x` are all invalid/zero, so CMD7
 never ran and no CMD18/CMD12/sector read occurred. This is the §6 H8
 CMD3-completion signature, field-for-field the same as attempt 1 except the
-fresh panic context and tick count. The drain code is in
-`gta4l_emmc_read_multi()` and did not execute; the run neither supports nor
-refutes it. The transcription is
+fresh panic context and tick count. The transcription is
 `out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-failure.txt`;
 the raw CID is kept there and not repeated here.
 
+Two later boots of the same image completed identification. One reached the
+MD phase and exercised the drain: the primary bound expired at block ordinal
+20, the 500,000 µs drain window exhausted its 50,000 iterations
+(`drain=1/0/0/50000`), no additional block was drained and no `TC` appeared,
+and the `CMD12` stop again captured a valid terminal state with no `CC`/`TC`
+and returned `-7`. The other boot failed earlier in the probe sequence: the
+stage-A `CMD17` read at LBA 2 returned `-11` with `step=16` and a terminal
+normal sample of `0x0002` (`TC` only, no `CC`/`BRR`). The transcriptions are
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-boot2-drain-failure.txt`
+and
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-boot3-array-failure.txt`.
+
 F2 remains unproven. Attempt 2 shows the CMD18 data phase is no longer limited
 to one block but does not establish a complete transfer or a clean stop.
-Attempt 3 did not reach the MD phase, so it adds no multi-block result and the
-drain remains untested on hardware. A further attempt with a fresh owner
-approval is required before F2 can be claimed; without a 21/21 report and
-matching sums, the MD abort condition still does not apply.
+Attempt 3's later boot exercised the drain but it did not resolve the stall,
+and no boot produced a complete transfer or a clean stop. A further attempt
+with a fresh owner approval is required before F2 can be claimed; without a
+21/21 report and matching sums, the MD abort condition still does not apply.
+
+### 2.15 Stage-B1 bus-width switch and bus-test implementation (2026-11-02, host-only)
+
+The Stage-B1 rung adds an opt-in fourth probe stage,
+`gta4l-emmc-probe=4`. The stage-A identification and 1-bit content pass run
+unchanged; the probe then switches `EXT_CSD[183] BUS_WIDTH` to 4-bit
+(value 1), sets the SDHCI `HOST_CONTROL` 4-bit bit (0x02), reads EXT_CSD back
+at the new width, runs one CMD19 (bus-test write) / CMD14 (bus-test read)
+round trip, and repeats the stage-A content pass at 4-bit. If every step
+succeeds it repeats the sequence for 8-bit (value 2, host bit 0x20, 8-byte
+pattern); the first failed step stops the rung and reports the accumulated
+state. The 1-bit sums from the stage-A pass are the comparison baseline, and
+the GPT gate is not re-run, so all three passes compare the same gated LBA
+list.
+
+The command ordering follows the pinned Linux `mmc_select_bus_width()`
+(`drivers/mmc/core/mmc.c:1022`): `mmc_switch()` writes the card field,
+`mmc_set_bus_width()` changes the host, then `mmc_bus_test()` exercises the
+bus. The host bits are the ones in `sdhci_set_bus_width()`
+(`drivers/mmc/host/sdhci.c:2277`); the EXT_CSD values are
+`EXT_CSD_BUS_WIDTH_4`/`EXT_CSD_BUS_WIDTH_8` (1/2), and the CMD6 argument is
+`0x03000000 | (183 << 16) | (value << 8) | EXT_CSD_CMD_SET_NORMAL`. The
+bus-test length, pattern and complement comparison follow
+`mmc_send_bus_test()`/`mmc_bus_test()`
+(`drivers/mmc/core/mmc_ops.c:771,847`): 4 bytes of `5a 00 00 00` or 8 bytes
+of `55 aa 00 00 00 00 00 00`, CMD19 writes, CMD14 reads, and only the first
+length/4 returned bytes are compared against `~pattern`. The production path
+reports a CMD19 error and does not proceed to CMD14, while Linux ignores
+`BUS_TEST_W` errors and relies on `BUS_TEST_R`; that difference is a
+diagnostic choice, not a claimed parity. The pinned reference has no
+separate EXT_CSD bus-test flag, so the plan's "bus-test flag" wording maps
+to the CMD19/CMD14 command pair, not to a field write. CRC stays enabled and
+the clock/bus-power state is unchanged.
+
+Expected report (`GTA4L-EMMC B1 REPORT`): the header
+`rc stop mci rca cap rev hci step log`; one `BW=1` baseline line and one
+`BW=4`/`BW=8` line per rung with `att` attempted, `req` requested bits,
+`sw` the masked byte-183 readback, `swrc` the switch result, `tt` whether
+the bus test ran, `tw`/`te` the returned/expected word, `trc` the test
+result, `hc` the `HOST_CONTROL` byte, `b0`/`b1` the block 0/1 sums and
+`same`/`div` the content comparison; the 21-entry `BLOCKS` line and the
+`DATA`/`LSTLBA` lines per width; `PAD qdsd=… dll=… dst=… bif=none` from
+TLMM SDC1 QDSD (offset 0x00), `CORE_DLL_CONFIG` (0x200) and
+`CORE_DLL_STATUS` (0x208); and the terminal
+`FAIL fail=valid/index/argument/command/error/normal/present/step` record.
+
+Bounds and stop binding: `stop=0` is the success report; 1-4 are 4-bit
+switch, bus-test, content-read and content-mismatch stops; 5-8 are the
+8-bit equivalents. `sw` is the observed value, not a success flag: a card
+that stays at 4-bit after the 8-bit CMD6 reports `req=8 sw=1 swrc=-19`
+(`GTA4L_EMMC_ERR_BUS_WIDTH`) and the host control is reverted before the
+report. A bus-test failure binds to `trc` and the `tw`/`te` pair
+(`-20`, `GTA4L_EMMC_ERR_BUS_TEST`); a content disagreement binds to `div`,
+the first differing absolute LBA (`-21`, probe-only). The rung never
+asserts or reads content on a width that failed. The report must fit the
+2048-byte panic buffer; the width fixture drives every field at its widest
+production form and the probe suite requires the widest B1 form to fit
+including the NUL. The only card content written is the `BUS_WIDTH`
+configuration byte and the CMD19 test pattern; no user-data sector is
+written and the core gains no user-data write path.
+
+The BUS_INTF timing node named by the plan does not exist in the live DT or
+the vendor tree: `grep` finds no `bus-intf`/`bus_intf` property. The closest
+vendor property is `qcom,bus-speed-mode` on `/soc/sdhci@4744000` at
+`device-dump/private/gta4l-dump/merged.dts:3030,3050` (values
+`HS400_1p8v`, `HS200_1p8v`, `DDR_1p8v`), which the probe does not parse;
+the report's `bif=none` is an explicit not-read marker, not a measured
+timing. The pad/DLL fields are register-level samples only and do not
+establish pad voltage, drive strength or timing margin.
+
+Host-tested source hashes for this rung (working tree, not a booted image):
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `package/Gta4lEmmc.c` | `9f2a9da7514296206674c7a8aa9f6d3935887a690b466b96f050a36790dabe00` |
+| `package/Gta4lEmmc.h` | `f13725e88afaaf4f176383fb7b8fb56f2c98a3ac3f93083d01f449d1e66617b9` |
+| `package/Gta4lEmmcProbe.c` | `a4aa4751a244a7affe087101f7b6846680d7c830430b870a3345384c233330d0` |
+| `scripts/sim-gta4l-emmc/harness.c` | `46171846209871dc8263642acfab29b1c6987e1e75a79111054f456f73239f3e` |
+| `scripts/sim-gta4l-emmc-probe/harness.c` | `d1ae210910e74410c4c9b3083ea61446e8b61465738472248f2b089088131ef3` |
+| `scripts/sim-gta4l-emmc-probe/report-width-fixture.c` | `516d042667c8f91bd6822c1ad42447f3d789c9d9f0170f32f5d650bb7cf9e41f` |
+| `scripts/test-gta4l-emmc.py` | `017451e4546248fbc7b1d65d23baee307eb3567d86a46f9e11a8185ce48f2c15` |
+| `scripts/test-gta4l-emmc-probe.py` | `ce2ce92d424868fa6068aebc81c970a5354c4f42990b0f08d046123ef63ad380` |
+
+Host checks: `scripts/test-gta4l-emmc.py` passes 136 scenarios and 80
+mutation controls; `scripts/test-gta4l-emmc-probe.py` passes 55 scenarios
+and 34 mutation controls, including the B1 success report, the stuck-width
+and stuck-8-bit cases, 4-bit and 8-bit bus-test mismatches, an 8-bit
+content divergence, and the field-wise width fixture. The core cases cover
+4-bit/8-bit success, a 1-bit unwind, CMD6 error, busy, invalid-width and
+pre-init calls, CMD19/CMD14 timeout/CRC/status errors, 4-bit and 8-bit
+pattern mismatches, width mismatch and the 1-bit refusal.
+
+Supported by this section: the host-side implementation, its report layout
+and its simulator coverage, with the command ordering and register values
+cited to the pinned Linux references. Not supported: any on-device
+bus-width, bus-test, content-at-width, pad/DLL or timing claim. No B1 image
+build, flash or boot is recorded; no 4-bit or 8-bit switch or CMD19/CMD14
+round trip has run on the card; F3 remains `[U]`. A 4-bit hardware success
+with a matching content pass is the plan's F3 PASS at 4-bit; an 8-bit
+failure is a separate exact binding and does not invalidate the 4-bit
+result.
 
 ---
 
@@ -1893,14 +2006,16 @@ then appeared at CMD7, the first R1b command: `error=0`, `normal=0x0002` (TC),
 is not confirmed for CMD3. See `docs/emmc-cmd7-timeout-finding.md`.
 
 **2026-11-02 attempt-3 update:** The CMD3-specific H8 signature recurred on
-the attempt-3 drain build (`step=9`, `fail` CMD3, valid/stable `c3t`, no
-`CC`/error) after the earlier `cmd1gap` and attempt-2 runs had completed
-identification. The attempt-3 change is in the MD read path and did not run,
-so the recurrence is not attributable to it. H8 remains an open, recurrent
-CMD3-completion failure mode; whether it is intermittent or build/layout
-sensitive is not established by these runs, and the cause of the missing CMD3
-completion is still open. The fmt=2 observation above (a different run failing
-at CMD7/R1b) also stands. The report is transcribed in
+the first boot of the attempt-3 drain build (`step=9`, `fail` CMD3,
+valid/stable `c3t`, no `CC`/error) after the earlier `cmd1gap` and attempt-2
+runs had completed identification, and two later boots of the same image
+completed identification (one reached the MD drain, one failed later in the
+stage-A `CMD17` read). H8 is therefore intermittent across boots, not a
+deterministic property of the build or layout. The attempt-3 change is in the
+MD read path and was not involved in the CMD3 failure. The cause of the
+missing CMD3 completion remains open, and the fmt=2 observation above (a
+different run failing at CMD7/R1b) also stands. The boot-1 report is
+transcribed in
 `out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-failure.txt`.
 
 ---

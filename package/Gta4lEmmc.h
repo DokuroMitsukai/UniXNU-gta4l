@@ -8,9 +8,10 @@
 // diagnostic callbacks. The host simulator and the XNU probe compile the same
 // source.
 //
-// Scope: one-bit bus, legacy timing, polling, single-block and open-ended
-// multi-block 512-byte PIO reads with an explicit CMD12 stop. No DMA, CQE,
-// ICE, tuning, high-speed mode or card writes.
+// Scope: one-bit base bus, legacy timing, polling, single-block and open-ended
+// multi-block 512-byte PIO reads with an explicit CMD12 stop, plus an opt-in
+// 4/8-bit BUS_WIDTH switch (CMD6) and CMD19/CMD14 bus test. No DMA, CQE, ICE,
+// tuning, high-speed mode or block-data writes.
 
 #ifndef GTA4L_EMMC_H
 #define GTA4L_EMMC_H
@@ -89,6 +90,10 @@
 #define GTA4L_EMMC_HOST_CONTROL2_VDD_180   0x0008u
 #define GTA4L_EMMC_HOST_CONTROL2_TUNING    0x0040u
 
+/* Host Control (0x28) bus-width bits (Linux sdhci_set_bus_width()). */
+#define GTA4L_EMMC_HOST_CONTROL_4BIT       0x02u
+#define GTA4L_EMMC_HOST_CONTROL_8BIT       0x20u
+
 /* Qualcomm v5 CORE_DLL_CONFIG bits (Linux sdhci-msm). At 100 MHz and below
  * the reference resets and powers down the DLL so the feedback clock is used
  * and tuning can be skipped. */
@@ -131,6 +136,9 @@
 
 #define GTA4L_EMMC_INT_CC                  0x0001u
 #define GTA4L_EMMC_INT_TC                  0x0002u
+/* Buffer Write Ready (SDHCI_SPACE_AVAIL). The bus-test write path polls it
+ * before filling the buffer port. */
+#define GTA4L_EMMC_INT_BWR                 0x0010u
 #define GTA4L_EMMC_INT_BRR                 0x0020u
 
 #define GTA4L_EMMC_INT_ERR_CMD_TIMEOUT     0x0001u
@@ -226,18 +234,39 @@
 #define GTA4L_EMMC_CMD1                    1u
 #define GTA4L_EMMC_CMD2                    2u
 #define GTA4L_EMMC_CMD3                    3u
+#define GTA4L_EMMC_CMD6                    6u
 #define GTA4L_EMMC_CMD7                    7u
 #define GTA4L_EMMC_CMD8                    8u
 #define GTA4L_EMMC_CMD9                    9u
 #define GTA4L_EMMC_CMD12                   12u
 #define GTA4L_EMMC_CMD13                   13u
+#define GTA4L_EMMC_CMD14                   14u
 #define GTA4L_EMMC_CMD17                   17u
 #define GTA4L_EMMC_CMD18                   18u
+#define GTA4L_EMMC_CMD19                   19u
 
 #define GTA4L_EMMC_BLOCK_BYTES             512u
 #define GTA4L_EMMC_OCR_VALUE               0x40FF8080u
 #define GTA4L_EMMC_DEFAULT_RCA             1u
 #define GTA4L_EMMC_EXT_CSD_BYTES           512u
+
+/* EXT_CSD BUS_WIDTH (byte 183; JEDEC 6.6.94, Linux EXT_CSD_BUS_WIDTH).
+ * CMD6 writes it with Access=0x03 (write byte) and Cmd Set=1 (normal). */
+#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF   183u
+#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1     0u
+#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4     1u
+#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8     2u
+#define GTA4L_EMMC_SWITCH_ACCESS_WRITE     0x03000000u
+#define GTA4L_EMMC_SWITCH_CMD_SET_NORMAL   0x00000001u
+
+/* CMD19/CMD14 bus-test data lengths and patterns (Linux
+ * mmc_send_bus_test()). The card returns the complement of the first
+ * len/4 bytes; only those bits cover the first two bits per data line. */
+#define GTA4L_EMMC_BUS_TEST_4_BYTES        4u
+#define GTA4L_EMMC_BUS_TEST_8_BYTES        8u
+#define GTA4L_EMMC_BUS_TEST_PATTERN_4      0x5Au
+#define GTA4L_EMMC_BUS_TEST_PATTERN_8_0    0x55u
+#define GTA4L_EMMC_BUS_TEST_PATTERN_8_1    0xAAu
 #define GTA4L_EMMC_EXT_CSD_DATA_SECTOR_SIZE_OFF 61u
 #define GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF 179u
 #define GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF   212u
@@ -272,6 +301,8 @@
 #define GTA4L_EMMC_ERR_RESPONSE          -16
 #define GTA4L_EMMC_ERR_INHIBIT           -17
 #define GTA4L_EMMC_ERR_UNSUPPORTED       -18
+#define GTA4L_EMMC_ERR_BUS_WIDTH         -19
+#define GTA4L_EMMC_ERR_BUS_TEST          -20
 
 /* Diagnostic event codes passed to the log callback. */
 #define GTA4L_EMMC_LOG_RESET              1u
@@ -282,6 +313,7 @@
 #define GTA4L_EMMC_LOG_READ               6u
 #define GTA4L_EMMC_LOG_CARD               7u
 #define GTA4L_EMMC_LOG_ERROR              8u
+#define GTA4L_EMMC_LOG_BUS                9u
 
 /* Protocol progress recorded for diagnostics. The value is the last step
  * that completed successfully, not the step that was in progress. */
@@ -308,6 +340,10 @@
 #define GTA4L_EMMC_STEP_PROBE_DATA        17u
 #define GTA4L_EMMC_STEP_PROBE_LAST        18u
 #define GTA4L_EMMC_STEP_PROBE_MB          19u
+/* Bus-width rung. The portable core sets these only when the caller invokes
+ * the opt-in switch/test API. */
+#define GTA4L_EMMC_STEP_BUS_WIDTH         20u
+#define GTA4L_EMMC_STEP_BUS_TEST          21u
 
 struct gta4l_emmc_ops {
 	uint8_t  (*read8)(void *context, uint32_t space, uint32_t offset);
@@ -475,5 +511,31 @@ int gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 
 /* Read the 512-byte EXT_CSD into `buffer`. */
 int gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer);
+
+/* Evidence for one bus-width rung step. Every field is an observed value;
+ * `switched` is the EXT_CSD BUS_WIDTH code read back after the CMD6 switch,
+ * and `test_word`/`test_expected` are the first 32 bits of the CMD14 response
+ * and of the complement the card must return. */
+struct gta4l_emmc_bus_result {
+	uint32_t requested;      /* requested width in bits (1, 4 or 8) */
+	uint32_t switched;       /* BUS_WIDTH code read back (0, 1 or 2) */
+	int      switch_result;  /* GTA4L_EMMC_OK or the failing code */
+	int      test_result;    /* GTA4L_EMMC_OK or the failing code */
+	uint32_t test_word;      /* raw CMD14 response, little endian */
+	uint32_t test_expected;  /* expected CMD14 word, little endian */
+	uint32_t host_control;   /* HOST_CONTROL byte after the host switch */
+};
+
+/* Switch the card BUS_WIDTH (CMD6) and the SDHCI host width. `bits` may be 1,
+ * 4 or 8; 1 is the identification width used to unwind a failed ramp. The
+ * caller's `initialized` flag must already be set. */
+int gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_result *result);
+
+/* CMD19/CMD14 bus-test round trip at the active width. The host must already
+ * be in the same width as the card. A pattern disagreement returns
+ * GTA4L_EMMC_ERR_BUS_TEST and still fills the observed words. */
+int gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_result *result);
 
 #endif /* GTA4L_EMMC_H */

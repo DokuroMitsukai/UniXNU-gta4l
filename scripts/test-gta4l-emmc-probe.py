@@ -112,10 +112,17 @@ SCENARIOS = [
     'probe-md-drain-error',
     'probe-md-stall-tc',
     'probe-mb-bare-refuse',
+    'probe-b1-success',
+    'probe-b1-stuck-width',
+    'probe-b1-bustest-fail',
+    'probe-b1-switch8-stuck',
+    'probe-b1-bustest8-fail',
+    'probe-b1-content8-div',
     'report-width-failure',
     'report-width-ident',
     'report-width-probe',
     'report-width-md',
+    'report-width-b1',
     'report-width-budget-control',
 ]
 
@@ -124,6 +131,7 @@ WIDTH_SCENARIOS = (
     'report-width-ident',
     'report-width-probe',
     'report-width-md',
+    'report-width-b1',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'

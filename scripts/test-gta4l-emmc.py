@@ -141,6 +141,26 @@ SCENARIOS = [
     'multi-stop-crc',
     'multi-stop-late-error',
     'multi-card-status',
+    'bus-width-4',
+    'bus-width-8',
+    'bus-width-1-unwind',
+    'bus-width-cmd6-error',
+    'bus-width-stuck',
+    'bus-width-busy',
+    'bus-width-invalid',
+    'bus-width-without-init',
+    'bus-test-4',
+    'bus-test-8',
+    'bus-test-data-timeout',
+    'bus-test-data-crc',
+    'bus-test-status',
+    'bus-test-read-timeout',
+    'bus-test-read-crc',
+    'bus-test-read-status',
+    'bus-test-mismatch-4',
+    'bus-test-mismatch-8',
+    'bus-test-width',
+    'bus-test-1bit',
 ]
 
 FORBIDDEN_CORE = [
@@ -999,6 +1019,61 @@ def main() -> int:
              '\t\thost->multi_drain_resolved = (completed != 0) ? 1 : 0;\n',
              '\t\thost->multi_drain_resolved = 0;\n',
              'Gta4lEmmc.c', (), 'multi-drain-tc'),
+            ('bw-offset',
+             'GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF   183u',
+             'GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF   182u',
+             'Gta4lEmmc.h', (), 'bus-width-4'),
+            ('bw-access',
+             'GTA4L_EMMC_SWITCH_ACCESS_WRITE     0x03000000u',
+             'GTA4L_EMMC_SWITCH_ACCESS_WRITE     0x01000000u',
+             'Gta4lEmmc.h', (), 'bus-width-4'),
+            ('bw-code-4',
+             'GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4     1u',
+             'GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4     2u',
+             'Gta4lEmmc.h', (), 'bus-width-4'),
+            ('bw-host-4',
+             'GTA4L_EMMC_HOST_CONTROL_4BIT       0x02u',
+             'GTA4L_EMMC_HOST_CONTROL_4BIT       0x01u',
+             'Gta4lEmmc.h', (), 'bus-width-4'),
+            ('bw-host-8',
+             'GTA4L_EMMC_HOST_CONTROL_8BIT       0x20u',
+             'GTA4L_EMMC_HOST_CONTROL_8BIT       0x10u',
+             'Gta4lEmmc.h', (), 'bus-width-8'),
+            ('bw-pattern-4',
+             'GTA4L_EMMC_BUS_TEST_PATTERN_4      0x5Au',
+             'GTA4L_EMMC_BUS_TEST_PATTERN_4      0xA5u',
+             'Gta4lEmmc.h', (), 'bus-test-4'),
+            ('bw-pattern-8',
+             'GTA4L_EMMC_BUS_TEST_PATTERN_8_1    0xAAu',
+             'GTA4L_EMMC_BUS_TEST_PATTERN_8_1    0xA9u',
+             'Gta4lEmmc.h', (), 'bus-test-8'),
+            ('bw-test-len-4',
+             'GTA4L_EMMC_BUS_TEST_4_BYTES        4u',
+             'GTA4L_EMMC_BUS_TEST_4_BYTES        8u',
+             'Gta4lEmmc.h', (), 'bus-test-4'),
+            ('bw-int-bwr',
+             'GTA4L_EMMC_INT_BWR                 0x0010u',
+             'GTA4L_EMMC_INT_BWR                 0x0000u',
+             'Gta4lEmmc.h', (), 'success'),
+            ('bw-no-host-write',
+             '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_HOST_CONTROL, control);\n',
+             '\t/* HOST_CONTROL switch removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'bus-width-4'),
+            ('bw-no-readback-compare',
+             '\tif (readback != code) {\n',
+             '\tif (0) {\n',
+             'Gta4lEmmc.c', (), 'bus-width-stuck'),
+            ('bw-no-restore',
+             '\tif (readback != code) {\n'
+             '\t\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_HOST_CONTROL, (uint8_t)previous_control);\n',
+             '\tif (readback != code) {\n',
+             'Gta4lEmmc.c', (), 'bus-width-stuck'),
+            ('bw-no-test-compare',
+             '\t\tif ((uint8_t)(pattern[index] ^ actual[index]) != 0xFFu) {\n',
+             '\t\tif (0) {\n',
+             'Gta4lEmmc.c', (), 'bus-test-mismatch-4'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -1063,6 +1138,32 @@ def main() -> int:
                 'drain-window data error was not reported',
             'mb-drain-resolved-suppressed':
                 'drain-resolved transfer did not record its resolution',
+            'bw-offset':
+                '4-bit switch failed',
+            'bw-access':
+                '4-bit switch failed',
+            'bw-code-4':
+                '4-bit CMD6 argument mismatch',
+            'bw-host-4':
+                '4-bit HOST_CONTROL width is wrong',
+            'bw-host-8':
+                '8-bit HOST_CONTROL width is wrong',
+            'bw-pattern-4':
+                '4-bit bus-test pattern is not 0x5a',
+            'bw-pattern-8':
+                '8-bit bus-test pattern is not 0x55aa',
+            'bw-test-len-4':
+                '4-bit bus test failed',
+            'bw-int-bwr':
+                'normal status enables are not set for polling',
+            'bw-no-host-write':
+                '4-bit bus test failed',
+            'bw-no-readback-compare':
+                'stuck BUS_WIDTH readback was not reported',
+            'bw-no-restore':
+                'failed readback left HOST_CONTROL on the failed width',
+            'bw-no-test-compare':
+                '4-bit pattern mismatch was not reported',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)

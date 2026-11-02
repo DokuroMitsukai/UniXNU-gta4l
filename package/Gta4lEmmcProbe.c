@@ -107,6 +107,28 @@ struct gta4l_emmc_probe_range {
 	uint32_t mb_div;
 };
 
+/* Stage-B1 bus-width rung evidence. One instance is kept per attempted width
+ * plus the 1-bit baseline used for the in-device content comparison. `result`
+ * carries the core's CMD6 readback and CMD19/CMD14 words; `same`/`div` report
+ * the CMD17 content comparison against the baseline, with `div` the first
+ * differing LBA. */
+struct gta4l_emmc_probe_bus {
+	struct gta4l_emmc_bus_result result;
+	uint32_t attempted;
+	uint32_t tested;
+	uint32_t same;
+	uint32_t div;
+	uint32_t block0_sum;
+	uint32_t block1_sum;
+	uint32_t blocks[GTA4L_EMMC_PROBE_ARRAY_BLOCKS];
+	uint32_t data_sum;
+	uint32_t last_sum;
+};
+
+/* The bus-width rung stops with a content disagreement that the per-width
+ * CMD17 sums exposed; it is not a controller or card-status code. */
+#define GTA4L_EMMC_PROBE_ERR_CONTENT     -21
+
 /* CMD7 R1b capture block shared by the failure and success reports. The field
  * order is part of GTA4L_EMMC_CAPTURE_FMT. Every value is an observed sample,
  * not proof of continuous bus visibility. c7p: pre-command state and raw
@@ -352,7 +374,8 @@ gta4l_emmc_probe_parse(const char *name, int *value)
 }
 
 /* 1 = full probe, 2 = controller/host init only, 3 = host init plus card
- * identification without sector reads. */
+ * identification without sector reads, 4 = stage-B1 bus-width switch and
+ * CMD19/CMD14 bus test with a per-width content pass. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -361,7 +384,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 3)) {
+	if ((value < 1) || (value > 4)) {
 		return 0;
 	}
 	return value;
@@ -511,6 +534,107 @@ gta4l_emmc_probe_gpt(struct gta4l_emmc_probe_range *range,
 		bad |= 0x40u;
 	}
 	return bad;
+}
+
+/* Stage-B1 content pass. Reads the same 25 LBA values as the stage-A probe
+ * (block 0/1, the 21-entry primary array, the first usable sector and the
+ * last sector) and stores the per-LBA sums. The baseline call also gates the
+ * live GPT header and fills `range`; width passes reuse that gated list. A
+ * read failure returns the core result and leaves the partial sums in `bus`
+ * for the stop report. */
+static int
+gta4l_emmc_probe_b1_content(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe_range *range,
+    struct gta4l_emmc_probe_bus *bus, uint32_t *gate_mask)
+{
+	static uint8_t block[GTA4L_EMMC_BLOCK_BYTES];
+	uint32_t index;
+	int result;
+
+	result = gta4l_emmc_read_block(host, 0, block);
+	if (result != GTA4L_EMMC_OK) {
+		return result;
+	}
+	bus->block0_sum = gta4l_emmc_probe_sum(block,
+	    GTA4L_EMMC_BLOCK_BYTES);
+
+	result = gta4l_emmc_read_block(host, 1, block);
+	if (result != GTA4L_EMMC_OK) {
+		return result;
+	}
+	bus->block1_sum = gta4l_emmc_probe_sum(block,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	if (gate_mask != 0) {
+		*gate_mask = gta4l_emmc_probe_gpt(range, block,
+		    host->capacity_blocks);
+		if (*gate_mask != 0u) {
+			return GTA4L_EMMC_OK;
+		}
+	}
+
+	host->last_step = GTA4L_EMMC_STEP_PROBE_ARRAY;
+	for (index = 0; index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
+		result = gta4l_emmc_read_block(host,
+		    (uint64_t)range->entries_lba + index, block);
+		if (result != GTA4L_EMMC_OK) {
+			return result;
+		}
+		bus->blocks[index] = gta4l_emmc_probe_sum(block,
+		    GTA4L_EMMC_BLOCK_BYTES);
+	}
+
+	host->last_step = GTA4L_EMMC_STEP_PROBE_DATA;
+	result = gta4l_emmc_read_block(host, range->first_usable, block);
+	if (result != GTA4L_EMMC_OK) {
+		return result;
+	}
+	bus->data_sum = gta4l_emmc_probe_sum(block, GTA4L_EMMC_BLOCK_BYTES);
+
+	host->last_step = GTA4L_EMMC_STEP_PROBE_LAST;
+	result = gta4l_emmc_read_block(host, range->backup_lba, block);
+	if (result != GTA4L_EMMC_OK) {
+		return result;
+	}
+	bus->last_sum = gta4l_emmc_probe_sum(block, GTA4L_EMMC_BLOCK_BYTES);
+	return GTA4L_EMMC_OK;
+}
+
+/* Compare one width's content pass against the 1-bit baseline. `div` is the
+ * absolute LBA of the first differing value, or 0 when every value agrees. */
+static void
+gta4l_emmc_probe_b1_compare(const struct gta4l_emmc_probe_range *range,
+    const struct gta4l_emmc_probe_bus *base,
+    struct gta4l_emmc_probe_bus *bus)
+{
+	uint32_t index;
+
+	bus->same = 1;
+	bus->div = 0;
+	if (bus->block0_sum != base->block0_sum) {
+		bus->same = 0;
+		return;
+	}
+	if (bus->block1_sum != base->block1_sum) {
+		bus->same = 0;
+		bus->div = 1u;
+		return;
+	}
+	for (index = 0; index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
+		if (bus->blocks[index] != base->blocks[index]) {
+			bus->same = 0;
+			bus->div = range->entries_lba + index;
+			return;
+		}
+	}
+	if (bus->data_sum != base->data_sum) {
+		bus->same = 0;
+		bus->div = range->first_usable;
+		return;
+	}
+	if (bus->last_sum != base->last_sum) {
+		bus->same = 0;
+		bus->div = range->backup_lba;
+	}
 }
 
 static void
@@ -718,6 +842,85 @@ gta4l_emmc_probe_report_multi_failure(const struct gta4l_emmc_host *host,
 }
 
 static void
+gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
+    const struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_range *range,
+    const struct gta4l_emmc_probe_bus *base,
+    const struct gta4l_emmc_probe_bus *w4,
+    const struct gta4l_emmc_probe_bus *w8, int rc, int stop)
+{
+	uint32_t qdsd = gta4l_emmc_probe_read32((void *)probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	uint32_t dll = gta4l_emmc_probe_read32((void *)probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	uint32_t dst = gta4l_emmc_probe_read32((void *)probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+
+	panic("GTA4L-EMMC B1 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
+	    "rev=%u hci=%02x step=%u log=%u\n"
+	    "GTA4L-EMMC B1 BW=1 att=%u req=1 sw=%u swrc=0 tt=0 "
+	    "tw=00000000 te=00000000 trc=0 hc=%02x b0=%08x b1=%08x "
+	    "same=1 div=0\n"
+	    "GTA4L-EMMC B1 BW=4 att=%u req=%u sw=%u swrc=%d tt=%u "
+	    "tw=%08x te=%08x trc=%d hc=%02x b0=%08x b1=%08x same=%u div=%u\n"
+	    "GTA4L-EMMC B1 BW=8 att=%u req=%u sw=%u swrc=%d tt=%u "
+	    "tw=%08x te=%08x trc=%d hc=%02x b0=%08x b1=%08x same=%u div=%u\n"
+	    "GTA4L-EMMC B1 BLOCKS 4"
+	    " 2=%08x 3=%08x 4=%08x 5=%08x 6=%08x 7=%08x 8=%08x 9=%08x"
+	    " 10=%08x 11=%08x 12=%08x 13=%08x 14=%08x 15=%08x 16=%08x"
+	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
+	    "GTA4L-EMMC B1 DATA 4 %u=%08x\n"
+	    "GTA4L-EMMC B1 LSTLBA 4 %u=%08x\n"
+	    "GTA4L-EMMC B1 BLOCKS 8"
+	    " 2=%08x 3=%08x 4=%08x 5=%08x 6=%08x 7=%08x 8=%08x 9=%08x"
+	    " 10=%08x 11=%08x 12=%08x 13=%08x 14=%08x 15=%08x 16=%08x"
+	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
+	    "GTA4L-EMMC B1 DATA 8 %u=%08x\n"
+	    "GTA4L-EMMC B1 LSTLBA 8 %u=%08x\n"
+	    "GTA4L-EMMC B1 PAD qdsd=%08x dll=%08x dst=%08x bif=none\n"
+	    "GTA4L-EMMC B1 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
+	    (unsigned int)host->ext_csd_rev,
+	    (unsigned int)base->result.host_control,
+	    host->last_step, probe->log_count,
+	    base->attempted, base->result.switched,
+	    (unsigned int)base->result.host_control,
+	    base->block0_sum, base->block1_sum,
+	    w4->attempted, w4->result.requested, w4->result.switched,
+	    w4->result.switch_result, w4->tested, w4->result.test_word,
+	    w4->result.test_expected, w4->result.test_result,
+	    (unsigned int)w4->result.host_control, w4->block0_sum,
+	    w4->block1_sum, w4->same, w4->div,
+	    w8->attempted, w8->result.requested, w8->result.switched,
+	    w8->result.switch_result, w8->tested, w8->result.test_word,
+	    w8->result.test_expected, w8->result.test_result,
+	    (unsigned int)w8->result.host_control, w8->block0_sum,
+	    w8->block1_sum, w8->same, w8->div,
+	    w4->blocks[0], w4->blocks[1], w4->blocks[2], w4->blocks[3],
+	    w4->blocks[4], w4->blocks[5], w4->blocks[6], w4->blocks[7],
+	    w4->blocks[8], w4->blocks[9], w4->blocks[10], w4->blocks[11],
+	    w4->blocks[12], w4->blocks[13], w4->blocks[14], w4->blocks[15],
+	    w4->blocks[16], w4->blocks[17], w4->blocks[18], w4->blocks[19],
+	    w4->blocks[20],
+	    range->first_usable, w4->data_sum,
+	    range->backup_lba, w4->last_sum,
+	    w8->blocks[0], w8->blocks[1], w8->blocks[2], w8->blocks[3],
+	    w8->blocks[4], w8->blocks[5], w8->blocks[6], w8->blocks[7],
+	    w8->blocks[8], w8->blocks[9], w8->blocks[10], w8->blocks[11],
+	    w8->blocks[12], w8->blocks[13], w8->blocks[14], w8->blocks[15],
+	    w8->blocks[16], w8->blocks[17], w8->blocks[18], w8->blocks[19],
+	    w8->blocks[20],
+	    range->first_usable, w8->data_sum,
+	    range->backup_lba, w8->last_sum,
+	    qdsd, dll, dst,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
+static void
 gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe *probe,
     const struct gta4l_emmc_probe_regs *regs,
@@ -851,6 +1054,9 @@ gta4l_emmc_probe_run(void)
 	struct gta4l_emmc_probe probe;
 	struct gta4l_emmc_probe_regs regs;
 	struct gta4l_emmc_probe_range range;
+	struct gta4l_emmc_probe_bus base;
+	struct gta4l_emmc_probe_bus w4;
+	struct gta4l_emmc_probe_bus w8;
 	struct gta4l_emmc_host host;
 	vm_offset_t sdhci_mapping;
 	vm_offset_t gcc_mapping;
@@ -1139,6 +1345,85 @@ gta4l_emmc_probe_run(void)
 	}
 	range.last_sum = gta4l_emmc_probe_sum(range_block,
 	    GTA4L_EMMC_BLOCK_BYTES);
+
+	/* Stage B1: switch the card/host to 4-bit then 8-bit, run the
+	 * CMD19/CMD14 bus-test round trip at each width, and repeat the
+	 * stage-A content reads so a ramp that disturbs data is visible. A
+	 * failed step stops at that width: the report never issues further
+	 * assertions on a bus that just failed. The 1-bit pass above is the
+	 * baseline for the per-width comparison. */
+	if (stage == 4) {
+		bzero(&base, sizeof(base));
+		bzero(&w4, sizeof(w4));
+		bzero(&w8, sizeof(w8));
+		base.result.requested = 1u;
+		base.result.switched = host.bus_width;
+		base.result.switch_result = GTA4L_EMMC_OK;
+		base.result.test_result = GTA4L_EMMC_OK;
+		base.result.host_control = gta4l_emmc_probe_read8(&probe,
+		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
+		base.attempted = 1u;
+		base.block0_sum = gta4l_emmc_probe_sum(block0,
+		    GTA4L_EMMC_BLOCK_BYTES);
+		base.block1_sum = gta4l_emmc_probe_sum(block1,
+		    GTA4L_EMMC_BLOCK_BYTES);
+		for (index = 0; index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS;
+		    index++) {
+			base.blocks[index] = range.array[index];
+		}
+		base.data_sum = range.data_sum;
+		base.last_sum = range.last_sum;
+
+		w4.attempted = 1u;
+		result = gta4l_emmc_set_bus_width(&host, 4u, &w4.result);
+		if (result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_b1(&host, &probe, &range,
+			    &base, &w4, &w8, result, 1);
+		}
+		w4.tested = 1u;
+		result = gta4l_emmc_bus_test(&host, 4u, &w4.result);
+		if (result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_b1(&host, &probe, &range,
+			    &base, &w4, &w8, result, 2);
+		}
+		result = gta4l_emmc_probe_b1_content(&host, &range, &w4, 0);
+		if (result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_b1(&host, &probe, &range,
+			    &base, &w4, &w8, result, 3);
+		}
+		gta4l_emmc_probe_b1_compare(&range, &base, &w4);
+		if (w4.same == 0u) {
+			gta4l_emmc_probe_report_b1(&host, &probe, &range,
+			    &base, &w4, &w8,
+			    GTA4L_EMMC_PROBE_ERR_CONTENT, 4);
+		}
+
+		w8.attempted = 1u;
+		result = gta4l_emmc_set_bus_width(&host, 8u, &w8.result);
+		if (result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_b1(&host, &probe, &range,
+			    &base, &w4, &w8, result, 5);
+		}
+		w8.tested = 1u;
+		result = gta4l_emmc_bus_test(&host, 8u, &w8.result);
+		if (result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_b1(&host, &probe, &range,
+			    &base, &w4, &w8, result, 6);
+		}
+		result = gta4l_emmc_probe_b1_content(&host, &range, &w8, 0);
+		if (result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_b1(&host, &probe, &range,
+			    &base, &w4, &w8, result, 7);
+		}
+		gta4l_emmc_probe_b1_compare(&range, &base, &w8);
+		if (w8.same == 0u) {
+			gta4l_emmc_probe_report_b1(&host, &probe, &range,
+			    &base, &w4, &w8,
+			    GTA4L_EMMC_PROBE_ERR_CONTENT, 8);
+		}
+		gta4l_emmc_probe_report_b1(&host, &probe, &range, &base,
+		    &w4, &w8, GTA4L_EMMC_OK, 0);
+	}
 
 	/* Optional MD pass: re-read the same 21 sectors as one open-ended
 	 * CMD18 transfer and stop it explicitly. A read failure stops here

@@ -28,7 +28,22 @@
 #define SIM_CMD_CRC             0x0008u
 #define SIM_CMD_INDEX           0x0010u
 #define SIM_CMD_CRC_NONE        0xFFu
+/* Bus-width switch and bus-test protocol values (JEDEC 6.6.94 and 7.5.4,
+ * Linux mmc_select_bus_width()/mmc_send_bus_test()). Kept independent of the
+ * production header so a mutated define cannot change what the card model
+ * accepts. */
+#define SIM_CMD6                6u
+#define SIM_CMD14               14u
+#define SIM_CMD19               19u
+#define SIM_BUS_WIDTH_OFF       183u
+#define SIM_SWITCH_ACCESS       0x03000000u
+#define SIM_SWITCH_CMD_SET      0x00000001u
+#define SIM_HOST_CONTROL_4BIT   0x02u
+#define SIM_HOST_CONTROL_8BIT   0x20u
+#define SIM_BUS_TEST_4_BYTES    4u
+#define SIM_BUS_TEST_8_BYTES    8u
 #define SIM_TM_BLOCK_COUNT_EN   0x0002u
+#define SIM_INT_BWR             0x0010u
 #define SIM_TM_READ             0x0010u
 #define SIM_TM_MULTI            0x0020u
 #define SIM_TM_AUTO_CMD12       0x0004u
@@ -283,6 +298,31 @@ struct sim {
 	uint32_t response_read_cmd[SIM_MAX_RESPONSE_READS];
 	uint32_t response_read_clear[SIM_MAX_RESPONSE_READS];
 	uint32_t response_read_offset[SIM_MAX_RESPONSE_READS];
+	/* Bus-width switch (CMD6) and CMD19/CMD14 bus-test model. The card
+	 * state is ext_csd[183]; CMD6 updates it unless a fault is enabled.
+	 * CMD19 captures the written pattern and CMD14 returns its complement
+	 * so the core's comparison runs against modeled card data. */
+	uint32_t cmd6_count;
+	uint32_t cmd6_argument;
+	uint32_t cmd19_count;
+	uint32_t cmd14_count;
+	uint32_t bus_test_size;
+	uint32_t bus_test_written_words;
+	uint32_t bus_test_pattern[GTA4L_EMMC_BUS_TEST_8_BYTES / 4u];
+	int bus_test_active;
+	int bus_test_pattern_error;
+	int bus_width_switch_error;
+	int bus_width_stuck;
+	int bus_width_busy;
+	int bus_width_busy_polls;
+	int bus_test_data_timeout;
+	int bus_test_read_timeout;
+	int bus_test_data_crc;
+	int bus_test_read_crc;
+	int bus_test_status_error;
+	int bus_test_read_status;
+	int bus_test_corrupt_word;
+	uint32_t bus_test_corrupt_xor;
 	int access_violation;
 	int command_error;
 };
@@ -868,7 +908,7 @@ sim_fill_ext_csd(struct sim *sim)
 
 	memset(sim->ext_csd, 0, sizeof(sim->ext_csd));
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_REV_OFF] = 8;
-	sim->ext_csd[183] = 2;
+	sim->ext_csd[SIM_BUS_WIDTH_OFF] = 0;
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_DATA_SECTOR_SIZE_OFF] =
 	    (uint8_t)(sim->data_sector_4k ? 1 : sim->data_sector_size_code);
 	sim->ext_csd[GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF] =
@@ -997,6 +1037,38 @@ sim_load_cmd2_response(struct sim *sim)
 }
 
 static int
+sim_bus_test_width_ok(const struct sim *sim, uint32_t size)
+{
+	uint32_t width = (uint32_t)sim->ext_csd[SIM_BUS_WIDTH_OFF] & 0x0Fu;
+	uint32_t control = (uint32_t)sim->sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+	    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT);
+
+	/* Both the card field and the SDHCI host width must select the same
+	 * lane count as the programmed block size. */
+	if ((width == 1u) && (size == SIM_BUS_TEST_4_BYTES)) {
+		return control == SIM_HOST_CONTROL_4BIT;
+	}
+	if ((width == 2u) && (size == SIM_BUS_TEST_8_BYTES)) {
+		return control == SIM_HOST_CONTROL_8BIT;
+	}
+	return 0;
+}
+
+static int
+sim_cmd6_argument_ok(uint32_t argument)
+{
+	uint32_t value = (argument >> 8) & 0xFFu;
+	uint32_t set = argument & 0xFFu;
+
+	/* The JEDEC application note writes the argument as 0x03B7_0100
+	 * (Cmd Set field zero); Linux sets EXT_CSD_CMD_SET_NORMAL (1). The
+	 * spec ignores Cmd Set for an EXT_CSD write, so accept both. */
+	return (argument & 0xFFFFFF00u) == (SIM_SWITCH_ACCESS |
+	    (SIM_BUS_WIDTH_OFF << 16) | (value << 8)) &&
+	    value <= 2u && set <= 1u;
+}
+
+static int
 sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
     uint16_t flags)
 {
@@ -1021,6 +1093,22 @@ sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
 		return response_type == 2u && data == 0 &&
 		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
 		    ((argument >> 16) != 0u);
+	case SIM_CMD6:
+		return response_type == 2u && data == 0 &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
+		    sim_cmd6_argument_ok(argument);
+	case SIM_CMD14:
+		return response_type == 2u && data != 0 && read &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
+		    block_count_en && sim->block_count == 1u &&
+		    argument == 0u && sim_bus_test_width_ok(sim,
+		    sim->block_size);
+	case SIM_CMD19:
+		return response_type == 2u && data != 0 && !read &&
+		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
+		    block_count_en && sim->block_count == 1u &&
+		    argument == 0u && sim_bus_test_width_ok(sim,
+		    sim->block_size);
 	case GTA4L_EMMC_CMD7:
 		return response_type == 3u && data == 0 &&
 		    checks == (SIM_CMD_CRC | SIM_CMD_INDEX) &&
@@ -1265,9 +1353,101 @@ sim_command(struct sim *sim, uint16_t command)
 		sim_set_response(sim, words, 4);
 		break;
 	case GTA4L_EMMC_CMD13:
+		if (sim->bus_width_busy_polls != 0) {
+			/* CMD6 completion leaves the card busy: TRAN but not
+			 * READY_FOR_DATA until the programmed poll budget is
+			 * consumed. */
+			sim->bus_width_busy_polls--;
+			response = 0x00000800u;
+		}
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		sim_set_response(sim, &response, 1);
 		break;
+	case SIM_CMD6:
+		sim->cmd6_count++;
+		sim->cmd6_argument = argument;
+		sim->normal_int |= GTA4L_EMMC_INT_CC;
+		if (sim->bus_width_busy != 0) {
+			/* The switch leaves the card busy; CMD13 reports TRAN
+			 * without READY_FOR_DATA until this poll budget is
+			 * consumed. Armed here so initialization is unaffected. */
+			sim->bus_width_busy_polls = 100;
+		}
+		if (sim->bus_width_switch_error != 0) {
+			response |= 0x00000080u; /* SWITCH_ERROR */
+		} else if (sim->bus_width_stuck == 0) {
+			sim->ext_csd[SIM_BUS_WIDTH_OFF] =
+			    (uint8_t)((argument >> 8) & 0x0Fu);
+		}
+		sim_set_response(sim, &response, 1);
+		break;
+	case SIM_CMD19: {
+		/* CMD19: the host writes the test pattern. Announce buffer
+		 * write readiness now; the port writes complete the transfer
+		 * and raise TC. */
+		uint32_t index;
+
+		sim->cmd19_count++;
+		sim->bus_test_size = sim->block_size;
+		sim->bus_test_written_words = 0;
+		sim->bus_test_active = 0;
+		for (index = 0;
+		    index < SIM_BUS_TEST_8_BYTES / 4u; index++) {
+			sim->bus_test_pattern[index] = 0;
+		}
+		sim->normal_int |= GTA4L_EMMC_INT_CC;
+		if (sim->bus_test_status_error != 0) {
+			response |= 0x00000080u;
+		}
+		sim_set_response(sim, &response, 1);
+		if (sim->bus_test_data_crc != 0) {
+			sim->error_int |= GTA4L_EMMC_INT_ERR_DATA_CRC;
+			break;
+		}
+		if (sim->bus_test_data_timeout != 0) {
+			break;
+		}
+		sim->bus_test_active = 1;
+		sim->normal_int |= SIM_INT_BWR;
+		break;
+	}
+	case SIM_CMD14: {
+		uint32_t length = sim->bus_test_size;
+		uint32_t words = length / 4u;
+		uint32_t index;
+
+		sim->cmd14_count++;
+		sim->normal_int |= GTA4L_EMMC_INT_CC;
+		if (sim->bus_test_read_status != 0) {
+			response |= 0x00000080u;
+		}
+		sim_set_response(sim, &response, 1);
+		if (sim->bus_test_read_crc != 0) {
+			sim->error_int |= GTA4L_EMMC_INT_ERR_DATA_CRC;
+			break;
+		}
+		if (sim->bus_test_read_timeout != 0) {
+			break;
+		}
+		if (words > (SIM_BUS_TEST_8_BYTES / 4u)) {
+			words = SIM_BUS_TEST_8_BYTES / 4u;
+		}
+		/* CMD14 returns the complemented pattern of the first len/4
+		 * bytes (JEDEC 7.5.4). An injected corrupt word models a
+		 * failed data line and is bound to the exact word. */
+		for (index = 0; index < words; index++) {
+			uint32_t value = ~sim->bus_test_pattern[index];
+
+			if ((sim->bus_test_corrupt_word >= 0) &&
+			    ((uint32_t)sim->bus_test_corrupt_word == index)) {
+				value ^= sim->bus_test_corrupt_xor;
+			}
+			sim->buffer_data[index] = value;
+		}
+		sim->normal_int |= GTA4L_EMMC_INT_BRR;
+		sim->normal_int |= GTA4L_EMMC_INT_TC;
+		break;
+	}
 	case GTA4L_EMMC_CMD17:
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		sim_set_response(sim, &response, 1);
@@ -1588,6 +1768,41 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 			}
 			return;
 		}
+		if (offset == GTA4L_EMMC_REG_BUFFER_DATA_PORT) {
+			if ((sim->bus_test_active != 0) &&
+			    (sim->bus_test_written_words <
+			    (sim->bus_test_size / 4u))) {
+				uint32_t slot = sim->bus_test_written_words;
+				uint32_t expected;
+
+				sim->bus_test_pattern[slot] = value;
+				sim->bus_test_written_words++;
+				/* The pattern is protocol-fixed, not derived
+				 * from the header, so a mutated core pattern
+				 * is rejected instead of echoed back. */
+				if ((sim->bus_test_size ==
+				    SIM_BUS_TEST_4_BYTES) && (slot == 0u)) {
+					expected = 0x0000005Au;
+				} else if ((sim->bus_test_size ==
+				    SIM_BUS_TEST_8_BYTES) && (slot == 0u)) {
+					expected = 0x0000AA55u;
+				} else {
+					expected = 0u;
+				}
+				if (value != expected) {
+					sim->bus_test_pattern_error = 1;
+				}
+				if (sim->bus_test_written_words ==
+				    (sim->bus_test_size / 4u)) {
+					sim->bus_test_active = 0;
+					sim->normal_int &=
+					    (uint16_t)~SIM_INT_BWR;
+					sim->normal_int |=
+					    GTA4L_EMMC_INT_TC;
+				}
+			}
+			return;
+		}
 		sim->sdhci[offset] = (uint8_t)(value & 0xFFu);
 		sim->sdhci[offset + 1u] = (uint8_t)((value >> 8) & 0xFFu);
 		sim->sdhci[offset + 2u] = (uint8_t)((value >> 16) & 0xFFu);
@@ -1743,6 +1958,7 @@ sim_init(struct sim *sim)
 	sim->mb_tc_delay_us = -1;
 	sim->mb_last_brr_delay_us = -1;
 	sim->mb_error_delay_us = -1;
+	sim->bus_test_corrupt_word = -1;
 	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_MCI_VERSION,
 	    0x10000072u);
 	/* The observed stage-3 vendor value: MCLK default, HC_SELECT_IN=6
@@ -1889,6 +2105,7 @@ main(int argc, char **argv)
 	uint8_t block1[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t block5[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t ext[GTA4L_EMMC_EXT_CSD_BYTES];
+	struct gta4l_emmc_bus_result bus;
 	static uint8_t mb_blocks[SIM_MB_TEST_BLOCKS * GTA4L_EMMC_BLOCK_BYTES];
 	int result;
 	int expected;
@@ -2296,6 +2513,34 @@ main(int argc, char **argv)
 		sim.cmd_late_error_index = GTA4L_EMMC_CMD12;
 	} else if (scenario_is(scenario, "multi-card-status")) {
 		sim.mb_response_error = 1;
+	} else if (scenario_is(scenario, "bus-width-cmd6-error")) {
+		sim.bus_width_switch_error = 1;
+	} else if (scenario_is(scenario, "bus-width-stuck")) {
+		sim.bus_width_stuck = 1;
+	} else if (scenario_is(scenario, "bus-width-busy")) {
+		/* wait_tran allows ten CMD13 attempts; the switch arms a poll
+		 * budget beyond that so the bounded wait must expire. */
+		sim.bus_width_busy = 1;
+	} else if (scenario_is(scenario, "bus-test-data-timeout")) {
+		sim.bus_test_data_timeout = 1;
+	} else if (scenario_is(scenario, "bus-test-data-crc")) {
+		sim.bus_test_data_crc = 1;
+	} else if (scenario_is(scenario, "bus-test-status")) {
+		sim.bus_test_status_error = 1;
+	} else if (scenario_is(scenario, "bus-test-read-timeout")) {
+		sim.bus_test_read_timeout = 1;
+	} else if (scenario_is(scenario, "bus-test-read-crc")) {
+		sim.bus_test_read_crc = 1;
+	} else if (scenario_is(scenario, "bus-test-read-status")) {
+		sim.bus_test_read_status = 1;
+	} else if (scenario_is(scenario, "bus-test-mismatch-4")) {
+		sim.bus_test_corrupt_word = 0;
+		sim.bus_test_corrupt_xor = 0x00000001u;
+	} else if (scenario_is(scenario, "bus-test-mismatch-8")) {
+		/* Corrupt the second pattern byte (0xAA -> 0xAB) so the 8-bit
+		 * failure is bound to the exact returned word 0x54AA. */
+		sim.bus_test_corrupt_word = 0;
+		sim.bus_test_corrupt_xor = 0x00000100u;
 	}
 
 	sim.trace_armed = 1;
@@ -2331,6 +2576,26 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "multi-stop-crc") ||
 	    scenario_is(scenario, "multi-stop-late-error") ||
 	    scenario_is(scenario, "multi-card-status") ||
+	    scenario_is(scenario, "bus-width-4") ||
+	    scenario_is(scenario, "bus-width-8") ||
+	    scenario_is(scenario, "bus-width-1-unwind") ||
+	    scenario_is(scenario, "bus-width-cmd6-error") ||
+	    scenario_is(scenario, "bus-width-stuck") ||
+	    scenario_is(scenario, "bus-width-busy") ||
+	    scenario_is(scenario, "bus-width-invalid") ||
+	    scenario_is(scenario, "bus-width-without-init") ||
+	    scenario_is(scenario, "bus-test-4") ||
+	    scenario_is(scenario, "bus-test-8") ||
+	    scenario_is(scenario, "bus-test-data-timeout") ||
+	    scenario_is(scenario, "bus-test-data-crc") ||
+	    scenario_is(scenario, "bus-test-status") ||
+	    scenario_is(scenario, "bus-test-read-timeout") ||
+	    scenario_is(scenario, "bus-test-read-crc") ||
+	    scenario_is(scenario, "bus-test-read-status") ||
+	    scenario_is(scenario, "bus-test-mismatch-4") ||
+	    scenario_is(scenario, "bus-test-mismatch-8") ||
+	    scenario_is(scenario, "bus-test-width") ||
+	    scenario_is(scenario, "bus-test-1bit") ||
 	    scenario_is(scenario, "power-delayed-bus") ||
 	    scenario_is(scenario, "power-bus-then-io") ||
 	    scenario_is(scenario, "power-wrong-io-then-correct") ||
@@ -2372,7 +2637,7 @@ main(int argc, char **argv)
 		    "CMD3 argument did not carry the RCA");
 		check(host.capacity_blocks == 61071360u, "capacity mismatch");
 		check(host.ext_csd_rev == 8u, "EXT_CSD revision mismatch");
-		check(host.bus_width == 2u, "bus width mismatch");
+		check(host.bus_width == 0u, "bus width mismatch");
 		check(host.partition_config == 0u,
 		    "partition access is not the user area");
 		check(host.data_sector_size_4k == 0u,
@@ -2430,7 +2695,8 @@ main(int argc, char **argv)
 		check(sim.command_error == 0,
 		    "core sent a command with wrong encoding or state");
 		check(sim.normal_enable == (GTA4L_EMMC_INT_CC |
-		    GTA4L_EMMC_INT_TC | GTA4L_EMMC_INT_BRR),
+		    GTA4L_EMMC_INT_TC | SIM_INT_BWR |
+		    GTA4L_EMMC_INT_BRR),
 		    "normal status enables are not set for polling");
 		check(sim.error_enable == GTA4L_EMMC_INT_ERR_MASK,
 		    "error status enables are not set for polling");
@@ -3130,6 +3396,287 @@ main(int argc, char **argv)
 		    "card-status run did not issue the explicit stop");
 		check(host.fail_valid == 0u,
 		    "a card status error was recorded as a controller failure");
+	} else if (scenario_is(scenario, "bus-width-4")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit switch failed");
+		check(sim.cmd6_count == 1u,
+		    "4-bit switch did not issue exactly one CMD6");
+		check(sim.cmd6_argument == 0x03B70101u,
+		    "4-bit CMD6 argument mismatch");
+		check(sim.ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] == 1u,
+		    "4-bit CMD6 did not update the card field");
+		check(bus.requested == 4u && bus.switched == 1u,
+		    "4-bit switch result fields mismatch");
+		check(bus.switch_result == GTA4L_EMMC_OK &&
+		    bus.test_result == GTA4L_EMMC_OK,
+		    "4-bit switch recorded a failure");
+		check((bus.host_control & (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "4-bit HOST_CONTROL width is wrong");
+		check(host.bus_width == 1u,
+		    "4-bit core width was not recorded");
+		check(host.last_step == GTA4L_EMMC_STEP_BUS_WIDTH,
+		    "4-bit switch did not advance the step");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit bus test failed");
+		check(sim.bus_test_pattern_error == 0,
+		    "4-bit bus-test pattern is not 0x5a");
+		check(sim.bus_test_pattern[0] == 0x0000005Au,
+		    "4-bit bus-test pattern word mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "4-bit bus-test command counts mismatch");
+		check(bus.test_word == 0x000000A5u &&
+		    bus.test_expected == 0x000000A5u,
+		    "4-bit bus-test result words mismatch");
+		check(host.last_step == GTA4L_EMMC_STEP_BUS_TEST,
+		    "4-bit bus test did not advance the step");
+	} else if (scenario_is(scenario, "bus-width-8")) {
+		result = gta4l_emmc_set_bus_width(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_OK, "8-bit switch failed");
+		check(sim.cmd6_count == 1u,
+		    "8-bit switch did not issue exactly one CMD6");
+		check(sim.cmd6_argument == 0x03B70201u,
+		    "8-bit CMD6 argument mismatch");
+		check(sim.ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] == 2u,
+		    "8-bit CMD6 did not update the card field");
+		check(bus.requested == 8u && bus.switched == 2u,
+		    "8-bit switch result fields mismatch");
+		check((bus.host_control & (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_8BIT,
+		    "8-bit HOST_CONTROL width is wrong");
+		check(host.bus_width == 2u,
+		    "8-bit core width was not recorded");
+		result = gta4l_emmc_bus_test(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_OK, "8-bit bus test failed");
+		check(sim.bus_test_pattern_error == 0,
+		    "8-bit bus-test pattern is not 0x55aa");
+		check(sim.bus_test_pattern[0] == 0x0000AA55u &&
+		    sim.bus_test_pattern[1] == 0x00000000u,
+		    "8-bit bus-test pattern words mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "8-bit bus-test command counts mismatch");
+		check(bus.test_word == 0x000055AAu &&
+		    bus.test_expected == 0x000055AAu,
+		    "8-bit bus-test result words mismatch");
+	} else if (scenario_is(scenario, "bus-width-1-unwind")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_set_bus_width(&host, 1u, &bus);
+		check(result == GTA4L_EMMC_OK, "1-bit unwind switch failed");
+		check(sim.cmd6_count == 2u,
+		    "unwind run did not issue two CMD6 commands");
+		check(sim.cmd6_argument == 0x03B70001u,
+		    "1-bit CMD6 argument mismatch");
+		check(sim.ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] == 0u,
+		    "1-bit CMD6 did not update the card field");
+		check(bus.requested == 1u && bus.switched == 0u,
+		    "1-bit unwind result fields mismatch");
+		check((bus.host_control & (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "1-bit unwind did not clear both host width bits");
+		check(host.bus_width == 0u,
+		    "1-bit unwind did not restore the core width");
+	} else if (scenario_is(scenario, "bus-width-cmd6-error")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "CMD6 SWITCH_ERROR was not reported");
+		check(bus.switch_result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "CMD6 error result field mismatch");
+		check(bus.switched == 0u,
+		    "failed switch recorded an unexpected readback");
+		check(sim.cmd6_count == 1u,
+		    "failed switch did not issue one CMD6");
+		check(host.bus_width == 0u,
+		    "failed switch changed the core width");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "failed switch changed the host width");
+		check(sim.cmd19_count == 0u,
+		    "a failed switch ran the bus test");
+	} else if (scenario_is(scenario, "bus-width-stuck")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_BUS_WIDTH,
+		    "stuck BUS_WIDTH readback was not reported");
+		check(bus.switch_result == GTA4L_EMMC_ERR_BUS_WIDTH,
+		    "stuck readback result field mismatch");
+		check(bus.switched == 0u,
+		    "stuck readback value was not recorded");
+		check((bus.host_control & (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "failed readback did not restore the reported host width");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "failed readback left HOST_CONTROL on the failed width");
+		check(host.bus_width == 0u,
+		    "failed readback changed the core width");
+	} else if (scenario_is(scenario, "bus-width-busy")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_CARD_NOT_READY,
+		    "busy card after CMD6 was not reported");
+		check(bus.switch_result == GTA4L_EMMC_ERR_CARD_NOT_READY,
+		    "busy card result field mismatch");
+		check(sim.cmd6_count == 1u,
+		    "busy switch did not issue one CMD6");
+		check(sim.bus_width_busy_polls != 0,
+		    "busy model was consumed down to a ready card");
+		check(host.bus_width == 0u,
+		    "busy switch changed the core width");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "busy switch changed the host width");
+	} else if (scenario_is(scenario, "bus-width-invalid")) {
+		result = gta4l_emmc_set_bus_width(&host, 2u, &bus);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "invalid two-bit width was accepted");
+		check(sim.cmd6_count == 0u,
+		    "invalid width issued a CMD6");
+	} else if (scenario_is(scenario, "bus-width-without-init")) {
+		struct gta4l_emmc_host blank;
+		struct gta4l_emmc_bus_result blank_bus;
+
+		memset(&blank, 0, sizeof(blank));
+		blank.ops = &sim_ops;
+		blank.context = &sim;
+		result = gta4l_emmc_set_bus_width(&blank, 4u, &blank_bus);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "uninitialized host accepted a switch");
+		result = gta4l_emmc_bus_test(&blank, 4u, &blank_bus);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "uninitialized host accepted a bus test");
+		check(sim.cmd6_count == 0u && sim.cmd19_count == 0u,
+		    "uninitialized host issued a command");
+	} else if (scenario_is(scenario, "bus-test-4")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit bus test failed");
+		check(sim.bus_test_pattern_error == 0,
+		    "4-bit bus-test pattern is not 0x5a");
+		check(bus.test_word == 0x000000A5u &&
+		    bus.test_expected == 0x000000A5u,
+		    "4-bit bus-test result words mismatch");
+		check(bus.test_result == GTA4L_EMMC_OK,
+		    "4-bit bus-test result field mismatch");
+	} else if (scenario_is(scenario, "bus-test-8")) {
+		result = gta4l_emmc_set_bus_width(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_OK, "8-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_OK, "8-bit bus test failed");
+		check(sim.bus_test_pattern_error == 0,
+		    "8-bit bus-test pattern is not 0x55aa");
+		check(bus.test_word == 0x000055AAu &&
+		    bus.test_expected == 0x000055AAu,
+		    "8-bit bus-test result words mismatch");
+	} else if (scenario_is(scenario, "bus-test-data-timeout")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "CMD19 data timeout was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "CMD19 timeout result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 0u,
+		    "CMD19 timeout still issued CMD14");
+		check(host.fail_valid == 1 &&
+		    host.fail_index == GTA4L_EMMC_CMD19,
+		    "CMD19 timeout was not captured");
+	} else if (scenario_is(scenario, "bus-test-data-crc")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_DATA_CRC,
+		    "CMD19 data CRC was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_DATA_CRC,
+		    "CMD19 CRC result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 0u,
+		    "CMD19 CRC still issued CMD14");
+		check(host.fail_valid == 1 &&
+		    host.fail_index == GTA4L_EMMC_CMD19,
+		    "CMD19 data CRC was not captured");
+	} else if (scenario_is(scenario, "bus-test-status")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "CMD19 card status was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "CMD19 status result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 0u,
+		    "CMD19 status error still issued CMD14");
+	} else if (scenario_is(scenario, "bus-test-read-timeout")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "CMD14 data timeout was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "CMD14 timeout result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "CMD14 timeout command counts mismatch");
+		check(host.fail_valid == 1 &&
+		    host.fail_index == GTA4L_EMMC_CMD14,
+		    "CMD14 timeout was not captured");
+	} else if (scenario_is(scenario, "bus-test-read-crc")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_DATA_CRC,
+		    "CMD14 data CRC was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_DATA_CRC,
+		    "CMD14 CRC result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "CMD14 CRC command counts mismatch");
+	} else if (scenario_is(scenario, "bus-test-read-status")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "CMD14 card status was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "CMD14 status result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "CMD14 status command counts mismatch");
+	} else if (scenario_is(scenario, "bus-test-mismatch-4")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_BUS_TEST,
+		    "4-bit pattern mismatch was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_BUS_TEST,
+		    "4-bit mismatch result field mismatch");
+		check(bus.test_word == 0x000000A4u &&
+		    bus.test_expected == 0x000000A5u,
+		    "4-bit failing word was not bound exactly");
+	} else if (scenario_is(scenario, "bus-test-mismatch-8")) {
+		result = gta4l_emmc_set_bus_width(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_OK, "8-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_ERR_BUS_TEST,
+		    "8-bit pattern mismatch was not reported");
+		check(bus.test_result == GTA4L_EMMC_ERR_BUS_TEST,
+		    "8-bit mismatch result field mismatch");
+		check(bus.test_word == 0x000054AAu &&
+		    bus.test_expected == 0x000055AAu,
+		    "8-bit failing word was not bound exactly");
+	} else if (scenario_is(scenario, "bus-test-width")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_ERR_BUS_WIDTH,
+		    "bus test ran at a width the card and host do not share");
+		check(sim.cmd19_count == 0u,
+		    "width-mismatched bus test issued CMD19");
+	} else if (scenario_is(scenario, "bus-test-1bit")) {
+		result = gta4l_emmc_bus_test(&host, 1u, &bus);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "one-bit bus test was not refused");
+		check(sim.cmd19_count == 0u,
+		    "one-bit bus test issued CMD19");
 	} else if (scenario_is(scenario, "multi-stop-tc-only") ||
 	    scenario_is(scenario, "multi-stop-late-cc") ||
 	    scenario_is(scenario, "multi-stop-busy-timeout") ||
@@ -3251,7 +3798,7 @@ main(int argc, char **argv)
 			    "pre-CMD3 status already held a completion");
 			check(host.pre_cmd3_normal_enable ==
 			    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC |
-			    GTA4L_EMMC_INT_BRR),
+			    SIM_INT_BWR | GTA4L_EMMC_INT_BRR),
 			    "pre-CMD3 normal enables do not match the core");
 			check(host.pre_cmd3_error_enable ==
 			    GTA4L_EMMC_INT_ERR_MASK,

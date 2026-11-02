@@ -72,7 +72,18 @@ adds no manifest row, and keeps the table at 45 rows. One more refresh on
 verified, but it stopped during identification at the same CMD3-completion
 timeout before the MD phase, so the post-bound drain was not exercised; it
 refreshes the `README.md` and `docs/emmc-driver.md` rows, adds no manifest row,
-and keeps the table at 45 rows. This document's own hash
+and keeps the table at 45 rows. A final refresh on `2026-11-02` records two
+later boots of the same attempt-3 image: one reached the MD phase and
+exercised the bounded drain without resolving the stall, and one failed the
+stage-A array read; it refreshes the `README.md` and `docs/emmc-driver.md`
+rows, adds no manifest row, and keeps the table at 45 rows. A host-side
+refresh on `2026-11-02` adds the Stage-B1 bus-width/bus-test rung
+(`docs/emmc-driver.md` §5.3.9): it refreshes the `README.md`,
+`docs/emmc-driver.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`,
+`package/Gta4lEmmcProbe.c`, `scripts/sim-gta4l-emmc/harness.c`,
+`scripts/test-gta4l-emmc.py` and `porting.toml` rows, adds no manifest row,
+and keeps the table at 45 rows. No B1 hardware run is recorded. This document's
+own hash
 is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
@@ -120,16 +131,17 @@ and update the table.
 | Twenty-eighth cmd1gap hardware-run paths at this snapshot | 8 modified (`README.md`, `docs/emmc-cmd1-gap-candidate.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Twenty-ninth stage-1 hardware-run paths at this snapshot | 6 modified (`README.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Thirtieth stage-A content-read paths at this snapshot | 12 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/build-gta4l-emmc-probe.py`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/test-gta4l-emmc-probe.py`) |
-| Dirty entries at the hash snapshot | 12, exactly the thirtieth paths above |
+| Thirty-first Stage-B1 host-side paths at this snapshot | 14 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc-probe.py`, `scripts/test-gta4l-emmc.py`) |
+| Dirty entries at the hash snapshot | 14, exactly the thirty-first paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
-The hash table describes the thirtieth working-tree snapshot: the
+The hash table describes the thirty-first working-tree snapshot: the
 `60817c3` base, the twenty-fourth CMD7-diagnostics batch, the twenty-fifth
 PixelExperience-provenance paths, the LinuxForGta4l organization source audit,
 the 2026-11-01 `fmt=4` fail-closed hardware runs on two units, the
 `cmd1gap` candidate hardware runs on three units, the 2026-11-02 stage-1
-full-probe runs on two units and the stage-A extended content read on the
-owner's SM-T505N. The stage-A batch refreshed the `README.md`,
+full-probe runs on two units, the stage-A extended content read on the
+owner's SM-T505N and the Stage-B1 host-side bus-width/bus-test rung. The stage-A batch refreshed the `README.md`,
 `docs/emmc-driver.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
 `scripts/build-gta4l-emmc-probe.py` and `porting.toml` rows;
 `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`,
@@ -540,18 +552,18 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `def6c5b7c06284b2641d454d357067006afa71515d5d39390a5b6093e9a1597d` |
+| Repository README | `README.md` | `60e4b831d1e3f6f149b25124e07f2d83640a5005283066cb83f9405b77c0dd3c` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `bf999aa62d432d10de67c2879e1040dfca9605c6ca59ef81079c2b49967a4e9b` |
+| Porting record | `porting.toml` | `68bd17e6fdb6798bc10155fb4b6f5e427f330bcac836fa8e282ea7f9f216fe75` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `f5aef85ea67c46635cdf61ede595e0f78065fbeaa1eb382d96446684ca7de37a` |
-| eMMC core header | `package/Gta4lEmmc.h` | `d6be302212fe9573b5761bc619f321155eddbd38942ba66eb74c07cf4c62293a` |
-| eMMC core source | `package/Gta4lEmmc.c` | `367978fd26b23d558a26e833ca3f4418b94500bca05b23da66193038b9a5219f` |
-| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `c344b35e16d57b01bb334788ae7f5b8faad54766e01c076945b4f5f1ae37258f` |
-| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `5522b26bb59651fa0de4f85de40066a437da75ae1771092c1a5f2452de548bf8` |
-| eMMC host test | `scripts/test-gta4l-emmc.py` | `91cf43c1abbe164f31ba5f2423b6c18c002cb7f516623309ebe22a94e7dee38c` |
+| eMMC driver record | `docs/emmc-driver.md` | `32d145ce57b9e9f2462921d70e3a298861ac085e40514d78212db4af2d66d6a4` |
+| eMMC core header | `package/Gta4lEmmc.h` | `f13725e88afaaf4f176383fb7b8fb56f2c98a3ac3f93083d01f449d1e66617b9` |
+| eMMC core source | `package/Gta4lEmmc.c` | `9f2a9da7514296206674c7a8aa9f6d3935887a690b466b96f050a36790dabe00` |
+| eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `a4aa4751a244a7affe087101f7b6846680d7c830430b870a3345384c233330d0` |
+| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `46171846209871dc8263642acfab29b1c6987e1e75a79111054f456f73239f3e` |
+| eMMC host test | `scripts/test-gta4l-emmc.py` | `017451e4546248fbc7b1d65d23baee307eb3567d86a46f9e11a8185ce48f2c15` |
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `ce5e4cd35a1164d78642abba3db7c9d34d383f58d08f7c5d6bb3a5087209e1f1` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
@@ -572,7 +584,14 @@ adding a row. The attempt-3 batch refreshed six rows (`docs/emmc-driver.md`,
 `package/Gta4lEmmc.h`, `package/Gta4lEmmc.c`, `package/Gta4lEmmcProbe.c`,
 `scripts/sim-gta4l-emmc/harness.c` and `scripts/test-gta4l-emmc.py`) without
 adding a row. The A2/F2 attempt-3 hardware-run batch refreshed the `README.md`
-and `docs/emmc-driver.md` rows without adding a row.
+and `docs/emmc-driver.md` rows without adding a row; the later-boot batch
+refreshed those same two rows without adding a row. The Stage-B1 host-side
+batch refreshed eight rows (`README.md`, `docs/emmc-driver.md`,
+`package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
+`scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py` and
+`porting.toml`) without adding a row; the probe simulator, width fixture,
+probe test, audit, CMD7 finding and this document are outside the table or
+not listed.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
@@ -837,8 +856,9 @@ terminal-read observation-boundary edits), run from
 
 | Check | Result |
 | --- | --- |
-| Current native eMMC core test | PASS: 116 simulator scenarios and 67 mutation controls |
-| Current eMMC probe report test | PASS: 48 scenarios and 34 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1493 bytes), four width-bound materializations, two width-fixture narrowing controls, two full-probe block-read failure controls, the stage-A GPT gate and 21-sector array content phase, four stage-A loop mutation controls (duplicate LBA, continued error, block-count off-by-one, wrong last LBA), the optional A2/F2 CMD18+CMD12 success, mismatch, mid-transfer failure, stop-timeout and bare-argument refusal cases, the post-bound drain TC/late-BRR/error/exhaustion cases with the `drain=` report field, a missing CMD18 Multi/Single Block Select bit, and the oversized-report rejection control |
+| Current native eMMC core test | PASS: 136 simulator scenarios and 80 mutation controls, including the Stage-B1 4-bit/8-bit switch, CMD6 and bus-test error cases |
+| Current eMMC probe report test | PASS: 55 scenarios and 34 mutation controls, including field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1493 bytes), four width-bound materializations, two width-fixture narrowing controls, two full-probe block-read failure controls, the stage-A GPT gate and 21-sector array content phase, four stage-A loop mutation controls (duplicate LBA, continued error, block-count off-by-one, wrong last LBA), the optional A2/F2 CMD18+CMD12 success, mismatch, mid-transfer failure, stop-timeout and bare-argument refusal cases, the post-bound drain TC/late-BRR/error/exhaustion cases with the `drain=` report field, a missing CMD18 Multi/Single Block Select bit, the Stage-B1 4-bit/8-bit success, stuck-width, 8-bit-stuck, bus-test-failure and content-divergence reports and the B1 field-wise width bound, and the oversized-report rejection control |
+| Stage-B1 bus-width/bus-test implementation | HOST-TESTED: CMD6 byte-183 switch to 4/8-bit with readback and `HOST_CONTROL` bits, CMD19/CMD14 pattern round trip, per-width stage-A content comparison, 2048-byte report bound; no B1 hardware run recorded |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |
@@ -1184,8 +1204,8 @@ unchanged, `RECOVERY` `14e11370…` unchanged, EFS `51fa824c…` and sec_efs
 `3a265d58…` unchanged. The pulled boot-image gate is 18/18 and the pulled
 payload contract is 7/7.
 
-The owner booted the image. It stopped during identification, before the MD
-phase, with the attempt-1 H8 CMD3-completion signature:
+The owner's first boot of the image stopped during identification, before the
+MD phase, with the attempt-1 H8 CMD3-completion signature:
 
 | Field | Report value | Decode |
 | --- | --- | --- |
@@ -1211,14 +1231,17 @@ This is the documented H8 CMD3-completion signature, field-for-field the same
 as the attempt-1 stage-1 failure except for the panic frame/page/free context
 and the `c3l` tick count (a fresh run). The attempt-3 drain is entered only in
 `gta4l_emmc_read_multi()` after a CMD18 primary-bound expiry, so it was not
-exercised; the report neither supports nor refutes it. The previous attempt-2
-boot did reach the MD phase, so this is a recurrence of the open CMD3/H8
-behavior rather than an MD/drain result. F2 remains unestablished and no
-on-device `drain=` value exists. The transcription is
+exercised on this boot; the report neither supports nor refutes it. The
+previous attempt-2 boot did reach the MD phase, so this is a recurrence of the
+open CMD3/H8 behavior rather than an MD/drain result. F2 remains unestablished
+and no on-device `drain=` value existed on this boot; a later boot of the same
+image did exercise the drain (next section). The transcription is
 `out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-failure.txt`;
 the owner photo file and hash are not in this tree. The attempt-3 image was
 not re-read after this boot, so the run is bound by the verified flash/readback
-record, not by a post-boot partition re-read.
+record, not by a post-boot partition re-read. The suite counts in the table
+below are the attempt-3 batch snapshot, not the current counts; the current
+suite counts are in the §2 table.
 
 | Check | Result |
 | --- | --- |
@@ -1233,6 +1256,66 @@ record, not by a post-boot partition re-read.
 | `scripts/check-gta4l.py` | PASS: SM6115 (gta4l) board layout verified |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |
 | `porting.toml` parse with `tomllib` | 13 areas |
+| `git diff --check` | PASS: clean |
+
+#### A2/F2 multi-block attempt-3 later boots (2026-11-02)
+
+Two more owner boots of the same verified `f85c18d9…` image were recorded. The
+image was not reflashed and the BOOT partition was not re-read after the first
+boot, so both records are bound by the attempt-3 flash/readback record and the
+owner's statement that they are boots of this image. Both are owner-supplied
+OCR text only; no photo file or hash is in this tree.
+
+**Boot 2 (drain exercised).** The stage-A pass and its GPT gate completed and
+the optional `CMD18` ran; the primary 1,000,000 µs bound expired at block
+ordinal 20 and the bounded drain ran to exhaustion:
+
+```text
+GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=4294967285 step=19
+mb=20 drain=1/0/0/50000 stop=4294967289/1/1/0000/0000/03f80af6/00000c1b/00000000 fail=1/18/2/0000123a/0000/0021/03f80af6/19
+```
+
+`drain=1/0/0/50000` decodes as used 1, resolved 0, 0 additional blocks and the
+full 50,000 iterations of the 500,000 µs / 10 µs window. The post-drain sample
+still shows `CC | BRR` and no `TC`; the stop captured a valid terminal state
+with no `CC`/`TC` and returned `-7`, field-for-field identical to attempt 2's
+stop record. The CMD18 failure record is valid index 18, argument 2, error 0,
+normal `0x0021`, present `0x03f80af6`, step 19. No MB sums were printed and
+the `mb=20` ambiguity (20-of-21 versus 21-of-21 drained) remains; if all 21
+blocks were already buffered (`done == count`), the zero drain-block count
+means there was nothing further to read, not that a late block was missed. The
+drain does not resolve the stall; the record does not support a marginally
+longer data bound as the explanation, though it does not formally exclude a
+block arriving just after the window. Transcription:
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-boot2-drain-failure.txt`.
+
+**Boot 3 (array read).** The stage-A extended content read failed at its first
+sector (LBA 2), after the GPT gate, so the probe stopped before the
+data/last-sector reads and the MD phase:
+
+```text
+GTA4L-EMMC PROBE FAILED: array read lba=2 rc=4294967285 step=16
+fail=1/17/2/0000113a/0000/0002/03f800f0/16
+```
+
+`rc=-11`, `step=16` is `STEP_PROBE_ARRAY`, and `fail` names CMD17 (index 17,
+argument 2) with error 0 and normal `0x0002` (`TC` only; no `CC` or `BRR`); the
+helper's 1,000,000 µs bound expired with no buffer-ready condition. This is a
+new single-block data-phase signature; the same image completed the stage-A
+pass on boot 2, so it is intermittent across boots. Whether the reboot between
+boots power-cycled the card (the previous boot ended with a failed CMD18 and a
+timed-out CMD12) is not recorded. Transcription:
+`out/gta4l/ram-root-emmc-probe-stage2b-attempt3-evidence/stage2b-attempt3-boot3-array-failure.txt`.
+
+H8 status: boot 1 failed identification at CMD3, while boots 2 and 3 completed
+identification, so H8 is intermittent rather than a deterministic property of
+this build. F2 remains unestablished.
+
+| Check | Result |
+| --- | --- |
+| eMMC A2/F2 attempt-3 boot 2 (drain) | RECORDED: `step=19`, `mb=20`, `drain=1/0/0/50000`, `rc=-11`, stop `-7`; drain entered and exhausted, no `TC`, no MB sums |
+| eMMC A2/F2 attempt-3 boot 3 (array) | RECORDED: `step=16`, CMD17 LBA 2 `rc=-11`, normal `0x0002` (TC only); new intermittent single-block data timeout |
+| Hash-table self-check in §6 | `rows=45 mismatches=0` |
 | `git diff --check` | PASS: clean |
 
 ## 7. Limits
@@ -1269,14 +1352,23 @@ record, not by a post-boot partition re-read.
   `CC | BRR` sample means a buffer-read-ready condition was present when
   polling stopped; it does not show that the remaining block or the stop would
   have completed.
-- The 2026-11-02 A2/F2 attempt-3 record is an owner-supplied OCR text and
-  photograph in chat; no photo file or hash is in this tree. The BOOT-only
-  write and readback were verified, but the boot stopped during identification
-  at the same H8 CMD3-completion timeout as attempt 1 (`step=9`, no
-  CMD7/CMD18/CMD12 and no sector read), so the attempt-3 drain was not
-  exercised. The run does not establish the drain's effect, a completed
-  multi-block transfer, a completed stop, a content match or F2. The CMD3
-  cause remains open; the attempt-3 image was not re-read after this boot.
+- The 2026-11-02 A2/F2 attempt-3 record covers three owner boots of the same
+  image; the transcriptions are owner-supplied OCR text (the boot-1 record
+  also mentions an owner photograph, but no photo file or hash is in this
+  tree). The BOOT-only write and readback were verified; the image was not
+  reflashed and the BOOT partition was not re-read after boot 1, so the later
+  boots are bound by the flash record and the owner's statement. Boot 1
+  stopped during identification at the H8 CMD3-completion timeout (`step=9`,
+  no CMD7/CMD18/CMD12 and no sector read). Boot 2 reached the MD phase: the
+  bounded drain was entered and exhausted its window with no additional
+  blocks and no `TC`, then the `CMD12` stop timed out; the drain does not
+  resolve the stall. Boot 3 failed the stage-A `CMD17` read at LBA 2 with
+  `TC` but no `CC`/`BRR`, a new intermittent single-block data-phase
+  signature. H8 is therefore intermittent across boots, not a deterministic
+  build property. The records do not establish a completed multi-block
+  transfer, a completed stop, a content match, the drain's sufficiency or F2;
+  the CMD3 and CMD17 causes remain open, and whether the reboot between boots
+  power-cycled the card is not recorded.
 - The pinned Linux cache has no `.git`; its revision is documented provenance,
   not a verifiable git checkout `[U]`.
 - The booted image is not tracked; the copy in the gitignored output tree

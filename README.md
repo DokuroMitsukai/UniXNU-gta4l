@@ -82,11 +82,19 @@ partition layout, payload policy and packaging.
   error, no `TC`), and the explicit `CMD12` stop did not report `CC` or `TC`
   within its bound. This exercises the multi-block data phase beyond one block
   but does not establish F2: no established 21/21 transfer, completed stop or
-  content comparison exists (`docs/emmc-driver.md` §5.3.7). A third
-  2026-11-02 boot of the post-bound-drain image stopped again during
-  identification at the same CMD3-completion timeout, before any `CMD18`; the
-  drain was not exercised and F2 remains unproven (`docs/emmc-driver.md`
-  §5.3.8).
+  content comparison exists (`docs/emmc-driver.md` §5.3.7). The post-bound
+  drain image (§5.3.8) was then booted three times: the first stopped during
+  identification at the same CMD3-completion timeout, the second reached the
+  MD phase and exhausted the 500,000 µs drain window with no additional
+  blocks and no `TC` before the `CMD12` stop again timed out, and the third
+  failed earlier with a single-block `CMD17` data timeout at array LBA 2. The
+  drain therefore did not resolve the stall, H8 is intermittent, and F2
+  remains unproven. Stage B1 (`gta4l-emmc-probe=4`) is implemented and
+  host-tested: it switches the card EXT_CSD BUS_WIDTH to 4-bit and then
+  8-bit, verifies the byte-183 readback and the SDHCI `HOST_CONTROL` bit,
+  runs the CMD19/CMD14 bus test at each width, and repeats the stage-A
+  content sums against the 1-bit baseline; no B1 hardware run is recorded,
+  so F3 remains unproven (`docs/emmc-driver.md` §5.3.9).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

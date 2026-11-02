@@ -150,6 +150,24 @@ static uint16_t transfer_mode;
 static uint32_t buffer_data[GTA4L_EMMC_BLOCK_BYTES / 4u];
 static uint32_t buffer_index;
 static unsigned char ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+/* Stage-B1 bus-width modeling. cmd6_ignore leaves EXT_CSD[183] unchanged so
+ * the readback disagrees with the requested code; cmd6_ignore_width8 does that
+ * only for the 8-bit write. bus_test_bad returns the written pattern instead of
+ * its complement at bus_test_bad_width (0 = every width). width_corrupt_lba
+ * changes one CMD17 payload at width_corrupt_code so the per-width content
+ * comparison differs. */
+static unsigned int cmd6_count;
+static uint32_t cmd6_argument;
+static int cmd6_ignore;
+static int cmd6_ignore_width8;
+static int bus_test_bad;
+static uint8_t bus_test_bad_width;
+static uint8_t bus_test_written[GTA4L_EMMC_BUS_TEST_8_BYTES];
+static unsigned int bus_test_written_count;
+static uint16_t bus_test_width;
+static uint32_t width_corrupt_lba = 0xFFFFFFFFu;
+static uint8_t width_corrupt_code;
+static int cmd19_error;
 static int cmd2_crc_fail;
 static int cmd3_no_cc;
 static int cmd3_late_cc;
@@ -164,6 +182,7 @@ static int gpt_bad_field;
 static int bad_command_argument;
 static const uint32_t *expected_lbas;
 static unsigned int expected_lba_count;
+static int expected_lba_wrap;
 static unsigned int cmd3_normal_reads;
 static uint32_t ext_csd_count = 0x01000000u;
 /* Multi-block CMD18/CMD12 modeling. mb_fail_done injects a data error after
@@ -337,6 +356,11 @@ sim_fill_block(uint32_t lba)
 			bytes[index] = (uint8_t)((lba * 7u) + (index * 13u));
 		}
 	}
+	if ((width_corrupt_code != 0u) &&
+	    (ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] ==
+	    width_corrupt_code) && (lba == width_corrupt_lba)) {
+		bytes[0] ^= 0xFFu;
+	}
 	sim_fill_buffer_words(bytes);
 }
 
@@ -435,6 +459,34 @@ static void
 sim_expected_blocks(char *buffer, size_t size)
 {
 	sim_expected_blocks_label(buffer, size, "BLOCKS", 0);
+}
+
+/* Expected Stage-B1 BLOCKS line for one width. */
+static void
+sim_expected_b1_blocks(char *buffer, size_t size, unsigned int width)
+{
+	size_t used;
+	uint32_t index;
+	int written;
+
+	written = snprintf(buffer, size, "GTA4L-EMMC B1 BLOCKS %u", width);
+	if ((written < 0) || ((size_t)written >= size)) {
+		check(0, "the expected B1 BLOCKS line does not fit its buffer");
+		return;
+	}
+	used = (size_t)written;
+	for (index = 0; index < SIM_GPT_ARRAY_BLOCKS; index++) {
+		uint32_t lba = SIM_GPT_ARRAY_LBA + index;
+
+		written = snprintf(buffer + used, size - used, " %u=%08x",
+		    lba, sim_block_sum(lba));
+		if ((written < 0) || ((size_t)written >= (size - used))) {
+			check(0, "the expected B1 BLOCKS line does not fit its "
+			    "buffer");
+			return;
+		}
+		used += (size_t)written;
+	}
 }
 
 static uint32_t
@@ -737,6 +789,90 @@ sim_command(uint16_t command)
 		normal_int |= GTA4L_EMMC_INT_CC;
 		return;
 	}
+	if (index == GTA4L_EMMC_CMD6) {
+		uint32_t value;
+
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX)) {
+			bad_command_format = 1;
+		}
+		cmd6_count++;
+		cmd6_argument = last_argument;
+		value = (last_argument >> 8) & 0xFFu;
+		if ((cmd6_ignore == 0) &&
+		    ((cmd6_ignore_width8 == 0) || (value != 2u))) {
+			ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] =
+			    (uint8_t)value;
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
+		normal_int |= GTA4L_EMMC_INT_CC;
+		return;
+	}
+	if (index == GTA4L_EMMC_CMD19) {
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
+		    GTA4L_EMMC_CMD_DATA)) {
+			bad_command_format = 1;
+		}
+		if ((block_count != 1u) ||
+		    ((transfer_mode & GTA4L_EMMC_TM_READ) != 0) ||
+		    ((transfer_mode & GTA4L_EMMC_TM_BLOCK_COUNT_EN) == 0)) {
+			bad_command_format = 1;
+		}
+		bus_test_width = block_size;
+		bus_test_written_count = 0;
+		if (cmd19_error != 0) {
+			error_int |= (uint16_t)cmd19_error;
+			return;
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
+		normal_int |= GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_BWR;
+		return;
+	}
+	if (index == GTA4L_EMMC_CMD14) {
+		uint8_t payload[GTA4L_EMMC_BUS_TEST_8_BYTES];
+		uint32_t index2;
+
+		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
+		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
+		    GTA4L_EMMC_CMD_DATA)) {
+			bad_command_format = 1;
+		}
+		if ((block_count != 1u) ||
+		    (block_size != bus_test_width) ||
+		    ((transfer_mode & (GTA4L_EMMC_TM_READ |
+		    GTA4L_EMMC_TM_BLOCK_COUNT_EN)) !=
+		    (GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN))) {
+			bad_command_format = 1;
+		}
+		if (bus_test_width > GTA4L_EMMC_BUS_TEST_8_BYTES) {
+			bad_command_format = 1;
+			bus_test_width = GTA4L_EMMC_BUS_TEST_8_BYTES;
+		}
+		for (index2 = 0; index2 < bus_test_width; index2++) {
+			if ((bus_test_bad != 0) &&
+			    ((bus_test_bad_width == 0u) ||
+			    (bus_test_bad_width ==
+			    (uint8_t)ext_csd[
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF]))) {
+				payload[index2] = bus_test_written[index2];
+			} else {
+				payload[index2] =
+				    (uint8_t)~bus_test_written[index2];
+			}
+		}
+		for (index2 = 0; index2 < bus_test_width; index2 += 4u) {
+			buffer_data[index2 / 4u] =
+			    (uint32_t)payload[index2] |
+			    ((uint32_t)payload[index2 + 1u] << 8) |
+			    ((uint32_t)payload[index2 + 2u] << 16) |
+			    ((uint32_t)payload[index2 + 3u] << 24);
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
+		normal_int |= GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_BRR |
+		    GTA4L_EMMC_INT_TC;
+		return;
+	}
 	if (index == GTA4L_EMMC_CMD18) {
 		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
@@ -812,8 +948,13 @@ sim_command(uint16_t command)
 			sim_fill_buffer_words(ext_csd);
 		} else {
 			cmd17_count++;
-			if ((cmd17_index >= expected_lba_count) ||
-			    (last_argument != expected_lbas[cmd17_index])) {
+			if ((expected_lba_count == 0u) ||
+			    ((expected_lba_wrap == 0) &&
+			    ((cmd17_index >= expected_lba_count) ||
+			    (last_argument != expected_lbas[cmd17_index]))) ||
+			    ((expected_lba_wrap != 0) &&
+			    (last_argument !=
+			    expected_lbas[cmd17_index % expected_lba_count]))) {
 				bad_command_argument = 1;
 			}
 			cmd17_index++;
@@ -1091,6 +1232,28 @@ gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset, uint32_t value)
 		if (offset == GTA4L_EMMC_REG_ARGUMENT) {
 			last_argument = value;
 		}
+		if (offset == GTA4L_EMMC_REG_BUFFER_DATA_PORT) {
+			uint32_t base = bus_test_written_count;
+
+			if ((last_index == GTA4L_EMMC_CMD19) &&
+			    ((base + 4u) <= sizeof(bus_test_written))) {
+				bus_test_written[base] = (uint8_t)value;
+				bus_test_written[base + 1u] =
+				    (uint8_t)(value >> 8);
+				bus_test_written[base + 2u] =
+				    (uint8_t)(value >> 16);
+				bus_test_written[base + 3u] =
+				    (uint8_t)(value >> 24);
+				bus_test_written_count += 4u;
+				if (bus_test_written_count >=
+				    bus_test_width) {
+					normal_int &= (uint16_t)
+					    ~GTA4L_EMMC_INT_BWR;
+					normal_int |= GTA4L_EMMC_INT_TC;
+				}
+			}
+			return;
+		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_CLEAR) {
 			pwr_status &= ~value;
 			sim_store(sdhci, offset, 4u, 0);
@@ -1224,7 +1387,8 @@ sim_init_ext_csd(void)
 
 	memset(ext_csd, 0, sizeof(ext_csd));
 	ext_csd[GTA4L_EMMC_EXT_CSD_REV_OFF] = 8u;
-	ext_csd[183] = 2u;
+	ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] =
+	    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
 	ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 0] =
 	    (uint8_t)(count & 0xFFu);
 	ext_csd[GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF + 1] =
@@ -1314,6 +1478,44 @@ static const uint8_t order_probe_md[] = {
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD18, GTA4L_EMMC_CMD12
+};
+/* Stage B1 keeps the stage-A 1-bit content pass, then repeats the switch,
+ * bus test and content pass at 4-bit and 8-bit. A failing scenario stops
+ * early, so the same prefix-checked order also covers the failure forms. */
+static const uint8_t order_probe_b1[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17
 };
 static const uint8_t order_cmd7[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
@@ -1792,6 +1994,41 @@ main(int argc, char **argv)
 		 * MMIO mapping and an explicit refusal. */
 		stage = 0;
 		mb_mode_arg = 1;
+	} else if ((strcmp(scenario, "probe-b1-success") == 0) ||
+	    (strcmp(scenario, "probe-b1-stuck-width") == 0) ||
+	    (strcmp(scenario, "probe-b1-bustest-fail") == 0) ||
+	    (strcmp(scenario, "probe-b1-switch8-stuck") == 0) ||
+	    (strcmp(scenario, "probe-b1-bustest8-fail") == 0) ||
+	    (strcmp(scenario, "probe-b1-content8-div") == 0)) {
+		/* Stage B1 starts from the same device-capacity 1-bit pass,
+		 * then switches to 4-bit and 8-bit. Each failure scenario
+		 * injects one model fault and stops at that width. */
+		stage = 4;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_probe_b1,
+		    (unsigned int)(sizeof(order_probe_b1) /
+		    sizeof(order_probe_b1[0])));
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-b1-stuck-width") == 0) {
+			cmd6_ignore = 1;
+		} else if (strcmp(scenario, "probe-b1-bustest-fail") == 0) {
+			bus_test_bad = 1;
+			bus_test_bad_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario, "probe-b1-switch8-stuck") == 0) {
+			cmd6_ignore_width8 = 1;
+		} else if (strcmp(scenario, "probe-b1-bustest8-fail") == 0) {
+			bus_test_bad = 1;
+			bus_test_bad_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;
+		} else if (strcmp(scenario,
+		    "probe-b1-content8-div") == 0) {
+			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
+			width_corrupt_code = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;
+		}
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		/* Synthetic field-wise width bound, not a controller state. */
 		width_form = 1;
@@ -1801,6 +2038,15 @@ main(int argc, char **argv)
 		width_form = 3;
 	} else if (strcmp(scenario, "report-width-md") == 0) {
 		width_form = 4;
+	} else if (strcmp(scenario, "report-width-b1") == 0) {
+		/* Synthetic B1 field-wise bound: the report samples the pad and
+		 * DLL registers live, so put them at their 32-bit maximum. */
+		width_form = 5;
+		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
+		    0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_STATUS, 4u,
+		    0xFFFFFFFFu);
 	} else if (strcmp(scenario, "report-width-budget-control") == 0) {
 		/* Negative control for the report-budget predicate: the last
 		 * byte that still leaves room for the NUL must be accepted and
@@ -2114,7 +2360,7 @@ main(int argc, char **argv)
 		    "the timeout capture does not carry the CMD3 index and "
 		    "raw response");
 		check(strstr(panic_message,
-		    "c3p=1/0000/0000/00000000/0023/07ff") != NULL,
+		    "c3p=1/0000/0000/00000000/0033/07ff") != NULL,
 		    "the report did not capture the pre-CMD3 state");
 		check(strstr(panic_message,
 		    "c2=1/0001/0000/05f46619,4d420090,44583638,00150100")
@@ -2160,7 +2406,7 @@ main(int argc, char **argv)
 		    "c3l=1/3/0001/0001/1/0000000000000000/1000000") != NULL,
 		    "the report lost the successful CMD3 poll history");
 		check(strstr(panic_message,
-		    "c3p=1/0000/0000/00000000/0023/07ff") != NULL,
+		    "c3p=1/0000/0000/00000000/0033/07ff") != NULL,
 		    "the report did not capture the pre-CMD3 state");
 		check(strstr(panic_message,
 		    "c2=1/0001/0000/05f46619,4d420090,44583638,00150100")
@@ -2248,7 +2494,7 @@ main(int argc, char **argv)
 		check(panicked == 1, "the identification success did not report");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC IDENT REPORT: rc=0 mci=10000072 rca=1 "
-		    "cap=16777216 rev=8 bw=2 ocr=c0ff8080 ext=0000000b")
+		    "cap=16777216 rev=8 bw=0 ocr=c0ff8080 ext=00000009")
 		    != NULL,
 		    "the success report does not carry the decoded card data");
 		check(strstr(panic_message, "step=15") != NULL,
@@ -2262,7 +2508,7 @@ main(int argc, char **argv)
 		    != NULL,
 		    "the success report lost the CMD2 capture");
 		check(strstr(panic_message,
-		    "c3p=1/0000/0000/00000000/0023/07ff") != NULL,
+		    "c3p=1/0000/0000/00000000/0033/07ff") != NULL,
 		    "the success report lost the pre-CMD3 capture");
 		check(strstr(panic_message,
 		    "c3t=0/0/0000/00000000/0/"
@@ -2286,7 +2532,7 @@ main(int argc, char **argv)
 		check(panicked == 1, "the maximum-width success did not report");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC IDENT REPORT: rc=0 mci=10000072 rca=1 "
-		    "cap=4294967295 rev=8 bw=2") != NULL,
+		    "cap=4294967295 rev=8 bw=0") != NULL,
 		    "the maximum-width success report does not carry the "
 		    "maximum-width capacity");
 		check(strstr(panic_message,
@@ -2322,7 +2568,7 @@ main(int argc, char **argv)
 		check(panicked == 1, "the maximum-width probe did not report");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 "
-		    "cap=4294967295 rev=8 bw=2") != NULL,
+		    "cap=4294967295 rev=8 bw=0") != NULL,
 		    "the maximum-width probe report does not carry the "
 		    "maximum-width capacity");
 		check(strstr(panic_message,
@@ -2409,7 +2655,7 @@ main(int argc, char **argv)
 		check(panicked == 1, "the full probe did not report");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 "
-		    "cap=61071360 rev=8 bw=2") != NULL,
+		    "cap=61071360 rev=8 bw=0") != NULL,
 		    "the full probe report does not carry the device capacity");
 		check(strstr(panic_message, "step=18 log=") != NULL,
 		    "the full probe report does not show the last content "
@@ -2507,7 +2753,7 @@ main(int argc, char **argv)
 		check(panicked == 1, "the MD probe did not report");
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 "
-		    "cap=61071360 rev=8 bw=2") != NULL,
+		    "cap=61071360 rev=8 bw=0") != NULL,
 		    "the MD probe report does not carry the device capacity");
 		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
 		    "the MD probe report does not name the MD step and log "
@@ -2674,6 +2920,121 @@ main(int argc, char **argv)
 		    "a bare MD argument touched SDHCI");
 		check(gcc_accesses == 0ul,
 		    "a bare MD argument touched GCC");
+	} else if (strcmp(scenario, "probe-b1-success") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the B1 success run did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=0 stop=0") != NULL,
+		    "the B1 success report does not carry the result");
+		check(strstr(panic_message,
+		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=0") != NULL,
+		    "the B1 report lost the 1-bit baseline width");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=02") != NULL,
+		    "the B1 report lost the 4-bit switch or bus-test words");
+		check(strstr(panic_message,
+		    "BW=8 att=1 req=8 sw=2 swrc=0 tt=1 "
+		    "tw=000055aa te=000055aa trc=0 hc=20") != NULL,
+		    "the B1 report lost the 8-bit switch or bus-test words");
+		check(strstr(panic_message, "same=1 div=0") != NULL,
+		    "the B1 report does not show the per-width content pass");
+		sim_expected_b1_blocks(expected, sizeof(expected), 4u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the 4-bit content pass lost the stage-A sums");
+		sim_expected_b1_blocks(expected, sizeof(expected), 8u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the 8-bit content pass lost the stage-A sums");
+		check(strstr(panic_message,
+		    "PAD qdsd=") != NULL,
+		    "the B1 report lost the pad/DLL state");
+		check(cmd6_count == 2u,
+		    "the B1 run did not issue one CMD6 per width");
+		check(cmd6_argument == 0x03B70201u,
+		    "the B1 run did not write the 8-bit EXT_CSD value last");
+		check(bad_command_format == 0,
+		    "a B1 command used the wrong flags");
+		check(bad_command_order == 0,
+		    "the B1 run sent commands in the wrong order");
+		check(bad_command_argument == 0,
+		    "the B1 content pass read the wrong LBA list");
+		check(cmd_count == 93u,
+		    "the B1 run did not complete both content passes");
+		check(strlen(panic_message) < 2048u,
+		    "the B1 report exceeds the 2048-byte panic-text budget");
+	} else if (strcmp(scenario, "probe-b1-stuck-width") == 0) {
+		check(panicked == 1, "a stuck 4-bit switch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-19 stop=1") != NULL,
+		    "the stuck-width report does not name the readback error");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=0") != NULL,
+		    "the stuck-width report does not show the unchanged "
+		    "EXT_CSD value");
+		check(strstr(panic_message,
+		    "BW=8 att=0 req=0 sw=0 swrc=0 tt=0") != NULL,
+		    "the stuck-width report kept asserting on 8-bit");
+		check(cmd_count == 36u,
+		    "the stuck-width run did not stop at the readback");
+	} else if (strcmp(scenario, "probe-b1-bustest-fail") == 0) {
+		check(panicked == 1, "a 4-bit bus-test mismatch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-20 stop=2") != NULL,
+		    "the 4-bit bus-test report does not name the mismatch");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1 "
+		    "tw=0000005a te=000000a5 trc=-20") != NULL,
+		    "the 4-bit bus-test report lost the failing pattern word");
+		check(strstr(panic_message,
+		    "BW=8 att=0 req=0 sw=0 swrc=0 tt=0") != NULL,
+		    "the 4-bit bus-test failure continued to 8-bit");
+		check(cmd_count == 38u,
+		    "the 4-bit bus-test failure did not stop at CMD14");
+	} else if (strcmp(scenario, "probe-b1-switch8-stuck") == 0) {
+		check(panicked == 1, "a stuck 8-bit switch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-19 stop=5") != NULL,
+		    "the stuck 8-bit switch report does not name the readback "
+		    "error");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1") != NULL,
+		    "the stuck 8-bit switch report lost the 4-bit pass");
+		check(strstr(panic_message,
+		    "BW=8 att=1 req=8 sw=1 swrc=-19 tt=0") != NULL,
+		    "the stuck 8-bit switch report does not show the unchanged "
+		    "EXT_CSD value");
+		check(cmd_count == 66u,
+		    "the stuck 8-bit switch run did not stop at the readback");
+	} else if (strcmp(scenario, "probe-b1-bustest8-fail") == 0) {
+		check(panicked == 1, "an 8-bit bus-test mismatch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-20 stop=6") != NULL,
+		    "the 8-bit bus-test report does not name the mismatch");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1") != NULL,
+		    "the 8-bit bus-test report lost the 4-bit pass");
+		check(strstr(panic_message,
+		    "BW=8 att=1 req=8 sw=2 swrc=0 tt=1 "
+		    "tw=0000aa55 te=000055aa trc=-20") != NULL,
+		    "the 8-bit bus-test report lost the failing pattern word");
+		check(cmd_count == 68u,
+		    "the 8-bit bus-test failure did not stop at CMD14");
+	} else if (strcmp(scenario, "probe-b1-content8-div") == 0) {
+		check(panicked == 1, "an 8-bit content mismatch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-21 stop=8") != NULL,
+		    "the content-mismatch report does not name the probe error");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1") != NULL,
+		    "the content-mismatch report lost the 4-bit pass");
+		check(strstr(panic_message,
+		    "same=0 div=34") != NULL,
+		    "the content-mismatch report does not name the first "
+		    "differing LBA");
+		check(cmd_count == 93u,
+		    "the content-mismatch run did not finish the 8-bit read "
+		    "pass");
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		check(panicked == 1, "the synthetic width failure did not panic");
 		check(strstr(panic_message, "stage=3") != NULL,
@@ -2923,6 +3284,65 @@ main(int argc, char **argv)
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width MD report does not fit the "
 		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-b1") == 0) {
+		check(panicked == 1,
+		    "the synthetic width B1 report did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-21 stop=8 mci=ffffffff rca=1 "
+		    "cap=4294967295 rev=255 hci=ff step=21 log=99999") != NULL,
+		    "the synthetic width B1 report lost the widest header");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 BW=1 att=1 req=1 sw=15 swrc=0 tt=0 "
+		    "tw=00000000 te=00000000 trc=0 hc=ff b0=ffffffff "
+		    "b1=ffffffff same=1 div=0") != NULL,
+		    "the synthetic width B1 report lost the 1-bit baseline");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 BW=4 att=1 req=4 sw=15 swrc=-20 tt=1 "
+		    "tw=ffffffff te=ffffffff trc=-20 hc=ff b0=ffffffff "
+		    "b1=ffffffff same=0 div=4294967295") != NULL,
+		    "the synthetic width B1 report lost the widest 4-bit "
+		    "switch/test fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 BW=8 att=1 req=8 sw=15 swrc=-20 tt=1 "
+		    "tw=ffffffff te=ffffffff trc=-20 hc=ff b0=ffffffff "
+		    "b1=ffffffff same=0 div=4294967294") != NULL,
+		    "the synthetic width B1 report lost the widest 8-bit "
+		    "switch/test fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 BLOCKS 4 2=ffffffff 3=ffffffff "
+		    "4=ffffffff 5=ffffffff 6=ffffffff 7=ffffffff "
+		    "8=ffffffff 9=ffffffff 10=ffffffff 11=ffffffff "
+		    "12=ffffffff 13=ffffffff 14=ffffffff 15=ffffffff "
+		    "16=ffffffff 17=ffffffff 18=ffffffff 19=ffffffff "
+		    "20=ffffffff 21=ffffffff 22=ffffffff") != NULL,
+		    "the synthetic width B1 report lost the 4-bit sums");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 BLOCKS 8 2=ffffffff 3=ffffffff "
+		    "4=ffffffff 5=ffffffff 6=ffffffff 7=ffffffff "
+		    "8=ffffffff 9=ffffffff 10=ffffffff 11=ffffffff "
+		    "12=ffffffff 13=ffffffff 14=ffffffff 15=ffffffff "
+		    "16=ffffffff 17=ffffffff 18=ffffffff 19=ffffffff "
+		    "20=ffffffff 21=ffffffff 22=ffffffff") != NULL,
+		    "the synthetic width B1 report lost the 8-bit sums");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 DATA 8 34=ffffffff") != NULL,
+		    "the synthetic width B1 report lost the widest data sum");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 LSTLBA 8 4294967294=ffffffff") != NULL,
+		    "the synthetic width B1 report lost the widest last "
+		    "sector");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 PAD qdsd=ffffffff dll=ffffffff "
+		    "dst=ffffffff bif=none") != NULL,
+		    "the synthetic width B1 report lost the pad/DLL state");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 FAIL fail=1/63/4294967295/0000ffff/ffff/"
+		    "ffff/ffffffff/21") != NULL,
+		    "the synthetic width B1 report lost the widest failure "
+		    "record");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width B1 report does not fit the "
+		    "2048-byte panic buffer including the NUL");
 	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
 	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
 	    (strcmp(scenario, "cmd7-busy-error") == 0) ||
@@ -2940,7 +3360,7 @@ main(int argc, char **argv)
 		    != NULL,
 		    "the report lost the successful CMD3 poll history");
 		check(strstr(panic_message,
-		    "c3p=1/0000/0000/00000000/0023/07ff") != NULL,
+		    "c3p=1/0000/0000/00000000/0033/07ff") != NULL,
 		    "the report did not capture the pre-CMD3 state");
 		check(strstr(panic_message,
 		    "c2=1/0001/0000/05f46619,4d420090,44583638,00150100")
@@ -2952,7 +3372,7 @@ main(int argc, char **argv)
 		    "the report does not carry the capture format and "
 		    "HOST_VERSION");
 		check(strstr(panic_message,
-		    "c7p=1/0000/0000/00000000/0023/07ff/"
+		    "c7p=1/0000/0000/00000000/0033/07ff/"
 		    "ef8e4040,fff6dbff,320f5903,00d02701") != NULL,
 		    "the report did not capture the pre-CMD7 state");
 		check(bad_command_format == 0,
@@ -3140,7 +3560,7 @@ main(int argc, char **argv)
 		    "00000000,00000000,00000000,00000000") != NULL,
 		    "the success report invented a timeout capture");
 		check(strstr(panic_message,
-		    "c7p=1/0000/0000/00000000/0023/07ff/"
+		    "c7p=1/0000/0000/00000000/0033/07ff/"
 		    "ef8e4040,fff6dbff,320f5903,00d02701") != NULL,
 		    "the success report did not capture the pre-CMD7 state");
 		check(bad_command_format == 0,
