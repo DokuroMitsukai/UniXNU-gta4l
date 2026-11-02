@@ -128,15 +128,20 @@ partition layout, payload policy and packaging.
   (four CMD17 TC-only timeouts, one CMD3 timeout), and the same-session BOOT
   re-read matched the post-flash hash. The 4-bit read paradox is unchanged
   (`es=000009cb` at the attempted width). F3 remains unproven
-  (`docs/emmc-driver.md` §5.3.12–5.3.15,
-  `docs/emmc-cmd2-crc-audit.md` §2.18–2.20). The stage-6 1-bit CMD19/CMD14
-  discriminator (`gta4l-emmc-probe=6`) is implemented and host-tested (core
-  138/83, probe 71/42) but not built, flashed or booted: it runs one 1-bit
-  bus-test round trip after the stage-A pass and before any CMD6, stops with
-  `stop=9` if that fails, and otherwise falls through to the stage-5 flow, so
-  it separates a width-caused 4-bit write timeout from an independent
-  first-write property. The device run needs a fresh explicit BOOT-only
-  approval.
+  (`docs/emmc-driver.md` §5.3.12–5.3.16,
+  `docs/emmc-cmd2-crc-audit.md` §2.18–2.21). The stage-6 1-bit CMD19/CMD14
+  discriminator (`gta4l-emmc-probe=6`) was built from clean `5f57dcb`
+  (kernel `a20d6269…`, payload `fdaa507d…`, boot image `90cf074c…`),
+  flashed BOOT only (p69 `c6a9f8e0…` → `1ea626f5…`) and booted thirteen
+  times without reflashing (seven cold, six warm; both p69 re-reads
+  matched). Boots 1 and 12, both cold, reached the rung and timed out in the
+  1-bit CMD19 write phase with the same terminal class as the 4-bit
+  continuation (`tt=1`, `tw=00000000`, `te=00000000`, `trc=-11`; CC and
+  BufferWriteReady latched, no TC, no error; present `0x03f801f6`), and no
+  CMD6 was issued, so the data-write path is broken independent of bus
+  width. The other eleven boots stopped pre-B1 (eight H8 CMD3 timeouts,
+  three CMD17 TC-only/no-error timeouts, one at the GPT array's LBA 2). The
+  `trc=-20` class remains unobserved; the byte-183 paradox is unchanged.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

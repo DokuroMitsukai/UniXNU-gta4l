@@ -155,6 +155,19 @@ and compares the first returned byte `0xA5`. That change refreshes the
 the probe simulator/fixture/test, the diagnostic builder/packager/gate
 scripts, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`
 and this document are outside the table or not listed.
+One more refresh on `2026-11-03` records the Stage-B1C-1 hardware run
+(`docs/emmc-driver.md` §5.3.16, `docs/emmc-cmd2-crc-audit.md` §2.21): the
+stage-6 image was flashed BOOT only and booted thirteen times (seven cold,
+six warm) without reflashing, both p69 re-reads matched the post-flash hash,
+two cold boots reached the 1-bit discriminator and both timed out in the
+CMD19 write phase with the same terminal class as the 4-bit continuation
+(`tt=1`, `trc=-11`, CC + BufferWriteReady, no TC, no error, present
+`0x03f801f6`) and no CMD6 issued, so the write path is broken independent of
+bus width; the other eleven boots stopped pre-B1 (eight H8 CMD3, three CMD17
+TC-only, one at the GPT array's LBA 2). That change refreshes the
+`README.md`, `docs/emmc-driver.md` and `porting.toml` rows, adds no manifest
+row, and keeps the table at 45 rows; `docs/emmc-cmd2-crc-audit.md` and this
+document are outside the table.
 This document's own hash is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
@@ -221,8 +234,9 @@ owner's SM-T505N, the Stage-B1 host-side bus-width/bus-test rung, the
 readback), the host-only Stage-B1 report-completeness audit, the
 Stage-B1R2 diagnostic re-run (five boots; two B1 stops with the new fields),
 the Stage-B1C continuation host batch, the 2026-11-03 Stage-B1C hardware
-run (seven boots; two CMD19 write-phase timeouts), and the Stage-B1C 1-bit
-discriminator host batch.
+run (seven boots; two CMD19 write-phase timeouts), the Stage-B1C 1-bit
+discriminator host batch, and the 2026-11-03 Stage-B1C-1 hardware run
+(thirteen boots; two identical 1-bit CMD19 write-phase timeouts).
 The stage-A
 batch refreshed the `README.md`,
 `docs/emmc-driver.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
@@ -641,13 +655,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `f2a7986355bc38923a60a73ec921723170e11d4dcb59aad106ab05624b261dbf` |
+| Repository README | `README.md` | `c81ba9aaa10dd0e75c38572bd9ae19a682ef41c54321efa33d28c1c92d871d91` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `a8b5949e2546fedff12ebb14151b34b4f1b03ebe2306e984a4d2f4a6347808f7` |
+| Porting record | `porting.toml` | `487f9614fd0f07e6832c3aefdd2cd61e68199a52b714b8846ac7ebb5fa0e2056` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `cb40428dbf129781b9d7338f80215eed91b9dab44bfaf34dfcf9901bdb3e29e3` |
+| eMMC driver record | `docs/emmc-driver.md` | `d0e0d9ae560b5e020b9dd3aac9db4ff09452c09032ca63db508ae33493c2981d` |
 | eMMC core header | `package/Gta4lEmmc.h` | `bd4ff3cc532d555cf7d2801fd0d0f47fb48a401c6a45bc51a64a5e9016dfc299` |
 | eMMC core source | `package/Gta4lEmmc.c` | `52fce3807ad946cc9ff5e8923b3fa0b6e53c261f55da197a48cee891334ea3d4` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `8a679d2ce917206217fdc17d4288aaccd06d3c36d10d1e83b95b00d1a97ef660` |
@@ -713,7 +727,10 @@ listed. The Stage-B1C 1-bit discriminator batch refreshed ten rows
 `porting.toml`) without adding a row; the probe simulator/fixture/test, the
 diagnostic builder/packager/gate scripts, `docs/emmc-cmd2-crc-audit.md`,
 `docs/emmc-cmd7-timeout-finding.md` and this document are outside the table
-or not listed.
+or not listed. The Stage-B1C-1 hardware-run batch refreshed the `README.md`,
+`docs/emmc-driver.md` and `porting.toml` rows without adding a row;
+`docs/emmc-cmd2-crc-audit.md` and this document are outside the table or not
+listed.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
@@ -986,6 +1003,7 @@ terminal-read observation-boundary edits), run from
 | eMMC Stage-B1R2 hardware run (2026-11-02) | RECORDED: five owner boots of the rebuilt `24f8c9d` image (warm force reboots only). Boots 1-2 reached B1 and reproduced the 4-bit stop with a clean CMD6 R1 (`c6=00000900`), the host width bit set and read back (`hb=00`, `ha=02`) and a successful EXT_CSD read returning the 1-bit content (`es=000009cb`, byte 183 still 0); boots 3-4 were TC-only/no-error CMD17 timeouts (block 1, array LBA 2) and boot 5 the H8 CMD3 timeout. No CMD19/CMD14 or content pass ran; F3 remains `[U]` |
 | eMMC Stage-B1C hardware run (2026-11-03) | RECORDED: seven owner boots of the `5ad1dd6` image (two cold, five warm). Boots 3 and 6 entered the continuation on the pinned 4-bit tuple and both timed out in the CMD19 write phase (`tt=1`, `trc=-11`, `normal=0x0011`, present `0x03f801f6`; CC and BufferWriteReady latched, no TC, no error), identical except the stack counters, with a cold power cycle between them. The other five stopped pre-B1 (four CMD17 TC-only/no-error timeouts, one H8 CMD3 timeout); the p69 re-read after boot 3 matched the post-flash hash. F3 remains `[U]` |
 | eMMC Stage-B1C 1-bit discriminator host batch (2026-11-03) | HOST-TESTED ONLY: `gta4l-emmc-probe=6` runs one 1-bit CMD19/CMD14 round trip after the stage-A pass and before the first CMD6; a failure stops with `stop=9` and no CMD6, a pass falls through to the stage-5 flow. The `BW=1` line carries the 1-bit `tt`/`tw`/`te`/`trc` for stage 6 and stays byte-identical for stages 4/5. Core 138/83 and probe 71/42, including the 1-bit write-phase timeout class and a pass-plus-continuation case; no build, flash or boot, F3 remains `[U]` |
+| eMMC Stage-B1C-1 hardware run (2026-11-03) | RECORDED: thirteen owner boots of the `5f57dcb` stage-6 image (seven cold, six warm) without reflashing; both p69 re-reads matched `1ea626f5…`. Boots 1 and 12, both cold, reached the 1-bit discriminator and timed out in the CMD19 write phase with the same terminal class as the 4-bit continuation (`tt=1`, `tw=00000000`, `te=00000000`, `trc=-11`, CC + BufferWriteReady, no TC, no error, present `0x03f801f6`), field-for-field identical, and no CMD6 was issued — the data-write path is broken independent of bus width and the width-caused model is excluded. The other eleven stopped pre-B1 (eight H8 CMD3, three CMD17 TC-only, one at the GPT array's LBA 2). The `trc=-20` class remains unobserved; F3 remains `[U]` |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |
@@ -1563,6 +1581,18 @@ a per-width content comparison; F3 remains `[U]`. The full decode is in
   does not establish a bus-test or content pass, does not separate a
   width-caused timeout from an independent first-write property, and does not
   establish F3.
+- The 2026-11-03 Stage-B1C-1 record covers thirteen owner boots of the same
+  verified image; the transcriptions are owner-supplied chat text and no photo
+  file or hash is in this tree. The BOOT partition was re-read after boot 9
+  and after boot 13, both matching the post-flash hash; the no-reflash
+  statement covers the boots between the reads. The first nine boots followed
+  the owner-stated cold/warm sequence and the final four were the requested
+  cold sampling batch. Boots 1 and 12, both cold, reached the 1-bit
+  discriminator and timed out in the CMD19 write phase with identical fields;
+  no CMD6 was issued on those boots, so the width-caused model is excluded for
+  the write failure. The record does not assign that width-independent failure
+  to the card, the pad/DLL or the host PIO path, does not observe the
+  `trc=-20` class, and does not establish F3.
 - The pinned Linux cache has no `.git`; its revision is documented provenance,
   not a verifiable git checkout `[U]`.
 - The booted image is not tracked; the copy in the gitignored output tree

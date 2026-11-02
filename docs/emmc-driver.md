@@ -1788,10 +1788,67 @@ suite is 71 scenarios and 42 mutation controls (67/39 before), adding
 `probe-b1-1bit-mismatch` and `probe-b1-1bit-continue` plus three mutation
 controls (skipped discriminator, failure that continues to the switch, wrong
 stop code). The `report-width-b1` fixture now materializes the 1-bit fields
-and still fits the 2048-byte panic buffer. No build, flash or boot was
-performed; the device run needs a fresh explicit BOOT-only flash approval.
-Expected pre-B1 stops on the current image remain about 5 of 7 boots, so
-several boots may be needed to reach the rung.
+and still fits the 2048-byte panic buffer. The build, BOOT-only flash and
+thirteen-boot device run are recorded in §5.3.16.
+
+### 5.3.16 Stage-B1C-1 hardware run: write phase times out at 1-bit (2026-11-03)
+
+The stage-6 image was built from clean `5f57dcb`: kernel `a20d6269…`,
+payload `fdaa507d…` (contract 7/7) and boot image `90cf074c…` (gate 18/18
+against the `ce4d76e8…` v5 baseline). The write was BOOT-only: pre-flash p69
+was `c6a9f8e0…` (the B1C post-flash hash), post-flash p69 is `1ea626f5…`,
+the image prefix read back as `90cf074c…`, the unchanged tail is
+`a28b4ea2…`, and `RECOVERY` `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` were unchanged. The flash record is
+`out/gta4l/ram-root-emmc-probe-b1c1-evidence/flash-record.json`; the boot
+record is `hardware-run-record.json` in the same directory.
+
+The owner booted the same image thirteen times without reflashing (nine
+owner-stated resets — cold, warm, warm, cold, warm, warm, cold, warm, warm —
+then four cold sampling boots) and re-read BOOT read-only after boot 9 and
+after boot 13; both reads matched `1ea626f5…`, so all boots are bound to the
+flashed bytes.
+
+Boots 1 and 12, both cold, reached the 1-bit discriminator. Both timed out in
+the CMD19 write phase with the same terminal class as the 4-bit continuation
+(§5.3.14):
+
+    rc=-11 stop=9 step=18 log=31
+    BW=1 att=1 req=1 sw=0 swrc=0 tt=1 tw=00000000 te=00000000 trc=-11
+    BW=4 att=0 ... c6=00000000   BW=8 att=0
+    FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/18 @Gta4lEmmcProbe.c:1090
+
+`es=000009cb`, `b0=62084b66`, `b1=84d0543e`, the `PAD` line
+(`qdsd=00009fe4`, `dll=6000642c`, `dst=00000000`, `bif=none`) and the whole
+`FAIL` tuple are identical between the two reports; only the stack
+`pages`/`free` counters and the second stack frame differ. No CMD6 was
+issued on either boot (`BW=4 att=0`, `bc=0`), so the failing path is a
+data-write hang at the identification width with no card-state write
+involved. CMD19's command phase completed (`CC`) and `BufferWriteReady`
+latched; the data phase never produced `TC` and no error bit appeared before
+the 1 s bounded poll expired. This is the §3.1.4 decision-table
+"write-phase timeout" row: the write path is broken independent of bus
+width, and the width-caused model (with both prior width-dependent models)
+is excluded.
+
+The other eleven boots stopped pre-B1: eight H8 CMD3-completion timeouts
+(`fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, `stage=6`, at `:838`) and
+three CMD17 TC-only/no-error timeouts — block 1 at `step=15`
+(`fail=1/17/1/…`) and, for the first time, the GPT array's first sector at
+LBA 2, `step=16` (`fail=1/17/2/…`). The `trc=-20` read-back-mismatch class
+remains unobserved, and the byte-183 readback paradox is unchanged
+(`es=000009cb` again at the 1-bit baseline).
+
+Status: F3 remains `[U]` — no bus-test pass, no per-width content pass and
+no 8-bit attempt. The write-failure question is answered (width-independent),
+but the cause (card-side write wedging versus the host PIO path) is not. The
+next rung, chosen by the owner, is a host data-timeout audit: both hang
+classes (CMD17 TC-only and the CMD19 wedge) record no data-timeout interrupt
+even though the core writes the DTO bit in `ERROR_INT_ENABLE`; the rung reads
+back the timeout/enable state, arms the minimum timeout for a healthy
+multi-block read longer than the counter, and repeats the 1-bit CMD19 wedge
+with an extended window. That rung is new code and needs its own build plus
+a fresh explicit BOOT-only flash approval.
 
 ## 6. Expected report
 

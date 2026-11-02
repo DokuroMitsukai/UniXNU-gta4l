@@ -1782,6 +1782,105 @@ the timeout is width-caused or an independent first-write property; a
 bus-test or content pass; that a cold boot reaches B1C; that `trc=-20` can
 occur; or that F3 is established.
 
+### 2.21 Stage-B1C-1 session: the write phase times out at 1-bit (2026-11-03)
+
+The stage-6 image (`gta4l-emmc-probe=6`, one 1-bit CMD19/CMD14 round trip
+after the stage-A pass and before the first CMD6, `docs/emmc-driver.md`
+§5.3.15) was built from clean `5f57dcb`: kernel `a20d6269…`, payload
+`fdaa507d…` (contract 7/7) and boot image `90cf074c…` (gate 18/18 against
+the `ce4d76e8…` v5 baseline). The write was BOOT-only from the remote flash
+host: pre-flash p69 was `c6a9f8e0…` (the B1C post-flash hash), post-flash
+p69 is `1ea626f5…`, the image prefix read back as `90cf074c…`, the
+unchanged tail is `a28b4ea2…`, and `RECOVERY` `14e11370…`, EFS `51fa824c…`
+and sec_efs `3a265d58…` were unchanged. The pre-flash battery was 100%.
+The flash record is `out/gta4l/ram-root-emmc-probe-b1c1-evidence/flash-record.json`.
+
+The owner booted the same image thirteen times without reflashing, reported
+in four groups. The first nine boots followed the owner-stated reset
+sequence cold, warm, warm, cold, warm, warm, cold, warm, warm; the final
+four were the requested cold sampling batch. The owner re-read BOOT read-only
+twice, after boot 9 and after boot 13:
+
+    $ adb shell sha256sum /dev/block/mmcblk0p69
+    1ea626f555ab7a326469d3a33b0120b9d622731e271b9fc2a1d1ec719289a9ea  /dev/block/mmcblk0p69
+
+Both match the flash record's post-flash hash, so every boot is bound to the
+flashed bytes.
+
+| Boot | Method | Reached the rung? | Result |
+| --- | --- | --- | --- |
+| 1 | cold | yes | The first 1-bit discriminator report: `rc=-11 stop=9 step=18 log=31`. The 1-bit round trip ran and timed out in the CMD19 write phase: `BW=1 att=1 req=1 sw=0 swrc=0 tt=1 tw=00000000 te=00000000 trc=-11 hc=00 es=000009cb b0=62084b66 b1=84d0543e same=1 div=0`. No CMD6 was issued (`BW=4 att=0`, `c6=00000000`). `FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/18` at `:1090` — the same terminal tuple as the 4-bit continuation (`normal=0x0011`, present `0x03f801f6`). |
+| 2 | warm | no | H8 CMD3-completion timeout, `stage=6 rc=-7 fail=1/3/65536/0000031a/0000/0000/03f800f0/9` at `:838`; `c31` 100,000 iterations exhausted. |
+| 3 | warm | no | Stage-A array read LBA 2, `rc=-11 step=16 fail=1/17/2/0000113a/0000/0002/03f800f0/16` at `:906`; TC-only/no-error. |
+| 4 | cold | no | Block-1 CMD17, `rc=-11 step=15 fail=1/17/1/0000113a/0000/0002/03f800f0/15` at `:1470`; TC-only/no-error. |
+| 5 | warm | no | The same H8 tuple as boot 2. |
+| 6 | warm | no | The same array-read LBA 2 tuple as boot 3. |
+| 7 | cold | no | The same H8 tuple. |
+| 8 | warm | no | The same H8 tuple. |
+| 9 | warm | no | The same H8 tuple; `c31` differs only in the counter value. |
+| 10 | cold | no | The same H8 tuple. |
+| 11 | cold | no | The same H8 tuple. |
+| 12 | cold | yes | The second 1-bit discriminator report: every protocol, content and pad field is identical to boot 1 — including `es=000009cb`, `b0=62084b66`, `b1=84d0543e`, the `PAD` line and the whole `FAIL` tuple at `:1090` — and only the stack `pages`/`free` counters and the second stack frame differ. |
+| 13 | cold | no | The same H8 tuple. |
+
+The same terminal class as §2.20, now observed at the identification width.
+The 1-bit round trip completed its command phase (`CC`) and latched
+`BufferWriteReady`, then the data phase never finished: no `TC`, no error
+bit, present state `0x03f801f6`, and the bounded poll exhausted at 1 s. The
+terminal tuple is byte-for-byte the one recorded for the 4-bit continuation
+in §2.20 (`fail=1/19/0/0000133a/0000/0011/03f801f6/18`), except that this
+time it happened before any CMD6: the report's `BW=4` and `BW=8` lines are
+untouched (`att=0`, `sw=0`) and `bc=0`, so no card-state write of any kind
+was issued on the failing boots. The stage-A pass had already completed at
+1-bit (`es=000009cb`, `b0`/`b1` equal to the values recorded by the earlier
+B1 reports), and the `PAD` samples are unchanged
+(`qdsd=00009fe4`, `dll=6000642c`, `dst=00000000`, `bif=none`).
+
+Per the §3.1.4 decision table this is the "write-phase timeout" row: the
+1-bit test failed the same way the 4-bit continuation did, so the write path
+is broken independent of bus width. The width-caused model is excluded, and
+with it both prior width-dependent models ("the wire never left 1-bit" and
+"the card switched but rejects the 4-byte write"). The remaining statement
+is narrower and stronger: the CMD19/CMD14 data-write direction does not
+complete on this host/card pair at either width, while every read direction
+in the same boots (stage-A CMD17 pass, CMD8 EXT_CSD reads, CMD3/CMD9/CMD13
+identification) completes. The two instances are field-for-field identical
+and both were cold boots (a full power-down before each), so the class is
+deterministic conditional on reaching the rung, not warm-reset state.
+
+The `trc=-20` read-back-mismatch class remains unobserved. The 4-bit
+byte-183 readback paradox is unchanged: the stage-A sum `es=000009cb`
+reappears identically at the 1-bit baseline, consistent with the clean
+readback the B1C tuple recorded at the attempted width.
+
+Pre-B1 stops dominated the batch: eleven of thirteen boots. Eight were H8
+CMD3-completion timeouts (`fail=1/3/65536/0000031a/0000/0000/03f800f0/9`)
+and three were CMD17 TC-only/no-error timeouts (`fail=1/17/1/.../step=15`
+for block 1 and `fail=1/17/2/.../step=16` for the GPT array's first sector,
+LBA 2). The LBA-2 position had not been recorded before; earlier CMD17
+stops were all block-1. The H8 share this session (eight of eleven pre-B1
+stops) is higher than on the B1C image (one of five), but the sample is
+small and no cause is assigned. Rung-reaching frequency was 2 of 13
+(~15%), lower than the 2 of 7 seen on B1C; again no cause is assigned.
+
+Verdict: F3 remains `[U]`. The discriminator answered its question — the
+write failure is width-independent — but a passing bus test, a per-width
+content pass and any 8-bit attempt still do not exist. The owner has chosen
+the data-timeout audit as the next rung (both hang classes record no
+data-timeout interrupt despite the core enabling the DTO status bit); its
+host batch is pending and any device step needs a fresh explicit BOOT-only
+approval.
+
+Supported by this section: the image identity and BOOT-only flash record; the
+thirteen boots, their reset methods and per-boot outcomes; the two p69
+re-reads and the binding of all thirteen boots; the two identical 1-bit
+CMD19 write-phase timeouts and their field values; the no-CMD6 statement;
+the unchanged pad and stage-A sums; the CMD17 and H8 pre-B1 samples,
+including the new LBA-2 position; and the width-independence conclusion. Not
+supported: the card-side versus host-side cause of the write-phase hang; the
+byte-183 paradox; a bus-test pass; a per-width content pass; the `trc=-20`
+class; or that F3 is established.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
