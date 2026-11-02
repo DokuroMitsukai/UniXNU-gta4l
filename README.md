@@ -128,8 +128,8 @@ partition layout, payload policy and packaging.
   (four CMD17 TC-only timeouts, one CMD3 timeout), and the same-session BOOT
   re-read matched the post-flash hash. The 4-bit read paradox is unchanged
   (`es=000009cb` at the attempted width). F3 remains unproven
-  (`docs/emmc-driver.md` §5.3.12–5.3.16,
-  `docs/emmc-cmd2-crc-audit.md` §2.18–2.21). The stage-6 1-bit CMD19/CMD14
+  (`docs/emmc-driver.md` §5.3.12–5.3.18,
+  `docs/emmc-cmd2-crc-audit.md` §2.18–2.22). The stage-6 1-bit CMD19/CMD14
   discriminator (`gta4l-emmc-probe=6`) was built from clean `5f57dcb`
   (kernel `a20d6269…`, payload `fdaa507d…`, boot image `90cf074c…`),
   flashed BOOT only (p69 `c6a9f8e0…` → `1ea626f5…`) and booted thirteen
@@ -142,14 +142,22 @@ partition layout, payload policy and packaging.
   width. The other eleven boots stopped pre-B1 (eight H8 CMD3 timeouts,
   three CMD17 TC-only/no-error timeouts, one at the GPT array's LBA 2). The
   `trc=-20` class remains unobserved; the byte-183 paradox is unchanged.
-  The next rung (owner-chosen) is a host data-timeout audit
-  (`gta4l-emmc-probe=7`): both hang classes record no data-timeout status
-  even though the core enables the DTO bit, so the stage reads back the
-  timeout/enable configuration, arms the minimum timeout for a healthy
-  8-block read longer than the counter, re-reads block 0 to prove recovery,
-  and repeats the 1-bit CMD19 wedge under an 8 s software bound. It is
-  implemented and host-tested (core 138/83, probe 75/46) but not built,
-  flashed or booted; it needs a fresh explicit BOOT-only flash approval.
+  The next rung (owner-chosen) was a host data-timeout audit
+  (`gta4l-emmc-probe=7`). The stage-7 image was built from clean `d158378`
+  (kernel `9d7ae51e…`, payload `b4171d96…`, boot image `3cc5f9f1…`),
+  flashed BOOT only (p69 `1ea626f5…` → `13f88342…`) and booted twelve times
+  without reflashing (one cold, eleven warm; the post-batch p69 re-read
+  matched). Five boots reached the DTO stage and reported `stop=12` with
+  identical fields; the stop is a probe-gate artifact, not a device result:
+  TOUTVAL `[7:3]` was already zero at rest, and the forced-write readback
+  differed only on the read-only `INT_STABLE` bit. E1 was silent — no error
+  bit of any kind latched while BufferReadReady streamed seven blocks
+  roughly 3× past the 20.5 ms minimum, then CMD12 got no R1b (`-7`) and
+  the recovery read ended in ERR_INHIBIT (`-17`), so the controller never
+  raises data-timeout in this configuration. The other seven boots stopped
+  pre-B1 (six block-1 CMD17 TC-only timeouts and one post-CMD7 CMD13
+  completion timeout). E2 did not run, the `trc=-20` class remains
+  unobserved, the byte-183 paradox is unchanged, and F3 remains unproven.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

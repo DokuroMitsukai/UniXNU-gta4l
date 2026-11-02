@@ -1881,6 +1881,102 @@ supported: the card-side versus host-side cause of the write-phase hang; the
 byte-183 paradox; a bus-test pass; a per-width content pass; the `trc=-20`
 class; or that F3 is established.
 
+### 2.22 Stage-B1C-2 session: the data-timeout counter is silent (2026-11-03)
+
+The stage-7 image (`gta4l-emmc-probe=7`, the data-timeout audit of
+`docs/emmc-driver.md` §5.3.17) was built from clean `d158378`: kernel
+`9d7ae51e…`, payload `b4171d96…` (contract 7/7) and boot image `3cc5f9f1…`
+(gate 18/18 against the `ce4d76e8…` v5 baseline). The write was BOOT-only
+from the remote flash host: pre-flash p69 was `1ea626f5…` (the B1C-1
+post-flash hash, backed up and verified), post-flash p69 is `13f88342…`,
+the image prefix read back as `3cc5f9f1…`, the unchanged tail is
+`a28b4ea2…`, and `RECOVERY` `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` were unchanged. The pre-flash battery was 100% and the pulled
+gates pass 18/18 and 7/7. The flash record is
+`out/gta4l/ram-root-emmc-probe-dto-evidence/flash-record.json`.
+
+The owner booted the same image twelve times without reflashing (boot 1
+cold, boots 2–12 warm) and re-read BOOT read-only after the batch:
+
+    $ adb shell sha256sum /dev/block/mmcblk0p69
+    13f883420f9514844b84446d87f099ed5c88c49827cf3e54ed5fa89dc5327465  /dev/block/mmcblk0p69
+
+The read matches the flash record's post-flash hash, so all twelve boots are
+bound to the flashed bytes.
+
+| Boot | Reached the rung? | Result |
+| --- | --- | --- |
+| 1 | yes | `DTO REPORT rc=0 stop=12`; the five rung-reaching reports are field-for-field identical except the stack `pages`/`free` counters. |
+| 2 | no | Block-1 CMD17 TC-only/no-error, `rc=-11 step=15 fail=1/17/1/0000113a/0000/0002/03f800f0/15`. |
+| 3 | yes | The same `stop=12` report as boot 1. |
+| 4 | no | Post-CMD7 CMD13 completion timeout, `stage=7 rc=-7 fail=1/13/65536/00000d1a/0000/0000/03f800f0/12`. |
+| 5 | no | The same block-1 CMD17 tuple as boot 2. |
+| 6 | no | The same block-1 CMD17 tuple as boot 2. |
+| 7 | no | The same block-1 CMD17 tuple as boot 2. |
+| 8 | yes | The same `stop=12` report as boot 1. |
+| 9 | yes | The same `stop=12` report as boot 1. |
+| 10 | yes | The same `stop=12` report as boot 1. |
+| 11 | no | The same block-1 CMD17 tuple as boot 2. |
+| 12 | no | The same block-1 CMD17 tuple as boot 2. |
+
+The five rung-reaching reports carry the same values:
+
+    mci=10000072 rca=1 cap=61071360 rev=8 hci=00 step=22 log=40
+    R1 clk=0007 ne=0033 ee=07ff ns=0000 se=0000 es=0000 arm=0005
+    E1 n=8 rc=-11 fail=1/18/2/0000123a/0000/0021/03f80af6/22
+    E1S mb=7 sr=-7/1/1 dr=1/0/0/50000
+    Q rc=-17
+    E2 att=0 win=0 rc=0 tt=0 tw=00000000 te=00000000 trc=0 hc=00
+    PAD qdsd=00009fe4 dll=6000642c dst=00000000
+    FAIL fail=1/17/0/0000113a/0000/0000/03f80af6/22 @Gta41EmmcProbe.c:1199
+
+`R1 clk=0007` places `CLOCK_CONTROL` at TOUTVAL `[7:3] = 0`, the 2^13-cycle
+minimum (about 20.5 ms at 400 kHz), before any experiment: the forced E1
+write armed nothing new. `arm=0005` differs from the expected `0007` only in
+the read-only `INT_STABLE` bit (0x0002), which drops after a full
+`CLOCK_CONTROL` write. The probe compares the whole register
+(`Gta4lEmmcProbe.c:1238`/`:1296`), so `stop=12` is an instrumentation
+artifact, not a device datapoint. E1 and Q execute before the gate
+(`:1246`/`:1281`), so their evidence is valid; E2 alone was skipped.
+
+E1's `rc=-11` is the core's software data-timeout return after the 1 s
+window, not a controller DTO: `fail_error=0x0000` means no error bit of any
+kind latched. `fail_normal=0x0021` is CC plus BufferReadReady and `mb=7`
+records seven blocks streamed — about 3.5 KiB at 400 kHz/1-bit, roughly
+3× the 20.5 ms minimum — before the 5 s drain (`dr=1/0/0/50000`) expired
+unresolved. The card then stalled: CMD12 got no R1b (`E1S sr=-7/1/1`, capture
+valid) and the block-0 recovery read ended in ERR_INHIBIT (`Q rc=-17`) with
+the terminal FAIL at `normal=0x0000`. The controller therefore never raises
+data-timeout in this configuration, even on an active transfer that was
+still progressing; that is the row-level fact covering every hang row,
+including the pre-B1 CMD17 TC-only class. E2 was moot in the silent branch,
+so this session adds no bus-test datapoint.
+
+The other seven boots are pre-B1 stops in known classes: six block-1 CMD17
+TC-only/no-error timeouts and one post-CMD7 CMD13 completion timeout (the
+same `-7` completion class as the earlier H8 CMD3 stops, now at CMD13 after
+CMD7 completed). No new failure surface appeared, and all twelve boots are
+bound to the flashed bytes by the post-batch p69 read.
+
+Verdict: the decision table's E1-silent row is taken. F3 remains `[U]`; the
+`trc=-20` read-back-mismatch class remains unobserved and the byte-183
+readback paradox is unchanged. The stop=12 gate is a probe defect, not a
+device result. If a later batch touches the probe, it should compare only
+the TOUTVAL bits (`dto.arm & TOUTVAL_MASK == expected & TOUTVAL_MASK`); the
+`INT_STABLE` drop after a full `CLOCK_CONTROL` write is a recorded hardware
+quirk. The next rung is B2 (high-speed timing, plan §3.2), which needs a
+fresh owner approval; no code change was made in this batch.
+
+Supported by this section: the image identity and BOOT-only flash record; the
+twelve boots, their reset methods and per-boot outcomes; the post-batch p69
+re-read and the binding of all boots; the five identical `stop=12` reports and
+their field values; the stop=12 gate artifact reading; the E1-silent row; the
+six CMD17 and one CMD13 pre-B1 samples; the no-CMD6/no-card-state-write
+statement; and the unchanged pad samples. Not supported: a controller
+data-timeout latch; a bus-test result (E2 did not run); a per-width content
+pass; the `trc=-20` class; the byte-183 paradox; a cause for the pre-B1 CMD17
+or CMD13 stops; or that F3 is established.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout

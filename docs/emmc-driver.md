@@ -1848,10 +1848,11 @@ even though the core writes the DTO bit in `ERROR_INT_ENABLE`; the rung reads
 back the timeout/enable state, arms the minimum timeout for a healthy
 multi-block read longer than the counter, and repeats the 1-bit CMD19 wedge
 with an extended window. The host batch is implemented and host-tested in
-§5.3.17; the device run needs its own build plus a fresh explicit BOOT-only
-flash approval.
+§5.3.17 and the twelve-boot device run is recorded in §5.3.18: the
+controller never raised data-timeout, so F3 remains `[U]` and the next rung
+is B2 (plan §3.2), pending a fresh owner approval.
 
-### 5.3.17 Stage-B1C-1 data-timeout audit rung (gta4l-emmc-probe=7, 2026-11-03)
+### 5.3.17 Stage-B1C-2 data-timeout audit rung (gta4l-emmc-probe=7, 2026-11-03)
 
 The `gta4l-emmc-probe=7` stage runs after the stage-A pass and before any
 CMD6. It issues no card-state write; E2 repeats the already-approved
@@ -1902,8 +1903,79 @@ window is used by counting `ERROR_INT_STATUS` reads (>= 700,000); the
 ignored-window core mutation drops that below the bound and is rejected. The
 DTO report is 518 bytes at device-shaped values, far under the 2048-byte
 budget; no width fixture is involved. The diagnostic wrapper accepts
-`emmc-probe-7`. No build, flash or boot was performed; F3 remains `[U]` and
-the ladder does not auto-advance.
+`emmc-probe-7`. The build, BOOT-only flash and twelve-boot device run are
+recorded in §5.3.18; F3 remains `[U]` and the ladder does not auto-advance.
+
+### 5.3.18 Stage-B1C-2 hardware run: the data-timeout counter is silent (2026-11-03)
+
+The stage-7 image was built from clean `d158378`: kernel `9d7ae51e…`,
+payload `b4171d96…` (contract 7/7) and boot image `3cc5f9f1…` (gate 18/18
+against the `ce4d76e8…` v5 baseline). The write was BOOT-only: pre-flash p69
+was `1ea626f5…` (the B1C-1 post-flash hash, backed up and verified),
+post-flash p69 is `13f88342…`, the image prefix read back as `3cc5f9f1…`,
+the unchanged tail is `a28b4ea2…`, and `RECOVERY` `14e11370…`, EFS
+`51fa824c…` and sec_efs `3a265d58…` were unchanged. The pre-flash battery
+was 100% and the pulled gates pass 18/18 and 7/7. The flash record is
+`out/gta4l/ram-root-emmc-probe-dto-evidence/flash-record.json`; the build
+provenance is `build-provenance.json` in the same directory.
+
+The owner booted the same image twelve times without reflashing (boot 1
+cold, boots 2–12 warm) and re-read BOOT read-only after the batch:
+
+    $ adb shell sha256sum /dev/block/mmcblk0p69
+    13f883420f9514844b84446d87f099ed5c88c49827cf3e54ed5fa89dc5327465  /dev/block/mmcblk0p69
+
+The read matches the post-flash hash, so all twelve boots are bound to the
+flashed bytes. Five boots (1, 3, 8, 9 and 10) reached the DTO stage and
+reported `rc=0 stop=12` with field-for-field identical values; only the
+stack `pages`/`free` counters differ. Six boots (2, 5, 6, 7, 11 and 12)
+stopped pre-B1 at the block-1 CMD17 TC-only/no-error timeout
+(`rc=-11 fail=1/17/1/0000113a/0000/0002/03f800f0/15`), and boot 4 stopped at
+the post-CMD7 CMD13 completion timeout
+(`stage=7 rc=-7 fail=1/13/65536/00000d1a/0000/0000/03f800f0/12`). Every stop
+is in a known class; no new failure surface appeared.
+
+The five reports carry:
+
+    mci=10000072 rca=1 cap=61071360 rev=8 hci=00 step=22 log=40
+    R1 clk=0007 ne=0033 ee=07ff ns=0000 se=0000 es=0000 arm=0005
+    E1 n=8 rc=-11 fail=1/18/2/0000123a/0000/0021/03f80af6/22
+    E1S mb=7 sr=-7/1/1 dr=1/0/0/50000
+    Q rc=-17
+    E2 att=0 win=0 rc=0 tt=0 tw=00000000 te=00000000 trc=0 hc=00
+    PAD qdsd=00009fe4 dll=6000642c dst=00000000
+    FAIL fail=1/17/0/0000113a/0000/0000/03f80af6/22 @Gta41EmmcProbe.c:1199
+
+`R1 clk=0007` shows `CLOCK_CONTROL` already at TOUTVAL `[7:3] = 0` at rest:
+the 2^13-cycle minimum (about 20.5 ms) was already armed and the E1 forced
+write was a no-op. `arm=0005` differs from the expected `0007` only in the
+read-only `INT_STABLE` bit (0x0002), which drops after a full
+`CLOCK_CONTROL` write; the stage compares the whole register
+(`Gta4lEmmcProbe.c:1238` and `:1296`), so `stop=12` is a probe-gate artifact,
+not a device datapoint. E1 and Q run before that gate (`:1246`/`:1281`), so
+the E1 evidence stands; only E2 was skipped.
+
+E1 returned `-11` from the 1 s software window, not from a latched
+controller timeout: `fail_error=0x0000` means no error bit of any kind
+fired, DTO included. `fail_normal=0x0021` is CC plus BufferReadReady and
+`mb=7` records seven blocks streamed before the stop — about 3.5 KiB at
+400 kHz/1-bit, roughly 3× the minimum curtain — while the 5 s drain
+(`dr=1/0/0/50000`) expired unresolved. The card then stopped answering:
+CMD12 got no R1b (`E1S sr=-7/1/1`), and the block-0 recovery read ended in
+ERR_INHIBIT (`Q rc=-17`) with the terminal FAIL carrying
+`normal=0x0000`. The controller therefore never raises data-timeout in this
+configuration, even on an active transfer that was still progressing — the
+row-level fact that also covers the pre-B1 CMD17 TC-only class. E2 is moot
+in the silent branch and was not run, so this batch adds no bus-test
+datapoint. F3 remains `[U]`; the `trc=-20` class remains unobserved and the
+byte-183 readback paradox is unchanged.
+
+Future guard: if a later batch touches the probe, the arming gate should
+compare only the TOUTVAL bits (`dto.arm & TOUTVAL_MASK == expected &
+TOUTVAL_MASK`) so a live RO status bit cannot block the report. The
+`INT_STABLE` drop after a full `CLOCK_CONTROL` write is a recorded hardware
+quirk. No code change is made in this records batch. The next rung is B2
+(high-speed timing, plan §3.2), which needs a fresh owner approval.
 
 ## 6. Expected report
 
