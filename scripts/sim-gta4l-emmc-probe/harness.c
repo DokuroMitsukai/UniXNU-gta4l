@@ -160,6 +160,13 @@ static unsigned int cmd6_count;
 static uint32_t cmd6_argument;
 static int cmd6_ignore;
 static int cmd6_ignore_width8;
+static uint32_t cmd6_status = 0x00000900u;
+static int cmd6_late_commit;
+static uint32_t cmd6_late_value;
+static unsigned int cmd6_late_reads;
+static unsigned int cmd8_after_cmd6;
+static unsigned int cmd8_fail_on_after_cmd6;
+static uint16_t cmd8_fail_error;
 static int bus_test_bad;
 static uint8_t bus_test_bad_width;
 static uint8_t bus_test_written[GTA4L_EMMC_BUS_TEST_8_BYTES];
@@ -167,6 +174,7 @@ static unsigned int bus_test_written_count;
 static uint16_t bus_test_width;
 static uint32_t width_corrupt_lba = 0xFFFFFFFFu;
 static uint8_t width_corrupt_code;
+static uint8_t sim_host_width_code(void);
 /* B1 readback-cause modeling. ext_csd_zero_width makes the CMD8 read at that
  * card width return an all-zero buffer without an error, which models a
  * data-path readback that never filled the buffer. host_width_ignore drops the
@@ -365,8 +373,10 @@ sim_fill_block(uint32_t lba)
 		}
 	}
 	if ((width_corrupt_code != 0u) &&
-	    (ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] ==
-	    width_corrupt_code) && (lba == width_corrupt_lba)) {
+	    ((ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] ==
+	    width_corrupt_code) ||
+	    (sim_host_width_code() == width_corrupt_code)) &&
+	    (lba == width_corrupt_lba)) {
 		bytes[0] ^= 0xFFu;
 	}
 	sim_fill_buffer_words(bytes);
@@ -514,6 +524,24 @@ sim_load(const unsigned char *window, uint32_t offset, uint32_t width)
 	return value;
 }
 
+/* The data-path width the controller currently drives, derived from
+ * HOST_CONTROL. A B1C continuation applies 4-bit at the host while the card's
+ * EXT_CSD byte 183 still reads 0, so content faults must key on this value too
+ * (1 = 4-bit, 2 = 8-bit, 0 = 1-bit). */
+static uint8_t
+sim_host_width_code(void)
+{
+	uint8_t control = (uint8_t)sim_load(sdhci,
+	    GTA4L_EMMC_REG_HOST_CONTROL, 1u);
+
+	if ((control & GTA4L_EMMC_HOST_CONTROL_8BIT) != 0u) {
+		return GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;
+	}
+	if ((control & GTA4L_EMMC_HOST_CONTROL_4BIT) != 0u) {
+		return GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+	}
+	return GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
+}
 static void
 sim_store(unsigned char *window, uint32_t offset, uint32_t width,
     uint32_t value)
@@ -807,12 +835,22 @@ sim_command(uint16_t command)
 		cmd6_count++;
 		cmd6_argument = last_argument;
 		value = (last_argument >> 8) & 0xFFu;
-		if ((cmd6_ignore == 0) &&
-		    ((cmd6_ignore_width8 == 0) || (value != 2u))) {
-			ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] =
-			    (uint8_t)value;
+		if ((cmd6_status & GTA4L_EMMC_R1_ERROR_MASK) == 0u) {
+			cmd8_after_cmd6 = 0;
+			if (cmd6_late_commit != 0) {
+				/* The write is invisible to the verification
+				 * readback and appears on a later CMD8, which
+				 * models a late BUS_WIDTH commit. */
+				cmd6_late_value = value;
+				cmd6_late_reads = 0;
+			} else if ((cmd6_ignore == 0) &&
+			    ((cmd6_ignore_width8 == 0) ||
+			    (value != 2u))) {
+				ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] =
+				    (uint8_t)value;
+			}
 		}
-		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, cmd6_status);
 		normal_int |= GTA4L_EMMC_INT_CC;
 		return;
 	}
@@ -862,7 +900,9 @@ sim_command(uint16_t command)
 			    ((bus_test_bad_width == 0u) ||
 			    (bus_test_bad_width ==
 			    (uint8_t)ext_csd[
-			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF]))) {
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF]) ||
+			    (bus_test_bad_width ==
+			    (uint8_t)(bus_test_width / 4u)))) {
 				payload[index2] = bus_test_written[index2];
 			} else {
 				payload[index2] =
@@ -953,6 +993,24 @@ sim_command(uint16_t command)
 		}
 		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
 		if (index == GTA4L_EMMC_CMD8) {
+			if (cmd6_count != 0u) {
+				cmd8_after_cmd6++;
+			}
+			if ((cmd8_fail_on_after_cmd6 != 0u) &&
+			    (cmd8_after_cmd6 == cmd8_fail_on_after_cmd6)) {
+				error_int |= cmd8_fail_error;
+				return;
+			}
+			if (cmd6_late_commit != 0) {
+				if (cmd6_late_reads == 0u) {
+					cmd6_late_reads = 1u;
+				} else {
+					ext_csd[
+					    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] =
+					    (uint8_t)cmd6_late_value;
+					cmd6_late_commit = 0;
+				}
+			}
 			if ((host_width_ignore != 0) &&
 			    (ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] != 0u)) {
 				error_int |= GTA4L_EMMC_INT_ERR_DATA_CRC;
@@ -1553,6 +1611,34 @@ static const uint8_t order_probe_b1[] = {
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17
 };
+/* Stage B1C adds exactly the continuation after the failed 4-bit readback:
+ * one CMD19/CMD14 round trip, the 25-value content pass, then a second CMD8
+ * re-read. A non-entering or partial run is a prefix of this order. */
+static const uint8_t order_probe_b1c[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD8
+};
 static const uint8_t order_cmd7[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7
@@ -2071,6 +2157,72 @@ main(int argc, char **argv)
 		    "probe-b1-content8-div") == 0) {
 			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
 			width_corrupt_code = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;
+		}
+	} else if ((strcmp(scenario, "probe-b1c-success") == 0) ||
+	    (strcmp(scenario, "probe-b1c-pass") == 0) ||
+	    (strcmp(scenario, "probe-b1c-late-commit") == 0) ||
+	    (strcmp(scenario, "probe-b1c-bustest-fail") == 0) ||
+	    (strcmp(scenario, "probe-b1c-content-div") == 0) ||
+	    (strcmp(scenario, "probe-b1c-content-error") == 0) ||
+	    (strcmp(scenario, "probe-b1c-reread-error") == 0) ||
+	    (strcmp(scenario, "probe-b1c-c6-error") == 0) ||
+	    (strcmp(scenario, "probe-b1c-zero-readback") == 0) ||
+	    (strcmp(scenario, "probe-b1c-host-width-stuck") == 0)) {
+		/* Stage B1C: the same 1-bit baseline and 4-bit switch.
+		 * probe-b1c-success runs the normal B1 escalation (no
+		 * continuation). The other scenarios model the observed
+		 * readback tuple and one continuation outcome each. */
+		stage = 5;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		if (strcmp(scenario, "probe-b1c-success") == 0) {
+			/* No continuation: the normal two-rung escalation. */
+			set_expected_order(order_probe_b1,
+			    (unsigned int)(sizeof(order_probe_b1) /
+			    sizeof(order_probe_b1[0])));
+		} else {
+			set_expected_order(order_probe_b1c,
+			    (unsigned int)(sizeof(order_probe_b1c) /
+			    sizeof(order_probe_b1c[0])));
+		}
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-b1c-pass") == 0) {
+			cmd6_ignore = 1;
+		} else if (strcmp(scenario,
+		    "probe-b1c-late-commit") == 0) {
+			cmd6_late_commit = 1;
+		} else if (strcmp(scenario,
+		    "probe-b1c-bustest-fail") == 0) {
+			cmd6_ignore = 1;
+			bus_test_bad = 1;
+			bus_test_bad_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-b1c-content-div") == 0) {
+			cmd6_ignore = 1;
+			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
+			width_corrupt_code = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-b1c-content-error") == 0) {
+			cmd6_ignore = 1;
+			cmd17_fail_on = 26u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-b1c-reread-error") == 0) {
+			cmd6_ignore = 1;
+			cmd8_fail_on_after_cmd6 = 2u;
+			cmd8_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario, "probe-b1c-c6-error") == 0) {
+			cmd6_status = 0x0000A000u;
+		} else if (strcmp(scenario,
+		    "probe-b1c-zero-readback") == 0) {
+			ext_csd_zero_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-b1c-host-width-stuck") == 0) {
+			host_width_ignore = 1;
 		}
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		/* Synthetic field-wise width bound, not a controller state. */
@@ -3136,6 +3288,208 @@ main(int argc, char **argv)
 		check(cmd_count == 93u,
 		    "the content-mismatch run did not finish the 8-bit read "
 		    "pass");
+	} else if (strcmp(scenario, "probe-b1c-success") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the B1C success run did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=0 stop=0") != NULL,
+		    "the B1C success report does not carry the result");
+		snprintf(expected, sizeof(expected),
+		    "BW=4 att=1 req=4 sw=1 swrc=0 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=02 hb=00 ha=02 "
+		    "c6=00000900 es=%08x", sim_ext_csd_sum() - 1u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the B1C success report lost the 4-bit verification "
+		    "fields");
+		check(strstr(panic_message,
+		    "same=1 div=0 bc=0 e183a=00000000 esa=00000000") != NULL,
+		    "the B1C success report did not disable the continuation "
+		    "fields");
+		check(strstr(panic_message,
+		    "BW=8 att=1 req=8 sw=2 swrc=0 tt=1") != NULL,
+		    "the B1C success report lost the 8-bit escalation");
+		check(cmd6_count == 2u,
+		    "the B1C success run did not issue one CMD6 per width");
+		check(cmd_count == 93u,
+		    "the B1C success run did not complete both content "
+		    "passes");
+	} else if (strcmp(scenario, "probe-b1c-pass") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the B1C continuation did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-19 stop=1") != NULL,
+		    "the B1C pass report does not keep the verification stop");
+		snprintf(expected, sizeof(expected),
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=00 hb=00 ha=02 "
+		    "c6=00000900 es=%08x", sim_ext_csd_sum());
+		check(strstr(panic_message, expected) != NULL,
+		    "the B1C pass report lost the failed-verification tuple or "
+		    "the bus test");
+		snprintf(expected, sizeof(expected),
+		    "same=1 div=0 bc=1 e183a=00000000 esa=%08x",
+		    sim_ext_csd_sum());
+		check(strstr(panic_message, expected) != NULL,
+		    "the B1C pass report lost the continuation marker or the "
+		    "re-read fields");
+		sim_expected_b1_blocks(expected, sizeof(expected), 4u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the B1C pass content pass lost the stage-A sums");
+		check(strstr(panic_message,
+		    "BW=8 att=0 req=0 sw=0 swrc=0 tt=0") != NULL,
+		    "the B1C continuation attempted 8-bit");
+		check(cmd_count == 64u,
+		    "the B1C pass run did not run exactly one continuation");
+	} else if (strcmp(scenario, "probe-b1c-late-commit") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the late-commit continuation did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-19 stop=1") != NULL,
+		    "the late-commit report does not keep the verification "
+		    "stop");
+		snprintf(expected, sizeof(expected),
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=00 hb=00 ha=02 "
+		    "c6=00000900 es=%08x", sim_ext_csd_sum() - 1u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the late-commit report lost the original verification "
+		    "tuple");
+		snprintf(expected, sizeof(expected),
+		    "same=1 div=0 bc=1 e183a=00000001 esa=%08x",
+		    sim_ext_csd_sum());
+		check(strstr(panic_message, expected) != NULL,
+		    "the late-commit report did not record the later byte-183 "
+		    "commit and its sum");
+		check(cmd_count == 64u,
+		    "the late-commit run did not run exactly one continuation");
+	} else if (strcmp(scenario, "probe-b1c-bustest-fail") == 0) {
+		check(panicked == 1, "the continuation bus-test mismatch did "
+		    "not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-20 stop=1") != NULL,
+		    "the continuation bus-test report does not name the "
+		    "mismatch");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=1 "
+		    "tw=0000005a te=000000a5 trc=-20 hc=00 hb=00 ha=02 "
+		    "c6=00000900") != NULL,
+		    "the continuation bus-test report lost the failing "
+		    "pattern word");
+		check(strstr(panic_message,
+		    "same=0 div=0 bc=1 e183a=00000000 esa=00000000") != NULL,
+		    "the continuation bus-test report ran the content pass or "
+		    "the re-read");
+		check(cmd_count == 38u,
+		    "the continuation bus-test failure did not stop at CMD14");
+	} else if (strcmp(scenario, "probe-b1c-content-div") == 0) {
+		check(panicked == 1, "the continuation content mismatch did "
+		    "not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-21 stop=1") != NULL,
+		    "the continuation content-mismatch report does not name "
+		    "the probe error");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=00 hb=00 ha=02 "
+		    "c6=00000900") != NULL,
+		    "the continuation content-mismatch report lost the bus "
+		    "test pass");
+		check(strstr(panic_message,
+		    "same=0 div=34 bc=1 e183a=00000000 esa=0000018e")
+		    != NULL,
+		    "the continuation content-mismatch report does not name "
+		    "the first differing LBA or the re-read result");
+		check(cmd_count == 64u,
+		    "the continuation content mismatch did not run the "
+		    "post-pass re-read");
+	} else if (strcmp(scenario, "probe-b1c-content-error") == 0) {
+		check(panicked == 1, "the continuation content read error did "
+		    "not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-12 stop=1") != NULL,
+		    "the continuation content-read error does not name the "
+		    "read result");
+		check(strstr(panic_message,
+		    "step=21 log=") != NULL,
+		    "the continuation content-read error falsified the last "
+		    "completed step");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=1 "
+		    "tw=000000a5 te=000000a5 trc=0 hc=00 hb=00 ha=02 "
+		    "c6=00000900") != NULL,
+		    "the continuation content-read error lost the bus-test "
+		    "pass");
+		check(strstr(panic_message,
+		    "b0=00000000 b1=00000000 same=0 div=0 bc=1 "
+		    "e183a=00000000 esa=00000000") != NULL,
+		    "the continuation content-read error ran the re-read or "
+		    "invented content");
+		check(cmd_count == 39u,
+		    "the continuation content-read error did not stop at the "
+		    "first continuation read");
+	} else if (strcmp(scenario, "probe-b1c-reread-error") == 0) {
+		char expected[512];
+
+		check(panicked == 1, "the continuation re-read error did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-12 stop=1") != NULL,
+		    "the continuation re-read error does not name the read "
+		    "result");
+		check(strstr(panic_message,
+		    "step=18 log=") != NULL,
+		    "the continuation re-read error falsified the last "
+		    "completed step");
+		check(strstr(panic_message,
+		    "same=1 div=0 bc=1 e183a=00000000 esa=00000000") != NULL,
+		    "the continuation re-read error lost the content pass or "
+		    "invented a byte-183 value");
+		sim_expected_b1_blocks(expected, sizeof(expected), 4u);
+		check(strstr(panic_message, expected) != NULL,
+		    "the continuation re-read error lost the content sums");
+		check(cmd_count == 64u,
+		    "the continuation re-read error did not issue the "
+		    "post-pass read");
+	} else if (strcmp(scenario, "probe-b1c-c6-error") == 0) {
+		check(panicked == 1, "the CMD6-error row did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B1 REPORT: rc=-15 stop=1") != NULL,
+		    "the CMD6-error row does not name the card status");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-15 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=00 hb=00 ha=00 c6=0000a000 "
+		    "es=00000000 b0=00000000 b1=00000000 same=0 div=0 "
+		    "bc=0 e183a=00000000 esa=00000000") != NULL,
+		    "the CMD6-error row is not the non-entering stage-B1 "
+		    "report plus zero B1C fields");
+		check(cmd_count == 34u,
+		    "the CMD6-error row did not stop at the failed switch");
+	} else if (strcmp(scenario, "probe-b1c-zero-readback") == 0) {
+		check(panicked == 1, "the B1C empty readback did not report");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=00 hb=00 ha=02 c6=00000900 "
+		    "es=00000000 b0=00000000 b1=00000000 same=0 div=0 "
+		    "bc=0 e183a=00000000 esa=00000000") != NULL,
+		    "the empty-readback row is not the non-entering stage-B1 "
+		    "report plus zero B1C fields");
+		check(cmd_count == 36u,
+		    "the empty-readback row did not stop at the readback");
+	} else if (strcmp(scenario, "probe-b1c-host-width-stuck") == 0) {
+		check(panicked == 1, "the B1C lost host width did not report");
+		check(strstr(panic_message,
+		    "BW=4 att=1 req=4 sw=0 swrc=-12 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=00 hb=00 ha=00 c6=00000900 "
+		    "es=00000000 b0=00000000 b1=00000000 same=0 div=0 "
+		    "bc=0 e183a=00000000 esa=00000000") != NULL,
+		    "the lost-host-width row is not the non-entering stage-B1 "
+		    "report plus zero B1C fields");
+		check(cmd_count == 36u,
+		    "the lost-host-width row did not stop at the read");
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		check(panicked == 1, "the synthetic width failure did not panic");
 		check(strstr(panic_message, "stage=3") != NULL,
@@ -3401,7 +3755,8 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC B1 BW=4 att=1 req=4 sw=15 swrc=-20 tt=1 "
 		    "tw=ffffffff te=ffffffff trc=-20 hc=ff hb=ff ha=ff "
 		    "c6=ffffffff es=ffffffff b0=ffffffff b1=ffffffff "
-		    "same=0 div=4294967295") != NULL,
+		    "same=0 div=4294967295 bc=1 e183a=ffffffff "
+		    "esa=ffffffff") != NULL,
 		    "the synthetic width B1 report lost the widest 4-bit "
 		    "switch/test fields");
 		check(strstr(panic_message,
@@ -3826,6 +4181,15 @@ main(int argc, char **argv)
 	    (strcmp(scenario, "branch-ahb") != 0)) {
 		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_VERSION] == 1u,
 		    "the report did not sample HOST_VERSION");
+	}
+
+	if (strncmp(scenario, "probe-b1c-", 10u) == 0) {
+		check(bad_command_format == 0,
+		    "a B1C command used the wrong flags");
+		check(bad_command_order == 0,
+		    "the B1C run sent commands in the wrong order");
+		check(bad_command_argument == 0,
+		    "the B1C content pass read the wrong LBA list");
 	}
 
 	if (failures != 0) {

@@ -51,6 +51,19 @@ rejection, not an unrelated crash. The fit assertions are host vsnprintf
 checks; they do not establish that the kernel panic renderer or the display
 shows the whole report.
 
+The Stage-B1C scenarios run the fifth probe stage. One success case keeps the
+normal stage-B1 escalation with the continuation fields disabled. The
+continuation cases model the observed 4-bit tuple and one outcome each: a
+passing bus test and content pass with byte 183 still 0, a late byte-183
+commit seen only by the post-pass re-read, a continuation bus-test mismatch,
+a continuation content mismatch, a continuation content-read error, a
+continuation re-read error, and the three non-entering rows (CMD6 R1 error
+bits, empty readback and lost host width), which must keep the stage-B1 stop
+report with `bc=0` and no continuation commands. Five
+mutations reject a continuation entered on a non-entering tuple, a
+continuation that does not stop, a wrong content baseline, a skipped
+host-width restore and a wrong continue marker.
+
 Nothing here touches a device, maps real MMIO or executes firmware.
 """
 import argparse
@@ -120,6 +133,16 @@ SCENARIOS = [
     'probe-b1-switch8-stuck',
     'probe-b1-bustest8-fail',
     'probe-b1-content8-div',
+    'probe-b1c-success',
+    'probe-b1c-pass',
+    'probe-b1c-late-commit',
+    'probe-b1c-bustest-fail',
+    'probe-b1c-content-div',
+    'probe-b1c-content-error',
+    'probe-b1c-reread-error',
+    'probe-b1c-c6-error',
+    'probe-b1c-zero-readback',
+    'probe-b1c-host-width-stuck',
     'report-width-failure',
     'report-width-ident',
     'report-width-probe',
@@ -620,6 +643,34 @@ MUTATIONS = [
      'probe-md-success',
      'the MD probe used the wrong CMD18/CMD12 form',
      'core'),
+    ('b1c-enter-non-entering',
+     '\tif (bus->result.readback_sum != host->ext_csd_sum) {\n'
+     '\t\treturn 0;\n\t}\n',
+     '\tif (0) {\n\t\treturn 0;\n\t}\n\t(void)host;\n',
+     'probe-b1c-zero-readback',
+     'the empty-readback row is not the non-entering stage-B1 report plus zero B1C fields'),
+    ('b1c-continue-must-stop',
+     '\t\t\tgta4l_emmc_probe_report_b1(&host, &probe, &range,\n'
+     '\t\t\t    &base, &w4, &w8, result, 1);\n',
+     '\t\t\t(void)result;\n',
+     'probe-b1c-pass',
+     'the B1C pass report does not keep the verification stop'),
+    ('b1c-wrong-baseline',
+     '\t\tbase.block0_sum = gta4l_emmc_probe_sum(block0,\n\t\t    GTA4L_EMMC_BLOCK_BYTES);\n',
+     '\t\tbase.block0_sum = 0u;\n',
+     'probe-b1c-pass',
+     'the B1C pass report lost the continuation marker or the re-read fields'),
+    ('b1c-skip-restore',
+     '\tgta4l_emmc_probe_write8(probe, GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t    GTA4L_EMMC_REG_HOST_CONTROL, (uint8_t)control);\n',
+     '\t(void)control;\n\t(void)probe;\n',
+     'probe-b1c-pass',
+     'the B1C pass report lost the failed-verification tuple or the bus test'),
+    ('b1c-wrong-marker',
+     '\t\t\t\tw4.continued = 1u;\n',
+     '\t\t\t\tw4.continued = 0u;\n',
+     'probe-b1c-pass',
+     'the B1C pass report lost the continuation marker or the re-read fields'),
 ]
 
 

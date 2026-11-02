@@ -110,8 +110,13 @@ partition layout, payload policy and packaging.
   4-bit tuple byte-for-byte, and the same-session BOOT re-read matched the
   post-flash hash. The 4-bit stop is therefore 4/4 across warm and cold
   boots, a retained warm-reset card state is excluded as its cause, and all
-  eight boots are bound to the flashed bytes. F3 remains unproven
-  (`docs/emmc-driver.md` §5.3.12–5.3.13,
+  eight boots are bound to the flashed bytes. Stage B1C
+  (`gta4l-emmc-probe=5`) is implemented and host-tested but not built or
+  booted: on exactly the observed 4-bit tuple it continues read-only at
+  4-bit (one CMD19/CMD14 bus test, the stage-A content pass, then an
+  EXT_CSD byte-183 re-read), restores the host width and emits one report
+  with `bc=`/`e183a=`/`esa=`; the 8-bit rung is not attempted. F3 remains
+  unproven (`docs/emmc-driver.md` §5.3.12–5.3.13 and §5.3.13.1,
   `docs/emmc-cmd2-crc-audit.md` §2.18–2.19).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),

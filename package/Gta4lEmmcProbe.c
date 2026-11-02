@@ -114,8 +114,11 @@ struct gta4l_emmc_probe_range {
  * differing LBA. */
 struct gta4l_emmc_probe_bus {
 	struct gta4l_emmc_bus_result result;
+	struct gta4l_emmc_bus_result test;
 	uint32_t attempted;
 	uint32_t tested;
+	uint32_t b1c_enabled;
+	uint32_t continued;
 	uint32_t same;
 	uint32_t div;
 	uint32_t block0_sum;
@@ -123,6 +126,10 @@ struct gta4l_emmc_probe_bus {
 	uint32_t blocks[GTA4L_EMMC_PROBE_ARRAY_BLOCKS];
 	uint32_t data_sum;
 	uint32_t last_sum;
+	/* Post-continuation EXT_CSD read at 4-bit: byte 183 and the byte sum.
+	 * Both stay zero when the continuation did not reach the re-read. */
+	uint32_t reread_width;
+	uint32_t reread_sum;
 	/* Pad/DLL samples taken immediately before the rung, so the report
 	 * can compare them with the post-run sample on its PAD line. */
 	uint32_t pad_qdsd;
@@ -380,7 +387,9 @@ gta4l_emmc_probe_parse(const char *name, int *value)
 
 /* 1 = full probe, 2 = controller/host init only, 3 = host init plus card
  * identification without sector reads, 4 = stage-B1 bus-width switch and
- * CMD19/CMD14 bus test with a per-width content pass. */
+ * CMD19/CMD14 bus test with a per-width content pass, 5 = stage-B1C, which
+ * adds the continue-past-readback continuation on the exact observed 4-bit
+ * tuple (4-bit only; 8-bit remains untouched). */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -389,7 +398,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 4)) {
+	if ((value < 1) || (value > 5)) {
 		return 0;
 	}
 	return value;
@@ -642,6 +651,115 @@ gta4l_emmc_probe_b1_compare(const struct gta4l_emmc_probe_range *range,
 	}
 }
 
+/* B1C continue condition, pinned to exactly the observed 4-bit tuple:
+ * a clean CMD6 R1 in TRAN with READY_FOR_DATA, the host width bit written and
+ * read back as 0x02, an EXT_CSD read at the attempted width that completed
+ * with the 1-bit byte sum, and byte 183 still 0 (readback code 0). Anything
+ * else keeps the stage-B1 stop-on-first-failure behavior. */
+static int
+gta4l_emmc_probe_b1c_enter(const struct gta4l_emmc_host *host,
+    const struct gta4l_emmc_probe_bus *bus)
+{
+	uint32_t status = bus->result.switch_status;
+	uint32_t state;
+
+	if (bus->result.requested != 4u) {
+		return 0;
+	}
+	if (bus->result.switch_result != GTA4L_EMMC_ERR_BUS_WIDTH) {
+		return 0;
+	}
+	if (bus->result.switched != GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1) {
+		return 0;
+	}
+	if (bus->result.host_after != GTA4L_EMMC_HOST_CONTROL_4BIT) {
+		return 0;
+	}
+	if (bus->result.host_before != 0u) {
+		/* The observed pre-attempt HOST_CONTROL was zero; any other
+		 * state is a different rung and must keep the stop behavior. */
+		return 0;
+	}
+	if (host->bus_width != (uint8_t)GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1) {
+		return 0;
+	}
+	if ((status & GTA4L_EMMC_R1_ERROR_MASK) != 0u) {
+		return 0;
+	}
+	state = (status & GTA4L_EMMC_R1_STATE_MASK) >> GTA4L_EMMC_R1_STATE_SHIFT;
+	if (state != GTA4L_EMMC_R1_STATE_TRAN) {
+		return 0;
+	}
+	if ((status & GTA4L_EMMC_R1_READY_FOR_DATA) == 0u) {
+		return 0;
+	}
+	if (bus->result.readback_sum != host->ext_csd_sum) {
+		return 0;
+	}
+	return 1;
+}
+
+/* Re-apply the 4-bit host width after the failed switch verification. The
+ * core reverted HOST_CONTROL on the failed readback, so the continuation
+ * applies the attempted host width itself and marks the host state as 4-bit
+ * so gta4l_emmc_bus_test() accepts the rung. The card's BUS_WIDTH field is
+ * deliberately not rewritten: this rung measures the data path, not the
+ * switch. */
+static void
+gta4l_emmc_probe_b1c_apply_4bit(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe)
+{
+	uint32_t control;
+
+	control = gta4l_emmc_probe_read8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT);
+	control |= GTA4L_EMMC_HOST_CONTROL_4BIT;
+	gta4l_emmc_probe_write8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL, control);
+	gta4l_emmc_probe_barrier(probe);
+	host->bus_width = (uint8_t)GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+}
+
+/* Re-read EXT_CSD after the continuation content pass: a late BUS_WIDTH
+ * commit would appear here even though the verification readback saw 0. */
+static int
+gta4l_emmc_probe_b1c_reread(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe_bus *bus)
+{
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t sum = 0;
+	uint32_t index;
+	int result;
+
+	result = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (result != GTA4L_EMMC_OK) {
+		return result;
+	}
+	bus->reread_width =
+	    (uint32_t)ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] & 0x0Fu;
+	/* The `es` field is the core's plain byte sum, not the probe's
+	 * rolling content hash, so the two sums stay comparable. */
+	for (index = 0; index < GTA4L_EMMC_EXT_CSD_BYTES; index++) {
+		sum += ext_csd[index];
+	}
+	bus->reread_sum = sum;
+	return GTA4L_EMMC_OK;
+}
+
+/* Restore the host width and the recorded card width after the continuation.
+ * `control` is the pre-attempt HOST_CONTROL byte saved by the failed switch. */
+static void
+gta4l_emmc_probe_b1c_restore(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe, uint32_t control)
+{
+	gta4l_emmc_probe_write8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL, (uint8_t)control);
+	gta4l_emmc_probe_barrier(probe);
+	host->bus_width = (uint8_t)GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
+}
+
 static void
 gta4l_emmc_probe_report_failure(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe *probe, int stage, int result,
@@ -818,6 +936,20 @@ gta4l_emmc_probe_append_text(char *buffer, uint32_t offset, const char *text)
 	return offset + index;
 }
 
+/* Fixed eight-digit lower-case hex writer for the B1C continuation fields. */
+static uint32_t
+gta4l_emmc_probe_append_hex8(char *buffer, uint32_t offset, uint32_t value)
+{
+	static const char digits[] = "0123456789abcdef";
+	uint32_t index;
+
+	for (index = 0; index < 8u; index++) {
+		buffer[offset + index] =
+		    digits[(value >> (28u - (index * 4u))) & 0x0Fu];
+	}
+	return offset + 8u;
+}
+
 static void
 gta4l_emmc_probe_report_multi_failure(const struct gta4l_emmc_host *host,
     const struct gta4l_emmc_probe_range *range, int result)
@@ -860,6 +992,24 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
 	uint32_t dst = gta4l_emmc_probe_read32((void *)probe,
 	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+	char b1c[48];
+	uint32_t b1c_offset = 0;
+
+	if (w4->b1c_enabled != 0u) {
+		b1c_offset = gta4l_emmc_probe_append_text(b1c, b1c_offset,
+		    " bc=");
+		b1c_offset = gta4l_emmc_probe_append_decimal(b1c, b1c_offset,
+		    w4->continued);
+		b1c_offset = gta4l_emmc_probe_append_text(b1c, b1c_offset,
+		    " e183a=");
+		b1c_offset = gta4l_emmc_probe_append_hex8(b1c, b1c_offset,
+		    w4->reread_width);
+		b1c_offset = gta4l_emmc_probe_append_text(b1c, b1c_offset,
+		    " esa=");
+		b1c_offset = gta4l_emmc_probe_append_hex8(b1c, b1c_offset,
+		    w4->reread_sum);
+	}
+	b1c[b1c_offset] = '\0';
 
 	panic("GTA4L-EMMC B1 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
 	    "rev=%u hci=%02x step=%u log=%u\n"
@@ -868,7 +1018,7 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 	    "same=1 div=0\n"
 	    "GTA4L-EMMC B1 BW=4 att=%u req=%u sw=%u swrc=%d tt=%u "
 	    "tw=%08x te=%08x trc=%d hc=%02x hb=%02x ha=%02x c6=%08x "
-	    "es=%08x b0=%08x b1=%08x same=%u div=%u\n"
+	    "es=%08x b0=%08x b1=%08x same=%u div=%u%s\n"
 	    "GTA4L-EMMC B1 BW=8 att=%u req=%u sw=%u swrc=%d tt=%u "
 	    "tw=%08x te=%08x trc=%d hc=%02x hb=%02x ha=%02x c6=%08x "
 	    "es=%08x b0=%08x b1=%08x same=%u div=%u\n"
@@ -895,16 +1045,16 @@ gta4l_emmc_probe_report_b1(const struct gta4l_emmc_host *host,
 	    (unsigned int)base->result.host_control, host->ext_csd_sum,
 	    base->block0_sum, base->block1_sum,
 	    w4->attempted, w4->result.requested, w4->result.switched,
-	    w4->result.switch_result, w4->tested, w4->result.test_word,
-	    w4->result.test_expected, w4->result.test_result,
+	    w4->result.switch_result, w4->tested, w4->test.test_word,
+	    w4->test.test_expected, w4->test.test_result,
 	    (unsigned int)w4->result.host_control,
 	    (unsigned int)w4->result.host_before,
 	    (unsigned int)w4->result.host_after, w4->result.switch_status,
 	    w4->result.readback_sum, w4->block0_sum,
-	    w4->block1_sum, w4->same, w4->div,
+	    w4->block1_sum, w4->same, w4->div, b1c,
 	    w8->attempted, w8->result.requested, w8->result.switched,
-	    w8->result.switch_result, w8->tested, w8->result.test_word,
-	    w8->result.test_expected, w8->result.test_result,
+	    w8->result.switch_result, w8->tested, w8->test.test_word,
+	    w8->test.test_expected, w8->test.test_result,
 	    (unsigned int)w8->result.host_control,
 	    (unsigned int)w8->result.host_before,
 	    (unsigned int)w8->result.host_after, w8->result.switch_status,
@@ -1101,6 +1251,7 @@ gta4l_emmc_probe_run(void)
 	int stage;
 	int mb_mode;
 	int result;
+	int set_result;
 
 	if (gta4l_emmc_probe_ran != 0) {
 		return;
@@ -1367,10 +1518,11 @@ gta4l_emmc_probe_run(void)
 	 * failed step stops at that width: the report never issues further
 	 * assertions on a bus that just failed. The 1-bit pass above is the
 	 * baseline for the per-width comparison. */
-	if (stage == 4) {
+	if (stage >= 4) {
 		bzero(&base, sizeof(base));
 		bzero(&w4, sizeof(w4));
 		bzero(&w8, sizeof(w8));
+		w4.b1c_enabled = (stage == 5) ? 1u : 0u;
 		base.result.requested = 1u;
 		base.result.switched = host.bus_width;
 		base.result.switch_result = GTA4L_EMMC_OK;
@@ -1396,13 +1548,60 @@ gta4l_emmc_probe_run(void)
 		    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
 
 		w4.attempted = 1u;
-		result = gta4l_emmc_set_bus_width(&host, 4u, &w4.result);
-		if (result != GTA4L_EMMC_OK) {
+		set_result = gta4l_emmc_set_bus_width(&host, 4u, &w4.result);
+		if (set_result != GTA4L_EMMC_OK) {
+			result = set_result;
+			if ((stage == 5) &&
+			    (gta4l_emmc_probe_b1c_enter(&host, &w4) != 0)) {
+				/* B1C: the verification failed with exactly the
+				 * observed tuple. Continue read-only at 4-bit
+				 * instead of stopping, then report once. The
+				 * failed-verification tuple stays in w4.result;
+				 * the continuation result lives in w4.test,
+				 * w4.same and the reread fields. */
+				gta4l_emmc_probe_b1c_apply_4bit(&host,
+				    &probe);
+				w4.continued = 1u;
+				w4.tested = 1u;
+				result = gta4l_emmc_bus_test(&host, 4u,
+				    &w4.test);
+				if ((result != GTA4L_EMMC_OK) &&
+				    (w4.test.test_result == GTA4L_EMMC_OK)) {
+					/* A precondition rejection returns
+					 * before filling the test result;
+					 * keep `trc` naming the failure. */
+					w4.test.test_result = result;
+				}
+				if (result == GTA4L_EMMC_OK) {
+					result = gta4l_emmc_probe_b1_content(
+					    &host, &range, &w4, 0);
+				}
+				if (result == GTA4L_EMMC_OK) {
+					gta4l_emmc_probe_b1_compare(&range,
+					    &base, &w4);
+					result = gta4l_emmc_probe_b1c_reread(
+					    &host, &w4);
+				}
+				gta4l_emmc_probe_b1c_restore(&host, &probe,
+				    w4.result.host_control);
+				w4.result.host_control =
+				    gta4l_emmc_probe_read8(&probe,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_HOST_CONTROL);
+				if ((result == GTA4L_EMMC_OK) &&
+				    (w4.same == 0u)) {
+					result =
+					    GTA4L_EMMC_PROBE_ERR_CONTENT;
+				}
+				if (result == GTA4L_EMMC_OK) {
+					result = set_result;
+				}
+			}
 			gta4l_emmc_probe_report_b1(&host, &probe, &range,
 			    &base, &w4, &w8, result, 1);
 		}
 		w4.tested = 1u;
-		result = gta4l_emmc_bus_test(&host, 4u, &w4.result);
+		result = gta4l_emmc_bus_test(&host, 4u, &w4.test);
 		if (result != GTA4L_EMMC_OK) {
 			gta4l_emmc_probe_report_b1(&host, &probe, &range,
 			    &base, &w4, &w8, result, 2);
@@ -1426,7 +1625,7 @@ gta4l_emmc_probe_run(void)
 			    &base, &w4, &w8, result, 5);
 		}
 		w8.tested = 1u;
-		result = gta4l_emmc_bus_test(&host, 8u, &w8.result);
+		result = gta4l_emmc_bus_test(&host, 8u, &w8.test);
 		if (result != GTA4L_EMMC_OK) {
 			gta4l_emmc_probe_report_b1(&host, &probe, &range,
 			    &base, &w4, &w8, result, 6);

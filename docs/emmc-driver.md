@@ -49,7 +49,7 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
 | `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 136 scenarios and 80 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 57 scenarios and 34 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 67 scenarios and 39 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -1659,6 +1659,47 @@ re-reads byte 183, restores the host width and emits one report, with no
 unchanged (core 136/80, probe 57/34). No code change follows from this
 record; the separately approved B1C batch implements the plan's continuation.
 
+### 5.3.13.1 Stage-B1C continue-past-readback host implementation (2026-11-02)
+
+`gta4l-emmc-probe=5` implements the plan's B1C rung on top of the stage-B1
+image. Nothing in the command order, register sequence, clock or power
+policy changes. The only behavior addition is the continue branch: when
+`gta4l_emmc_set_bus_width()` fails at 4-bit with exactly the observed tuple
+(`swrc=-19`, `sw=0`, `hb=00`, `ha=02`, `c6=00000900` clean R1 in TRAN with
+READY_FOR_DATA, and `es` equal to the 1-bit baseline), the probe re-applies
+the 4-bit host width (the core reverted it), runs one CMD19/CMD14 bus test,
+repeats the stage-A content pass, re-reads EXT_CSD byte 183 and its byte
+sum, restores the host width and emits one `GTA4L-EMMC B1 REPORT` with
+`stop=1`. `rc` is the continuation error when one stops the continuation
+(for example `-20` for a bus-test mismatch or `-21` for a content
+mismatch); a completed continuation keeps the verification result `-19`.
+Every other failed tuple and every 4-bit success path keeps the stage-B1
+behavior, and the 8-bit rung is not attempted after a continuation.
+
+The `BW=4` line gains `bc=` (1 when the continuation ran, 0 otherwise) and,
+for stage 5 only, `e183a=`/`esa=` (post-continuation byte 183 and byte sum).
+`sw`/`swrc` keep their stage-B1 meanings and are never folded with the
+continuation result; the continuation result rides in `tt`/`tw`/`te`/`trc`,
+the content fields and the re-read fields. `hc` is the end-of-rung
+HOST_CONTROL sample, re-read after the restore. A continuation hard error
+stops at that step and the report carries the completed fields. Stage-4
+reports are byte-identical to the pre-batch output; stage-5 non-continue
+reports are the stage-4 fields plus `bc=0 e183a=00000000 esa=00000000`.
+
+Host checks: the probe suite is 67 scenarios and 39 mutation controls (57/34
+before), adding `probe-b1c-success`, `probe-b1c-pass`,
+`probe-b1c-late-commit`, `probe-b1c-bustest-fail`,
+`probe-b1c-content-div`, `probe-b1c-content-error`,
+`probe-b1c-reread-error`, `probe-b1c-c6-error`,
+`probe-b1c-zero-readback` and `probe-b1c-host-width-stuck`, plus five
+mutation controls (continue entered on a non-entering tuple, a continuation
+that does not stop, a wrong content baseline, a skipped host-width restore
+and a wrong continue marker). The core suite is unchanged at 136/80. The
+`report-width-b1` fixture materializes `bc=1`, `e183a=ffffffff` and
+`esa=ffffffff`, and the report still fits the 2048-byte panic buffer. No
+build, flash or boot was performed; F3 remains `[U]`, and the device run is
+§5.3.14 after a fresh explicit BOOT-only flash approval.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
@@ -1679,6 +1720,10 @@ On a full success the probe panics with a report containing:
   followed by `drain=used/resolved/blocks/iterations`; the counters are
   `step=19`/`log=51`. An MD failure line carries the same `drain` field
   between `mb=` and `stop=`.
+- In the Stage-B1C mode (`gta4l-emmc-probe=5`) the same B1 form adds `bc=`,
+  `e183a=` and `esa=` to the `BW=4` line: `bc=1` marks a continuation that
+  ran, and the two re-read fields are zero when the continuation did not
+  reach the re-read. Stage-4 reports keep the earlier form unchanged.
 - In the Stage-B1 mode (`gta4l-emmc-probe=4`) the probe emits the
   `GTA4L-EMMC B1 REPORT` form instead: the header plus one `BW=1` baseline
   line and one `BW=4`/`BW=8` line per rung (`att`, `req`, `sw`, `swrc`, `tt`,
