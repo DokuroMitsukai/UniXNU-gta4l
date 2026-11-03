@@ -2166,8 +2166,47 @@ controls (was 85/51), adding `probe-h9-clean-no-fire`, `probe-h9-fire-pass`,
 the `report-width-h9` width materialization (the seventh). The diagnostic
 wrapper and payload gate accept `emmc-probe-9`.
 
-No build, flash or boot has been performed. The device run needs a fresh
-explicit BOOT-only approval that names the duplicate CMD3. F3 remains `[U]`.
+The run procedure required a fresh explicit BOOT-only approval that names
+the duplicate CMD3; the as-run result is in §5.3.22. F3 remains `[U]`.
+
+### 5.3.22 Stage-H9 hardware run: the duplicate CMD3 also times out (2026-11-03)
+
+The stage-9 image was built from clean `a952a09` (kernel `75e529a3…`,
+payload `e1b474f7…` with a 7/7 contract, boot image `92d9471c…` with an
+18/18 gate against the `ce4d76e8…` v5 baseline; the probe archive
+`7022e326…` matches the committed sources), flashed BOOT only (pre p69
+`2cd82e0f…`, post p69 `25385fd7…`, image prefix `92d9471c…`, unchanged
+tail `a28b4ea2…`, RECOVERY/EFS/sec_efs unchanged, pulled gates 18/18 and
+7/7) and booted four times without reflashing (boot 1 cold, boots 2–4
+warm). The post-batch p69 re-read matched `25385fd7…`, binding all four
+boots. Every boot reached stage 9 and stopped before any EXT_CSD read
+(`cap=0 rev=0 bw=0 ext=00000000`).
+
+Boots 1/3/4 produced field-identical `rc=-7 stop=11 retry=1/0 att=2`
+reports: attempt 1 reproduced the historical H8 tuple
+(`fail=1/3/65536/0000031a/0000/0000/03f800f0/9`) and exhausted the full
+100,000-iteration poll budget (≈1.14 s at 19.2 MHz) with the normal/error
+samples zero at every step and a zero fresh post-timeout sample — the
+wait is completion-silent, and the H8-era "65536 = latched CTO bit"
+reading is corrected: `65536` is the FAIL-record argument (`0x00010000`).
+The duplicate CMD3 (`0x00010000`, same timing path, never a third
+attempt) also timed out, exiting through the latched-error branch with
+`fail=1/3/65536/0000031a/0001/8000/03f800f1/9` (ERROR `0x0001` command
+timeout, NORMAL `0x8000` error summary, present bit 0). Boot 2 was the
+clean control: `rc=0 stop=0 retry=0/0 att=1 step=13`, a clean CMD3
+completing within 26 poll iterations (≈0.29 ms), `rca=1`, and an empty
+attempt-2 slot.
+
+Verdict: the sticky row of the H9 decision table is taken with three
+field-identical samples (the pair (1, 3) already satisfies the
+two-matching rule); the majority row was exercised once, and the
+"attempt-1 timeout, attempt-2 clean" row never occurred. The immediate
+duplicate CMD3 is not a recovery mechanism (0/3), so no per-boot retry
+policy is adopted; the flake remains per-boot random (cold boot 1 timed
+out, warm boot 2 was clean, warm boots 3/4 timed out; 3/4 this batch).
+The `A2L` poll zeros are the latched-error exit's expected shape because
+that exit never validates the poll capture. F3 stays `[U]`; no width,
+write, DMA, frequency or EXT_CSD work was done.
 
 ## 6. Expected report
 

@@ -251,6 +251,26 @@ refreshes the `README.md`, `docs/diagnostic-payload-input-inventory.md`,
 the probe simulator/fixture/test, the diagnostic builder/packager/gate
 scripts, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`
 and this document are outside the table.
+One more refresh on `2026-11-03` records the Stage-H9 CMD3-completion
+retry hardware run (`docs/emmc-driver.md` §5.3.22,
+`docs/emmc-cmd2-crc-audit.md` §2.26): the stage-9 image was built from
+`a952a09` (kernel `75e529a3…`, payload `e1b474f7…` with a 7/7 contract,
+boot image `92d9471c…` with an 18/18 gate), flashed BOOT only (pre-flash
+p69 `2cd82e0f…` → post-flash `25385fd7…`, prefix/tail read back,
+RECOVERY/EFS/sec_efs unchanged) and booted four times without reflashing
+(one cold, three warm; the post-batch p69 re-read matched). Boot 2 was
+the clean control (`rc=0 stop=0`, a clean CMD3 within 26 poll iterations
+≈0.29 ms). Boots 1/3/4 were field-identical `rc=-7 stop=11` reports:
+attempt 1 exhausted the full 100,000-iteration ≈1.14 s window
+completion-silent, and the approved duplicate CMD3 also timed out (0/3
+recovery, with the latched `ERROR=0x0001`/`NORMAL=0x8000` exit). The
+two-matching rule closed the sticky row with three samples; the cold
+boot took part, so no cold-path caveat applies. No per-boot retry policy
+is adopted; the flake stays per-boot random (3/4 this batch). F3 remains
+`[U]`. That change refreshes the `README.md`, `docs/emmc-driver.md` and
+`porting.toml` rows, adds no manifest row, and keeps the table at 45
+rows; `docs/emmc-cmd2-crc-audit.md` and this document are outside the
+table.
 This document's own hash is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
@@ -304,7 +324,8 @@ and update the table.
 | Thirty-fourth Stage-B1R2 hardware-run paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Thirty-fifth Stage-B1C hardware-run paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Thirty-sixth Stage-H9 host-batch paths at this snapshot | 19 modified (`README.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/build-gta4l-diagnostic-payload.py`, `scripts/check-gta4l-payload.py`, `scripts/package-gta4l-diagnostic.py`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-diagnostic-payload.py`, `scripts/test-gta4l-emmc-probe.py`, `scripts/test-gta4l-emmc.py`) |
-| Dirty entries at the hash snapshot | 19, exactly the thirty-sixth paths above |
+| Thirty-seventh Stage-H9 hardware-run paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
+| Dirty entries at the hash snapshot | 5, exactly the thirty-seventh paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
 The hash table describes the thirty-sixth working-tree snapshot: the
@@ -324,8 +345,10 @@ boots; two identical 1-bit CMD19 write-phase timeouts), the data-timeout
 audit host batch, the 2026-11-03 Stage-B1C-2 data-timeout audit hardware
 run (twelve boots; five identical `stop=12` DTO reports), the Stage-B2
 HS-timing host batch, the 2026-11-03 Stage-B2 HS-timing hardware run
-(four boots; two matching 1-bit/50 MHz B2 passes), and the Stage-H9
-CMD3-completion retry host batch.
+(four boots; two matching 1-bit/50 MHz B2 passes), the Stage-H9
+CMD3-completion retry host batch, and the 2026-11-03 Stage-H9
+CMD3-completion retry hardware run (four boots; three field-identical
+sticky `stop=11` reports and one clean control).
 The stage-A
 batch refreshed the `README.md`,
 `docs/emmc-driver.md`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`,
@@ -744,13 +767,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `f0ad01c6a9b9b3584bd43b835cfa3ce037072ee8967ef784a30ff0d947928896` |
+| Repository README | `README.md` | `b1d45c3ab5e8f94836daffd4c333bc7008c8a6b986cf5cea4263f67f7c8dd22a` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `3e69b305bcd75af08a8eabe2f29b1463da316d5405963b264a2374d143ccc911` |
+| Porting record | `porting.toml` | `567f5789f0e803b0e5c101ab34a469fc5144ddd9e2330e0019de0b681f1b5708` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `cf5924746852d15cbe844127bcfff37e67b8e5736ac0a599265cdbef46b4ac6f` |
+| eMMC driver record | `docs/emmc-driver.md` | `c73161aa06e6979953793d30c2a6b0cec09ea3026cea57697682ef589fb61edc` |
 | eMMC core header | `package/Gta4lEmmc.h` | `97c2ce93b21f7b1a13e6e5e4c0e20c161fd67524245c0ee89844bd307fb85fec` |
 | eMMC core source | `package/Gta4lEmmc.c` | `b6b91da99ab9cdef57ab048d2421194660e5f14f0d364b10f6e8c8de2be57f1e` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `385d28d95fac26e8790e09a53e435b0bbd9aa81086c5b7bd484fe7e87d1f0a07` |
@@ -847,7 +870,10 @@ listed. The Stage-H9 CMD3-completion retry host batch refreshed ten rows
 `porting.toml`) without adding a row; the probe simulator/fixture/test, the
 diagnostic builder/packager/gate scripts, `docs/emmc-cmd2-crc-audit.md`,
 `docs/emmc-cmd7-timeout-finding.md` and this document are outside the table
-or not listed.
+or not listed. The Stage-H9 hardware-run batch refreshed the `README.md`,
+`docs/emmc-driver.md` and `porting.toml` rows without adding a row;
+`docs/emmc-cmd2-crc-audit.md` and this document are outside the table or
+not listed.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
@@ -1126,6 +1152,7 @@ terminal-read observation-boundary edits), run from
 | eMMC Stage-B2 HS-timing host batch (2026-11-03) | HOST-TESTED ONLY: `gta4l-emmc-probe=8` runs after the stage-A pass with no CMD19/CMD14, width switch or user-data write; the only card write is EXT_CSD `HS_TIMING` byte 185. R samples byte 185, `CLOCK_CONTROL` and the pad/DLL state; S sends CMD6 SET index 185 value 1, waits TRAN/ready, reads byte 185 back and ramps the GCC SDCC1 APPS RCG to the pinned 50 MHz floor row (`0x20B`, M/N/D zero; the 52 MHz class floors to 50 MHz); T repeats the full stage-A content pass at 50 MHz and compares every sum with the 400 kHz baseline; V drops the clock to 400 kHz first, clears byte 185, reads both back and re-reads block 0. Stop codes 0/10/11/12/13/14 cover pass, switch/byte-185 failure, clock failure, content read/divergence, revert failure and recovery failure. The stage-7 arming gate now compares only TOUTVAL, with a new arm-artifact scenario. Core 143/86 (was 138/83), probe 85/51 (was 75/46), six width materializations including `report-width-b2`; no build, flash or boot, F4 remains `[U]` |
 | eMMC Stage-B2 HS-timing hardware run (2026-11-03) | RECORDED: four owner boots of the `9a84215`+`9d6fd1f` stage-8 image (boot 1 cold, boots 2–4 warm) without reflashing; the post-batch p69 re-read matched `2cd82e0f…`. Boots 2 and 4 produced field-for-field identical `rc=0 stop=0` reports: `S` read byte 185 = 1 with CMD6 R1 `00000900`, `T same=1 div=0` with all stage-A sums matching at 50 MHz after the RCG reached the pinned `0x20b` floor row, and `V` reverted to `hs=00`/RCG `0x2017` with block-0 matching. Boots 1 and 3 stopped pre-B2 at the H8 CMD3-completion timeout. F4 measured PASS at 1-bit/50 MHz (content-level only); F3 remains `[U]` |
 | eMMC Stage-H9 CMD3-completion retry host batch (2026-11-03) | HOST-TESTED ONLY: `gta4l-emmc-probe=9` runs the standard read-only identification sequence once with the pinned 8-us post-ready CMD1 delay and, on the H8 CMD3 completion timeout, snapshots attempt 1 and re-issues exactly one identical CMD3 (`0x00010000`, same timing path); a third attempt is impossible and there is no fall-through. The stage stops after the TRAN wait before any EXT_CSD read or stage-A pass, so it issues no CMD6, width switch or user-data access; the only new card-facing action is the duplicate CMD3. It always emits `GTA4L-EMMC H9 REPORT` (retry engaged/ok, two attempt slots with result/R1/fail record/pre-command and timeout samples/poll history) and stops with 0/10/11/12/13/14/15. Core 148/90 (was 143/86), probe 91/51 (was 85/51), seven width materializations including `report-width-h9`; no build, flash or boot, F3 remains `[U]` |
+| eMMC Stage-H9 CMD3-retry hardware run (2026-11-03) | RECORDED: four owner boots of the `a952a09` stage-9 image (boot 1 cold, boots 2–4 warm) without reflashing; the post-batch p69 re-read matched `25385fd7…`. Boots 1/3/4 were field-identical `rc=-7 stop=11` reports (`retry=1/0 att=2 step=9`): attempt 1 is the historical H8 tuple and exhausted the full 100,000-iteration ≈1.14 s window completion-silent, and the approved duplicate CMD3 also timed out (0/3 recovery) with the latched `ERROR=0x0001`/`NORMAL=0x8000` exit. Boot 2 was the clean control (`rc=0 stop=0 step=13`, a clean CMD3 within 26 poll iterations ≈0.29 ms, empty attempt-2 slot). The two-matching rule closed the sticky row with three samples; the cold boot took part. No in-boot retry policy; F3 remains `[U]` |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |
@@ -1748,6 +1775,20 @@ a per-width content comparison; F3 remains `[U]`. The full decode is in
   batch does not establish a cold-start pass, a width, write, DMA, CQE, ICE,
   HS200 or frequency-measurement result, a cause for the H8 pre-B2 stops, or
   F3.
+- The 2026-11-03 Stage-H9 record covers four owner boots of the same
+  verified image; the transcriptions are owner-supplied chat text and no
+  photo file or hash is in this tree. The post-batch p69 re-read binds the
+  batch; the no-reflash statement covers every boot. Boots 1/3/4 are
+  field-identical except the stack counters and the attempt-1 poll-tick
+  timestamps; their attempt-1 record is the historical H8 tuple, and the
+  attempt-2 record's non-zero ERROR/NORMAL samples are the latched-error
+  exit shape (the zero `A2L` poll capture is that exit's expected shape,
+  not a missing record). The result establishes that an in-boot duplicate
+  CMD3 does not recover the completion timeout (0/3) and that the flake
+  re-rolls per boot; it does not establish a cause for the H8 class, a
+  cold-vs-warm correlation, a recovery mechanism, or any width, write,
+  DMA, frequency or F3 result. The batch lost three of four boots to the
+  flake, which informs but does not measure a rate.
 - The pinned Linux cache has no `.git`; its revision is documented provenance,
   not a verifiable git checkout `[U]`.
 - The booted image is not tracked; the copy in the gitignored output tree

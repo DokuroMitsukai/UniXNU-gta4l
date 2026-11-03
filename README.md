@@ -192,8 +192,18 @@ partition layout, payload policy and packaging.
   `GTA4L-EMMC H9 REPORT`. It issues no CMD6, width switch or user-data
   access; the only new card-facing action is the duplicate CMD3. Core 148/90
   and probe 91/51; the `report-width-h9` fixture is the seventh width
-  materialization. The device run needs a fresh explicit BOOT-only approval
-  that names the duplicate CMD3.
+  materialization. The stage-9 image was then built from clean `a952a09`
+  (kernel `75e529a3…`, payload `e1b474f7…` with a 7/7 contract, boot image
+  `92d9471c…` with an 18/18 gate), flashed BOOT only (p69 `2cd82e0f…` →
+  `25385fd7…`) and booted four times without reflashing (one cold, three
+  warm; the post-batch p69 re-read matched). Boot 2 was the clean control
+  (`rc=0 stop=0`, a clean CMD3 within 26 poll iterations ≈0.29 ms); boots
+  1/3/4 were field-identical `rc=-7 stop=11` reports: attempt 1 exhausted
+  the full 100,000-iteration ≈1.14 s window completion-silent, and the
+  approved duplicate CMD3 also timed out (0/3 recovery), so no in-boot
+  retry policy is adopted and the flake stays per-boot random (3/4 this
+  batch). F3 remains unproven. The flash record and transcript are in
+  `out/gta4l/ram-root-emmc-probe-h9-evidence/`.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

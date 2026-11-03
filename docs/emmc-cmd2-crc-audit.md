@@ -2180,6 +2180,112 @@ change to F3.
 
 ---
 
+### 2.26 Stage-H9 device run: the duplicate CMD3 also times out (2026-11-03)
+
+The stage-9 image (`gta4l-emmc-probe=9`, the H9 CMD3-completion retry
+discriminator of `docs/emmc-driver.md` §5.3.21–5.3.22) was built from
+clean `a952a09`: kernel `75e529a3…`, payload `e1b474f7…` (contract 7/7)
+and boot image `92d9471c…` (gate 18/18 against the `ce4d76e8…` v5
+baseline). The probe archive `7022e326…` matches the committed sources,
+and the prelinked kernel contains the `GTA4L-EMMC H9 REPORT` string. The
+write was BOOT-only: pre-flash p69 was `2cd82e0f…` (the B2 post-flash
+hash, backed up and verified), post-flash p69 is `25385fd7…`, the image
+prefix read back as `92d9471c…`, the unchanged tail is `a28b4ea2…`, and
+`RECOVERY` `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` were
+unchanged. The pre-flash battery was 100%, the pulled gates pass 18/18
+and 7/7, and the post-batch p69 re-read matched `25385fd7…`, binding all
+four boots. The flash record is
+`out/gta4l/ram-root-emmc-probe-h9-evidence/flash-record.json`; the build
+provenance is `build-provenance.json` in the same directory.
+
+The owner booted the same image four times without reflashing (boot 1
+cold, boots 2–4 warm). Every boot reached stage 9 and stopped before any
+EXT_CSD read (`cap=0 rev=0 bw=0 ext=00000000`; `rca=0` and step 9 =
+`STEP_CMD2` on the timeout boots, `rca=1` and step 13 = `STEP_TRAN` on
+the clean boot; CID, OCR `c0ff8080`, `mci=10000072`, `hci=00` and
+`cmd1=3/0` are constant across boots).
+
+| Boot | Reset | stop | rc | retry/att | Class |
+| --- | --- | --- | --- | --- | --- |
+| 1 | cold | 11 | -7 | 1/0, att=2 | sticky (both attempts time out) |
+| 2 | warm | 0 | 0 | 0/0, att=1 | clean identification |
+| 3 | warm | 11 | -7 | 1/0, att=2 | sticky, field-identical to boot 1 |
+| 4 | warm | 11 | -7 | 1/0, att=2 | sticky, field-identical to boot 1 |
+
+The three sticky reports carry (boots 1/3/4, stack counters excluded):
+
+    rc=-7 stop=11 retry=1/0 att=2 step=9 log=6
+    A1 n=1 rc=-7 r1=0 fail=1/3/65536/0000031a/0000/0000/03f800f0/9
+       rsp=00000500,5836384d,42009005,f4661978
+    A1P c3p=1/0000/0000/03f800f0/0033/07ff
+       c3t=1/3/031a/00010000/1/00000500,5836384d,42009005,f4661978
+    A1L c31=1/3/0000/0000/100000/0000000014c33cf/19200000
+    A2 n=2 rc=-7 r1=0 fail=1/3/65536/0000031a/0001/8000/03f800f1/9
+       rsp=00000500,5836384d,42009005,f4661978
+    A2P c3p=1/0000/0000/03f800f0/0033/07ff
+       c3t=0/0/0000/00000000/0/00000000,00000000,00000000,00000000
+    A2L c31=0/3/0000/0000/0/0000000000000000/19200000
+    C cid=15010044,5836384d,42009005,f4661900 cmd1=3/0
+    FAIL fail=1/3/65536/0000031a/0001/8000/03f800f1/9
+
+Decode: the attempt-1 fail record is the historical H8 tuple byte for
+byte (index 3 = CMD3, argument 65536 = `0x00010000`, command word
+`0x31a`, fresh ERROR/NORMAL samples zero, present `0x03f800f0`, step 9).
+The poll history shows the wait ran the full 100,000-iteration budget
+(`GTA4L_EMMC_CMD_TIMEOUT_US` 1,000,000 us at the 10 us poll step) in
+`0x14c33cf`–`0x14c33e4` counter ticks ≈1.14 s at 19.2 MHz with
+`first_normal`/`last_normal` zero at every step: the controller is
+completion-silent for the whole window and the fresh post-timeout sample
+is also zero. The `65536` field is the FAIL-record argument, not a
+latched CTO bit (the layout is
+`valid/index/argument/command/error/normal/present/step`, §2.x
+decoding); the H8-era "the CTO bit is latched" wording was a
+field-semantics misread.
+
+The duplicate CMD3 (`0x00010000`, same timing path, never a third
+attempt) timed out in all three boots — 0/3 recovery — but exited
+through the latched-error branch: its fail record carries ERROR `0x0001`
+(command timeout), NORMAL `0x8000` (error summary) and present
+`0x03f800f1` (bit 0 newly set), field-identical across the three boots.
+That exit path never validates the poll capture (the mid-loop error
+branch returns before the poll bookkeeping), so the `A2L` zeros are the
+expected shape of the attempt-2 exit, not a missing record. Boot 2, the
+clean control, shows a clean CMD3 completing within 26 poll iterations
+(`0x1560` ticks ≈0.29 ms) with a clean A1 record, `rca=1`, step 13, and
+the empty `A2` slot (`n=0`), as designed.
+
+Verdict: the decision table's sticky row is taken with three
+field-identical samples (the pair (1, 3) already satisfies the
+two-matching rule; boot 4 is a third identical sample). The majority row
+(attempt-1 clean, no retry) is also realized once, so the stage executes
+as designed for both classes, and the "attempt-1 timeout, attempt-2
+clean" row never occurred. The immediate duplicate CMD3 is not a
+recovery or retry mechanism for this completion timeout: when it hits,
+the same boot's second attempt is already doomed, while every fresh boot
+re-rolls (cold boot 1 timed out, warm boot 2 was clean, warm boots 3/4
+timed out again — 3 of 4 boots this batch, versus 2 of 4 in the B2
+batch). No cold-path caveat applies — the cold boot participated in the
+sticky class. The terminal `H9 FAIL` line prints on every stop and
+carries zeroed fields on the clean boot; the `rc=`/`stop=` header is the
+verdict source.
+
+F3 stays `[U]`, `trc=-20` remains unobserved and the byte-183 paradox is
+unchanged. The rung did no width, write, DMA, frequency or EXT_CSD work.
+
+Supported by this section: the image identity and BOOT-only flash
+record; the four boots and their reset methods; the post-batch p69
+re-read and the binding of all boots; the three field-identical sticky
+reports (stack counters excluded); the historical H8 attempt-1 tuple;
+the completion-silent 100,000-iteration attempt-1 window; the duplicate
+CMD3's identical argument and its repeated timeout with the latched
+`ERROR=0x0001`/`NORMAL=0x8000` shape; the clean-control CMD3 (26
+iterations) and the empty attempt-2 slot; and the sticky-row verdict
+with no cold-path caveat. Not supported: any recovery of the H8 class by
+an in-boot duplicate CMD3; a cause for the H8 class; any width, write,
+DMA, CQE, ICE, HS200, frequency-measurement or EXT_CSD result; a
+cold-vs-warm correlation; the byte-183 paradox; the `trc=-20` class; or
+F3.
+
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 
 ### 3.1 Command sequence
