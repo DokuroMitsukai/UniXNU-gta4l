@@ -2529,6 +2529,60 @@ host-only write-phase wedge audit. Evidence:
 `device-run-record.json`, `device-run-transcript.txt`,
 `postflash-hashes.txt`, `postboot-reread.txt`).
 
+### 5.3.27 Write-phase wedge audit: the CMD19 write has no completion token (host-only, 2026-11-03)
+
+The host-only audit is `docs/emmc-write-wedge-audit.md`. It decodes the
+recorded CMD19 write sequence against the pinned `sdhci.c` PIO/transfer-mode
+path, the `sdhci-msm` timeout formula, JEDEC B1.51 §6.6.4/Table 7 and
+§A.6.3/Table A.223, and the Linux bus-test handling. No build, flash, boot or
+device access was performed, and no code changed.
+
+The two-phase finding: the command phase completes (`CC` latches, the R1
+response is read), the controller asks for the block (`BufferWriteReady`
+latches, the 4-byte or 8-byte PIO block is written), and the data phase never
+produces `TC`. The terminal sample is `error=0x0000`,
+`normal=0x0011` (`CC | BWR`), present `0x03f801f6` (`CMD_INHIBIT=0`,
+`DAT_INHIBIT=1`, `DAT_LINE_ACTIVE=1`), at both widths, with no CMD6 in the
+1-bit case. The write path's required completion signal is not the one CMD19
+produces: JEDEC defines a host-to-device pattern (the device ignores all but
+the first two bits of each line and the optional CRC16), not a normal data
+write, and the TI SPRZ436H i836 erratum records controllers waiting for a CRC
+status token that the card does not send. Linux ignores `BUS_TEST_W` errors and
+lets `BUS_TEST_R` decide (`mmc_ops-pinned.c:847-866`), and excludes
+`MMC_BUS_TEST_R` from the data-CRC path (`sdhci.c:3471-3477`). That is the
+leading cause: no CRC status token, so the controller stays data-active and
+`TC` never comes.
+
+The window arithmetic is consistent with the silence. Every observed write
+wedge used the universal 1 s poll window; the 8 s E2 repeat never ran because
+the stage-7 E1 recovery read failed with `ERR_INHIBIT` (`Q rc=-17`). The port
+arms `TIMEOUT_CONTROL = 0x0E` (`Gta4lEmmc.c:1502`); the MSM formula
+(`sdhci-msm.c:2213-2227`) makes that about 22 minutes at 400 kHz and about
+10.7 s at 50 MHz, so a write waiting for a CRC status has no reason to raise
+`DTO` inside 1 s or 8 s. The stage-7 E1 forced `TOUTVAL=0` row saw no `DTO` in
+a 5 s read drain, but its `mb=7` field cannot distinguish a pending eighth
+block from a completed transfer whose `TC` never latched; the write-wait state
+itself has never been tested with `TOUTVAL=0`.
+
+The audit also records a host recovery gap: the core has no per-request data
+reset (only `RESET_ALL` at init, `Gta4lEmmc.c:1480`), so the failed write
+leaves `DAT_INHIBIT` set and the next command fails the inhibit wait. Linux
+resets the data circuit on a data error (`sdhci.c:1566-1600`). The gap is not
+the cause of the first wedge, but it is a confound and a prerequisite for the
+next rung.
+
+The next rung menu is in the audit §6. The recommended rung is a data-circuit
+reset followed by CMD14: treat the CMD19 write phase as Linux does, reset the
+data circuit, then let the read pattern comparison decide. The second rung is
+the forced-`TOUTVAL=0` 1-bit write decoupled from the recovery read, which
+distinguishes a working-but-long counter from a counter that is silent in the
+write-wait state. Both are owner-gated BOOT-only runs; neither is authorized
+by this record, and no write-side goal (CMD19 at width, B1C continuation,
+F5/F6) is claimed. Evidence rows remain
+`out/gta4l/ram-root-emmc-probe-b1c-evidence/`,
+`out/gta4l/ram-root-emmc-probe-b1c1-evidence/` and
+`out/gta4l/ram-root-emmc-probe-dto-evidence/`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

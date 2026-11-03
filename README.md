@@ -272,10 +272,19 @@ partition layout, payload policy and packaging.
   value differing (4 versus the refused 1 and 2), the post-switch
   behavior changed, coherent with the card toggling into 4-bit DDR for
   data: the paradox row is measured but unverified and the whole-field
-  refusal row is not closed. F3 remains unproven; the next step is the
-  host-only write-phase wedge audit, followed by an owner-gated rung from
-  the surviving hypotheses. The flash and boot records are in
-  `out/gta4l/ram-root-emmc-probe-h12-evidence/`.
+  refusal row is not closed. F3 remains unproven. The flash and boot
+  records are in `out/gta4l/ram-root-emmc-probe-h12-evidence/`.
+  The host-only write-phase wedge audit is
+  [docs/emmc-write-wedge-audit.md](docs/emmc-write-wedge-audit.md): the
+  command phase completes and the controller requests the CMD19 block, but
+  the data phase never latches `TC` because CMD19 is a bus-test pattern,
+  not a normal data write, and the card sends no CRC status token; the
+  port's `TOUTVAL=0x0E` at 400 kHz puts the hardware timeout about 22
+  minutes away, far beyond the 1 s window every observed wedge used. The
+  audit also records the missing per-request data reset as a recovery gap
+  and names a data-reset + CMD14 rung as the recommended owner-gated
+  follow-up (the forced-`TOUTVAL=0` 1-bit write is second). No device work
+  was performed and no write-side goal is claimed.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

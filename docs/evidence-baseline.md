@@ -402,6 +402,30 @@ open; F3 remains `[U]`. That change refreshes the `README.md`,
 `docs/emmc-driver.md` and `porting.toml` rows, adds no manifest row, and
 keeps the table at 45 rows; `docs/emmc-cmd2-crc-audit.md` and this
 document are outside the table.
+One more refresh on `2026-11-03` records the host-only write-phase wedge
+audit (`docs/emmc-write-wedge-audit.md`, `docs/emmc-driver.md` §5.3.27,
+`docs/emmc-cmd2-crc-audit.md` §2.30): the audit decodes the recorded
+CMD19 write sequence against the pinned `sdhci.c` PIO/transfer-mode path,
+the `sdhci-msm` timeout formula, JEDEC B1.51 §6.6.4/Table 7 and
+§A.6.3/Table A.223, and Linux `mmc_bus_test()`. At both measured widths
+the command phase completes (`CC` latched) and the controller requests
+the block (`BufferWriteReady` latched), but `TC` never latches and no
+error bit sets (`normal=0x0011`, `error=0x0000`, present `0x03f801f6`).
+The leading cause is that CMD19 is a host-to-device bus-test pattern for
+which the card sends no CRC status token, so the controller waits for a
+completion that never arrives; the port's `TIMEOUT_CONTROL = 0x0E` puts
+the hardware timeout about 22 minutes away at 400 kHz, beyond the 1 s
+window every observed wedge used, and the 8 s E2 repeat never ran
+because the stage-7 E1 recovery read failed with `ERR_INHIBIT`. The
+audit also records the missing per-request data-circuit reset as a host
+recovery gap (not the first-wedge cause) and names a data-reset + CMD14
+rung as the recommended owner-gated follow-up, with a forced-`TOUTVAL=0`
+1-bit write second. No build, flash, boot or device access was performed,
+no card-state write or write-side verdict was added, and F3 remains
+`[U]`. That change refreshes the `README.md`, `docs/emmc-driver.md` and
+`porting.toml` rows, adds no manifest row, and keeps the table at 45
+rows; the new audit document, `docs/emmc-cmd2-crc-audit.md` and this
+document are outside the table.
 This document's own hash is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
@@ -459,7 +483,8 @@ and update the table.
 | Thirty-ninth Stage-H10 device-run record paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Forty-first Stage-H11 device-run record paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Forty-third Stage-H12 device-run record paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
-| Dirty entries at the hash snapshot | 5, exactly the forty-third paths above |
+| Forty-fourth host-only write-phase wedge audit paths at this snapshot | 6: 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) and 1 added (`docs/emmc-write-wedge-audit.md`) |
+| Dirty entries at the hash snapshot | 6, exactly the forty-fourth paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
 The hash table describes the thirty-sixth working-tree snapshot: the
@@ -904,13 +929,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `196be17a760789e796eeb2721a8bce567d590f49b6ce08301a1b16c6e28f90fe` |
+| Repository README | `README.md` | `c5dd0343f8229beb12068a5671d39945ef0849645d2d9525d9a207188fdcdb25` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `1dac69213aaa4866c79afb006aa440d8ebbeb231debc0121760d42ababc25633` |
+| Porting record | `porting.toml` | `492626d4f7c30500c81ce7019f954ec07f6ba4c816568d3d32b233178f635964` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `8f0493a2815bcbe704f6d073139f1d9be55ce5ff9c8d08b85474b85f49a63031` |
+| eMMC driver record | `docs/emmc-driver.md` | `035e5c9d1a024571efe3b29f30d2228d903edd2fd0b731e9b9a46344ac829a6f` |
 | eMMC core header | `package/Gta4lEmmc.h` | `f57bed74b75f3757396facaa513f0d489623b3e68ef327f0e0452096b0149caa` |
 | eMMC core source | `package/Gta4lEmmc.c` | `d4ecf50eddba968be52922f05328998b0bfce607881aea4550ba74a31dc609b1` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `3b4488cb4e8cd74e2218b7ae66865b99d87396da0fd8642ee9b9b544eac50c55` |

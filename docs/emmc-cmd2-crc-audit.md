@@ -2501,6 +2501,28 @@ fingerprint it stays unverified, and the whole-field-refusal conclusion
 (row 1) is not closed. F3 remains `[U]`; the open owner questions remain
 the DDR bit-plane and the CMD19 write-phase wedge.
 
+### 2.30 Write-phase wedge audit: CMD19 has no completion token (host-only, 2026-11-03)
+
+The host-only dissection is `docs/emmc-write-wedge-audit.md` and the driver
+record is §5.3.27. It re-reads the B1C 4-bit and B1C-1 1-bit terminal tuples
+(`fail=1/19/0/0000133a/0000/0011/03f801f6/18`, `error=0`, `normal=0x0011`,
+present `0x03f801f6`) against the pinned `sdhci.c` PIO/transfer-mode path,
+the `sdhci-msm` timeout formula, JEDEC B1.51 §6.6.4/Table 7 and
+§A.6.3/Table A.223, and Linux `mmc_bus_test()`.
+
+The command phase completes and the controller requests the block; the data
+phase never produces `TC`. The leading cause is that CMD19 is a bus-test
+pattern, not a normal data write: the card sends no CRC status token, the
+controller stays data-active waiting for one, and the port's `TOUTVAL=0x0E`
+at 400 kHz puts the hardware timeout about 22 minutes away, far beyond the
+1 s window every observed wedge used. The 8 s E2 repeat never ran because
+the stage-7 recovery read failed with `ERR_INHIBIT`. The audit also records
+the missing per-request data reset as a recovery gap (not the first-wedge
+cause) and names a data-reset + CMD14 rung as the recommended owner-gated
+follow-up, with a forced-`TOUTVAL=0` 1-bit write as the second. No build,
+flash, boot, card-state write or write-side verdict was added; F3 remains
+`[U]`.
+
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 
 ### 3.1 Command sequence
