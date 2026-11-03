@@ -58,9 +58,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 148 scenarios and 90 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 160 scenarios and 98 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 128 scenarios and 69 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 139 scenarios and 69 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -2582,6 +2582,113 @@ F5/F6) is claimed. Evidence rows remain
 `out/gta4l/ram-root-emmc-probe-b1c-evidence/`,
 `out/gta4l/ram-root-emmc-probe-b1c1-evidence/` and
 `out/gta4l/ram-root-emmc-probe-dto-evidence/`.
+
+### 5.3.28 Stage-H13 rung-1 write-phase recovery (gta4l-emmc-probe=13, host batch 2026-11-03)
+
+The `gta4l-emmc-probe=13` stage is the first rung of the write-phase wedge
+ladder recommended by the host-only audit. It runs the standard read-only
+identification once (no CMD3 retry), the unchanged stage-A content pass at
+400 kHz/1-bit as the baseline, then one record-only 1-bit CMD19 bus-test
+write (the 4-byte pattern block, first byte `0x5A`, compared as `0xA5`),
+one bounded SDHCI data-circuit reset (`SOFTWARE_RESET` ← `0x04`, the data
+bit, with the self-clear poll using the 100,000 us reset bound and the
+10 us poll step), the post-reset `PRESENT_STATE`/`DAT_INHIBIT` sample, one
+CMD14 read with the existing pattern comparison, and the block-0 recovery
+read. It always emits `GTA4L-EMMC H13 REPORT` and stops; there is no
+on-device retry and no fall-through. The only card-facing write is the
+non-persistent CMD19 pattern; no CMD6, CMD18, CMD25 or user-data write is
+issued, and no card width or timing is changed. The stage parser
+accepts 1..13.
+
+The reset is local to `gta4l_emmc_bus_test_reset()`; no other timeout path
+changes. The helper accepts 1/4/8 bits, requires the host width and
+`HOST_CONTROL` DAT bits to match, and records the terminal write sample,
+the reset write/readback/poll count, the post-reset `DAT_INHIBIT`, and the
+CMD14 result with its first pattern words in
+`struct gta4l_emmc_bus_reset_result`. Stop codes: 0 clean wedge recovery
+(the recorded `CC | BufferWriteReady`/no-`TC` write, reset clear, CMD14
+pattern expected); 10 reset did not self-clear; 11 `DAT_INHIBIT` survived
+the reset (CMD14 not issued); 12 the width/argument precondition refused
+the helper; 13 CMD14 pattern mismatch; 14 CMD14 transport or card-status
+failure; 15 block-0 recovery read failed or disagreed; 16 the write
+completed normally and the rest passed; 17 the write failed with a
+non-timeout error and the rest passed.
+
+The report carries the header (`rc`, `stop`, `mci`, `rca`, `cap`, `rev`,
+`hci`, `step`, `log`, `bw`), an `R` pre-rung line (`clk`, `hc`, `bw`,
+`es`), a `W` write line (`wrc`, `err`, `nrm`, `pst`), a `RST` reset line
+(`rc`, `wr`, `rb`, `it`, `pst`, `dinh`), a `T` CMD14 line (`trc`, `tw`,
+`te`), a `Q` recovery line (`rc`, `qb0`), the shared `PAD` line and the
+terminal `FAIL` record.
+
+Host checks: the probe suite is 139 scenarios and 69 mutation controls
+(was 128/69), adding `probe-h13-pass`, `probe-h13-reset-stuck`,
+`probe-h13-inhibit`, `probe-h13-mismatch`, `probe-h13-read-timeout`,
+`probe-h13-read-crc`, `probe-h13-read-status`, `probe-h13-write-crc`,
+`probe-h13-normal` and `probe-h13-q-fail` plus the eleventh width
+materialization `report-width-h13`. The core suite is 160 scenarios and
+98 mutation controls (was 148/90), adding the reset-clear, stuck-reset,
+surviving-inhibit, CMD14 mismatch/read-timeout/read-CRC/read-status,
+non-wedged write and non-timeout write cases with mutation controls for
+the reset write, the DAT_INHIBIT gate and the stop-code mapping. The
+diagnostic wrapper and payload gate accept `emmc-probe-13`. No build,
+flash or boot was performed when the host batch landed.
+
+### 5.3.29 Stage-H13 hardware run: the bounded data reset does not recover the card (2026-11-03)
+
+The stage-13 image was built from the clean `5c79aa9` base (kernel
+`3e02d187…`, payload `1fb04a4d…` with a 7/7 contract, boot image
+`bc8175e9…` with an 18/18 gate against the `ce4d76e8…` v5 baseline; the
+probe archive `4ffb6d2c…` matches the committed sources), flashed BOOT
+only (pre p69 `0f7ec22c…`, post p69 `18d2a83d…`, image prefix
+`bc8175e9…`, unchanged tail `a28b4ea2…`; RECOVERY/EFS/sec_efs unchanged)
+and booted repeatedly without reflashing by the owner. The exact boot
+count was lost; the verdict arrived on an estimated ~18th boot. The first
+three boots were not method-captured, the next eight were explicitly cold
+(power-off, ~10 s, power on), and the remaining boots were not
+individually recorded. The post-boot p69 re-read matched `18d2a83d…`
+(battery 92%), binding every boot to the flashed bytes.
+
+About seventeen boots before the verdict stopped pre-identification with
+the H8 CMD3 completion-silent class (`PROBE FAILED stage=13 rc=-7`,
+`step=9`, `fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, the full
+100,000-iteration ≈1.14 s poll window; two were captured field-identically
+and only the `c31` ticks and the stack pages/free differ): facts only,
+re-run not retried, and the H13 experiment never ran in those boots.
+
+The verdict boot emitted the single `GTA4L-EMMC H13 REPORT`:
+`rc=-12 stop=14` (`GTA4L_EMMC_ERR_DATA_CRC`; CMD14 transport or
+card-status failure). The pre-rung `R` line was clean
+(`clk=0007 hc=00 bw=00 es=000009cb`). The `W` line reproduced the wedge
+(`wrc=-11` = `GTA4L_EMMC_ERR_DATA_TIMEOUT`, `err=0000`, `nrm=0011` =
+`CC | BWR`, `pst=03f801f6` = `DAT_INHIBIT=1`, `DAT_LINE_ACTIVE=1`); the
+terminal `FAIL` tuple `1/19/0/0000133a/0000/0011/03f801f6/18` is
+field-identical to the historical B1C 4-bit and B1C-1 1-bit rows (only
+the source location differs, `:2403` here versus `:1085` there). The
+bounded reset self-cleared (`RST rc=0 wr=04 rb=00 it=6 pst=03f800f0
+dinh=0`), about 60 us after six status reads, so stops 10/11 did not
+occur and the controller-side latch is fully recovered. CMD14 then failed
+with `trc=-12`; `tw`/`te` stayed zero because the pattern words are only
+filled after a successful data read. The block-0 recovery read returned
+`Q rc=-17` (`GTA4L_EMMC_ERR_INHIBIT`) with `qb0=00000000` unset, so the
+rung's own data conversation was still not inhibit-clean. `PAD` pre
+equals post (`00009fe4/6000642c/00000000`) and `log=31` (6 identification
+events plus 25 stage-A CMD17 reads; H13 does not re-read EXT_CSD before
+the rung).
+
+The result is a single verdict sample (the two-matching rule is unmet):
+the host data-circuit reset clears the controller's latched data state
+but does not restore the card to a working data conversation. CMD14 fails
+at the CRC layer and the next block read is inhibit-blocked, consistent
+with a card still waiting for the write data phase it never received.
+The card remained readable at the partition level in TWRP (the post-batch
+p69 read matched the post-flash hash), so a fresh TWRP boot reinitialized
+it. F3 remains `[U]`; the device record names the forced post-write
+CMD12/CMD13 drain sample as the next step, to be drafted only after this
+record lands. Evidence:
+`out/gta4l/ram-root-emmc-probe-h13-evidence/` (`flash-record.json`,
+`device-run-record.json`, `device-run-transcript.txt`,
+`postflash-hashes.txt`, `postboot-reread.txt`).
 
 ## 6. Expected report
 

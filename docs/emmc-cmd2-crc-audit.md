@@ -2523,6 +2523,76 @@ follow-up, with a forced-`TOUTVAL=0` 1-bit write as the second. No build,
 flash, boot, card-state write or write-side verdict was added; F3 remains
 `[U]`.
 
+### 2.31 Stage-H13 host batch and hardware run: the bounded data reset clears the controller but not the card (2026-11-03)
+
+The stage-13 rung (`gta4l-emmc-probe=13`, driver §5.3.28) is the first
+write-phase recovery step named by the §2.30 audit. It runs the standard
+read-only identification once (no CMD3 retry), the unchanged stage-A
+content pass at 400 kHz/1-bit as the baseline, one record-only 1-bit CMD19
+write, one bounded SDHCI data-circuit reset (`SOFTWARE_RESET` ← `0x04`,
+self-clear poll), the post-reset `PRESENT_STATE`/`DAT_INHIBIT` sample, one
+CMD14 read with the existing pattern comparison, and the block-0 recovery
+read. It always emits a `GTA4L-EMMC H13 REPORT` (R, W, RST, T, Q lines
+plus the shared PAD and terminal FAIL record) and stops with
+0/10/11/12/13/14/15/16/17; it issues no CMD6, CMD18, CMD25 or user-data
+write and changes no card width or timing. The reset is local to
+`gta4l_emmc_bus_test_reset()`; no other timeout path changes.
+
+Host checks: the probe suite is 139 scenarios and 69 mutation controls
+(was 128/69), adding the ten `probe-h13-*` rows plus the eleventh width
+materialization `report-width-h13`; the core suite is 160 scenarios and 98
+mutation controls (was 148/90). The diagnostic wrapper and payload gate
+accept `emmc-probe-13`. No build, flash or boot was performed when the
+host batch landed.
+
+The device run followed on 2026-11-03. The stage-13 image was built from
+the clean `5c79aa9` base (kernel `3e02d187…`, payload `1fb04a4d…` with a
+7/7 contract, boot image `bc8175e9…` with an 18/18 gate against the
+`ce4d76e8…` v5 baseline; the probe archive `4ffb6d2c…` matches the
+committed sources), flashed BOOT only (pre p69 `0f7ec22c…`, post p69
+`18d2a83d…`, image prefix `bc8175e9…`, unchanged tail `a28b4ea2…`;
+RECOVERY/EFS/sec_efs unchanged) and booted repeatedly without reflashing.
+The owner lost the exact count; the verdict arrived on an estimated ~18th
+boot. The first three boots were not method-captured, the next eight were
+explicitly cold, and the rest were not individually recorded. The
+post-boot p69 re-read matched `18d2a83d…` (battery 92%), binding every
+boot.
+
+About seventeen boots before the verdict stopped pre-identification with
+the H8 CMD3 completion-silent class (`PROBE FAILED stage=13 rc=-7`,
+`step=9`, `fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, the full
+100,000-iteration ≈1.14 s poll window; two were captured field-identically
+and only the `c31` ticks and the stack pages/free differ): facts only,
+re-run not retried, and the rung never ran in those boots.
+
+The verdict boot was `rc=-12 stop=14`. The pre-rung `R` line was clean
+(`clk=0007 hc=00 bw=00 es=000009cb`). The `W` line reproduced the
+recorded write wedge (`wrc=-11`, `err=0000`, `nrm=0011`, `pst=03f801f6`;
+the terminal tuple `1/19/0/0000133a/0000/0011/03f801f6/18` is
+field-identical to the B1C/B1C-1 rows, only the source location differs).
+The bounded reset self-cleared (`RST rc=0 wr=04 rb=00 it=6
+pst=03f800f0 dinh=0`, about 60 us), so the controller latch is fully
+recovered and stops 10/11 did not occur. CMD14 then failed with
+`ERR_DATA_CRC` (`trc=-12`); `tw`/`te` are zero because the pattern words
+are only filled after a successful data read. The block-0 recovery read
+was refused with `ERR_INHIBIT` (`Q rc=-17`, `qb0` unset), so the rung's
+data conversation was still not inhibit-clean. `PAD` pre equals post and
+`log=31` (6 identification events plus 25 stage-A CMD17 reads).
+
+The measured row is that the host data-circuit reset clears the
+controller's latched data state but does not restore the card: CMD14
+fails at the CRC layer and the next block read is inhibit-blocked,
+consistent with a card still waiting for the write data phase it never
+received. The card remained readable at the partition level in TWRP
+after the batch (the p69 re-read matched the post-flash hash), so a fresh
+TWRP boot reinitialized it. The verdict is a single sample (the
+two-matching rule is unmet), F3 remains `[U]`, and the device record
+names the forced post-write CMD12/CMD13 drain sample as the next step, to
+be drafted only after this record lands. Evidence:
+`out/gta4l/ram-root-emmc-probe-h13-evidence/` (`flash-record.json`,
+`device-run-record.json`, `device-run-transcript.txt`,
+`postflash-hashes.txt`, `postboot-reread.txt`).
+
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 
 ### 3.1 Command sequence

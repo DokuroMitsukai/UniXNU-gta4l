@@ -285,6 +285,30 @@ partition layout, payload policy and packaging.
   and names a data-reset + CMD14 rung as the recommended owner-gated
   follow-up (the forced-`TOUTVAL=0` 1-bit write is second). No device work
   was performed and no write-side goal is claimed.
+  The first wedge-ladder rung is H13 (`gta4l-emmc-probe=13`), implemented
+  and simulator-tested: after the stage-A pass it issues one 1-bit CMD19
+  write, one bounded SDHCI data-circuit reset (`SOFTWARE_RESET` data bit
+  with a self-clear poll), the post-reset `PRESENT_STATE`, one CMD14 read
+  with the existing pattern comparison and a block-0 recovery read, then
+  reports (`GTA4L-EMMC H13 REPORT`) and stops with 0/10/11/12/13/14/15/16/17.
+  It issues no CMD6, CMD18, CMD25 or user-data write and changes no card
+  width or timing. Core 160/98 (was 148/90); probe 139/69 (was 128/69);
+  the `report-width-h13` fixture is the eleventh width materialization.
+  The device run followed on 2026-11-03 (BOOT-only flash, p69 `0f7ec22c…`
+  → `18d2a83d…`, boot count lost, verdict on an estimated ~18th boot
+  without reflashing): about seventeen boots stopped pre-identification at
+  the H8 CMD3 completion timeout (facts only), and the only H13 verdict was
+  `rc=-12 stop=14`. The CMD19 write reproduced the wedge (`wrc=-11`,
+  `err=0000`, `nrm=0011`, `pst=03f801f6`; the same terminal tuple as the
+  B1C/B1C-1 rows), the bounded reset self-cleared (`rc=0 wr=04 rb=00 it=6
+  dinh=0`), but CMD14 failed with `ERR_DATA_CRC` (`trc=-12`, no pattern
+  words) and the block-0 recovery read was refused with `ERR_INHIBIT`
+  (`rc=-17`). The reset clears the controller latch but does not restore
+  the card's data conversation; the verdict is a single sample (the
+  two-matching rule is unmet) and F3 remains unproven. The flash and boot
+  records are in `out/gta4l/ram-root-emmc-probe-h13-evidence/`. The next
+  rung is the forced post-write CMD12/CMD13 drain sample, to be drafted
+  only after this record lands.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and
