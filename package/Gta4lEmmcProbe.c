@@ -411,7 +411,10 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * stage-A content pass and returns to legacy before its B2 report. Stage 9
  * is the H9 identification rung: it runs the read-only identification
  * sequence once with one designed duplicate CMD3 after a completion
- * timeout, then always stops with the H9 report. */
+ * timeout, then always stops with the H9 report. Stage 10 is the H10
+ * width-at-HS continuation: after the stage-A pass it enters HS, switches
+ * the BUS_WIDTH to 4-bit at HS, runs one CMD19 round trip and the content
+ * pass at 4-bit/50 MHz, reverts both and stops with the H10 report. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -420,7 +423,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 9)) {
+	if ((value < 1) || (value > 10)) {
 		return 0;
 	}
 	return value;
@@ -1508,6 +1511,266 @@ gta4l_emmc_probe_b2_run(struct gta4l_emmc_host *host,
 	    GTA4L_EMMC_OK, 0);
 }
 
+/* H10 width-at-HS continuation capture. R holds the 400 kHz identity
+ * samples, S the HS entry, W the 4-bit BUS_WIDTH switch at HS, B the
+ * CMD19/CMD14 round trip at 4-bit, T the content pass at 4-bit/HS, V the
+ * width revert, X the HS revert and Q the recovery read. Every value is an
+ * observed sample. */
+struct gta4l_emmc_probe_h10 {
+	struct gta4l_emmc_hs_result hs;
+	struct gta4l_emmc_hs_result hs_revert;
+	struct gta4l_emmc_bus_result width;
+	struct gta4l_emmc_bus_result width_revert;
+	struct gta4l_emmc_bus_result bus_test;
+	struct gta4l_emmc_probe_bus content;
+	uint32_t pre_hs;
+	uint32_t pre_width;
+	uint32_t pre_clock;
+	uint32_t pre_hc;
+	uint32_t pre_sum;
+	uint32_t pre_qdsd;
+	uint32_t pre_dll;
+	uint32_t pre_dst;
+	uint32_t content_attempted;
+	uint32_t tested;
+	int      switch_rc;
+	int      width_rc;
+	int      content_rc;
+	int      width_revert_rc;
+	int      hs_revert_rc;
+	int      q_result;
+	uint32_t q_block0_sum;
+};
+
+static void
+gta4l_emmc_probe_report_h10(const struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_h10 *h10, int rc, int stop)
+{
+	uint8_t hci = gta4l_emmc_probe_read8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	uint32_t qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	uint32_t dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	uint32_t dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+
+	panic("GTA4L-EMMC H10 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
+	    "rev=%u hci=%02x step=%u log=%u bw=%02x\n"
+	    "GTA4L-EMMC H10 R clk=%04x hs=%02x bw=%02x hc=%02x es=%08x\n"
+	    "GTA4L-EMMC H10 S rc=%d sw=%d c6=%08x hs=%02x clk=%04x "
+	    "rcg=%08x sum=%08x\n"
+	    "GTA4L-EMMC H10 W rc=%d sw=%u swrc=%d c6=%08x hb=%02x "
+	    "ha=%02x es=%08x\n"
+	    "GTA4L-EMMC H10 B rc=%d tt=%u trc=%d tw=%08x te=%08x\n"
+	    "GTA4L-EMMC H10 T rc=%d att=%u same=%u div=%u b0=%08x "
+	    "b1=%08x data=%08x last=%08x\n"
+	    "GTA4L-EMMC H10 V rc=%d sw=%u swrc=%d c6=%08x hb=%02x "
+	    "ha=%02x es=%08x\n"
+	    "GTA4L-EMMC H10 X rc=%d sw=%d c6=%08x hs=%02x clk=%04x "
+	    "rcg=%08x sum=%08x\n"
+	    "GTA4L-EMMC H10 Q rc=%d qb0=%08x\n"
+	    "GTA4L-EMMC H10 BLOCKS"
+	    " 2=%08x 3=%08x 4=%08x 5=%08x 6=%08x 7=%08x 8=%08x 9=%08x"
+	    " 10=%08x 11=%08x 12=%08x 13=%08x 14=%08x 15=%08x 16=%08x"
+	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
+	    "GTA4L-EMMC H10 PAD pre=%08x/%08x/%08x post=%08x/%08x/%08x\n"
+	    "GTA4L-EMMC H10 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
+	    (unsigned int)host->ext_csd_rev, (unsigned int)hci,
+	    host->last_step, probe->log_count,
+	    (unsigned int)host->bus_width,
+	    (unsigned int)h10->pre_clock, (unsigned int)h10->pre_hs,
+	    (unsigned int)h10->pre_width, (unsigned int)h10->pre_hc,
+	    h10->pre_sum,
+	    h10->switch_rc, h10->hs.switch_result,
+	    h10->hs.switch_status,
+	    (unsigned int)h10->hs.hs_after, (unsigned int)h10->hs.clock,
+	    h10->hs.rcg_after, h10->hs.readback_sum,
+	    h10->width_rc, h10->width.switched, h10->width.switch_result,
+	    h10->width.switch_status,
+	    (unsigned int)h10->width.host_before,
+	    (unsigned int)h10->width.host_after,
+	    h10->width.readback_sum,
+	    h10->bus_test.test_result, h10->tested,
+	    h10->bus_test.test_result, h10->bus_test.test_word,
+	    h10->bus_test.test_expected,
+	    h10->content_rc, h10->content_attempted,
+	    h10->content.same, h10->content.div,
+	    h10->content.block0_sum, h10->content.block1_sum,
+	    h10->content.data_sum, h10->content.last_sum,
+	    h10->width_revert_rc, h10->width_revert.switched,
+	    h10->width_revert.switch_result,
+	    h10->width_revert.switch_status,
+	    (unsigned int)h10->width_revert.host_before,
+	    (unsigned int)h10->width_revert.host_after,
+	    h10->width_revert.readback_sum,
+	    h10->hs_revert_rc, h10->hs_revert.switch_result,
+	    h10->hs_revert.switch_status,
+	    (unsigned int)h10->hs_revert.hs_after,
+	    (unsigned int)h10->hs_revert.clock,
+	    h10->hs_revert.rcg_after, h10->hs_revert.readback_sum,
+	    h10->q_result, h10->q_block0_sum,
+	    h10->content.blocks[0], h10->content.blocks[1],
+	    h10->content.blocks[2], h10->content.blocks[3],
+	    h10->content.blocks[4], h10->content.blocks[5],
+	    h10->content.blocks[6], h10->content.blocks[7],
+	    h10->content.blocks[8], h10->content.blocks[9],
+	    h10->content.blocks[10], h10->content.blocks[11],
+	    h10->content.blocks[12], h10->content.blocks[13],
+	    h10->content.blocks[14], h10->content.blocks[15],
+	    h10->content.blocks[16], h10->content.blocks[17],
+	    h10->content.blocks[18], h10->content.blocks[19],
+	    h10->content.blocks[20],
+	    h10->pre_qdsd, h10->pre_dll, h10->pre_dst, qdsd, dll, dst,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
+/* Revert the width at HS and then the timing class. Best effort: the HS
+ * revert runs even when the width revert fails. Returns 0, 15 (width
+ * revert) or 16 (HS revert). */
+static int
+gta4l_emmc_probe_h10_unwind(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe_h10 *h10)
+{
+	h10->width_revert_rc = gta4l_emmc_set_bus_width(host, 1u,
+	    &h10->width_revert);
+	h10->hs_revert_rc = gta4l_emmc_set_hs_timing(host, 0u,
+	    &h10->hs_revert);
+	if (h10->width_revert_rc != GTA4L_EMMC_OK) {
+		return 15;
+	}
+	if (h10->hs_revert_rc != GTA4L_EMMC_OK) {
+		return 16;
+	}
+	return 0;
+}
+
+/* Run the stage-10 width-at-HS continuation: stage-A at 400 kHz/1-bit is
+ * the baseline, then HS entry, the 4-bit switch at HS, one CMD19/CMD14
+ * round trip, the stage-A content pass at 4-bit/HS, the reverts and the
+ * recovery read. Report and stop in every case; no 8-bit step, no retry. */
+static void
+gta4l_emmc_probe_h10_run(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe, struct gta4l_emmc_probe_range *range,
+    const uint8_t *block0, const uint8_t *block1)
+{
+	static uint8_t qblock[GTA4L_EMMC_BLOCK_BYTES];
+	struct gta4l_emmc_probe_bus base;
+	struct gta4l_emmc_probe_h10 h10;
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t index;
+	uint32_t sum;
+	int unwind;
+	int rc;
+
+	bzero(&base, sizeof(base));
+	bzero(&h10, sizeof(h10));
+	base.block0_sum = gta4l_emmc_probe_sum(block0,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	base.block1_sum = gta4l_emmc_probe_sum(block1,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	for (index = 0; index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
+		base.blocks[index] = range->array[index];
+	}
+	base.data_sum = range->data_sum;
+	base.last_sum = range->last_sum;
+
+	h10.pre_clock = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CLOCK_CONTROL);
+	h10.pre_hc = gta4l_emmc_probe_read8(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
+	h10.pre_qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	h10.pre_dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	h10.pre_dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		h10.switch_rc = rc;
+		gta4l_emmc_probe_report_h10(host, probe, &h10, rc, 10);
+	}
+	h10.pre_hs = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
+	h10.pre_width = ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF];
+	for (index = 0, sum = 0; index < GTA4L_EMMC_EXT_CSD_BYTES;
+	    index++) {
+		sum += ext_csd[index];
+	}
+	h10.pre_sum = sum;
+
+	h10.switch_rc = gta4l_emmc_set_hs_timing(host, 1u, &h10.hs);
+	if (h10.switch_rc != GTA4L_EMMC_OK) {
+		h10.hs_revert_rc = gta4l_emmc_set_hs_timing(host, 0u,
+		    &h10.hs_revert);
+		gta4l_emmc_probe_report_h10(host, probe, &h10,
+		    h10.switch_rc,
+		    (h10.hs.clock_result != GTA4L_EMMC_OK) ? 11 : 10);
+	}
+
+	h10.width_rc = gta4l_emmc_set_bus_width(host, 4u, &h10.width);
+	if (h10.width_rc != GTA4L_EMMC_OK) {
+		unwind = gta4l_emmc_probe_h10_unwind(host, &h10);
+		gta4l_emmc_probe_report_h10(host, probe, &h10,
+		    h10.width_rc, (unwind != 0) ? unwind : 12);
+	}
+
+	h10.tested = 1u;
+	rc = gta4l_emmc_bus_test(host, 4u, &h10.bus_test);
+	if ((rc != GTA4L_EMMC_OK) &&
+	    (h10.bus_test.test_result == GTA4L_EMMC_OK)) {
+		h10.bus_test.test_result = rc;
+	}
+	if (rc != GTA4L_EMMC_OK) {
+		/* The CMD19 wedge leaves the controller inhibited; the B1C
+		 * evidence stopped at the same point without issuing further
+		 * commands, so the width/timing reverts are recorded as
+		 * not-run and the panic reboot resets the card. */
+		gta4l_emmc_probe_report_h10(host, probe, &h10, rc, 13);
+	}
+
+	h10.content_attempted = 1u;
+	h10.content_rc = gta4l_emmc_probe_b1_content(host, range,
+	    &h10.content, 0);
+	if (h10.content_rc == GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_b1_compare(range, &base, &h10.content);
+	}
+	unwind = gta4l_emmc_probe_h10_unwind(host, &h10);
+	if (h10.content_rc != GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_report_h10(host, probe, &h10,
+		    h10.content_rc, (unwind != 0) ? unwind : 14);
+	}
+	if (h10.content.same == 0u) {
+		gta4l_emmc_probe_report_h10(host, probe, &h10,
+		    GTA4L_EMMC_PROBE_ERR_CONTENT,
+		    (unwind != 0) ? unwind : 14);
+	}
+	if (unwind != 0) {
+		gta4l_emmc_probe_report_h10(host, probe, &h10,
+		    (unwind == 15) ? h10.width_revert_rc :
+		    h10.hs_revert_rc, unwind);
+	}
+
+	h10.q_result = gta4l_emmc_read_block(host, 0u, qblock);
+	if (h10.q_result != GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_report_h10(host, probe, &h10,
+		    h10.q_result, 17);
+	}
+	h10.q_block0_sum = gta4l_emmc_probe_sum(qblock,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	if (h10.q_block0_sum != base.block0_sum) {
+		gta4l_emmc_probe_report_h10(host, probe, &h10,
+		    GTA4L_EMMC_PROBE_ERR_CONTENT, 17);
+	}
+	gta4l_emmc_probe_report_h10(host, probe, &h10,
+	    GTA4L_EMMC_OK, 0);
+}
+
 /* Run the stage-7 audit: read back the timeout configuration (R1), arm the
  * minimum data timeout and read 8 blocks (E1), re-read block 0 to prove the bus
  * recovered (Q), then repeat the 1-bit CMD19 write test under the extended
@@ -2087,6 +2350,11 @@ gta4l_emmc_probe_run(void)
 
 	if (stage == 8) {
 		gta4l_emmc_probe_b2_run(&host, &probe, &range, block0, block1);
+	}
+
+	if (stage == 10) {
+		gta4l_emmc_probe_h10_run(&host, &probe, &range, block0,
+		    block1);
 	}
 
 	/* Stage B1: switch the card/host to 4-bit then 8-bit, run the

@@ -29,6 +29,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	struct gta4l_emmc_probe_bus w4;
 	struct gta4l_emmc_probe_bus w8;
 	struct gta4l_emmc_probe_b2 b2;
+	struct gta4l_emmc_probe_h10 h10;
 	struct gta4l_emmc_host host;
 	uint32_t index;
 
@@ -39,6 +40,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	memset(&w4, 0, sizeof(w4));
 	memset(&w8, 0, sizeof(w8));
 	memset(&b2, 0, sizeof(b2));
+	memset(&h10, 0, sizeof(h10));
 	memset(&host, 0, sizeof(host));
 	memset(block0, 0xFF, sizeof(block0));
 	memset(block1, 0xFF, sizeof(block1));
@@ -356,7 +358,7 @@ gta4l_emmc_probe_width_fixture(int form)
 		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		gta4l_emmc_probe_report_b2(&host, &probe, &b2,
 		    GTA4L_EMMC_ERR_CLOCK, 13);
-	} else {
+	} else if (form == 6) {
 		/* H9 form: both attempt slots at their field bounds and a
 		 * failed duplicate so the stop code stays non-clean. */
 		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
@@ -416,6 +418,75 @@ gta4l_emmc_probe_width_fixture(int form)
 			capture->response[3] = 0xFFFFFFFFu;
 		}
 		gta4l_emmc_probe_report_h9(&host, &probe, &regs,
+		    GTA4L_EMMC_ERR_UNSUPPORTED, 13);
+	} else {
+		/* H10 form: both switch results, the bus test, the content
+		 * pass and the reverts at their field bounds, and a failed
+		 * recovery read. */
+		h10.pre_hs = 0xFFu;
+		h10.pre_width = 0xFFu;
+		h10.pre_clock = 0xFFFFu;
+		h10.pre_hc = 0xFFu;
+		h10.pre_sum = 0xFFFFFFFFu;
+		h10.pre_qdsd = 0xFFFFFFFFu;
+		h10.pre_dll = 0xFFFFFFFFu;
+		h10.pre_dst = 0xFFFFFFFFu;
+		h10.hs.timing = 1u;
+		h10.hs.hs_before = 0xFFu;
+		h10.hs.hs_after = 0xFFu;
+		h10.hs.rcg_before = 0xFFFFFFFFu;
+		h10.hs.rcg_after = 0xFFFFFFFFu;
+		h10.hs.clock = 0xFFFFu;
+		h10.hs.switch_status = 0xFFFFFFFFu;
+		h10.hs.readback_sum = 0xFFFFFFFFu;
+		h10.hs.switch_result = GTA4L_EMMC_ERR_TIMING;
+		h10.hs.clock_result = GTA4L_EMMC_ERR_CLOCK;
+		h10.width.requested = 4u;
+		h10.width.switched = 0xFFu;
+		h10.width.switch_result = GTA4L_EMMC_ERR_BUS_WIDTH;
+		h10.width.switch_status = 0xFFFFFFFFu;
+		h10.width.host_before = 0xFFu;
+		h10.width.host_after = 0xFFu;
+		h10.width.readback_sum = 0xFFFFFFFFu;
+		h10.width_rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+		h10.tested = 1u;
+		h10.bus_test.test_result = GTA4L_EMMC_ERR_BUS_TEST;
+		h10.bus_test.test_word = 0xFFFFFFFFu;
+		h10.bus_test.test_expected = 0xFFFFFFFFu;
+		h10.content_attempted = 1u;
+		h10.content.same = 0u;
+		h10.content.div = 0xFFFFFFFFu;
+		h10.content.block0_sum = 0xFFFFFFFFu;
+		h10.content.block1_sum = 0xFFFFFFFFu;
+		h10.content.data_sum = 0xFFFFFFFFu;
+		h10.content.last_sum = 0xFFFFFFFFu;
+		memset(h10.content.blocks, 0xFF, sizeof(h10.content.blocks));
+		h10.content_rc = GTA4L_EMMC_ERR_DATA_CRC;
+		h10.width_revert.requested = 1u;
+		h10.width_revert.switched = 0xFFu;
+		h10.width_revert.switch_result = GTA4L_EMMC_ERR_BUS_WIDTH;
+		h10.width_revert.switch_status = 0xFFFFFFFFu;
+		h10.width_revert.host_before = 0xFFu;
+		h10.width_revert.host_after = 0xFFu;
+		h10.width_revert.readback_sum = 0xFFFFFFFFu;
+		h10.width_revert_rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+		h10.hs_revert = h10.hs;
+		h10.hs_revert.timing = 0u;
+		h10.hs_revert.switch_result = GTA4L_EMMC_ERR_TIMING;
+		h10.hs_revert.clock_result = GTA4L_EMMC_ERR_CLOCK;
+		h10.hs_revert_rc = GTA4L_EMMC_ERR_TIMING;
+		h10.q_result = GTA4L_EMMC_ERR_DATA_CRC;
+		h10.q_block0_sum = 0xFFFFFFFFu;
+		host.fail_valid = 1u;
+		host.fail_index = 0xFFFFFFFFu;
+		host.fail_argument = 0xFFFFFFFFu;
+		host.fail_command = 0xFFFFFFFFu;
+		host.fail_error = 0xFFFFu;
+		host.fail_normal = 0xFFFFu;
+		host.fail_present = 0xFFFFFFFFu;
+		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		gta4l_emmc_probe_report_h10(&host, &probe, &h10,
 		    GTA4L_EMMC_ERR_UNSUPPORTED, 13);
 	}
 }

@@ -204,6 +204,18 @@ partition layout, payload policy and packaging.
   retry policy is adopted and the flake stays per-boot random (3/4 this
   batch). F3 remains unproven. The flash record and transcript are in
   `out/gta4l/ram-root-emmc-probe-h9-evidence/`.
+  The next rung is H10 (`gta4l-emmc-probe=10`), the width-at-HS
+  continuation, implemented and simulator-tested: after the stage-A pass it
+  enters HS (byte 185 = 1, 50 MHz), switches EXT_CSD BUS_WIDTH (byte 183)
+  to 4-bit at HS, runs one CMD19/CMD14 round trip and the content pass at
+  4-bit/HS, then reverts the width and the timing and re-reads block 0.
+  It always reports (`GTA4L-EMMC H10 REPORT`) and stops with
+  0/10/11/12/13/14/15/16/17; it issues no 8-bit step, no retry and no
+  user-data write. Core 148/90 unchanged; probe 102/56 (was 91/51); the
+  `report-width-h10` fixture is the eighth width materialization. The
+  device run needs a fresh explicit BOOT-only approval naming the
+  byte-185/byte-183/CMD19 combination and the 50 MHz ramp. F3 remains
+  unproven.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

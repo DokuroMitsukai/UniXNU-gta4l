@@ -164,6 +164,17 @@ SCENARIOS = [
     'probe-b2-revert-fail',
     'probe-b2-q-fail',
     'probe-b2-pre-read-fail',
+    'probe-h10-pass',
+    'probe-h10-hs-ignored',
+    'probe-h10-clock-busy',
+    'probe-h10-width-ignored',
+    'probe-h10-bustest-timeout',
+    'probe-h10-bustest-mismatch',
+    'probe-h10-content-div',
+    'probe-h10-content-read',
+    'probe-h10-width-revert-fail',
+    'probe-h10-hs-revert-fail',
+    'probe-h10-q-fail',
     'probe-b1c-success',
     'probe-b1c-pass',
     'probe-b1c-late-commit',
@@ -192,6 +203,7 @@ WIDTH_SCENARIOS = (
     'report-width-b1',
     'report-width-b2',
     'report-width-h9',
+    'report-width-h10',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'
@@ -792,6 +804,36 @@ MUTATIONS = [
      '\tif (dto.arm != expected) {\n',
      'probe-dto-arm-ro',
      'the arm readback artifact does not keep stop 10'),
+    ('h10-width-step-skipped',
+     '\th10.width_rc = gta4l_emmc_set_bus_width(host, 4u, &h10.width);\n',
+     '\th10.width_rc = GTA4L_EMMC_OK;\n',
+     'probe-h10-width-ignored',
+     'the ignored H10 width switch does not keep stop 12'),
+    ('h10-width-wrong-stop',
+     '\t\tgta4l_emmc_probe_report_h10(host, probe, &h10,\n'
+     '\t\t    h10.width_rc, (unwind != 0) ? unwind : 12);\n',
+     '\t\tgta4l_emmc_probe_report_h10(host, probe, &h10,\n'
+     '\t\t    h10.width_rc, (unwind != 0) ? unwind : 13);\n',
+     'probe-h10-width-ignored',
+     'the ignored H10 width switch does not keep stop 12'),
+    ('h10-silent-revert',
+     '\th10->width_revert_rc = gta4l_emmc_set_bus_width(host, 1u,\n'
+     '\t    &h10->width_revert);\n',
+     '\th10->width_revert_rc = GTA4L_EMMC_OK;\n',
+     'probe-h10-content-div',
+     'the H10 divergence run did not revert the width'),
+    ('h10-content-skipped',
+     '\th10.content_rc = gta4l_emmc_probe_b1_content(host, range,\n'
+     '\t    &h10.content, 0);\n',
+     '\th10.content_rc = GTA4L_EMMC_OK;\n',
+     'probe-h10-pass',
+     'the H10 pass does not name its stop'),
+    ('h10-bustest-continues',
+     '\t\tgta4l_emmc_probe_report_h10(host, probe, &h10, rc, 13);\n'
+     '\t}\n',
+     '\t\t(void)rc;\n\t}\n',
+     'probe-h10-bustest-timeout',
+     'the H10 bus-test timeout does not keep stop 13'),
 ]
 
 

@@ -60,7 +60,7 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
 | `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 148 scenarios and 90 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 91 scenarios and 51 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 102 scenarios and 56 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -2207,6 +2207,58 @@ out, warm boot 2 was clean, warm boots 3/4 timed out; 3/4 this batch).
 The `A2L` poll zeros are the latched-error exit's expected shape because
 that exit never validates the poll capture. F3 stays `[U]`; no width,
 write, DMA, frequency or EXT_CSD work was done.
+
+### 5.3.23 Stage-H10 width-at-HS continuation (gta4l-emmc-probe=10, host batch 2026-11-03)
+
+The `gta4l-emmc-probe=10` stage runs the standard read-only identification
+sequence once (no retry hook), the unchanged stage-A content pass at
+400 kHz/1-bit as the baseline, then HS entry (byte 185 = 1, RCG `0x20B`,
+readbacks), a 4-bit BUS_WIDTH switch at HS (byte 183 = 1, CMD13 TRAN wait,
+`HOST_CONTROL` write/readback and the EXT_CSD re-read at the attempted
+width), one CMD19/CMD14 round trip at 4-bit, the full stage-A content pass
+at 4-bit/HS, the width revert (byte 183 = 0), the HS revert (clock to
+400 kHz first, then byte 185 = 0) and a block-0 recovery read. It always
+emits `GTA4L-EMMC H10 REPORT` and stops; there is no 8-bit step, no
+on-device retry and no fall-through, and the only card-state writes are
+bytes 185 and 183 (the only data write is the 4-byte CMD19 pattern).
+
+The stage reuses the opt-in core calls (`gta4l_emmc_set_hs_timing()`,
+`gta4l_emmc_set_bus_width()`, `gta4l_emmc_bus_test()`) and the shared
+content/compare helpers; the stage parser accepts 1..10. The report carries
+a header (`rc`, `stop`, the identification fields, `hci`, `step`, `log`,
+`bw`), an `R` identity line (byte 185, byte 183, `CLOCK_CONTROL`,
+`HOST_CONTROL` and the EXT_CSD sum at 400 kHz), an `S` line (HS entry), a
+`W` line (width switch: `sw`, `swrc`, `c6`, `hb`/`ha`, `es`), a `B` line
+(bus test: `tt`, `trc`, `tw`, `te`), a `T` line (`same`, `div`, the content
+sums), a `V` line (width revert), an `X` line (HS revert), a `Q` line
+(recovery read), the shared `BLOCKS`/`PAD` lines and the terminal `FAIL`
+record.
+
+Stop codes: 0 pass; 10 byte-185 readback mismatch or HS switch error; 11 HS
+clock failure; 12 width switch failure (CMD6/R1 error, empty readback or
+byte-183 readback mismatch); 13 bus-test failure at 4-bit/HS (a CMD19
+write-phase wedge leaves the controller inhibited, so the reverts are
+recorded as not-run and the rung stops immediately, like the B1C stop);
+14 content read failure or first divergence at 4-bit/HS; 15 width-revert
+failure; 16 HS-revert failure; 17 recovery-read failure or sum mismatch.
+
+Host checks: the probe suite is 102 scenarios and 56 mutation controls (was
+91/51), adding `probe-h10-pass`, `probe-h10-hs-ignored`,
+`probe-h10-clock-busy`, `probe-h10-width-ignored`,
+`probe-h10-bustest-timeout`, `probe-h10-bustest-mismatch`,
+`probe-h10-content-div`, `probe-h10-content-read`,
+`probe-h10-width-revert-fail`, `probe-h10-hs-revert-fail` and
+`probe-h10-q-fail` plus five mutations (a skipped width step, a wrong stop
+code, a silent width revert, a skipped content pass and a bus-test failure
+that continues into the inhibited controller). The core suite is unchanged
+at 148/90. The `report-width-h10` fixture is the eighth width
+materialization, and the diagnostic wrapper and payload gate accept
+`emmc-probe-10`.
+
+No build, flash or boot has been performed. The device run needs a fresh
+explicit BOOT-only approval that names the byte-185 enter and clear, the
+byte-183 4-bit switch and its revert, the CMD19/CMD14 4-byte pattern and
+the 50 MHz HS clock ramp. F3 remains `[U]`.
 
 ## 6. Expected report
 

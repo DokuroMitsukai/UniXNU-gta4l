@@ -2286,6 +2286,48 @@ DMA, CQE, ICE, HS200, frequency-measurement or EXT_CSD result; a
 cold-vs-warm correlation; the byte-183 paradox; the `trc=-20` class; or
 F3.
 
+### 2.27 Stage-H10 host batch: the width-at-HS rung is simulator-tested (2026-11-03)
+
+The stage-10 rung (`gta4l-emmc-probe=10`, driver §5.3.23) is the H10
+width-at-HS continuation: the standard read-only identification once (no
+CMD3 retry — the H9 verdict), the unchanged stage-A content pass at
+400 kHz/1-bit as the baseline, then HS entry, the 4-bit BUS_WIDTH switch at
+HS, one CMD19/CMD14 round trip, the content pass at 4-bit/HS, the width and
+HS reverts and a block-0 recovery read. It always emits a
+`GTA4L-EMMC H10 REPORT` and stops with 0/10/11/12/13/14/15/16/17; there is
+no 8-bit step, no retry and no fall-through, and the only card writes are
+bytes 185/183 and the 4-byte CMD19 pattern.
+
+The rung exists because F3's legacy-timing observations are negative but
+narrow: at 400 kHz the 4-bit switch left byte 183 at 0 with a clean CMD6 R1
+and the host width set/read back, the EXT_CSD re-read returned the 1-bit
+content, and the CMD19 write phase timed out at both 1-bit and 4-bit.
+Whether the card accepts the width switch, or completes the CMD19 write,
+once the HS timing class is established is the unmeasured variable; the
+decision table treats a clean S/W/B/T/V/X/Q sequence as the F3-at-4-bit
+candidate, the legacy width tuple at HS as the "timing class excluded"
+row, the legacy CMD19 write-phase class at HS as the "timing class
+excluded" row for the data-write path, and divergence as the integrity
+catch.
+
+Host checks: the probe suite is 102 scenarios and 56 mutation controls (was
+91/51), adding `probe-h10-pass`, `probe-h10-hs-ignored`,
+`probe-h10-clock-busy`, `probe-h10-width-ignored`,
+`probe-h10-bustest-timeout`, `probe-h10-bustest-mismatch`,
+`probe-h10-content-div`, `probe-h10-content-read`,
+`probe-h10-width-revert-fail`, `probe-h10-hs-revert-fail` and
+`probe-h10-q-fail` plus five mutation controls (a skipped width step, a
+wrong stop code, a silent width revert, a skipped content pass and a
+bus-test failure that continues into the inhibited controller). The core
+suite is unchanged at 148/90. The `report-width-h10` fixture is the eighth
+width materialization and bounds the H10 report inside 2048 bytes; the
+diagnostic wrapper and payload gate accept `emmc-probe-10`.
+
+No build, flash or boot has been performed; F3 remains `[U]`. The device
+run needs a fresh explicit BOOT-only approval that names the byte-185
+enter/clear, the byte-183 4-bit switch and its revert, the CMD19/CMD14
+4-byte pattern and the 50 MHz HS clock ramp.
+
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 
 ### 3.1 Command sequence

@@ -185,6 +185,12 @@ static uint32_t hs_content_lba = 0xFFFFFFFFu;
 static int bus_test_bad;
 static uint8_t bus_test_bad_width;
 static int cmd19_1bit_timeout;
+/* Stage-H10 width-at-HS modeling. cmd19_4bit_timeout reproduces the observed
+ * CMD19 write-phase stall when the host is at 4-bit: CC and BufferWriteReady
+ * latch, TC never follows and no error bit is set. cmd6_ignore_revert leaves
+ * byte 183 at 1 for the value-0 revert so the width unwind fails. */
+static int cmd19_4bit_timeout;
+static int cmd6_ignore_revert;
 static uint8_t bus_test_written[GTA4L_EMMC_BUS_TEST_8_BYTES];
 static unsigned int bus_test_written_count;
 static uint16_t bus_test_width;
@@ -900,7 +906,9 @@ sim_command(uint16_t command)
 				cmd6_late_reads = 0;
 			} else if ((cmd6_ignore == 0) &&
 			    ((cmd6_ignore_width8 == 0) ||
-			    (value != 2u))) {
+			    (value != 2u)) &&
+			    ((cmd6_ignore_revert == 0) ||
+			    (value != 0u))) {
 				ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] =
 				    (uint8_t)value;
 			}
@@ -928,6 +936,20 @@ sim_command(uint16_t command)
 			 * but TC never follows and no error bit is set. The
 			 * present state is the observed write-direction
 			 * sample, stored at the terminal point only. */
+			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+			    0x00000900u);
+			sim_store(sdhci, GTA4L_EMMC_REG_PRESENT_STATE, 4u,
+			    0x03f801f6u);
+			normal_int |= GTA4L_EMMC_INT_CC |
+			    GTA4L_EMMC_INT_BWR;
+			return;
+		}
+		if ((cmd19_4bit_timeout != 0) &&
+		    (sim_host_width_code() ==
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4)) {
+			/* Same terminal class as the 1-bit wedge, now with the
+			 * host driving 4-bit: the write phase ACKs but never
+			 * completes. */
 			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
 			    0x00000900u);
 			sim_store(sdhci, GTA4L_EMMC_REG_PRESENT_STATE, 4u,
@@ -965,12 +987,11 @@ sim_command(uint16_t command)
 			bad_command_format = 1;
 			bus_test_width = GTA4L_EMMC_BUS_TEST_8_BYTES;
 		}
-		/* The width code follows the CMD6 count: no switch yet is the
-		 * 1-bit discriminator, one switch is the 4-bit rung and two
-		 * switches are the 8-bit rung. This keeps the 1-bit and 4-bit
-		 * tests (both a 4-byte block) distinguishable. */
-		width_code = (cmd6_count == 0u) ? 0u :
-		    (cmd6_count == 1u) ? 1u : 2u;
+		/* The width code follows the host width the controller
+		 * currently drives, not the CMD6 count: the H10 rung's first
+		 * CMD6 is the byte-185 switch, so a count-based code would
+		 * misname its 4-bit test as 8-bit. */
+		width_code = sim_host_width_code();
 		for (index2 = 0; index2 < bus_test_width; index2++) {
 			if ((bus_test_bad != 0) &&
 			    ((bus_test_bad_width == 0u) ||
@@ -1419,11 +1440,13 @@ gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset, uint32_t value)
 				bus_test_written_count += 4u;
 				if (bus_test_written_count >=
 				    bus_test_width) {
-					if ((cmd19_1bit_timeout != 0) &&
-					    (cmd6_count == 0u)) {
-						/* 1-bit write-phase timeout:
-						 * BufferWriteReady stays
-						 * latched and TC never
+					if (((cmd19_1bit_timeout != 0) &&
+					    (cmd6_count == 0u)) ||
+					    ((cmd19_4bit_timeout != 0) &&
+					    (sim_host_width_code() ==
+					    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4))) {
+						/* Write-phase timeout: BufferWriteReady
+						 * stays latched and TC never
 						 * follows. */
 					} else {
 						normal_int &= (uint16_t)
@@ -1869,6 +1892,90 @@ static const uint8_t order_probe_b2[] = {
 	GTA4L_EMMC_CMD8,
 	GTA4L_EMMC_CMD17
 };
+/* Stage 10: the stage-A pass, then the H10 sequence - the pre-rung EXT_CSD
+ * read, the HS enter, the 4-bit switch at HS, one CMD19/CMD14 round trip,
+ * the 25-value content pass at 4-bit/HS, the width revert, the HS revert and
+ * one block-0 recovery read. A failure is a prefix of this order. */
+static const uint8_t order_probe_h10[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17
+};
+#define ORDER_H10_BASE 33u
+static uint8_t h10_order_buffer[160];
+static const uint8_t h10_suffix_hs_ignored[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h10_suffix_width_ignored[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h10_suffix_bustest_timeout[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h10_suffix_bustest_mismatch[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h10_suffix_content_read[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
 /* The B2 failure paths deviate from the full order only after the switch
  * step. Each suffix below is spliced after the shared 33-command init plus
  * stage-A prefix. */
@@ -1953,6 +2060,20 @@ set_b2_order(const uint8_t *suffix, unsigned int count)
 		b2_order_buffer[ORDER_B2_BASE + index] = suffix[index];
 	}
 	set_expected_order(b2_order_buffer, ORDER_B2_BASE + count);
+}
+
+static void
+set_h10_order(const uint8_t *suffix, unsigned int count)
+{
+	unsigned int index;
+
+	for (index = 0; index < ORDER_H10_BASE; index++) {
+		h10_order_buffer[index] = order_probe_h10[index];
+	}
+	for (index = 0; index < count; index++) {
+		h10_order_buffer[ORDER_H10_BASE + index] = suffix[index];
+	}
+	set_expected_order(h10_order_buffer, ORDER_H10_BASE + count);
 }
 
 int
@@ -2567,6 +2688,92 @@ main(int argc, char **argv)
 			cmd8_fail_on = 2u;
 			cmd8_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
 		}
+	} else if ((strcmp(scenario, "probe-h10-pass") == 0) ||
+	    (strcmp(scenario, "probe-h10-hs-ignored") == 0) ||
+	    (strcmp(scenario, "probe-h10-clock-busy") == 0) ||
+	    (strcmp(scenario, "probe-h10-width-ignored") == 0) ||
+	    (strcmp(scenario, "probe-h10-bustest-timeout") == 0) ||
+	    (strcmp(scenario, "probe-h10-bustest-mismatch") == 0) ||
+	    (strcmp(scenario, "probe-h10-content-div") == 0) ||
+	    (strcmp(scenario, "probe-h10-content-read") == 0) ||
+	    (strcmp(scenario, "probe-h10-width-revert-fail") == 0) ||
+	    (strcmp(scenario, "probe-h10-hs-revert-fail") == 0) ||
+	    (strcmp(scenario, "probe-h10-q-fail") == 0)) {
+		/* Stage 10: width-at-HS continuation. The stage-A pass runs at
+		 * 400 kHz/1-bit, then the HS enter, the 4-bit switch at HS,
+		 * one CMD19/CMD14 round trip, the content pass at 4-bit/HS,
+		 * the width and HS reverts and the recovery read. One fault
+		 * per failure case; the non-prefix failure orders splice
+		 * their own suffix after the shared base. */
+		stage = 10;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		if (strcmp(scenario, "probe-h10-hs-ignored") == 0) {
+			set_h10_order(h10_suffix_hs_ignored,
+			    (unsigned int)(sizeof(h10_suffix_hs_ignored) /
+			    sizeof(h10_suffix_hs_ignored[0])));
+		} else if (strcmp(scenario,
+		    "probe-h10-width-ignored") == 0) {
+			set_h10_order(h10_suffix_width_ignored,
+			    (unsigned int)(sizeof(h10_suffix_width_ignored) /
+			    sizeof(h10_suffix_width_ignored[0])));
+		} else if (strcmp(scenario,
+		    "probe-h10-bustest-timeout") == 0) {
+			set_h10_order(h10_suffix_bustest_timeout,
+			    (unsigned int)(sizeof(h10_suffix_bustest_timeout) /
+			    sizeof(h10_suffix_bustest_timeout[0])));
+		} else if (strcmp(scenario,
+		    "probe-h10-bustest-mismatch") == 0) {
+			set_h10_order(h10_suffix_bustest_mismatch,
+			    (unsigned int)(sizeof(h10_suffix_bustest_mismatch) /
+			    sizeof(h10_suffix_bustest_mismatch[0])));
+		} else if (strcmp(scenario,
+		    "probe-h10-content-read") == 0) {
+			set_h10_order(h10_suffix_content_read,
+			    (unsigned int)(sizeof(h10_suffix_content_read) /
+			    sizeof(h10_suffix_content_read[0])));
+		} else {
+			set_expected_order(order_probe_h10,
+			    (unsigned int)(sizeof(order_probe_h10) /
+			    sizeof(order_probe_h10[0])));
+		}
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-h10-hs-ignored") == 0) {
+			hs_timing_ignore_enter = 1;
+		} else if (strcmp(scenario,
+		    "probe-h10-clock-busy") == 0) {
+			rcg_stuck_after = 1u;
+		} else if (strcmp(scenario,
+		    "probe-h10-width-ignored") == 0) {
+			cmd6_ignore = 1;
+		} else if (strcmp(scenario,
+		    "probe-h10-bustest-timeout") == 0) {
+			cmd19_4bit_timeout = 1;
+		} else if (strcmp(scenario,
+		    "probe-h10-bustest-mismatch") == 0) {
+			bus_test_bad = 1;
+			bus_test_bad_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-h10-content-div") == 0) {
+			hs_content_lba = SIM_GPT_FIRST_USABLE;
+		} else if (strcmp(scenario,
+		    "probe-h10-content-read") == 0) {
+			cmd17_fail_on = 26u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-h10-width-revert-fail") == 0) {
+			cmd6_ignore_revert = 1;
+		} else if (strcmp(scenario,
+		    "probe-h10-hs-revert-fail") == 0) {
+			hs_timing_ignore_exit = 1;
+		} else if (strcmp(scenario, "probe-h10-q-fail") == 0) {
+			cmd17_fail_on = 51u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		}
 	} else if ((strcmp(scenario, "probe-dto-fired") == 0) ||
 	    (strcmp(scenario, "probe-dto-silent") == 0) ||
 	    (strcmp(scenario, "probe-dto-q-fail") == 0) ||
@@ -2703,6 +2910,17 @@ main(int argc, char **argv)
 		/* Synthetic H9 field-wise bound: the fixture fills both
 		 * attempt slots and the report formatter is called directly. */
 		width_form = 7;
+	} else if (strcmp(scenario, "report-width-h10") == 0) {
+		/* Synthetic H10 field-wise bound: the fixture fills every
+		 * switch/test/content/revert field and the report formatter
+		 * samples the live header and pad registers. */
+		width_form = 8;
+		sim_store(sdhci, GTA4L_EMMC_REG_HOST_CONTROL, 1u, 0xFFu);
+		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
+		    0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_STATUS, 4u,
+		    0xFFFFFFFFu);
 	} else if (strcmp(scenario, "report-width-budget-control") == 0) {
 		/* Negative control for the report-budget predicate: the last
 		 * byte that still leaves room for the NUL must be accepted and
@@ -4323,6 +4541,229 @@ main(int argc, char **argv)
 		    "the failed B2 pre-read issued a CMD6");
 		check(cmd17_count == 25u,
 		    "the failed B2 pre-read ran the HS content pass");
+	} else if (strcmp(scenario, "probe-h10-pass") == 0) {
+		check(panicked == 1, "the H10 pass did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=0 stop=0") != NULL,
+		    "the H10 pass does not name its stop");
+		check(strstr(panic_message,
+		    "H10 R clk=0007 hs=00 bw=00 hc=00 es=0000018e") != NULL,
+		    "the H10 R line lost the 400 kHz identity");
+		check(strstr(panic_message,
+		    "H10 S rc=0 sw=0 c6=00000900 hs=01 clk=0007 "
+		    "rcg=0000020b sum=0000018f") != NULL,
+		    "the H10 S line lost the HS switch or the 50 MHz RCG");
+		check(strstr(panic_message,
+		    "H10 W rc=0 sw=1 swrc=0 c6=00000900 hb=00 ha=02 "
+		    "es=00000190") != NULL,
+		    "the H10 W line lost the 4-bit switch at HS");
+		check(strstr(panic_message,
+		    "H10 B rc=0 tt=1 trc=0 tw=000000a5 te=000000a5")
+		    != NULL,
+		    "the H10 bus test did not pass at 4-bit/HS");
+		check(strstr(panic_message,
+		    "H10 T rc=0 att=1 same=1 div=0") != NULL,
+		    "the H10 content pass did not match");
+		check(strstr(panic_message,
+		    "H10 V rc=0 sw=0 swrc=0 c6=00000900 hb=02 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H10 width revert did not restore 1-bit");
+		check(strstr(panic_message,
+		    "H10 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017 sum=0000018e") != NULL,
+		    "the H10 HS revert did not restore legacy timing");
+		check(strstr(panic_message,
+		    "H10 Q rc=0 qb0=5c510100") != NULL,
+		    "the H10 recovery read did not match block 0");
+		check(strstr(panic_message,
+		    "H10 PAD pre=00009fe4/60000000/00000000 "
+		    "post=00009fe4/60000000/00000000") != NULL,
+		    "the H10 pad samples changed");
+		check(strstr(panic_message,
+		    "H10 FAIL fail=0/0/0/00000000/0000/0000/00000000/0")
+		    != NULL,
+		    "the H10 pass invented a failure record");
+		check(cmd6_count == 4u,
+		    "the H10 pass did not issue both switches and reverts");
+		check(cmd17_count == 51u,
+		    "the H10 pass did not run both content passes and Q");
+	} else if (strcmp(scenario, "probe-h10-hs-ignored") == 0) {
+		check(panicked == 1, "the ignored H10 HS switch did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-22 stop=10") != NULL,
+		    "the ignored H10 HS switch does not keep stop 10");
+		check(strstr(panic_message,
+		    "H10 S rc=-22 sw=-22 c6=00000900 hs=00") != NULL,
+		    "the ignored H10 HS switch did not record the readback "
+		    "mismatch");
+		check(strstr(panic_message,
+		    "H10 W rc=0 sw=0 swrc=0 c6=00000000") != NULL,
+		    "the ignored H10 HS switch continued to the width step");
+		check(strstr(panic_message,
+		    "H10 T rc=0 att=0") != NULL,
+		    "the ignored H10 HS switch ran the content pass");
+		check(strstr(panic_message,
+		    "H10 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017") != NULL,
+		    "the ignored H10 HS switch did not revert cleanly");
+		check(cmd17_count == 25u,
+		    "the ignored H10 HS switch still ran the content pass");
+		check(cmd6_count == 2u,
+		    "the ignored H10 HS switch did not issue both byte-185 "
+		    "commands");
+	} else if (strcmp(scenario, "probe-h10-clock-busy") == 0) {
+		check(panicked == 1, "the busy H10 RCG did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-5 stop=11") != NULL,
+		    "the busy H10 RCG does not keep stop 11");
+		check(strstr(panic_message,
+		    "H10 S rc=-5 sw=0 c6=00000900 hs=01 clk=0000") != NULL,
+		    "the busy H10 RCG lost the completed switch or the "
+		    "failed clock");
+		check(strstr(panic_message,
+		    "H10 X rc=-5 sw=0 c6=00000000 hs=00") != NULL,
+		    "the busy H10 RCG revert failure was not recorded");
+		check(cmd17_count == 25u,
+		    "the busy H10 RCG still ran the content pass");
+		check(cmd6_count == 1u,
+		    "the busy H10 RCG issued a width command");
+		check((sim_load(sdhci, GTA4L_EMMC_REG_CLOCK_CONTROL, 2u) &
+		    GTA4L_EMMC_CLOCK_CARD_EN) == 0u,
+		    "the busy H10 RCG left the card clock enabled");
+	} else if (strcmp(scenario, "probe-h10-width-ignored") == 0) {
+		check(panicked == 1, "the ignored H10 width switch did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-19 stop=12") != NULL,
+		    "the ignored H10 width switch does not keep stop 12");
+		check(strstr(panic_message,
+		    "H10 W rc=-19 sw=0 swrc=-19 c6=00000900 hb=00 ha=02 "
+		    "es=0000018f") != NULL,
+		    "the ignored H10 width switch did not record the legacy "
+		    "tuple");
+		check(strstr(panic_message,
+		    "H10 V rc=0 sw=0 swrc=0 c6=00000900 hb=00 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the ignored H10 width switch did not unwind to 1-bit");
+		check(strstr(panic_message,
+		    "H10 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017") != NULL,
+		    "the ignored H10 width switch did not revert HS");
+		check(cmd17_count == 25u,
+		    "the ignored H10 width switch ran the content pass");
+		check(cmd6_count == 4u,
+		    "the ignored H10 width switch did not issue both "
+		    "switches and reverts");
+	} else if (strcmp(scenario, "probe-h10-bustest-timeout") == 0) {
+		check(panicked == 1, "the H10 bus-test timeout did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-11 stop=13") != NULL,
+		    "the H10 bus-test timeout does not keep stop 13");
+		check(strstr(panic_message,
+		    "H10 B rc=-11 tt=1 trc=-11 tw=00000000 te=00000000")
+		    != NULL,
+		    "the H10 bus-test timeout lost the write-phase class");
+		check(strstr(panic_message,
+		    "H10 V rc=0 sw=0 swrc=0") != NULL,
+		    "the H10 bus-test timeout did not restore 1-bit");
+		check(strstr(panic_message,
+		    "H10 X rc=0 sw=0 c6=00000000 hs=00 clk=0000 "
+		    "rcg=00000000 sum=00000000") != NULL,
+		    "the H10 bus-test failure walked back into the "
+		    "inhibited controller");
+		check(cmd17_count == 25u,
+		    "the H10 bus-test timeout ran the content pass");
+	} else if (strcmp(scenario, "probe-h10-bustest-mismatch") == 0) {
+		check(panicked == 1, "the H10 bus-test mismatch did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-20 stop=13") != NULL,
+		    "the H10 bus-test mismatch does not keep stop 13");
+		check(strstr(panic_message,
+		    "H10 B rc=-20 tt=1 trc=-20 tw=0000005a te=000000a5")
+		    != NULL,
+		    "the H10 bus-test mismatch did not bind the pattern "
+		    "words");
+		check(cmd17_count == 25u,
+		    "the H10 bus-test mismatch ran the content pass");
+	} else if (strcmp(scenario, "probe-h10-content-div") == 0) {
+		check(panicked == 1, "the H10 content divergence did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-21 stop=14") != NULL,
+		    "the H10 divergence does not keep stop 14");
+		check(strstr(panic_message,
+		    "H10 T rc=0 att=1 same=0 div=34") != NULL,
+		    "the H10 divergence did not name the first differing "
+		    "LBA");
+		check(strstr(panic_message,
+		    "H10 V rc=0 sw=0 swrc=0 c6=00000900") != NULL,
+		    "the H10 divergence run did not revert the width");
+		check(strstr(panic_message,
+		    "H10 X rc=0 sw=0 c6=00000900 hs=00") != NULL,
+		    "the H10 divergence run did not revert HS");
+		check(cmd17_count == 50u,
+		    "the H10 divergence did not stop at Q");
+	} else if (strcmp(scenario, "probe-h10-content-read") == 0) {
+		check(panicked == 1, "the H10 content read error did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-12 stop=14") != NULL,
+		    "the H10 content read error does not keep stop 14");
+		check(strstr(panic_message,
+		    "H10 T rc=-12 att=1") != NULL,
+		    "the H10 content read error lost its core code");
+		check(cmd17_count == 26u,
+		    "the H10 content read error did not stop at the first "
+		    "4-bit read");
+	} else if (strcmp(scenario, "probe-h10-width-revert-fail") == 0) {
+		check(panicked == 1, "the H10 width-revert failure did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-19 stop=15") != NULL,
+		    "the H10 width-revert failure does not keep stop 15");
+		check(strstr(panic_message,
+		    "H10 T rc=0 att=1 same=1 div=0") != NULL,
+		    "the H10 width-revert failure lost the passing content "
+		    "pass");
+		check(strstr(panic_message,
+		    "H10 V rc=-19 sw=1 swrc=-19 c6=00000900 hb=02 ha=00 "
+		    "es=00000190") != NULL,
+		    "the H10 width-revert failure did not record the "
+		    "byte-183 mismatch");
+		check(strstr(panic_message,
+		    "H10 X rc=0 sw=0 c6=00000900 hs=00") != NULL,
+		    "the H10 width-revert failure did not revert HS");
+		check(cmd17_count == 50u,
+		    "the H10 width-revert failure ran Q");
+	} else if (strcmp(scenario, "probe-h10-hs-revert-fail") == 0) {
+		check(panicked == 1, "the H10 HS-revert failure did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-22 stop=16") != NULL,
+		    "the H10 HS-revert failure does not keep stop 16");
+		check(strstr(panic_message,
+		    "H10 V rc=0 sw=0 swrc=0") != NULL,
+		    "the H10 HS-revert failure lost the clean width revert");
+		check(strstr(panic_message,
+		    "H10 X rc=-22 sw=-22 c6=00000900 hs=01") != NULL,
+		    "the H10 HS-revert failure did not record the byte-185 "
+		    "mismatch");
+		check(cmd17_count == 50u,
+		    "the H10 HS-revert failure ran Q");
+	} else if (strcmp(scenario, "probe-h10-q-fail") == 0) {
+		check(panicked == 1, "the failed H10 recovery read did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-12 stop=17") != NULL,
+		    "the failed H10 recovery read does not keep stop 17");
+		check(strstr(panic_message,
+		    "H10 Q rc=-12 qb0=00000000") != NULL,
+		    "the failed H10 recovery read lost its core code");
+		check(cmd17_count == 51u,
+		    "the failed H10 recovery read did not stop at Q");
 	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
 		check(panicked == 1, "the fired DTO audit did not report");
 		check(strstr(panic_message,
@@ -4841,6 +5282,74 @@ main(int argc, char **argv)
 		    "record");
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width H9 report does not fit the "
+		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-h10") == 0) {
+		check(panicked == 1,
+		    "the synthetic width H10 report did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 REPORT: rc=-18 stop=13 mci=ffffffff "
+		    "rca=1 cap=4294967295 rev=255 hci=ff step=24 log=99999 "
+		    "bw=0f") != NULL,
+		    "the synthetic width H10 report lost the widest header");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 R clk=ffff hs=ff bw=ff hc=ff "
+		    "es=ffffffff") != NULL,
+		    "the synthetic width H10 report lost the 400 kHz "
+		    "identity line");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 S rc=-22 sw=-22 c6=ffffffff hs=ff "
+		    "clk=ffff rcg=ffffffff sum=ffffffff") != NULL,
+		    "the synthetic width H10 report lost the widest HS "
+		    "switch fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 W rc=-19 sw=255 swrc=-19 c6=ffffffff "
+		    "hb=ff ha=ff es=ffffffff") != NULL,
+		    "the synthetic width H10 report lost the widest width "
+		    "switch fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 B rc=-20 tt=1 trc=-20 tw=ffffffff "
+		    "te=ffffffff") != NULL,
+		    "the synthetic width H10 report lost the widest bus-test "
+		    "fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 T rc=-12 att=1 same=0 div=4294967295 "
+		    "b0=ffffffff b1=ffffffff data=ffffffff last=ffffffff")
+		    != NULL,
+		    "the synthetic width H10 report lost the widest content "
+		    "fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 V rc=-19 sw=255 swrc=-19 c6=ffffffff "
+		    "hb=ff ha=ff es=ffffffff") != NULL,
+		    "the synthetic width H10 report lost the widest width "
+		    "revert fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 X rc=-22 sw=-22 c6=ffffffff hs=ff "
+		    "clk=ffff rcg=ffffffff sum=ffffffff") != NULL,
+		    "the synthetic width H10 report lost the widest HS "
+		    "revert fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 Q rc=-12 qb0=ffffffff") != NULL,
+		    "the synthetic width H10 report lost the recovery read");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 BLOCKS 2=ffffffff 3=ffffffff "
+		    "4=ffffffff 5=ffffffff 6=ffffffff 7=ffffffff "
+		    "8=ffffffff 9=ffffffff 10=ffffffff 11=ffffffff "
+		    "12=ffffffff 13=ffffffff 14=ffffffff 15=ffffffff "
+		    "16=ffffffff 17=ffffffff 18=ffffffff 19=ffffffff "
+		    "20=ffffffff 21=ffffffff 22=ffffffff") != NULL,
+		    "the synthetic width H10 report lost the content sums");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 PAD pre=ffffffff/ffffffff/ffffffff "
+		    "post=ffffffff/ffffffff/ffffffff") != NULL,
+		    "the synthetic width H10 report lost the before/after "
+		    "pad/DLL state");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H10 FAIL fail=1/4294967295/4294967295/"
+		    "ffffffff/ffff/ffff/ffffffff/24") != NULL,
+		    "the synthetic width H10 report lost the widest failure "
+		    "record");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width H10 report does not fit the "
 		    "2048-byte panic buffer including the NUL");
 	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
 	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
