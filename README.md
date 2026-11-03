@@ -169,8 +169,21 @@ partition layout, payload policy and packaging.
   write. The host batch also narrows the stage-7 arming gate to TOUTVAL
   only, so the read-only `INT_STABLE` bit cannot block a DTO report. Core
   143/86 and probe 85/51; the `report-width-b2` fixture fits the 2048-byte
-  buffer. No build, flash or boot has happened; the device run needs a
-  fresh explicit BOOT-only approval and F4 remains unproven.
+  buffer. The stage-8 image was then built from `9a84215` plus the packager
+  fix `9d6fd1f` (kernel `fc3d5ee3…`, payload `9d17d0a1…` with a 7/7
+  contract, boot image `e5bc5024…` with an 18/18 gate), flashed BOOT only
+  (p69 `13f88342…` → `2cd82e0f…`) and booted four times without reflashing
+  (one cold, three warm; the post-batch p69 re-read matched). Boots 1 and 3
+  stopped pre-B2 at the H8 CMD3-completion timeout (`stage=8`, `rc=-7`,
+  `step=9`); boots 2 and 4 produced field-identical `B2 REPORT rc=0 stop=0`
+  reports: byte 185 switched to 1 (`S … hs=01`), the RCG read `0x20b` (the
+  pinned 50 MHz floor row), the full stage-A content pass matched at 50 MHz
+  (`T same=1 div=0`, all 21 block sums), and the revert was clean
+  (`V … hs=00 rcg=00002017`, block-0 `qb0=62084b66`). F4 is therefore
+  measured PASS at 1-bit/50 MHz (content-level only; not a width, write,
+  DMA, CQE, ICE, HS200 or frequency-measurement result), and the cold boot
+  is not part of that evidence. F3 remains unproven. The flash record and
+  transcript are in `out/gta4l/ram-root-emmc-probe-b2-evidence/`.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

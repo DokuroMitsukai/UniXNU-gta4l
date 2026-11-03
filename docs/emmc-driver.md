@@ -22,11 +22,18 @@ implemented and host-tested; the first B1 image was flashed and booted three
 times (§5.3.10), and only one boot reached B1 before stopping at the 4-bit
 byte-183 readback. The B1R2 report-completeness re-run (§5.3.12) then booted
 the rebuilt image five times: two boots reproduced the 4-bit stop with the
-new fields and three stopped before B1, so F3 remains `[U]`. Card
+new fields and three stopped before B1, so F3 remains `[U]`. The B1C
+continuation and the 1-bit discriminator then timed out in the CMD19 write
+phase before any CMD6 (§5.3.14, §5.3.16), and the B1C-2 audit found no
+controller data-timeout in either hang class (§5.3.18). The Stage-B2
+HS-timing image then booted four times (§5.3.20): two warm boots accepted
+`HS_TIMING=1`, matched the full stage-A content pass at the 50 MHz floor
+and reverted cleanly, so F4 is measured PASS at 1-bit/50 MHz `[C]`; the
+cold boot and one warm boot stopped pre-B2 at the H8 CMD3 timeout. Card
 identification,
 single-block sector reads and
 a partial multi-block data phase are therefore observed; a complete
-multi-block read, a filesystem, block-device publication and the later stages
+multi-block read, a filesystem, block-device publication, DMA/CQE/ICE and F3
 remain `[U]`. The
 core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
@@ -2031,9 +2038,82 @@ wrapper and payload gate accept `emmc-probe-8`. The stage-7 arming gate now
 compares only the TOUTVAL bits, so the B1C-2 `INT_STABLE` artifact cannot
 block a later DTO report.
 
-No build, flash or boot has been performed. The device run needs a fresh
-explicit BOOT-only approval; F3 and F4 remain `[U]` until the device report
-exists.
+No build, flash or boot had been performed when this host batch was
+written. The build, BOOT-only flash and four-boot device run are recorded in
+§5.3.20: F4 is measured PASS at 1-bit/50 MHz `[C]`, and F3 remains `[U]`.
+
+### 5.3.20 Stage-B2 hardware run: HS timing holds at 50 MHz (2026-11-03)
+
+The stage-8 image (`gta4l-emmc-probe=8`) was built from `9a84215` plus the
+packager-gate fix `9d6fd1f`: kernel `fc3d5ee3…`, payload `9d17d0a1…`
+(contract 7/7) and boot image `e5bc5024…` (gate 18/18 against the
+`ce4d76e8…` v5 baseline). The write was BOOT-only: pre-flash p69 was
+`13f88342…` (the B1C-2 post-flash hash, backed up and verified), post-flash
+p69 is `2cd82e0f…`, the image prefix read back as `e5bc5024…`, the unchanged
+tail is `a28b4ea2…`, and `RECOVERY` `14e11370…`, EFS `51fa824c…` and
+sec_efs `3a265d58…` were unchanged. The pre-flash battery was 100%, the
+post-batch read was 98%, and the pulled gates pass 18/18 and 7/7. The flash
+record is `out/gta4l/ram-root-emmc-probe-b2-evidence/flash-record.json`; the
+build provenance is `build-provenance.json` in the same directory.
+
+The owner booted the same image four times without reflashing (boot 1 cold,
+boots 2–4 warm) and re-read BOOT read-only after the batch:
+
+    $ adb shell sha256sum /dev/block/mmcblk0p69
+    2cd82e0f5a5734eb35d015c24629093afa6c9c3d47ef9f111fe911b98d4f46d7  /dev/block/mmcblk0p69
+
+The read matches the post-flash hash, so all four boots are bound to the
+flashed bytes. Boots 2 and 4 reached B2 and produced field-for-field
+identical reports apart from the stack counters, with boot 4's
+owner-supplied PAD `post` field carrying an extra leading zero (an OCR
+artifact of `00009fe4`). Boots 1 and 3 stopped pre-B2 at the H8
+CMD3-completion timeout
+(`stage=8 rc=-7 fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, `step=9`,
+`log=5/8/3/0`); they are the known flake class and not B2 verdicts.
+
+The two B2 reports carry:
+
+    mci=10000072 rca=1 cap=61071360 rev=8 hci=00 step=23 log=58
+    R clk=0007 hs=00 es=000009cb
+    S rc=0 sw=0 c6=00000900 hs=01 clk=0007 rcg=0000020b sum=000009cc
+    T rc=0 att=1 same=1 div=0 b0=62084b66 b1=84d0543e data=f418cd33 last=a89b26d5
+    V rc=0 sw=0 hs=00 clk=0007 rcg=00002017 q=0 qb0=62084b66
+    BLOCKS 2=793877e4 3=01fcf835 4=393b7c13 5=0bfbefd5 6=57ac4bf5
+      7=82d4c9c9 8=2e16c705 9=adbc9085 10=2d26b02c 11=69ab5982
+      12=604856e0 13=7f3f196c 14=7e056798 15=d6926617 16=3d035910
+      17=5076cbb8 18=d40dca26 19=37f4be4f 20=057d3881 21=89457318
+      22=00000000
+    PAD pre=00009fe4/6000642c/00000000 post=00009fe4/6000642c/00000000
+    FAIL fail=0/0/0/00000000/0000/0000/00000000/0 @Gta41EmmcProbe.c:1286
+
+`R` records byte 185 = 0 and the EXT_CSD byte sum `0x9cb` at 400 kHz. `S`
+records a clean CMD6 (`sw=0`, R1 `00000900` = TRAN + READY_FOR_DATA), byte
+185 reading 1, and the GCC SDCC1 APPS RCG at `0x20b` — the pinned 50 MHz
+floor row (source select 2, divider 11, M/N/D zero) for the 52 MHz class.
+The post-switch EXT_CSD sum `0x9cc` is exactly the baseline plus one for
+the changed byte. `T` reports `att=1`, `same=1`, `div=0` and the stage-A
+sums at 50 MHz: b0 `62084b66`, b1 `84d0543e`, DATA 34 `f418cd33`, LSTLBA
+`a89b26d5` and all 21 GPT-array BLOCKS sums, identical to the 400 kHz
+baseline. `V` drops the clock first, clears byte 185, reads back `hs=00`
+with RCG `0x2017` (400 kHz) and re-reads block 0 at 400 kHz (`q=0`,
+`qb0=62084b66`). The pad/DLL samples are identical before and after and the
+terminal FAIL record is all zero.
+
+Verdict: the decision table's S-pass + T-pass row is taken. F4 is measured
+PASS at 1-bit/50 MHz: the card accepted `HS_TIMING=1`, the controller
+programmed and read back the 50 MHz floor row, the full stage-A content
+pass matched at that clock, and the revert to legacy timing plus the
+recovery read were clean. The two matching reports satisfy the
+two-matching rule. This is content-level evidence only: it is not a width,
+write, DMA, CQE, ICE, HS200 or frequency-measurement result. The cold boot
+did not reach B2, so the cold-start path is not part of the F4 evidence;
+both passes are warm boots that followed a pre-B2 stop, and each report's
+`V` line returns the card to legacy timing, so no retained HS state is
+implied. The H8 class remains an independent pre-B2 flake.
+
+F4 moves from `[U]` to `[C]` at the stated 1-bit/50 MHz content scope. F3
+remains `[U]`; `trc=-20` remains unobserved and the byte-183 readback
+paradox is unchanged.
 
 ## 6. Expected report
 
@@ -2143,7 +2223,9 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   `HOST_CONTROL2`, and it fails if the power loop is exhausted. A *new* power
   request raised after both completions and after the card clock starts still
   has no interrupt path `[U]`.
-- No DMA, SMMU programming, CQE, ICE, tuning or high-speed mode exists `[U]`.
+- No DMA, SMMU programming, CQE, ICE or tuning exists `[U]`. High-speed
+  timing is measured PASS at 1-bit/50 MHz (§5.3.20) `[C]`, but no high-speed
+  data, multi-bit, DMA or interrupt result exists `[U]`.
   The Stage-B1 4/8-bit bus-width switch and CMD19/CMD14 bus test are
   implemented and host-tested (§5.3.9) and ran on 2026-11-02 (§5.3.10); the
   only boot that reached B1 stopped at the 4-bit byte-183 readback, so F3
@@ -2199,9 +2281,17 @@ BOOT-only and booted seven times (§5.3.14): both boots that reached the
 continuation timed out in the CMD19 write phase (CC + BufferWriteReady
 latched, no TC, no error), so the data-write direction is now the blocking
 observation and F3 remains `[U]`. The stage-6 1-bit CMD19/CMD14 discriminator
-(§5.3.15) is implemented and host-tested (core 138/83, probe 71/42) but not
-built, flashed or booted; it is the next device step and needs a fresh
-explicit BOOT-only approval. Any further B1/B2 step is owner-gated, and the
-pre-B1 H8/CMD17 failures also need a plan decision. No filesystem,
+(§5.3.15) was flashed and booted thirteen times (§5.3.16); both boots that
+reached the rung timed out in the 1-bit CMD19 write phase before any CMD6, so
+the write failure is width-independent and F3 remains `[U]`. The Stage-B1C-2
+data-timeout audit (§5.3.17–5.3.18) then found that the controller never
+raises data-timeout in either hang class: five DTO boots were silent while
+data streamed past the armed minimum. The Stage-B2 HS-timing rung (§5.3.19)
+was built, flashed BOOT-only and booted four times (§5.3.20); two warm boots
+accepted `HS_TIMING=1`, matched the full stage-A content pass at the 50 MHz
+floor and reverted cleanly, so F4 is measured PASS at 1-bit/50 MHz `[C]`
+(content-level only), while the cold boot and one warm boot stopped pre-B2
+at the H8 CMD3 timeout. F3 remains `[U]`, the pre-B1 H8/CMD17 stops remain
+open, and any further ladder step is owner-gated. No filesystem,
 block-device publication, mount, storage write, DMA, CQE or ICE result exists
 yet.

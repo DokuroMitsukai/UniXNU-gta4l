@@ -2037,6 +2037,88 @@ scenarios and mutation outcomes, and the TOUTVAL guard. Not supported: any
 device HS-timing result, a card acceptance of byte 185, content equality
 at 50 MHz, a width or write result, a frequency measurement, or F4.
 
+### 2.24 Stage-B2 hardware run: HS timing holds at 50 MHz (2026-11-03)
+
+The stage-8 image (`gta4l-emmc-probe=8`, the HS-timing rung of
+`docs/emmc-driver.md` §5.3.19–5.3.20) was built from `9a84215` plus the packager
+gate fix `9d6fd1f`: kernel `fc3d5ee3…`, payload `9d17d0a1…` (contract 7/7)
+and boot image `e5bc5024…` (gate 18/18 against the `ce4d76e8…` v5
+baseline). The write was BOOT-only: pre-flash p69 was `13f88342…` (the
+B1C-2 post-flash hash, backed up and verified), post-flash p69 is
+`2cd82e0f…`, the image prefix read back as `e5bc5024…`, the unchanged tail
+is `a28b4ea2…`, and `RECOVERY` `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` were unchanged. The pre-flash battery was 100%, the post-batch
+read was 98%, and the pulled gates pass 18/18 and 7/7. The flash record is
+`out/gta4l/ram-root-emmc-probe-b2-evidence/flash-record.json`; the build
+provenance is `build-provenance.json` in the same directory.
+
+The owner booted the same image four times without reflashing (boot 1
+cold, boots 2–4 warm). The post-batch read-only re-read returned
+`2cd82e0f…`, matching the flash record, so all four boots are bound to the
+flashed bytes.
+
+| Boot | Reset | Reached B2? | Result |
+| --- | --- | --- | --- |
+| 1 | cold | no | H8 CMD3-completion timeout, `stage=8 rc=-7 fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, `step=9`, `log=5/8/3/0`; `c31` exhausted 100,000 iterations (`0x14c345b` ticks at 19.2 MHz). |
+| 2 | warm | yes | `B2 REPORT rc=0 stop=0`; S pass, T `same=1 div=0`, V clean. |
+| 3 | warm | no | The same H8 CMD3-completion timeout as boot 1, except `c31=0x14c344d`. |
+| 4 | warm | yes | The same `B2 REPORT` as boot 2, field-for-field except the stack counters (and one OCR-added leading zero in the supplied boot-4 PAD `post` field, `000009fe4` vs `00009fe4`). |
+
+The two B2 reports carry:
+
+    mci=10000072 rca=1 cap=61071360 rev=8 hci=00 step=23 log=58
+    R clk=0007 hs=00 es=000009cb
+    S rc=0 sw=0 c6=00000900 hs=01 clk=0007 rcg=0000020b sum=000009cc
+    T rc=0 att=1 same=1 div=0 b0=62084b66 b1=84d0543e data=f418cd33 last=a89b26d5
+    V rc=0 sw=0 hs=00 clk=0007 rcg=00002017 q=0 qb0=62084b66
+    BLOCKS 2=793877e4 3=01fcf835 4=393b7c13 5=0bfbefd5 6=57ac4bf5
+      7=82d4c9c9 8=2e16c705 9=adbc9085 10=2d26b02c 11=69ab5982
+      12=604856e0 13=7f3f196c 14=7e056798 15=d6926617 16=3d035910
+      17=5076cbb8 18=d40dca26 19=37f4be4f 20=057d3881 21=89457318
+      22=00000000
+    PAD pre=00009fe4/6000642c/00000000 post=00009fe4/6000642c/00000000
+    FAIL fail=0/0/0/00000000/0000/0000/00000000/0 @Gta41EmmcProbe.c:1286
+
+Decode: `R` records byte 185 = 0 and the EXT_CSD byte sum `0x9cb` at
+400 kHz. `S` records a clean CMD6 (`sw=0` is the switch result, `c6=00000900`
+is the R1 TRAN+READY_FOR_DATA status), byte 185 reading 1, and the GCC
+SDCC1 APPS RCG at `0x20B` (source select 2, divider 11, M/N/D zero) — the
+pinned 50 MHz floor row for the 52 MHz class. The post-switch EXT_CSD sum
+is `0x9cc`, exactly the baseline plus one for the changed byte 185. `T`
+reports `att=1`, `same=1`, `div=0` and the stage-A sums at 50 MHz: b0
+`62084b66`, b1 `84d0543e`, DATA 34 `f418cd33`, LSTLBA `a89b26d5`, and all
+21 GPT-array BLOCKS sums, identical to the 400 kHz baseline. `V` drops the
+clock first, clears byte 185, reads back `hs=00` with RCG `0x2017`
+(400 kHz) and re-reads block 0 at 400 kHz (`q=0`, `qb0=62084b66`). The
+pad/DLL samples are identical before and after; the terminal FAIL record is
+all zero.
+
+Verdict: the decision table's S-pass + T-pass row is taken. F4 is measured
+PASS at 1-bit/50 MHz: the card accepted `HS_TIMING=1`, the controller
+programmed and read back the 50 MHz floor row, the full stage-A content
+pass matched at that clock, and the revert to legacy timing plus the
+recovery read were clean. The two matching reports satisfy the two-matching
+rule. This is content-level evidence only: it is not a width, write, DMA,
+CQE, ICE, HS200 or frequency-measurement result. The cold boot did not
+reach B2 (the known H8 CMD3 timeout), so the cold-start path is not part of
+the F4 evidence; both passes are warm boots that followed pre-B2 stops, and
+each report's `V` line returns the card to legacy timing, so no retained HS
+state is implied. The H8 class remains an independent pre-B2 flake.
+
+F4 moves from `[U]` to `[C]` at the stated 1-bit/50 MHz content scope. F3
+remains `[U]`; `trc=-20` remains unobserved and the byte-183 readback
+paradox is unchanged.
+
+Supported by this section: the image identity and BOOT-only flash record;
+the four boots and their reset methods; the post-batch p69 re-read and the
+binding of all boots; the two field-identical B2 reports (except the stack
+counters and the noted OCR field); the S-pass/T-pass/V-clean row; the
+50 MHz RCG readback; the byte-185 switch and revert; the content equality
+with the stage-A baseline; and the clean block-0 recovery read. Not
+supported: a cold-start B2 pass; a width, write, DMA, CQE, ICE, HS200 or
+frequency-measurement result; a cause for the H8 pre-B2 stops; the byte-183
+readback paradox; the `trc=-20` class; or F3.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
