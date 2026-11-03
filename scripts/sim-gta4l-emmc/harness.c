@@ -36,6 +36,7 @@
 #define SIM_CMD14               14u
 #define SIM_CMD19               19u
 #define SIM_BUS_WIDTH_OFF       183u
+#define SIM_HS_TIMING_OFF       185u
 #define SIM_SWITCH_ACCESS       0x03000000u
 #define SIM_SWITCH_CMD_SET      0x00000001u
 #define SIM_HOST_CONTROL_4BIT   0x02u
@@ -315,6 +316,7 @@ struct sim {
 	int bus_width_stuck;
 	int bus_width_busy;
 	int bus_width_busy_polls;
+	int hs_timing_stuck;
 	int bus_test_data_timeout;
 	int bus_test_read_timeout;
 	int bus_test_data_crc;
@@ -1061,15 +1063,23 @@ sim_bus_test_width_ok(const struct sim *sim, uint32_t size)
 static int
 sim_cmd6_argument_ok(uint32_t argument)
 {
+	uint32_t index = (argument >> 16) & 0xFFu;
 	uint32_t value = (argument >> 8) & 0xFFu;
 	uint32_t set = argument & 0xFFu;
 
 	/* The JEDEC application note writes the argument as 0x03B7_0100
 	 * (Cmd Set field zero); Linux sets EXT_CSD_CMD_SET_NORMAL (1). The
 	 * spec ignores Cmd Set for an EXT_CSD write, so accept both. */
-	return (argument & 0xFFFFFF00u) == (SIM_SWITCH_ACCESS |
-	    (SIM_BUS_WIDTH_OFF << 16) | (value << 8)) &&
-	    value <= 2u && set <= 1u;
+	if ((argument & 0x03000000u) != SIM_SWITCH_ACCESS) {
+		return 0;
+	}
+	if (index == SIM_BUS_WIDTH_OFF) {
+		return value <= 2u && set <= 1u;
+	}
+	if (index == SIM_HS_TIMING_OFF) {
+		return value <= 1u && set <= 1u;
+	}
+	return 0;
 }
 
 static int
@@ -1379,6 +1389,11 @@ sim_command(struct sim *sim, uint16_t command)
 		}
 		if (sim->bus_width_switch_error != 0) {
 			response |= 0x00000080u; /* SWITCH_ERROR */
+		} else if (((argument >> 16) & 0xFFu) == SIM_HS_TIMING_OFF) {
+			if (sim->hs_timing_stuck == 0) {
+				sim->ext_csd[SIM_HS_TIMING_OFF] =
+				    (uint8_t)((argument >> 8) & 0x01u);
+			}
 		} else if (sim->bus_width_stuck == 0) {
 			sim->ext_csd[SIM_BUS_WIDTH_OFF] =
 			    (uint8_t)((argument >> 8) & 0x0Fu);
@@ -2110,6 +2125,7 @@ main(int argc, char **argv)
 	uint8_t block5[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t ext[GTA4L_EMMC_EXT_CSD_BYTES];
 	struct gta4l_emmc_bus_result bus;
+	struct gta4l_emmc_hs_result hs;
 	static uint8_t mb_blocks[SIM_MB_TEST_BLOCKS * GTA4L_EMMC_BLOCK_BYTES];
 	int result;
 	int expected;
@@ -2525,6 +2541,10 @@ main(int argc, char **argv)
 		/* wait_tran allows ten CMD13 attempts; the switch arms a poll
 		 * budget beyond that so the bounded wait must expire. */
 		sim.bus_width_busy = 1;
+	} else if (scenario_is(scenario, "hs-timing-stuck")) {
+		sim.hs_timing_stuck = 1;
+	} else if (scenario_is(scenario, "hs-timing-cmd6-error")) {
+		sim.bus_width_switch_error = 1;
 	} else if (scenario_is(scenario, "bus-test-data-timeout")) {
 		sim.bus_test_data_timeout = 1;
 	} else if (scenario_is(scenario, "bus-test-data-crc")) {
@@ -2605,6 +2625,11 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "bus-test-width") ||
 	    scenario_is(scenario, "bus-test-1bit") ||
 	    scenario_is(scenario, "bus-test-1bit-width") ||
+	    scenario_is(scenario, "hs-timing-enter") ||
+	    scenario_is(scenario, "hs-timing-stuck") ||
+	    scenario_is(scenario, "hs-timing-cmd6-error") ||
+	    scenario_is(scenario, "hs-timing-clock-busy") ||
+	    scenario_is(scenario, "hs-timing-arg") ||
 	    scenario_is(scenario, "power-delayed-bus") ||
 	    scenario_is(scenario, "power-bus-then-io") ||
 	    scenario_is(scenario, "power-wrong-io-then-correct") ||
@@ -3709,6 +3734,126 @@ main(int argc, char **argv)
 		    "one-bit bus-test width was not recorded");
 		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
 		    "one-bit bus test did not complete CMD19/CMD14");
+	} else if (scenario_is(scenario, "hs-timing-enter")) {
+		result = gta4l_emmc_set_hs_timing(&host, 1u, &hs);
+		check(result == GTA4L_EMMC_OK, "HS enter failed");
+		check(hs.timing == 1u && hs.hs_before == 0u &&
+		    hs.hs_after == 1u,
+		    "HS enter byte-185 readback mismatch");
+		check(hs.switch_status == 0x00000900u,
+		    "HS enter CMD6 R1 mismatch");
+		check(hs.switch_result == GTA4L_EMMC_OK &&
+		    hs.clock_result == GTA4L_EMMC_OK,
+		    "HS enter recorded a failure");
+		check(sim.cmd6_count == 1u &&
+		    sim.cmd6_argument == 0x03B90101u,
+		    "HS enter CMD6 argument mismatch");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u,
+		    "HS enter did not update byte 185");
+		check(sim.gcc[SIM_GCC_APPS_CFG / 4u] ==
+		    GTA4L_EMMC_RCG_50M_CFG,
+		    "HS enter left the 400 kHz RCG");
+		check(sim.gcc[SIM_GCC_APPS_M / 4u] == 0u &&
+		    sim.gcc[SIM_GCC_APPS_N / 4u] == 0u &&
+		    sim.gcc[SIM_GCC_APPS_D / 4u] == 0u,
+		    "HS enter RCG MND mismatch");
+		check(hs.rcg_after == GTA4L_EMMC_RCG_50M_CFG,
+		    "HS enter result RCG mismatch");
+		check((hs.clock & (GTA4L_EMMC_CLOCK_INT_EN |
+		    GTA4L_EMMC_CLOCK_INT_STABLE |
+		    GTA4L_EMMC_CLOCK_CARD_EN)) ==
+		    (GTA4L_EMMC_CLOCK_INT_EN |
+		    GTA4L_EMMC_CLOCK_INT_STABLE |
+		    GTA4L_EMMC_CLOCK_CARD_EN),
+		    "HS enter clock is not enabled and stable");
+		check(host.last_step == GTA4L_EMMC_STEP_HS_CLOCK,
+		    "HS enter did not advance the step");
+		result = gta4l_emmc_set_hs_timing(&host, 0u, &hs);
+		check(result == GTA4L_EMMC_OK, "HS leave failed");
+		check(hs.timing == 0u && hs.hs_before == 1u &&
+		    hs.hs_after == 0u,
+		    "HS leave byte-185 readback mismatch");
+		check(sim.cmd6_count == 2u &&
+		    sim.cmd6_argument == 0x03B90001u,
+		    "HS leave CMD6 argument mismatch");
+		check(hs.rcg_before == GTA4L_EMMC_RCG_50M_CFG,
+		    "HS leave did not record the HS RCG");
+		check(sim.gcc[SIM_GCC_APPS_CFG / 4u] ==
+		    GTA4L_EMMC_RCG_400K_CFG,
+		    "HS leave did not restore the 400 kHz RCG");
+		check(sim.gcc[SIM_GCC_APPS_M / 4u] ==
+		    GTA4L_EMMC_RCG_400K_M &&
+		    sim.gcc[SIM_GCC_APPS_N / 4u] ==
+		    GTA4L_EMMC_RCG_400K_N &&
+		    sim.gcc[SIM_GCC_APPS_D / 4u] ==
+		    GTA4L_EMMC_RCG_400K_D,
+		    "HS leave RCG MND mismatch");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 0u,
+		    "HS leave did not clear byte 185");
+		check(host.last_step == GTA4L_EMMC_STEP_HS_TIMING,
+		    "HS leave step mismatch");
+	} else if (scenario_is(scenario, "hs-timing-stuck")) {
+		result = gta4l_emmc_set_hs_timing(&host, 1u, &hs);
+		check(result == GTA4L_EMMC_ERR_TIMING,
+		    "stuck HS_TIMING readback was not reported");
+		check(hs.hs_before == 0u && hs.hs_after == 0u,
+		    "stuck HS readback values mismatch");
+		check(hs.switch_result == GTA4L_EMMC_ERR_TIMING &&
+		    hs.clock_result == GTA4L_EMMC_OK,
+		    "stuck HS result fields mismatch");
+		check(sim.cmd6_count == 1u,
+		    "stuck HS did not issue one CMD6");
+		check(sim.gcc[SIM_GCC_APPS_CFG / 4u] ==
+		    GTA4L_EMMC_RCG_400K_CFG,
+		    "stuck HS ramped the clock anyway");
+		check(host.last_step == GTA4L_EMMC_STEP_READY,
+		    "stuck HS advanced the step");
+	} else if (scenario_is(scenario, "hs-timing-cmd6-error")) {
+		result = gta4l_emmc_set_hs_timing(&host, 1u, &hs);
+		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "CMD6 SWITCH_ERROR was not reported");
+		check(hs.switch_result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "CMD6 error result field mismatch");
+		check(hs.switch_status == 0x00000980u,
+		    "CMD6 error R1 was not captured");
+		check(sim.cmd6_count == 1u,
+		    "failed HS switch did not issue one CMD6");
+		check(sim.gcc[SIM_GCC_APPS_CFG / 4u] ==
+		    GTA4L_EMMC_RCG_400K_CFG,
+		    "CMD6 error ramped the clock");
+	} else if (scenario_is(scenario, "hs-timing-clock-busy")) {
+		sim.rcg_busy = 1;
+		result = gta4l_emmc_set_hs_timing(&host, 1u, &hs);
+		check(result == GTA4L_EMMC_ERR_CLOCK,
+		    "busy RCG was not reported");
+		check(hs.switch_result == GTA4L_EMMC_OK &&
+		    hs.clock_result == GTA4L_EMMC_ERR_CLOCK,
+		    "busy RCG result fields mismatch");
+		check(hs.hs_after == 1u,
+		    "busy RCG lost the successful byte-185 readback");
+		check(host.last_step == GTA4L_EMMC_STEP_HS_TIMING,
+		    "busy RCG advanced the clock step");
+		check((sim.sdhci[GTA4L_EMMC_REG_CLOCK_CONTROL] &
+		    GTA4L_EMMC_CLOCK_CARD_EN) == 0u,
+		    "busy RCG left the card clock enabled");
+	} else if (scenario_is(scenario, "hs-timing-arg")) {
+		result = gta4l_emmc_set_hs_timing(&host, 2u, &hs);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "invalid HS timing value was accepted");
+		check(sim.cmd6_count == 0u,
+		    "invalid HS timing value issued a CMD6");
+		{
+			struct gta4l_emmc_host fresh;
+
+			memset(&fresh, 0, sizeof(fresh));
+			fresh.ops = &sim_ops;
+			fresh.context = &sim;
+			result = gta4l_emmc_set_hs_timing(&fresh, 1u, &hs);
+			check(result == GTA4L_EMMC_ERR_ARG,
+			    "HS switch ran without init");
+			check(sim.cmd6_count == 0u,
+			    "uninitialized HS switch issued a CMD6");
+		}
 	} else if (scenario_is(scenario, "multi-stop-tc-only") ||
 	    scenario_is(scenario, "multi-stop-late-cc") ||
 	    scenario_is(scenario, "multi-stop-busy-timeout") ||

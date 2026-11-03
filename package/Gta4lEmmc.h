@@ -200,6 +200,16 @@
 #define GTA4L_EMMC_RCG_400K_N              0x000000FCu
 #define GTA4L_EMMC_RCG_400K_D              0x000000FBu
 
+/* 50 MHz direct-divided row used for the 52 MHz HS class: pinned
+ * `F(50000000, P_GPLL0_OUT_AUX2, 6, 0, 0)` with clk_rcg2_floor_ops, so a
+ * 52 MHz request floors to 50 MHz on this clock tree. Source select 2,
+ * divider field 11, M/N/D zero (direct mode). The parent rate is a table
+ * value, not a measurement. */
+#define GTA4L_EMMC_RCG_50M_CFG             0x0000020Bu
+#define GTA4L_EMMC_RCG_50M_M               0x00000000u
+#define GTA4L_EMMC_RCG_50M_N               0x00000000u
+#define GTA4L_EMMC_RCG_50M_D               0x00000000u
+
 /* The UEFI-derived active SDC1 pad configuration. */
 #define GTA4L_EMMC_SDC1_PAD_ACTIVE         0x00009FE4u
 
@@ -278,6 +288,7 @@
 #define GTA4L_EMMC_BUS_TEST_PATTERN_8_1    0xAAu
 #define GTA4L_EMMC_EXT_CSD_DATA_SECTOR_SIZE_OFF 61u
 #define GTA4L_EMMC_EXT_CSD_PARTITION_CONFIG_OFF 179u
+#define GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF   185u
 #define GTA4L_EMMC_EXT_CSD_SEC_COUNT_OFF   212u
 #define GTA4L_EMMC_EXT_CSD_REV_OFF         192u
 #define GTA4L_EMMC_EXT_CSD_PARTITION_ACCESS_MASK 0x07u
@@ -312,6 +323,7 @@
 #define GTA4L_EMMC_ERR_UNSUPPORTED       -18
 #define GTA4L_EMMC_ERR_BUS_WIDTH         -19
 #define GTA4L_EMMC_ERR_BUS_TEST          -20
+#define GTA4L_EMMC_ERR_TIMING            -22
 
 /* Diagnostic event codes passed to the log callback. */
 #define GTA4L_EMMC_LOG_RESET              1u
@@ -356,6 +368,10 @@
 /* Data-timeout audit: the probe-only timeout-configuration readback and
  * experiments. The portable core never sets it. */
 #define GTA4L_EMMC_STEP_DTO               22u
+/* HS-timing rung: the byte-185 switch and the clock ramp. The portable core
+ * sets these only when the caller invokes the opt-in HS-timing API. */
+#define GTA4L_EMMC_STEP_HS_TIMING         23u
+#define GTA4L_EMMC_STEP_HS_CLOCK          24u
 
 struct gta4l_emmc_ops {
 	uint8_t  (*read8)(void *context, uint32_t space, uint32_t offset);
@@ -567,5 +583,34 @@ int gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
  * the identification width. */
 int gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_result *result);
+
+/* Evidence for one HS_TIMING rung step. `hs_before`/`hs_after` are EXT_CSD
+ * byte 185 read before and after the CMD6 switch; the RCG fields are the GCC
+ * SDCC1 APPS source configuration, because CLOCK_CONTROL carries only the
+ * enable/stable bits and cannot name the card clock. `timing` is the value
+ * requested (0 legacy, 1 high speed). */
+struct gta4l_emmc_hs_result {
+	uint32_t timing;        /* requested byte-185 value (0 or 1) */
+	uint32_t hs_before;     /* byte 185 read before the switch */
+	uint32_t hs_after;      /* byte 185 read after the switch */
+	uint32_t rcg_before;    /* GCC APPS CFG before the clock change */
+	uint32_t rcg_after;     /* GCC APPS CFG after the clock change */
+	uint32_t clock;         /* CLOCK_CONTROL after the clock change */
+	uint32_t switch_status; /* CMD6 R1 status */
+	uint32_t readback_sum;  /* byte sum of the post-switch EXT_CSD read */
+	int      switch_result; /* OK, a command/status error or ERR_TIMING */
+	int      clock_result;  /* OK or ERR_CLOCK */
+};
+
+/* Enter (timing=1, byte-185 high speed, 50 MHz HS clock) or leave
+ * (timing=0, clock first back to 400 kHz, then byte-185 legacy) the HS
+ * timing class. The switch is ordered as Linux: for timing=1 the CMD6 and
+ * its byte-185 readback complete before the clock rises; for timing=0 the
+ * clock drops before the card is asked to leave HS timing. A byte-185
+ * readback mismatch returns GTA4L_EMMC_ERR_TIMING and, for timing=1, leaves
+ * the clock at 400 kHz. The caller's `initialized` flag must already be
+ * set. */
+int gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
+    struct gta4l_emmc_hs_result *result);
 
 #endif /* GTA4L_EMMC_H */

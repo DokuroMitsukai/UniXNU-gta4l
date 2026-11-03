@@ -406,7 +406,9 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * a repeated 1-bit CMD19 wedge under an extended bound; no CMD6). On stage 6
  * a failed 1-bit test stops the rung (report stop=9) and issues no CMD6; a
  * passing 1-bit test falls through to the stage-5 flow unchanged. Stage 7
- * always reports and stops with the DTO report. */
+ * always reports and stops with the DTO report. Stage 8 is the HS-timing
+ * rung: it switches byte 185, ramps to the 50 MHz HS row, repeats the
+ * stage-A content pass and returns to legacy before its B2 report. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -415,7 +417,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 7)) {
+	if ((value < 1) || (value > 8)) {
 		return 0;
 	}
 	return value;
@@ -1199,6 +1201,189 @@ gta4l_emmc_probe_report_dto(const struct gta4l_emmc_host *host,
 	    host->fail_step);
 }
 
+/* Stage-8 HS-timing rung capture. `hs` is the byte-185/clock enter step and
+ * `revert` the return to legacy; `b2` holds the 50 MHz content pass and its
+ * comparison against the 400 kHz stage-A baseline. */
+struct gta4l_emmc_probe_b2 {
+	struct gta4l_emmc_hs_result hs;
+	struct gta4l_emmc_hs_result revert;
+	struct gta4l_emmc_probe_bus content;
+	uint32_t pre_hs;
+	uint32_t pre_clock;
+	uint32_t pre_sum;
+	uint32_t pre_qdsd;
+	uint32_t pre_dll;
+	uint32_t pre_dst;
+	uint32_t content_attempted;
+	int      switch_rc;
+	int      content_rc;
+	int      revert_rc;
+	int      q_result;
+	uint32_t q_block0_sum;
+};
+
+static void
+gta4l_emmc_probe_report_b2(const struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_b2 *b2, int rc, int stop)
+{
+	uint8_t hci = gta4l_emmc_probe_read8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	uint32_t qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	uint32_t dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	uint32_t dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+
+	panic("GTA4L-EMMC B2 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
+	    "rev=%u hci=%02x step=%u log=%u\n"
+	    "GTA4L-EMMC B2 R clk=%04x hs=%02x es=%08x\n"
+	    "GTA4L-EMMC B2 S rc=%d sw=%d c6=%08x hs=%02x clk=%04x "
+	    "rcg=%08x sum=%08x\n"
+	    "GTA4L-EMMC B2 T rc=%d att=%u same=%u div=%u b0=%08x b1=%08x "
+	    "data=%08x last=%08x\n"
+	    "GTA4L-EMMC B2 V rc=%d sw=%d hs=%02x clk=%04x rcg=%08x q=%d "
+	    "qb0=%08x\n"
+	    "GTA4L-EMMC B2 BLOCKS"
+	    " 2=%08x 3=%08x 4=%08x 5=%08x 6=%08x 7=%08x 8=%08x 9=%08x"
+	    " 10=%08x 11=%08x 12=%08x 13=%08x 14=%08x 15=%08x 16=%08x"
+	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
+	    "GTA4L-EMMC B2 PAD pre=%08x/%08x/%08x post=%08x/%08x/%08x\n"
+	    "GTA4L-EMMC B2 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
+	    (unsigned int)host->ext_csd_rev, (unsigned int)hci,
+	    host->last_step, probe->log_count,
+	    (unsigned int)b2->pre_clock, (unsigned int)b2->pre_hs,
+	    b2->pre_sum,
+	    b2->switch_rc, b2->hs.switch_result, b2->hs.switch_status,
+	    (unsigned int)b2->hs.hs_after, (unsigned int)b2->hs.clock,
+	    b2->hs.rcg_after, b2->hs.readback_sum,
+	    b2->content_rc, b2->content_attempted,
+	    b2->content.same, b2->content.div,
+	    b2->content.block0_sum, b2->content.block1_sum,
+	    b2->content.data_sum, b2->content.last_sum,
+	    b2->revert_rc, b2->revert.switch_result,
+	    (unsigned int)b2->revert.hs_after,
+	    (unsigned int)b2->revert.clock, b2->revert.rcg_after,
+	    b2->q_result, b2->q_block0_sum,
+	    b2->content.blocks[0], b2->content.blocks[1],
+	    b2->content.blocks[2], b2->content.blocks[3],
+	    b2->content.blocks[4], b2->content.blocks[5],
+	    b2->content.blocks[6], b2->content.blocks[7],
+	    b2->content.blocks[8], b2->content.blocks[9],
+	    b2->content.blocks[10], b2->content.blocks[11],
+	    b2->content.blocks[12], b2->content.blocks[13],
+	    b2->content.blocks[14], b2->content.blocks[15],
+	    b2->content.blocks[16], b2->content.blocks[17],
+	    b2->content.blocks[18], b2->content.blocks[19],
+	    b2->content.blocks[20],
+	    b2->pre_qdsd, b2->pre_dll, b2->pre_dst, qdsd, dll, dst,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
+/* Run the stage-8 HS-timing rung: sample the 400 kHz state (R), switch
+ * byte 185 to high speed and ramp to the 50 MHz HS row (S), repeat the full
+ * stage-A content pass at HS and compare it with the 400 kHz baseline (T),
+ * then drop the clock and clear byte 185 before a block-0 recovery read (V).
+ * Report and stop in every case; no retry on device. Stop codes: 0 pass,
+ * 10 switch/byte-185 failure, 11 clock failure, 12 content read failure or
+ * divergence, 13 revert failure, 14 recovery-read failure. */
+static void
+gta4l_emmc_probe_b2_run(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe, struct gta4l_emmc_probe_range *range,
+    const uint8_t *block0, const uint8_t *block1)
+{
+	static uint8_t qblock[GTA4L_EMMC_BLOCK_BYTES];
+	struct gta4l_emmc_probe_bus base;
+	struct gta4l_emmc_probe_b2 b2;
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t index;
+	uint32_t sum;
+	int rc;
+
+	bzero(&base, sizeof(base));
+	bzero(&b2, sizeof(b2));
+	base.block0_sum = gta4l_emmc_probe_sum(block0,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	base.block1_sum = gta4l_emmc_probe_sum(block1,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	for (index = 0; index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
+		base.blocks[index] = range->array[index];
+	}
+	base.data_sum = range->data_sum;
+	base.last_sum = range->last_sum;
+
+	b2.pre_clock = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CLOCK_CONTROL);
+	b2.pre_qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	b2.pre_dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	b2.pre_dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		b2.switch_rc = rc;
+		gta4l_emmc_probe_report_b2(host, probe, &b2,
+		    rc, 10);
+	}
+	b2.pre_hs = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
+	for (index = 0, sum = 0; index < GTA4L_EMMC_EXT_CSD_BYTES; index++) {
+		sum += ext_csd[index];
+	}
+	b2.pre_sum = sum;
+
+	b2.switch_rc = gta4l_emmc_set_hs_timing(host, 1u, &b2.hs);
+	if (b2.switch_rc != GTA4L_EMMC_OK) {
+		b2.revert_rc = gta4l_emmc_set_hs_timing(host, 0u,
+		    &b2.revert);
+		gta4l_emmc_probe_report_b2(host, probe, &b2,
+		    b2.switch_rc,
+		    (b2.hs.clock_result != GTA4L_EMMC_OK) ? 11 : 10);
+	}
+
+	b2.content_attempted = 1u;
+	b2.content_rc = gta4l_emmc_probe_b1_content(host, range,
+	    &b2.content, 0);
+	if (b2.content_rc == GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_b1_compare(range, &base, &b2.content);
+	}
+	if ((b2.content_rc != GTA4L_EMMC_OK) ||
+	    (b2.content.same == 0u)) {
+		b2.revert_rc = gta4l_emmc_set_hs_timing(host, 0u,
+		    &b2.revert);
+		gta4l_emmc_probe_report_b2(host, probe, &b2,
+		    (b2.content_rc != GTA4L_EMMC_OK) ? b2.content_rc :
+		    GTA4L_EMMC_PROBE_ERR_CONTENT,
+		    (b2.revert_rc != GTA4L_EMMC_OK) ? 13 : 12);
+	}
+
+	b2.revert_rc = gta4l_emmc_set_hs_timing(host, 0u, &b2.revert);
+	if (b2.revert_rc != GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_report_b2(host, probe, &b2,
+		    b2.revert_rc, 13);
+	}
+
+	b2.q_result = gta4l_emmc_read_block(host, 0u, qblock);
+	if (b2.q_result != GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_report_b2(host, probe, &b2,
+		    b2.q_result, 14);
+	}
+	b2.q_block0_sum = gta4l_emmc_probe_sum(qblock,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	if (b2.q_block0_sum != base.block0_sum) {
+		gta4l_emmc_probe_report_b2(host, probe, &b2,
+		    GTA4L_EMMC_PROBE_ERR_CONTENT, 14);
+	}
+	gta4l_emmc_probe_report_b2(host, probe, &b2,
+	    GTA4L_EMMC_OK, 0);
+}
+
 /* Run the stage-7 audit: read back the timeout configuration (R1), arm the
  * minimum data timeout and read 8 blocks (E1), re-read block 0 to prove the bus
  * recovered (Q), then repeat the 1-bit CMD19 write test under the extended
@@ -1280,7 +1465,9 @@ gta4l_emmc_probe_dto_run(struct gta4l_emmc_host *host,
 
 	dto.q_result = gta4l_emmc_read_block(host, 0u, block0);
 
-	if ((dto.arm == expected) && (dto.q_result == GTA4L_EMMC_OK)) {
+	if (((dto.arm & GTA4L_EMMC_PROBE_TOUTVAL_MASK) ==
+	    (expected & GTA4L_EMMC_PROBE_TOUTVAL_MASK)) &&
+	    (dto.q_result == GTA4L_EMMC_OK)) {
 		dto.e2_attempted = 1u;
 		dto.e2_window = GTA4L_EMMC_PROBE_DTO_WINDOW_US;
 		host->bus_test_window_us = GTA4L_EMMC_PROBE_DTO_WINDOW_US;
@@ -1293,7 +1480,8 @@ gta4l_emmc_probe_dto_run(struct gta4l_emmc_host *host,
 		dto.e2_host_control = bus.host_control;
 	}
 
-	if (dto.arm != expected) {
+	if ((dto.arm & GTA4L_EMMC_PROBE_TOUTVAL_MASK) !=
+	    (expected & GTA4L_EMMC_PROBE_TOUTVAL_MASK)) {
 		stop = 12;
 		rc = 0;
 	} else if (dto.q_result != GTA4L_EMMC_OK) {
@@ -1753,6 +1941,10 @@ gta4l_emmc_probe_run(void)
 	 * non-persistent class already approved for B1C. */
 	if (stage == 7) {
 		gta4l_emmc_probe_dto_run(&host, &probe, &range, block0);
+	}
+
+	if (stage == 8) {
+		gta4l_emmc_probe_b2_run(&host, &probe, &range, block0, block1);
 	}
 
 	/* Stage B1: switch the card/host to 4-bit then 8-bit, run the

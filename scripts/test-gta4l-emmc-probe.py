@@ -150,6 +150,15 @@ SCENARIOS = [
     'probe-dto-silent',
     'probe-dto-q-fail',
     'probe-dto-e2-pass',
+    'probe-dto-arm-ro',
+    'probe-b2-pass',
+    'probe-b2-ignored',
+    'probe-b2-clock-busy',
+    'probe-b2-content-div',
+    'probe-b2-content-read',
+    'probe-b2-revert-fail',
+    'probe-b2-q-fail',
+    'probe-b2-pre-read-fail',
     'probe-b1c-success',
     'probe-b1c-pass',
     'probe-b1c-late-commit',
@@ -165,6 +174,7 @@ SCENARIOS = [
     'report-width-probe',
     'report-width-md',
     'report-width-b1',
+    'report-width-b2',
     'report-width-budget-control',
 ]
 
@@ -174,6 +184,7 @@ WIDTH_SCENARIOS = (
     'report-width-probe',
     'report-width-md',
     'report-width-b1',
+    'report-width-b2',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'
@@ -741,6 +752,39 @@ MUTATIONS = [
      '\tdto.e1_blocks = 21u;\n',
      'probe-dto-fired',
      'the E1 line lost the latched data-timeout record'),
+    ('b2-no-readback',
+     '\tif (readback != timing) {\n',
+     '\tif (0) {\n',
+     'probe-b2-ignored',
+     'the ignored byte-185 switch does not keep stop 10',
+     'core'),
+    ('b2-div-accepted',
+     '\tif ((b2.content_rc != GTA4L_EMMC_OK) ||\n'
+     '\t    (b2.content.same == 0u)) {\n',
+     '\tif (b2.content_rc != GTA4L_EMMC_OK) {\n',
+     'probe-b2-content-div',
+     'the HS divergence does not keep stop 12'),
+    ('b2-no-revert',
+     '\t\tb2.revert_rc = gta4l_emmc_set_hs_timing(host, 0u,\n'
+     '\t\t    &b2.revert);\n'
+     '\t\tgta4l_emmc_probe_report_b2(host, probe, &b2,\n'
+     '\t\t    b2.switch_rc,\n',
+     '\t\tb2.revert_rc = GTA4L_EMMC_OK;\n'
+     '\t\tgta4l_emmc_probe_report_b2(host, probe, &b2,\n'
+     '\t\t    b2.switch_rc,\n',
+     'probe-b2-ignored',
+     'the ignored switch did not revert cleanly'),
+    ('b2-clock-stop',
+     '\t\t    (b2.hs.clock_result != GTA4L_EMMC_OK) ? 11 : 10);\n',
+     '\t\t    (b2.hs.clock_result != GTA4L_EMMC_OK) ? 10 : 10);\n',
+     'probe-b2-clock-busy',
+     'the busy RCG does not keep stop 11'),
+    ('dto-arm-unmasked',
+     '\tif ((dto.arm & GTA4L_EMMC_PROBE_TOUTVAL_MASK) !=\n'
+     '\t    (expected & GTA4L_EMMC_PROBE_TOUTVAL_MASK)) {\n',
+     '\tif (dto.arm != expected) {\n',
+     'probe-dto-arm-ro',
+     'the arm readback artifact does not keep stop 10'),
 ]
 
 

@@ -32,7 +32,8 @@ DIAGNOSTICS = ('gta4l-sdhci-host-init=1',
                'gta4l-emmc-probe=4',
                'gta4l-emmc-probe=5',
                'gta4l-emmc-probe=6',
-               'gta4l-emmc-probe=7')
+               'gta4l-emmc-probe=7',
+               'gta4l-emmc-probe=8')
 DIAGNOSTIC_NAMES = {
     'host-init': 'gta4l-sdhci-host-init=1',
     'audit': 'gta4l-sdhci-audit=1',
@@ -44,6 +45,7 @@ DIAGNOSTIC_NAMES = {
     'emmc-probe-5': 'gta4l-emmc-probe=5',
     'emmc-probe-6': 'gta4l-emmc-probe=6',
     'emmc-probe-7': 'gta4l-emmc-probe=7',
+    'emmc-probe-8': 'gta4l-emmc-probe=8',
 }
 
 
@@ -211,7 +213,8 @@ def main():
                         choices=('any', 'host-init', 'audit', 'snapshot',
                                  'emmc-probe-1', 'emmc-probe-2',
                                  'emmc-probe-3', 'emmc-probe-4',
-                                 'emmc-probe-5', 'emmc-probe-6', 'emmc-probe-7'),
+                                 'emmc-probe-5', 'emmc-probe-6', 'emmc-probe-7',
+                                 'emmc-probe-8'),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

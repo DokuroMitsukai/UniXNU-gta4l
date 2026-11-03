@@ -163,6 +163,11 @@ SCENARIOS = [
     'bus-test-width',
     'bus-test-1bit',
     'bus-test-1bit-width',
+    'hs-timing-enter',
+    'hs-timing-stuck',
+    'hs-timing-cmd6-error',
+    'hs-timing-clock-busy',
+    'hs-timing-arg',
 ]
 
 FORBIDDEN_CORE = [
@@ -1096,6 +1101,34 @@ def main() -> int:
              'GTA4L_EMMC_BUS_TEST_1_BYTES        4u',
              'GTA4L_EMMC_BUS_TEST_1_BYTES        8u',
              'Gta4lEmmc.h', (), 'bus-test-1bit'),
+            ('hs-no-readback',
+             '\tif (readback != timing) {\n',
+             '\tif (0) {\n',
+             'Gta4lEmmc.c', (), 'hs-timing-stuck'),
+            ('hs-wrong-divider',
+             '\t\trc = gta4l_emmc_switch_clock(host, '
+             'GTA4L_EMMC_RCG_50M_CFG,\n',
+             '\t\trc = gta4l_emmc_switch_clock(host, '
+             'GTA4L_EMMC_RCG_400K_CFG,\n',
+             'Gta4lEmmc.c', (), 'hs-timing-enter'),
+            ('hs-ignore-switch-error',
+             '\tif ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {\n'
+             '\t\thost->card_status = response[0];\n'
+             '\t\tif (result != 0) {\n'
+             '\t\t\tresult->switch_result = GTA4L_EMMC_ERR_CARD_STATUS;\n'
+             '\t\t}\n'
+             '\t\treturn GTA4L_EMMC_ERR_CARD_STATUS;\n'
+             '\t}\n'
+             '\trc = gta4l_emmc_wait_tran(host);\n',
+             '\tif (0) {\n'
+             '\t\thost->card_status = response[0];\n'
+             '\t\tif (result != 0) {\n'
+             '\t\t\tresult->switch_result = GTA4L_EMMC_ERR_CARD_STATUS;\n'
+             '\t\t}\n'
+             '\t\treturn GTA4L_EMMC_ERR_CARD_STATUS;\n'
+             '\t}\n'
+             '\trc = gta4l_emmc_wait_tran(host);\n',
+             'Gta4lEmmc.c', (), 'hs-timing-cmd6-error'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -1192,6 +1225,12 @@ def main() -> int:
                 '1-bit bus-test pattern is not 0x5a',
             'bw-test-len-1':
                 'one-bit bus test failed',
+            'hs-no-readback':
+                'stuck HS_TIMING readback was not reported',
+            'hs-wrong-divider':
+                'HS enter failed',
+            'hs-ignore-switch-error':
+                'CMD6 SWITCH_ERROR was not reported',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)

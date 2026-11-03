@@ -128,6 +128,8 @@ static int map_fail;
 static int branch_stuck;
 static int rcg_stuck;
 static int clock_timeout;
+static unsigned int clock_drop_write;
+static unsigned int clock_write_count;
 static int bad_access;
 static unsigned long sdhci_accesses;
 static unsigned long sdhci_writes;
@@ -166,7 +168,20 @@ static uint32_t cmd6_late_value;
 static unsigned int cmd6_late_reads;
 static unsigned int cmd8_after_cmd6;
 static unsigned int cmd8_fail_on_after_cmd6;
+static unsigned int cmd8_count;
+static unsigned int cmd8_fail_on;
 static uint16_t cmd8_fail_error;
+/* Stage-B2 HS-timing modeling. hs_timing_ignore_enter leaves byte 185 at 0
+ * for the value-1 switch; hs_timing_ignore_exit leaves it at 1 for the
+ * value-0 revert. rcg_stuck_after lets the first N RCG updates complete and
+ * stalls the next one. hs_content_lba changes one CMD17 payload only while
+ * the GCC APPS RCG carries the 50 MHz row, so the HS content comparison sees
+ * a divergence that is absent at 400 kHz. */
+static int hs_timing_ignore_enter;
+static int hs_timing_ignore_exit;
+static unsigned int rcg_stuck_after;
+static unsigned int rcg_update_count;
+static uint32_t hs_content_lba = 0xFFFFFFFFu;
 static int bus_test_bad;
 static uint8_t bus_test_bad_width;
 static int cmd19_1bit_timeout;
@@ -380,6 +395,12 @@ sim_fill_block(uint32_t lba)
 	    (lba == width_corrupt_lba)) {
 		bytes[0] ^= 0xFFu;
 	}
+	if ((hs_content_lba != 0xFFFFFFFFu) &&
+	    (sim_load(gcc, GTA4L_EMMC_GCC_SDCC1_APPS_CFG, 4u) ==
+	    GTA4L_EMMC_RCG_50M_CFG) &&
+	    (lba == hs_content_lba)) {
+		bytes[0] ^= 0xFFu;
+	}
 	sim_fill_buffer_words(bytes);
 }
 
@@ -564,9 +585,14 @@ sim_store(unsigned char *window, uint32_t offset, uint32_t width,
 static void
 sim_gcc_write32(uint32_t offset, uint32_t value)
 {
-	if ((offset == GTA4L_EMMC_GCC_SDCC1_APPS_CMD) && (rcg_stuck == 0)) {
-		/* The RCG update bit is self-clearing. */
+	if ((offset == GTA4L_EMMC_GCC_SDCC1_APPS_CMD) &&
+	    ((value & GTA4L_EMMC_RCG_CMD_UPDATE) != 0) &&
+	    (rcg_stuck == 0) &&
+	    ((rcg_stuck_after == 0) ||
+	    (rcg_update_count < rcg_stuck_after))) {
+		/* The RCG update bit is self-clearing until the arm count. */
 		value &= ~GTA4L_EMMC_RCG_CMD_UPDATE;
+		rcg_update_count++;
 	}
 	sim_store(gcc, offset, 4u, value);
 	if (offset == GTA4L_EMMC_GCC_SDCC1_BCR) {
@@ -828,6 +854,7 @@ sim_command(uint16_t command)
 	}
 	if (index == GTA4L_EMMC_CMD6) {
 		uint32_t value;
+		uint32_t ext_index;
 
 		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX)) {
@@ -836,9 +863,20 @@ sim_command(uint16_t command)
 		cmd6_count++;
 		cmd6_argument = last_argument;
 		value = (last_argument >> 8) & 0xFFu;
+		ext_index = (last_argument >> 16) & 0xFFu;
 		if ((cmd6_status & GTA4L_EMMC_R1_ERROR_MASK) == 0u) {
 			cmd8_after_cmd6 = 0;
-			if (cmd6_late_commit != 0) {
+			if (ext_index ==
+			    GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF) {
+				if (((value == 1u) &&
+				    (hs_timing_ignore_enter == 0)) ||
+				    ((value == 0u) &&
+				    (hs_timing_ignore_exit == 0))) {
+					ext_csd[
+					    GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] =
+					    (uint8_t)value;
+				}
+			} else if (cmd6_late_commit != 0) {
 				/* The write is invisible to the verification
 				 * readback and appears on a later CMD8, which
 				 * models a late BUS_WIDTH commit. */
@@ -1013,6 +1051,12 @@ sim_command(uint16_t command)
 		}
 		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
 		if (index == GTA4L_EMMC_CMD8) {
+			cmd8_count++;
+			if ((cmd8_fail_on != 0u) &&
+			    (cmd8_count == cmd8_fail_on)) {
+				error_int |= cmd8_fail_error;
+				return;
+			}
 			if (cmd6_count != 0u) {
 				cmd8_after_cmd6++;
 			}
@@ -1292,11 +1336,21 @@ gta4l_emmc_probe_test_write16(uint32_t space, uint32_t offset, uint16_t value)
 			return;
 		}
 		if (offset == GTA4L_EMMC_REG_CLOCK_CONTROL) {
+			clock_write_count++;
 			sim_store(sdhci, offset, 2u, value);
 			if (((value & GTA4L_EMMC_CLOCK_INT_EN) != 0) &&
 			    (clock_timeout == 0)) {
 				value |= GTA4L_EMMC_CLOCK_INT_STABLE;
 				sim_store(sdhci, offset, 2u, value);
+			}
+			if ((clock_drop_write != 0u) &&
+			    (clock_write_count == clock_drop_write)) {
+				/* The full write clears the RO INT_STABLE bit
+				 * until the clock settles again; the immediate
+				 * readback sees 0x0005, as on the B1C-2 run. */
+				sim_store(sdhci, offset, 2u,
+				    (uint16_t)(value &
+				    ~GTA4L_EMMC_CLOCK_INT_STABLE));
 			}
 			return;
 		}
@@ -1750,6 +1804,69 @@ static const uint8_t order_probe_dto[] = {
 	GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14
 };
+/* Stage 8: the stage-A pass, then the B2 sequence - a pre-switch EXT_CSD
+ * read, the core's own before-read + CMD6 + CMD13 + after-read, the 25-value
+ * content pass at HS, the clock-down + CMD6 + CMD13 + after-read revert and
+ * one block-0 recovery read. A failure is a prefix of this order. */
+static const uint8_t order_probe_b2[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17
+};
+/* The B2 failure paths deviate from the full order only after the switch
+ * step. Each suffix below is spliced after the shared 33-command init plus
+ * stage-A prefix. */
+#define ORDER_B2_BASE 33u
+static uint8_t b2_order_buffer[128];
+static const uint8_t b2_suffix_ignored[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t b2_suffix_clock_busy[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t b2_suffix_content_read[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t b2_suffix_pre_read[] = {
+	GTA4L_EMMC_CMD8
+};
+
+static void
+set_b2_order(const uint8_t *suffix, unsigned int count);
 static const uint8_t order_cmd7[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7
@@ -1789,6 +1906,20 @@ set_expected_lbas(const uint32_t *lbas, unsigned int count)
 {
 	expected_lbas = lbas;
 	expected_lba_count = count;
+}
+
+static void
+set_b2_order(const uint8_t *suffix, unsigned int count)
+{
+	unsigned int index;
+
+	for (index = 0; index < ORDER_B2_BASE; index++) {
+		b2_order_buffer[index] = order_probe_b2[index];
+	}
+	for (index = 0; index < count; index++) {
+		b2_order_buffer[ORDER_B2_BASE + index] = suffix[index];
+	}
+	set_expected_order(b2_order_buffer, ORDER_B2_BASE + count);
 }
 
 int
@@ -2304,15 +2435,84 @@ main(int argc, char **argv)
 		    "probe-b1-1bit-continue") == 0) {
 			cmd6_ignore = 1;
 		}
+	} else if ((strcmp(scenario, "probe-b2-pass") == 0) ||
+	    (strcmp(scenario, "probe-b2-ignored") == 0) ||
+	    (strcmp(scenario, "probe-b2-clock-busy") == 0) ||
+	    (strcmp(scenario, "probe-b2-content-div") == 0) ||
+	    (strcmp(scenario, "probe-b2-content-read") == 0) ||
+	    (strcmp(scenario, "probe-b2-revert-fail") == 0) ||
+	    (strcmp(scenario, "probe-b2-q-fail") == 0) ||
+	    (strcmp(scenario, "probe-b2-pre-read-fail") == 0)) {
+		/* Stage 8: HS-timing rung. The stage-A pass runs at 400 kHz,
+		 * then the byte-185 switch, the 50 MHz content pass, the
+		 * revert and the recovery read. One fault per failure case. */
+		stage = 8;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		if (strcmp(scenario, "probe-b2-ignored") == 0) {
+			set_b2_order(b2_suffix_ignored,
+			    (unsigned int)(sizeof(b2_suffix_ignored) /
+			    sizeof(b2_suffix_ignored[0])));
+		} else if (strcmp(scenario,
+		    "probe-b2-clock-busy") == 0) {
+			set_b2_order(b2_suffix_clock_busy,
+			    (unsigned int)(sizeof(b2_suffix_clock_busy) /
+			    sizeof(b2_suffix_clock_busy[0])));
+		} else if (strcmp(scenario,
+		    "probe-b2-content-read") == 0) {
+			set_b2_order(b2_suffix_content_read,
+			    (unsigned int)(sizeof(b2_suffix_content_read) /
+			    sizeof(b2_suffix_content_read[0])));
+		} else if (strcmp(scenario,
+		    "probe-b2-pre-read-fail") == 0) {
+			set_b2_order(b2_suffix_pre_read,
+			    (unsigned int)(sizeof(b2_suffix_pre_read) /
+			    sizeof(b2_suffix_pre_read[0])));
+		} else {
+			set_expected_order(order_probe_b2,
+			    (unsigned int)(sizeof(order_probe_b2) /
+			    sizeof(order_probe_b2[0])));
+		}
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-b2-ignored") == 0) {
+			hs_timing_ignore_enter = 1;
+		} else if (strcmp(scenario,
+		    "probe-b2-clock-busy") == 0) {
+			rcg_stuck_after = 1u;
+		} else if (strcmp(scenario,
+		    "probe-b2-content-div") == 0) {
+			hs_content_lba = SIM_GPT_FIRST_USABLE;
+		} else if (strcmp(scenario,
+		    "probe-b2-content-read") == 0) {
+			cmd17_fail_on = 26u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-b2-revert-fail") == 0) {
+			hs_timing_ignore_exit = 1;
+		} else if (strcmp(scenario, "probe-b2-q-fail") == 0) {
+			cmd17_fail_on = 51u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-b2-pre-read-fail") == 0) {
+			cmd8_fail_on = 2u;
+			cmd8_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		}
 	} else if ((strcmp(scenario, "probe-dto-fired") == 0) ||
 	    (strcmp(scenario, "probe-dto-silent") == 0) ||
 	    (strcmp(scenario, "probe-dto-q-fail") == 0) ||
-	    (strcmp(scenario, "probe-dto-e2-pass") == 0)) {
+	    (strcmp(scenario, "probe-dto-e2-pass") == 0) ||
+	    (strcmp(scenario, "probe-dto-arm-ro") == 0)) {
 		/* Stage 7: data-timeout audit. E1 reads 8 blocks with the
 		 * minimum timeout armed; probe-dto-fired and probe-dto-q-fail
 		 * inject a data-timeout error mid-transfer, probe-dto-silent
 		 * lets the read complete. probe-dto-q-fail also fails the
-		 * block-0 recovery read. E2 repeats the 1-bit CMD19 wall. */
+		 * block-0 recovery read. E2 repeats the 1-bit CMD19 wall.
+		 * probe-dto-arm-ro drops the RO INT_STABLE bit on the arm
+		 * readback (0x0005) to prove the TOUTVAL-only gate. */
 		stage = 7;
 		ext_csd_count = 61071360u;
 		sim_init_ext_csd();
@@ -2332,6 +2532,9 @@ main(int argc, char **argv)
 		if (strcmp(scenario, "probe-dto-q-fail") == 0) {
 			cmd17_fail_on = 26u;
 			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		}
+		if (strcmp(scenario, "probe-dto-arm-ro") == 0) {
+			clock_drop_write = 4u;
 		}
 		if (strcmp(scenario, "probe-dto-e2-pass") != 0) {
 			cmd19_1bit_timeout = 1;
@@ -2415,6 +2618,16 @@ main(int argc, char **argv)
 		/* Synthetic B1 field-wise bound: the report samples the pad and
 		 * DLL registers live, so put them at their 32-bit maximum. */
 		width_form = 5;
+		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
+		    0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_STATUS, 4u,
+		    0xFFFFFFFFu);
+	} else if (strcmp(scenario, "report-width-b2") == 0) {
+		/* Synthetic B2 field-wise bound: the header and pad lines read
+		 * the live SDHCI/TLMM samples. */
+		width_form = 6;
+		sim_store(sdhci, GTA4L_EMMC_REG_HOST_CONTROL, 1u, 0xFFu);
 		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
 		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
 		    0xFFFFFFFFu);
@@ -3767,6 +3980,133 @@ main(int argc, char **argv)
 		    "the 1-bit mismatch issued a CMD6");
 		check(cmd_count == 35u,
 		    "the 1-bit mismatch did not stop at CMD14");
+	} else if (strcmp(scenario, "probe-b2-pass") == 0) {
+		check(panicked == 1, "the B2 pass did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=0 stop=0") != NULL,
+		    "the B2 pass does not name its stop");
+		check(strstr(panic_message,
+		    "B2 R clk=0007 hs=00") != NULL,
+		    "the B2 R line lost the 400 kHz state");
+		check(strstr(panic_message,
+		    "B2 S rc=0 sw=0 c6=00000900 hs=01 clk=0007 "
+		    "rcg=0000020b") != NULL,
+		    "the B2 S line lost the HS switch or the 50 MHz RCG");
+		check(strstr(panic_message,
+		    "B2 T rc=0 att=1 same=1 div=0") != NULL,
+		    "the B2 content pass did not match");
+		check(strstr(panic_message,
+		    "B2 V rc=0 sw=0 hs=00 clk=0007 rcg=00002017 q=0")
+		    != NULL,
+		    "the B2 revert did not restore legacy timing");
+		check(strstr(panic_message,
+		    "B2 PAD pre=00009fe4/60000000/00000000 "
+		    "post=00009fe4/60000000/00000000") != NULL,
+		    "the B2 pad samples changed");
+		check(strstr(panic_message,
+		    "B2 FAIL fail=0/0/0/00000000/0000/0000/00000000/0")
+		    != NULL,
+		    "the B2 pass invented a failure record");
+		check(cmd6_count == 2u,
+		    "the B2 pass did not issue the enter and leave CMD6");
+		check(cmd17_count == 51u,
+		    "the B2 pass did not run both content passes and Q");
+	} else if (strcmp(scenario, "probe-b2-ignored") == 0) {
+		check(panicked == 1, "the ignored HS switch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=-22 stop=10") != NULL,
+		    "the ignored byte-185 switch does not keep stop 10");
+		check(strstr(panic_message,
+		    "B2 S rc=-22 sw=-22 c6=00000900 hs=00") != NULL,
+		    "the ignored switch did not record the readback mismatch");
+		check(strstr(panic_message,
+		    "B2 V rc=0 sw=0 hs=00 clk=0007 rcg=00002017") != NULL,
+		    "the ignored switch did not revert cleanly");
+		check(cmd17_count == 25u,
+		    "the ignored switch still ran the HS content pass");
+		check(sim_load(gcc, GTA4L_EMMC_GCC_SDCC1_APPS_CFG, 4u) ==
+		    GTA4L_EMMC_RCG_400K_CFG,
+		    "the ignored switch left the 50 MHz RCG");
+	} else if (strcmp(scenario, "probe-b2-clock-busy") == 0) {
+		check(panicked == 1, "the busy RCG did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=-5 stop=11") != NULL,
+		    "the busy RCG does not keep stop 11");
+		check(strstr(panic_message,
+		    "B2 S rc=-5 sw=0 c6=00000900 hs=01 clk=0000") != NULL,
+		    "the busy RCG lost the completed switch or the failed "
+		    "clock");
+		check(strstr(panic_message,
+		    "B2 V rc=-5 sw=0 hs=00") != NULL,
+		    "the busy RCG revert failure was not recorded");
+		check(cmd17_count == 25u,
+		    "the busy RCG still ran the HS content pass");
+		check((sim_load(sdhci, GTA4L_EMMC_REG_CLOCK_CONTROL, 2u) &
+		    GTA4L_EMMC_CLOCK_CARD_EN) == 0u,
+		    "the busy RCG left the card clock enabled");
+	} else if (strcmp(scenario, "probe-b2-content-div") == 0) {
+		check(panicked == 1, "the HS content divergence did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=-21 stop=12") != NULL,
+		    "the HS divergence does not keep stop 12");
+		check(strstr(panic_message,
+		    "B2 T rc=0 att=1 same=0 div=34") != NULL,
+		    "the HS divergence did not name the first differing LBA");
+		check(strstr(panic_message,
+		    "B2 V rc=0 sw=0 hs=00 clk=0007 rcg=00002017") != NULL,
+		    "the HS divergence run did not revert");
+	} else if (strcmp(scenario, "probe-b2-content-read") == 0) {
+		check(panicked == 1, "the HS content read error did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=-12 stop=12") != NULL,
+		    "the HS content read error does not keep stop 12");
+		check(strstr(panic_message,
+		    "B2 T rc=-12 att=1") != NULL,
+		    "the HS content read error lost its core code");
+		check(strstr(panic_message,
+		    "B2 V rc=0 sw=0 hs=00 clk=0007 rcg=00002017") != NULL,
+		    "the HS content read error did not revert");
+		check(cmd17_count == 26u,
+		    "the HS content read error did not stop at the first "
+		    "HS read");
+	} else if (strcmp(scenario, "probe-b2-revert-fail") == 0) {
+		check(panicked == 1, "the failed revert did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=-22 stop=13") != NULL,
+		    "the failed revert does not keep stop 13");
+		check(strstr(panic_message,
+		    "B2 T rc=0 att=1 same=1 div=0") != NULL,
+		    "the failed revert lost the passing HS content pass");
+		check(strstr(panic_message,
+		    "B2 V rc=-22 sw=-22 hs=01") != NULL,
+		    "the failed revert did not record the byte-185 mismatch");
+		check(sim_load(gcc, GTA4L_EMMC_GCC_SDCC1_APPS_CFG, 4u) ==
+		    GTA4L_EMMC_RCG_400K_CFG,
+		    "the failed revert left the 50 MHz RCG");
+	} else if (strcmp(scenario, "probe-b2-q-fail") == 0) {
+		check(panicked == 1, "the failed B2 recovery read did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=-12 stop=14") != NULL,
+		    "the failed B2 recovery read does not keep stop 14");
+		check(strstr(panic_message,
+		    "B2 V rc=0 sw=0 hs=00 clk=0007 rcg=00002017 q=-12")
+		    != NULL,
+		    "the failed B2 recovery read lost its core code");
+		check(cmd17_count == 51u,
+		    "the failed B2 recovery read did not stop at Q");
+	} else if (strcmp(scenario, "probe-b2-pre-read-fail") == 0) {
+		check(panicked == 1, "the failed B2 pre-read did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=-12 stop=10") != NULL,
+		    "the failed B2 pre-read does not keep stop 10");
+		check(strstr(panic_message,
+		    "B2 S rc=-12 sw=0 c6=00000000 hs=00") != NULL,
+		    "the failed B2 pre-read still issued a CMD6");
+		check(cmd6_count == 0u,
+		    "the failed B2 pre-read issued a CMD6");
+		check(cmd17_count == 25u,
+		    "the failed B2 pre-read ran the HS content pass");
 	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
 		check(panicked == 1, "the fired DTO audit did not report");
 		check(strstr(panic_message,
@@ -3857,6 +4197,31 @@ main(int argc, char **argv)
 		    "the E2 line lost the passing 1-bit words");
 		check(cmd_count == 38u,
 		    "the passing E2 run did not complete CMD19/CMD14");
+	} else if (strcmp(scenario, "probe-dto-arm-ro") == 0) {
+		check(panicked == 1, "the arm-artifact audit did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC DTO REPORT: rc=-11 stop=10") != NULL,
+		    "the arm readback artifact does not keep stop 10");
+		check(strstr(panic_message,
+		    "DTO R1 clk=0007 ne=0033 ee=07ff ns=0000 se=0000 "
+		    "es=0000 arm=0005") != NULL,
+		    "the arm line did not record the dropped INT_STABLE bit");
+		check(strstr(panic_message,
+		    "DTO E1 n=8 rc=0 "
+		    "fail=0/0/0/00000000/0000/0000/00000000/0") != NULL,
+		    "the arm artifact lost the silent E1 row");
+		check(strstr(panic_message,
+		    "DTO Q rc=0") != NULL,
+		    "the arm artifact skipped the recovery read");
+		check(strstr(panic_message,
+		    "DTO E2 att=1 win=8000000 rc=-11 tt=1") != NULL,
+		    "the TOUTVAL-only gate did not run E2");
+		check(strstr(panic_message,
+		    "DTO FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/22")
+		    != NULL,
+		    "the arm artifact lost the terminal CMD19 tuple");
+		check(cmd_count == 37u,
+		    "the arm artifact did not run the full DTO sequence");
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		check(panicked == 1, "the synthetic width failure did not panic");
 		check(strstr(panic_message, "stage=3") != NULL,
@@ -4169,6 +4534,53 @@ main(int argc, char **argv)
 		    "record");
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width B1 report does not fit the "
+		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-b2") == 0) {
+		check(panicked == 1,
+		    "the synthetic width B2 report did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 REPORT: rc=-5 stop=13 mci=ffffffff rca=1 "
+		    "cap=4294967295 rev=255 hci=ff step=24 log=99999") != NULL,
+		    "the synthetic width B2 report lost the widest header");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 R clk=ffff hs=ff es=ffffffff") != NULL,
+		    "the synthetic width B2 report lost the 400 kHz state");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 S rc=-22 sw=-22 c6=ffffffff hs=ff "
+		    "clk=ffff rcg=ffffffff sum=ffffffff") != NULL,
+		    "the synthetic width B2 report lost the widest switch "
+		    "fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 T rc=-21 att=1 same=0 div=4294967295 "
+		    "b0=ffffffff b1=ffffffff data=ffffffff last=ffffffff")
+		    != NULL,
+		    "the synthetic width B2 report lost the widest content "
+		    "fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 V rc=-5 sw=-22 hs=ff clk=ffff "
+		    "rcg=ffffffff q=-17 qb0=ffffffff") != NULL,
+		    "the synthetic width B2 report lost the failed revert and "
+		    "recovery read");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 BLOCKS 2=ffffffff 3=ffffffff "
+		    "4=ffffffff 5=ffffffff 6=ffffffff 7=ffffffff "
+		    "8=ffffffff 9=ffffffff 10=ffffffff 11=ffffffff "
+		    "12=ffffffff 13=ffffffff 14=ffffffff 15=ffffffff "
+		    "16=ffffffff 17=ffffffff 18=ffffffff 19=ffffffff "
+		    "20=ffffffff 21=ffffffff 22=ffffffff") != NULL,
+		    "the synthetic width B2 report lost the content sums");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 PAD pre=ffffffff/ffffffff/ffffffff "
+		    "post=ffffffff/ffffffff/ffffffff") != NULL,
+		    "the synthetic width B2 report lost the before/after "
+		    "pad/DLL state");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC B2 FAIL fail=1/4294967295/4294967295/"
+		    "ffffffff/ffff/ffff/ffffffff/24") != NULL,
+		    "the synthetic width B2 report lost the widest failure "
+		    "record");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width B2 report does not fit the "
 		    "2048-byte panic buffer including the NUL");
 	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
 	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
@@ -4552,7 +4964,8 @@ main(int argc, char **argv)
 
 	if ((strncmp(scenario, "probe-b1c-", 10u) == 0) ||
 	    (strncmp(scenario, "probe-b1-1bit-", 15u) == 0) ||
-	    (strncmp(scenario, "probe-dto-", 10u) == 0)) {
+	    (strncmp(scenario, "probe-dto-", 10u) == 0) ||
+	    (strncmp(scenario, "probe-b2-", 9u) == 0)) {
 		check(bad_command_format == 0,
 		    "a B1C command used the wrong flags");
 		check(bad_command_order == 0,

@@ -236,10 +236,14 @@ def test_emmc_probe_7(base):
     check_emmc_probe(base, 7)
 
 
+def test_emmc_probe_8(base):
+    check_emmc_probe(base, 8)
+
+
 def main():
     tests = (test_explicit_kernel, test_default_kernel, test_missing_kernel,
              test_emmc_probe_4, test_emmc_probe_5, test_emmc_probe_6,
-             test_emmc_probe_7)
+             test_emmc_probe_7, test_emmc_probe_8)
     for test in tests:
         with tempfile.TemporaryDirectory(prefix='gta4l-payload-test-') as tmp:
             test(Path(tmp))

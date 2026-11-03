@@ -1070,12 +1070,14 @@ gta4l_emmc_enable_clocks(struct gta4l_emmc_host *host)
 	return GTA4L_EMMC_OK;
 }
 
+/* Program the GCC SDCC1 APPS RCG with the card clock stopped. The caller
+ * enables the clock and waits for INT_STABLE afterwards. */
 static int
-gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
+gta4l_emmc_program_rcg(struct gta4l_emmc_host *host, uint32_t config_bits,
+    uint32_t m, uint32_t n, uint32_t d, uint32_t *config_out)
 {
 	uint32_t command;
 	uint32_t config;
-	int result;
 
 	/* Stop the card clock before touching the RCG. */
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
@@ -1086,13 +1088,16 @@ gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
 	    GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
 	config &= ~(GTA4L_EMMC_RCG_SRC_SEL_MASK |
 	    GTA4L_EMMC_RCG_SRC_DIV_MASK | GTA4L_EMMC_RCG_MODE_MASK);
-	config |= GTA4L_EMMC_RCG_400K_CFG;
+	config |= config_bits;
+	if (config_out != 0) {
+		*config_out = config;
+	}
 	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_GCC,
-	    GTA4L_EMMC_GCC_SDCC1_APPS_M, GTA4L_EMMC_RCG_400K_M);
+	    GTA4L_EMMC_GCC_SDCC1_APPS_M, m);
 	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_GCC,
-	    GTA4L_EMMC_GCC_SDCC1_APPS_N, GTA4L_EMMC_RCG_400K_N);
+	    GTA4L_EMMC_GCC_SDCC1_APPS_N, n);
 	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_GCC,
-	    GTA4L_EMMC_GCC_SDCC1_APPS_D, GTA4L_EMMC_RCG_400K_D);
+	    GTA4L_EMMC_GCC_SDCC1_APPS_D, d);
 	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_GCC,
 	    GTA4L_EMMC_GCC_SDCC1_APPS_CFG, config);
 	gta4l_emmc_barrier(host);
@@ -1103,9 +1108,59 @@ gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
 	    GTA4L_EMMC_GCC_SDCC1_APPS_CMD,
 	    command | GTA4L_EMMC_RCG_CMD_UPDATE);
 	gta4l_emmc_barrier(host);
-	result = gta4l_emmc_wait32(host, GTA4L_EMMC_SPACE_GCC,
+	return gta4l_emmc_wait32(host, GTA4L_EMMC_SPACE_GCC,
 	    GTA4L_EMMC_GCC_SDCC1_APPS_CMD, GTA4L_EMMC_RCG_CMD_UPDATE, 0,
 	    GTA4L_EMMC_RCG_TIMEOUT_US);
+}
+
+/* Switch the running card clock to `config_bits`/M/N/D and leave the card
+ * clock enabled. Returns ERR_CLOCK when the RCG update or the INT_STABLE
+ * wait fails; `clock_after` receives the final CLOCK_CONTROL value. */
+static int
+gta4l_emmc_switch_clock(struct gta4l_emmc_host *host, uint32_t config_bits,
+    uint32_t m, uint32_t n, uint32_t d, uint32_t *clock_after)
+{
+	uint32_t clock;
+	int result;
+
+	result = gta4l_emmc_program_rcg(host, config_bits, m, n, d, 0);
+	if (result != GTA4L_EMMC_OK) {
+		return GTA4L_EMMC_ERR_CLOCK;
+	}
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL, GTA4L_EMMC_CLOCK_INT_EN);
+	gta4l_emmc_barrier(host);
+	result = gta4l_emmc_wait16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL,
+	    GTA4L_EMMC_CLOCK_INT_EN | GTA4L_EMMC_CLOCK_INT_STABLE,
+	    GTA4L_EMMC_CLOCK_INT_EN | GTA4L_EMMC_CLOCK_INT_STABLE,
+	    GTA4L_EMMC_CLOCK_TIMEOUT_US);
+	if (result != GTA4L_EMMC_OK) {
+		return GTA4L_EMMC_ERR_CLOCK;
+	}
+	clock = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL,
+	    (uint16_t)(clock | GTA4L_EMMC_CLOCK_CARD_EN));
+	gta4l_emmc_barrier(host);
+	gta4l_emmc_delay(host, GTA4L_EMMC_CARD_CLOCK_SETTLE_US);
+	if (clock_after != 0) {
+		*clock_after = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_CLOCK_CONTROL);
+	}
+	return GTA4L_EMMC_OK;
+}
+
+static int
+gta4l_emmc_configure_clock(struct gta4l_emmc_host *host)
+{
+	uint32_t config;
+	int result;
+
+	result = gta4l_emmc_program_rcg(host, GTA4L_EMMC_RCG_400K_CFG,
+	    GTA4L_EMMC_RCG_400K_M, GTA4L_EMMC_RCG_400K_N,
+	    GTA4L_EMMC_RCG_400K_D, &config);
 	if (result != GTA4L_EMMC_OK) {
 		return GTA4L_EMMC_ERR_CLOCK;
 	}
@@ -1874,6 +1929,174 @@ gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
 		}
 	}
 	gta4l_emmc_log(host, GTA4L_EMMC_LOG_BUS, bits, test_word);
+	return GTA4L_EMMC_OK;
+}
+
+int
+gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
+    struct gta4l_emmc_hs_result *result)
+{
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t response[4];
+	uint32_t argument;
+	uint32_t readback;
+	uint32_t rcg_expected;
+	uint32_t rcg_actual;
+	uint32_t clock = 0;
+	uint32_t sum = 0;
+	uint32_t index;
+	const struct gta4l_emmc_hs_result zero = { 0 };
+	int rc;
+
+	if ((host == 0) || (host->initialized == 0) || (timing > 1u)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if (result != 0) {
+		*result = zero;
+		result->timing = timing;
+		result->switch_result = GTA4L_EMMC_OK;
+		result->clock_result = GTA4L_EMMC_OK;
+	}
+	if (result != 0) {
+		result->rcg_before = gta4l_emmc_read32(host,
+		    GTA4L_EMMC_SPACE_GCC, GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
+	}
+
+	/* Leaving HS: drop the clock to 400 kHz before the card is asked to
+	 * return to legacy timing, because legacy timing is not valid at the
+	 * HS rate. Entering HS keeps 400 kHz until the byte-185 readback
+	 * confirms the switch, matching Linux mmc_select_timing(). */
+	if (timing == 0u) {
+		rc = gta4l_emmc_switch_clock(host, GTA4L_EMMC_RCG_400K_CFG,
+		    GTA4L_EMMC_RCG_400K_M, GTA4L_EMMC_RCG_400K_N,
+		    GTA4L_EMMC_RCG_400K_D, &clock);
+		if (rc != GTA4L_EMMC_OK) {
+			if (result != 0) {
+				result->clock_result = rc;
+				result->clock = clock;
+			}
+			return rc;
+		}
+		if (result != 0) {
+			result->clock = clock;
+			result->rcg_after = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_GCC,
+			    GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
+		}
+		host->last_step = GTA4L_EMMC_STEP_HS_CLOCK;
+	}
+
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->switch_result = rc;
+		}
+		return rc;
+	}
+	if (result != 0) {
+		result->hs_before =
+		    ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
+	}
+
+	argument = GTA4L_EMMC_SWITCH_ACCESS_WRITE |
+	    (GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF << 16) | (timing << 8) |
+	    GTA4L_EMMC_SWITCH_CMD_SET_NORMAL;
+	rc = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD6, argument,
+	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX, GTA4L_EMMC_CMD_TIMEOUT_US, response);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->switch_result = rc;
+		}
+		return rc;
+	}
+	if (result != 0) {
+		result->switch_status = response[0];
+	}
+	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
+		host->card_status = response[0];
+		if (result != 0) {
+			result->switch_result = GTA4L_EMMC_ERR_CARD_STATUS;
+		}
+		return GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+	rc = gta4l_emmc_wait_tran(host);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->switch_result = rc;
+		}
+		return rc;
+	}
+
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->switch_result = rc;
+		}
+		return rc;
+	}
+	readback = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
+	for (index = 0; index < GTA4L_EMMC_EXT_CSD_BYTES; index++) {
+		sum += ext_csd[index];
+	}
+	if (result != 0) {
+		result->hs_after = readback;
+		result->readback_sum = sum;
+	}
+	if (readback != timing) {
+		if (result != 0) {
+			result->switch_result = GTA4L_EMMC_ERR_TIMING;
+		}
+		return GTA4L_EMMC_ERR_TIMING;
+	}
+	host->last_step = GTA4L_EMMC_STEP_HS_TIMING;
+
+	if (timing != 0u) {
+		rc = gta4l_emmc_switch_clock(host, GTA4L_EMMC_RCG_50M_CFG,
+		    GTA4L_EMMC_RCG_50M_M, GTA4L_EMMC_RCG_50M_N,
+		    GTA4L_EMMC_RCG_50M_D, &clock);
+		if (rc != GTA4L_EMMC_OK) {
+			if (result != 0) {
+				result->clock_result = rc;
+				result->clock = clock;
+			}
+			return rc;
+		}
+		if (result != 0) {
+			result->clock = clock;
+		}
+		host->last_step = GTA4L_EMMC_STEP_HS_CLOCK;
+	}
+
+	if (result != 0) {
+		rcg_actual = result->rcg_after;
+	} else {
+		rcg_actual = 0u;
+	}
+	if (rcg_actual == 0u) {
+		rcg_actual = gta4l_emmc_read32(host,
+		    GTA4L_EMMC_SPACE_GCC,
+		    GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
+		if (result != 0) {
+			result->rcg_after = rcg_actual;
+		}
+	}
+	rcg_expected = (timing != 0u) ? GTA4L_EMMC_RCG_50M_CFG :
+	    GTA4L_EMMC_RCG_400K_CFG;
+	if ((rcg_actual & (GTA4L_EMMC_RCG_SRC_SEL_MASK |
+	    GTA4L_EMMC_RCG_SRC_DIV_MASK |
+	    GTA4L_EMMC_RCG_MODE_MASK)) !=
+	    (rcg_expected & (GTA4L_EMMC_RCG_SRC_SEL_MASK |
+	    GTA4L_EMMC_RCG_SRC_DIV_MASK |
+	    GTA4L_EMMC_RCG_MODE_MASK))) {
+		if (result != 0) {
+			result->clock_result = GTA4L_EMMC_ERR_CLOCK;
+		}
+		return GTA4L_EMMC_ERR_CLOCK;
+	}
+	gta4l_emmc_log(host, GTA4L_EMMC_LOG_CLOCK, timing,
+	    gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_CLOCK_CONTROL));
 	return GTA4L_EMMC_OK;
 }
 

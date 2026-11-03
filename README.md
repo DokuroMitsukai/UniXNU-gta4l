@@ -128,8 +128,8 @@ partition layout, payload policy and packaging.
   (four CMD17 TC-only timeouts, one CMD3 timeout), and the same-session BOOT
   re-read matched the post-flash hash. The 4-bit read paradox is unchanged
   (`es=000009cb` at the attempted width). F3 remains unproven
-  (`docs/emmc-driver.md` §5.3.12–5.3.18,
-  `docs/emmc-cmd2-crc-audit.md` §2.18–2.22). The stage-6 1-bit CMD19/CMD14
+  (`docs/emmc-driver.md` §5.3.12–5.3.19,
+  `docs/emmc-cmd2-crc-audit.md` §2.18–2.23). The stage-6 1-bit CMD19/CMD14
   discriminator (`gta4l-emmc-probe=6`) was built from clean `5f57dcb`
   (kernel `a20d6269…`, payload `fdaa507d…`, boot image `90cf074c…`),
   flashed BOOT only (p69 `c6a9f8e0…` → `1ea626f5…`) and booted thirteen
@@ -158,6 +158,19 @@ partition layout, payload policy and packaging.
   pre-B1 (six block-1 CMD17 TC-only timeouts and one post-CMD7 CMD13
   completion timeout). E2 did not run, the `trc=-20` class remains
   unobserved, the byte-183 paradox is unchanged, and F3 remains unproven.
+  The next rung is B2 high-speed timing (`gta4l-emmc-probe=8`), implemented
+  and simulator-tested: after the stage-A pass it switches EXT_CSD
+  `HS_TIMING` (byte 185) to 1, ramps the GCC SDCC1 APPS RCG to the pinned
+  50 MHz floor row (`0x20B`; the 52 MHz class floors to 50 MHz), repeats
+  the full content pass at that clock and compares every sum with the
+  400 kHz baseline, then drops the clock and clears byte 185 before a
+  recovery read. It always reports (`GTA4L-EMMC B2 REPORT`) and stops with
+  0/10/11/12/13/14; it issues no CMD19/CMD14, width switch or user-data
+  write. The host batch also narrows the stage-7 arming gate to TOUTVAL
+  only, so the read-only `INT_STABLE` bit cannot block a DTO report. Core
+  143/86 and probe 85/51; the `report-width-b2` fixture fits the 2048-byte
+  buffer. No build, flash or boot has happened; the device run needs a
+  fresh explicit BOOT-only approval and F4 remains unproven.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

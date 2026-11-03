@@ -28,6 +28,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	struct gta4l_emmc_probe_bus base;
 	struct gta4l_emmc_probe_bus w4;
 	struct gta4l_emmc_probe_bus w8;
+	struct gta4l_emmc_probe_b2 b2;
 	struct gta4l_emmc_host host;
 
 	memset(&probe, 0, sizeof(probe));
@@ -36,6 +37,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	memset(&base, 0, sizeof(base));
 	memset(&w4, 0, sizeof(w4));
 	memset(&w8, 0, sizeof(w8));
+	memset(&b2, 0, sizeof(b2));
 	memset(&host, 0, sizeof(host));
 	memset(block0, 0xFF, sizeof(block0));
 	memset(block1, 0xFF, sizeof(block1));
@@ -297,7 +299,7 @@ gta4l_emmc_probe_width_fixture(int form)
 		memset(range.mb, 0xFF, sizeof(range.mb));
 		gta4l_emmc_probe_report_probe(&host, &probe, &regs, block0,
 		    block1, &range, 1);
-	} else {
+	} else if (form == 4) {
 		/* Stage-B1 form: both width rungs present, every content sum
 		 * and the first differing LBA at their 32-bit bound, and the
 		 * widest switch/test result codes. */
@@ -305,5 +307,53 @@ gta4l_emmc_probe_width_fixture(int form)
 		host.last_step = GTA4L_EMMC_STEP_BUS_TEST;
 		gta4l_emmc_probe_report_b1(&host, &probe, &range, &base, &w4,
 		    &w8, GTA4L_EMMC_PROBE_ERR_CONTENT, 8);
+	} else {
+		/* Stage-B2 form: both HS results at their field bounds, the
+		 * content pass at its widest, the failed revert and a failed
+		 * recovery read. */
+		b2.pre_clock = 0xFFFFu;
+		b2.pre_hs = 0xFFu;
+		b2.pre_sum = 0xFFFFFFFFu;
+		b2.pre_qdsd = 0xFFFFFFFFu;
+		b2.pre_dll = 0xFFFFFFFFu;
+		b2.pre_dst = 0xFFFFFFFFu;
+		b2.hs.timing = 1u;
+		b2.hs.hs_before = 0xFFu;
+		b2.hs.hs_after = 0xFFu;
+		b2.hs.rcg_before = 0xFFFFFFFFu;
+		b2.hs.rcg_after = 0xFFFFFFFFu;
+		b2.hs.clock = 0xFFFFu;
+		b2.hs.switch_status = 0xFFFFFFFFu;
+		b2.hs.readback_sum = 0xFFFFFFFFu;
+		b2.hs.switch_result = GTA4L_EMMC_ERR_TIMING;
+		b2.hs.clock_result = GTA4L_EMMC_ERR_CLOCK;
+		b2.revert = b2.hs;
+		b2.revert.timing = 0u;
+		b2.revert.switch_result = GTA4L_EMMC_ERR_TIMING;
+		b2.revert.clock_result = GTA4L_EMMC_ERR_CLOCK;
+		b2.content_attempted = 1u;
+		b2.content.same = 0u;
+		b2.content.div = 0xFFFFFFFFu;
+		b2.content.block0_sum = 0xFFFFFFFFu;
+		b2.content.block1_sum = 0xFFFFFFFFu;
+		b2.content.data_sum = 0xFFFFFFFFu;
+		b2.content.last_sum = 0xFFFFFFFFu;
+		memset(b2.content.blocks, 0xFF, sizeof(b2.content.blocks));
+		b2.switch_rc = GTA4L_EMMC_ERR_TIMING;
+		b2.content_rc = GTA4L_EMMC_PROBE_ERR_CONTENT;
+		b2.revert_rc = GTA4L_EMMC_ERR_CLOCK;
+		b2.q_result = GTA4L_EMMC_ERR_INHIBIT;
+		b2.q_block0_sum = 0xFFFFFFFFu;
+		host.fail_valid = 1u;
+		host.fail_index = 0xFFFFFFFFu;
+		host.fail_argument = 0xFFFFFFFFu;
+		host.fail_command = 0xFFFFFFFFu;
+		host.fail_error = 0xFFFFu;
+		host.fail_normal = 0xFFFFu;
+		host.fail_present = 0xFFFFFFFFu;
+		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		gta4l_emmc_probe_report_b2(&host, &probe, &b2,
+		    GTA4L_EMMC_ERR_CLOCK, 13);
 	}
 }

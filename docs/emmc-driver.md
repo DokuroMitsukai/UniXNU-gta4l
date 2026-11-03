@@ -47,9 +47,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 138 scenarios and 83 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 143 scenarios and 86 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 75 scenarios and 46 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 85 scenarios and 51 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -1976,6 +1976,64 @@ TOUTVAL_MASK`) so a live RO status bit cannot block the report. The
 `INT_STABLE` drop after a full `CLOCK_CONTROL` write is a recorded hardware
 quirk. No code change is made in this records batch. The next rung is B2
 (high-speed timing, plan §3.2), which needs a fresh owner approval.
+
+### 5.3.19 Stage-B2 HS-timing rung (gta4l-emmc-probe=8, host batch 2026-11-03)
+
+The `gta4l-emmc-probe=8` stage runs after the stage-A pass and before any
+width CMD6. It measures one thing: whether the card accepts the 52 MHz HS
+class and whether the data path preserves content at the raised clock on
+the only proven-good path (1-bit single-block CMD17 reads). It issues no
+CMD19/CMD14, no width switch and no user-data write; the only card write is
+the EXT_CSD `HS_TIMING` byte (185). The rung always emits a
+`GTA4L-EMMC B2 REPORT` and stops; there is no on-device retry and no
+fall-through.
+
+Steps:
+
+| Step | Action |
+| --- | --- |
+| R | Read byte 185 and `CLOCK_CONTROL`; sample the pad/DLL state at 400 kHz. |
+| S | CMD6 SET index 185 value 1, wait TRAN/ready and read byte 185 back. Only a confirmed `hs=1` raises the GCC SDCC1 APPS RCG to the pinned 50 MHz floor row (`0x20B`, M/N/D zero) and re-enables/verifies the card clock. |
+| T | Repeat the full stage-A content pass (block 0/1, the 21 GPT-array sectors, the first usable sector and the last sector) at 50 MHz and compare every sum with the held 400 kHz baseline. |
+| V | Drop the clock to 400 kHz first, then CMD6 byte 185 = 0, read both back and re-read block 0 at 400 kHz. |
+
+The 52 MHz class is floored to 50 MHz on this clock tree: the pinned
+`gcc-sm6115.c` table has no 52 MHz entry and `clk_rcg2_floor_ops` selects
+`F(50000000, P_GPLL0_OUT_AUX2, 6, 0, 0)`, which encodes source select 2
+and divider field 11 (`0x20B`) with the MND block in direct mode. The
+parent rate is a table value, not a measurement. `CLOCK_CONTROL` carries
+only the enable/stable bits, so the frequency verdict comes from the RCG
+readback.
+
+Stop codes: 0 pass with a clean V and recovery read; 10 switch step failed
+(CMD6/TRAN error, the byte-185-ignored class, or the pre-switch EXT_CSD
+read failure); 11 clock step failed (RCG update, `INT_STABLE` wait or RCG
+readback); 12 content read failure or first divergence at 50 MHz; 13 revert
+failure; 14 recovery-read failure or block-0 content mismatch.
+
+The report carries an `R` line (byte 185, `CLOCK_CONTROL`, EXT_CSD sum), an
+`S` line (invocation rc, switch result, CMD6 R1, byte-185 readback, clock,
+RCG config, EXT_CSD sum), a `T` line (content rc, attempt marker, `same=`,
+`div=`, block sums), a `V` line (revert rc/result, byte 185, clock, RCG,
+recovery rc/sum), the 21 HS content sums, before/after pad/DLL samples and
+the terminal FAIL record. The `report-width-b2` fixture fills every field
+at its bound and stays inside the 2048-byte panic buffer.
+
+Host checks: core 143 scenarios and 86 mutation controls (was 138/83),
+adding HS enter/leave, an ignored byte-185 readback, CMD6 SWITCH_ERROR and
+a busy-RCG case plus three mutation controls; probe 85 scenarios and 51
+mutation controls (was 75/46), adding the eight stage-8 scenarios (pass,
+ignored switch, busy RCG, content divergence, content read error, failed
+revert, failed recovery read and failed pre-read) and four stage-8
+mutations, plus the TOUTVAL-only arm-artifact case and its mutation; the
+`report-width-b2` materialization is the sixth width fixture. The diagnostic
+wrapper and payload gate accept `emmc-probe-8`. The stage-7 arming gate now
+compares only the TOUTVAL bits, so the B1C-2 `INT_STABLE` artifact cannot
+block a later DTO report.
+
+No build, flash or boot has been performed. The device run needs a fresh
+explicit BOOT-only approval; F3 and F4 remain `[U]` until the device report
+exists.
 
 ## 6. Expected report
 

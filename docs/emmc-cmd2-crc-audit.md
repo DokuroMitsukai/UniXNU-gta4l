@@ -1977,6 +1977,66 @@ data-timeout latch; a bus-test result (E2 did not run); a per-width content
 pass; the `trc=-20` class; the byte-183 paradox; a cause for the pre-B1 CMD17
 or CMD13 stops; or that F3 is established.
 
+### 2.23 Stage-B2 host batch: the HS-timing rung is simulator-tested (2026-11-03)
+
+The stage-8 rung (`gta4l-emmc-probe=8`, driver §5.3.19) is the B2
+high-speed measurement. It runs after the stage-A pass and before any width
+CMD6, always emits a `GTA4L-EMMC B2 REPORT` and stops; it issues no
+CMD19/CMD14, no width switch and no user-data write. The only card write is
+the EXT_CSD `HS_TIMING` byte (185). The sequence is R (sample byte 185,
+`CLOCK_CONTROL` and the pad/DLL state at 400 kHz), S (CMD6 SET index 185
+value 1, wait TRAN/ready, read byte 185 back; only a confirmed `hs=1` raises
+the GCC SDCC1 APPS RCG to the pinned 50 MHz floor row `0x20B` with M/N/D
+zero and re-enables the card clock), T (repeat the full stage-A content
+pass at 50 MHz and compare every sum with the held 400 kHz baseline) and V
+(drop the clock to 400 kHz first, then CMD6 byte 185 = 0, read both back
+and re-read block 0 at 400 kHz).
+
+The 52 MHz class is floored to 50 MHz: the pinned `gcc-sm6115.c` table has
+no 52 MHz entry, so `clk_rcg2_floor_ops` selects
+`F(50000000, P_GPLL0_OUT_AUX2, 6, 0, 0)`. The source select is 2, the
+divider field is 11 and the MND block is in direct mode, giving `0x20B` for
+the CFG register. The parent rate is a table value, not a measurement;
+`CLOCK_CONTROL` names only the enable/stable bits, so every frequency claim
+in the report comes from the RCG readback.
+
+Stop codes: 0 pass; 10 switch step failed (CMD6/TRAN error, the
+byte-185-ignored class or the pre-switch EXT_CSD read failure); 11 clock
+step failed (RCG update, `INT_STABLE` wait or RCG readback); 12 content read
+failure or first divergence; 13 revert failure; 14 recovery-read failure or
+block-0 mismatch. The `T` line carries the content rc, the attempt marker,
+`same=` and `div=`, and the 21 per-LBA sums follow on a `BLOCKS` line; the
+`S`/`V` lines carry the switch status, result codes, byte-185 readbacks,
+clock and RCG values, and the `FAIL` line is the terminal record.
+
+Decision rows: S pass + T pass → the controller and card hold 50 MHz with
+content equality on the 1-bit read path (F4 measured PASS at that point,
+not a width, write, DMA or HS200 result). S pass + T divergence → the timing
+raised a content error; the run stops at the first differing LBA. S fail
+with the byte-185-ignored class → the card does not accept the HS switch on
+this configuration; the class is declared in advance, not a surprise abort.
+Clock or RCG readback mismatch → instrumentation class, no device
+hypothesis. V failure → the return to legacy timing is its own record. A
+pre-B2 CMD17 TC-only or CMD13-class stop is a pre-B stop and not a B2
+verdict.
+
+The host batch is implemented and simulator-tested: core 143 scenarios and
+86 mutation controls (was 138/83), probe 85 scenarios and 51 mutation
+controls (was 75/46), six width materializations including
+`report-width-b2`, and the diagnostic wrapper/payload gate accept
+`emmc-probe-8`. The stage-7 arming gate now compares only TOUTVAL
+(`dto.arm & TOUTVAL_MASK == expected & TOUTVAL_MASK`), with a new
+`probe-dto-arm-ro` scenario proving the RO `INT_STABLE` bit cannot block
+the DTO report. No build, flash or boot has been performed; the device run
+needs a fresh explicit BOOT-only approval. F3 and F4 remain `[U]` until the
+device report exists.
+
+Supported by this section: the stage-8 design and register/encoding
+derivations, the 50 MHz floor row, the stop-code table, the simulator
+scenarios and mutation outcomes, and the TOUTVAL guard. Not supported: any
+device HS-timing result, a card acceptance of byte 185, content equality
+at 50 MHz, a width or write result, a frequency measurement, or F4.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
