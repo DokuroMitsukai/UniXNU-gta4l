@@ -34,7 +34,8 @@ DIAGNOSTICS = ('gta4l-sdhci-host-init=1',
                'gta4l-emmc-probe=6',
                'gta4l-emmc-probe=7',
                'gta4l-emmc-probe=8',
-               'gta4l-emmc-probe=9')
+               'gta4l-emmc-probe=9',
+               'gta4l-emmc-probe=10')
 DIAGNOSTIC_NAMES = {
     'host-init': 'gta4l-sdhci-host-init=1',
     'audit': 'gta4l-sdhci-audit=1',
@@ -196,7 +197,8 @@ def check(image, expected='any'):
                     addon_present == ('GpuAddon' in memory_map))
 
             args = xnu_args(toml_path)
-            found = [item for item in DIAGNOSTICS if item in args]
+            tokens = args.split()
+            found = [item for item in DIAGNOSTICS if item in tokens]
             require('exactly_one_diagnostic_argument', len(found) == 1)
             if expected != 'any':
                 require(f'{expected}_diagnostic_selected',
