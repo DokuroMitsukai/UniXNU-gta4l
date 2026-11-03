@@ -30,6 +30,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	struct gta4l_emmc_probe_bus w8;
 	struct gta4l_emmc_probe_b2 b2;
 	struct gta4l_emmc_host host;
+	uint32_t index;
 
 	memset(&probe, 0, sizeof(probe));
 	memset(&regs, 0, sizeof(regs));
@@ -307,7 +308,7 @@ gta4l_emmc_probe_width_fixture(int form)
 		host.last_step = GTA4L_EMMC_STEP_BUS_TEST;
 		gta4l_emmc_probe_report_b1(&host, &probe, &range, &base, &w4,
 		    &w8, GTA4L_EMMC_PROBE_ERR_CONTENT, 8);
-	} else {
+	} else if (form == 5) {
 		/* Stage-B2 form: both HS results at their field bounds, the
 		 * content pass at its widest, the failed revert and a failed
 		 * recovery read. */
@@ -355,5 +356,66 @@ gta4l_emmc_probe_width_fixture(int form)
 		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		gta4l_emmc_probe_report_b2(&host, &probe, &b2,
 		    GTA4L_EMMC_ERR_CLOCK, 13);
+	} else {
+		/* H9 form: both attempt slots at their field bounds and a
+		 * failed duplicate so the stop code stays non-clean. */
+		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		host.cmd3_retry_enabled = 1u;
+		host.cmd3_retry_engaged = 1u;
+		host.cmd3_retry_ok = 0u;
+		host.cmd3_attempt_count = GTA4L_EMMC_CMD3_ATTEMPTS;
+		for (index = 0; index < GTA4L_EMMC_CMD3_ATTEMPTS; index++) {
+			struct gta4l_emmc_cmd3_capture *capture =
+			    &host.cmd3_attempt[index];
+
+			capture->number = index + 1u;
+			capture->result = GTA4L_EMMC_ERR_UNSUPPORTED;
+			capture->r1_error = 1u;
+			capture->fail_valid = host.fail_valid;
+			capture->fail_index = host.fail_index;
+			capture->fail_argument = host.fail_argument;
+			capture->fail_command = host.fail_command;
+			capture->fail_error = host.fail_error;
+			capture->fail_normal = host.fail_normal;
+			capture->fail_present = host.fail_present;
+			capture->fail_step = host.fail_step;
+			capture->pre_valid = host.pre_cmd3_capture_valid;
+			capture->pre_normal = host.pre_cmd3_normal;
+			capture->pre_error = host.pre_cmd3_error;
+			capture->pre_present = host.pre_cmd3_present;
+			capture->pre_normal_enable = host.pre_cmd3_normal_enable;
+			capture->pre_error_enable = host.pre_cmd3_error_enable;
+			capture->timeout_valid = host.timeout_capture_valid;
+			capture->timeout_index = host.timeout_index;
+			capture->timeout_command = host.timeout_command;
+			capture->timeout_argument = host.timeout_argument;
+			capture->timeout_response_stable =
+			    host.timeout_response_stable;
+			capture->poll_valid = host.poll_capture_valid;
+			capture->poll_iterations = host.poll_iterations;
+			capture->poll_index = host.poll_index;
+			capture->poll_first_normal = host.poll_first_normal;
+			capture->poll_last_normal = host.poll_last_normal;
+			capture->poll_ticks = host.poll_ticks;
+			capture->fail_response[0] = host.fail_response[0];
+			capture->fail_response[1] = host.fail_response[1];
+			capture->fail_response[2] = host.fail_response[2];
+			capture->fail_response[3] = host.fail_response[3];
+			capture->timeout_response[0] =
+			    host.timeout_response[0];
+			capture->timeout_response[1] =
+			    host.timeout_response[1];
+			capture->timeout_response[2] =
+			    host.timeout_response[2];
+			capture->timeout_response[3] =
+			    host.timeout_response[3];
+			capture->response[0] = 0xFFFFFFFFu;
+			capture->response[1] = 0xFFFFFFFFu;
+			capture->response[2] = 0xFFFFFFFFu;
+			capture->response[3] = 0xFFFFFFFFu;
+		}
+		gta4l_emmc_probe_report_h9(&host, &probe, &regs,
+		    GTA4L_EMMC_ERR_UNSUPPORTED, 13);
 	}
 }

@@ -242,6 +242,10 @@ struct sim {
 	int cmd3_late_cc;
 	int cmd3_stale_cc;
 	int cmd3_identify_status;
+	int cmd3_timeouts_remaining;
+	int cmd3_r1_error_after;
+	uint32_t cmd3_count;
+	uint32_t cmd3_arguments[4];
 	int enable_readback_wrong;
 	uint32_t cmd3_normal_reads;
 	/* CMD7 R1b modeling. Delays are microseconds from command issue; -1
@@ -1189,6 +1193,12 @@ sim_command(struct sim *sim, uint16_t command)
 	sim->last_cmd = index;
 	sim->last_cmd_argument = argument;
 	sim->cmd_count++;
+	if (index == GTA4L_EMMC_CMD3) {
+		if (sim->cmd3_count < 4u) {
+			sim->cmd3_arguments[sim->cmd3_count] = argument;
+		}
+		sim->cmd3_count++;
+	}
 	sim->cmd_clear_count = sim->error_clear_count;
 	sim->cmd_issue_clear[index] = sim->error_clear_count;
 	sim->buffer_index = 0;
@@ -1297,11 +1307,18 @@ sim_command(struct sim *sim, uint16_t command)
 		sim->rca = argument >> 16;
 		response = sim->cmd3_identify_status ? 0x00000500u :
 		    0x00000900u;
-		if (sim->cmd3_error != 0) {
+		if ((sim->cmd3_error != 0) ||
+		    ((sim->cmd3_r1_error_after > 0) &&
+		    (sim->cmd3_count >=
+		    (uint32_t)sim->cmd3_r1_error_after))) {
 			response |= 0x00000080u;
 		}
 		sim->cmd3_normal_reads = 0;
-		if ((sim->cmd3_no_cc == 0) && (sim->cmd3_late_cc == 0)) {
+		if (sim->cmd3_timeouts_remaining > 0) {
+			/* The completion is lost for this attempt only. */
+			sim->cmd3_timeouts_remaining--;
+		} else if ((sim->cmd3_no_cc == 0) &&
+		    (sim->cmd3_late_cc == 0)) {
 			sim->normal_int |= GTA4L_EMMC_INT_CC;
 		}
 		sim_set_response(sim, &response, 1);
@@ -2324,6 +2341,22 @@ main(int argc, char **argv)
 		/* CMD3 returns the Identify-state R1 status seen on
 		 * hardware. */
 		sim.cmd3_identify_status = 1;
+	} else if (scenario_is(scenario, "cmd3-retry-clean")) {
+		host.cmd3_retry_enabled = 1;
+	} else if (scenario_is(scenario, "cmd3-retry-pass")) {
+		host.cmd3_retry_enabled = 1;
+		sim.cmd3_timeouts_remaining = 1;
+	} else if (scenario_is(scenario, "cmd3-retry-fail")) {
+		host.cmd3_retry_enabled = 1;
+		sim.cmd3_timeouts_remaining = 2;
+	} else if (scenario_is(scenario, "cmd3-retry-status")) {
+		host.cmd3_retry_enabled = 1;
+		sim.cmd3_timeouts_remaining = 1;
+		sim.cmd3_r1_error_after = 2;
+	} else if (scenario_is(scenario, "cmd3-retry-later-fail")) {
+		host.cmd3_retry_enabled = 1;
+		sim.cmd3_timeouts_remaining = 1;
+		sim.cmd_late_error_index = GTA4L_EMMC_CMD9;
 	} else if (scenario_is(scenario, "cmd3-enable-readback")) {
 		/* The status-enable readback does not reflect the value the
 		 * core programmed, without changing the actual enables. */
@@ -2646,6 +2679,8 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "cmd3-identify") ||
 	    scenario_is(scenario, "cmd3-stale-cc") ||
 	    scenario_is(scenario, "cmd3-enable-readback") ||
+	    scenario_is(scenario, "cmd3-retry-clean") ||
+	    scenario_is(scenario, "cmd3-retry-pass") ||
 	    scenario_is(scenario, "cmd7-cc-then-tc") ||
 	    scenario_is(scenario, "cmd7-tc-then-cc") ||
 	    scenario_is(scenario, "cmd7-simultaneous") ||
@@ -4015,6 +4050,60 @@ main(int argc, char **argv)
 			    "enable-readback run did not record the CMD3 "
 			    "poll");
 		}
+	} else if (scenario_is(scenario, "cmd3-retry-clean") ||
+	    scenario_is(scenario, "cmd3-retry-pass")) {
+		uint32_t expected_attempts =
+		    scenario_is(scenario, "cmd3-retry-pass") ? 2u : 1u;
+
+		check(result == GTA4L_EMMC_OK,
+		    "CMD3 retry scenario init failed");
+		check(host.cmd3_retry_enabled == 1u,
+		    "CMD3 retry was not enabled by the scenario");
+		check(host.cmd3_attempt_count == expected_attempts,
+		    "CMD3 attempt count mismatch");
+		check(host.cmd3_retry_engaged ==
+		    ((expected_attempts == 2u) ? 1u : 0u),
+		    "CMD3 retry engagement flag mismatch");
+		check(host.cmd3_retry_ok ==
+		    ((expected_attempts == 2u) ? 1u : 0u),
+		    "CMD3 retry success flag mismatch");
+		check(sim.cmd3_count == expected_attempts,
+		    "the core did not issue exactly the expected CMD3 count");
+		check(sim.cmd3_arguments[0] ==
+		    (GTA4L_EMMC_DEFAULT_RCA << 16),
+		    "the first CMD3 argument changed");
+		if (expected_attempts == 2u) {
+			check(sim.cmd3_arguments[1] ==
+			    (GTA4L_EMMC_DEFAULT_RCA << 16),
+			    "the duplicate CMD3 did not use the same argument");
+			check(host.cmd3_attempt[0].number == 1u,
+			    "the first CMD3 record is missing");
+			check(host.cmd3_attempt[0].result ==
+			    GTA4L_EMMC_ERR_CMD_TIMEOUT,
+			    "the first CMD3 timeout was not recorded");
+			check(host.cmd3_attempt[0].fail_valid == 1u &&
+			    host.cmd3_attempt[0].timeout_valid == 1u &&
+			    host.cmd3_attempt[0].poll_valid == 1u,
+			    "the first CMD3 timeout capture is incomplete");
+			check(host.cmd3_attempt[1].number == 2u,
+			    "the second CMD3 record is missing");
+			check(host.cmd3_attempt[1].result == GTA4L_EMMC_OK,
+			    "the duplicate CMD3 result was not clean");
+			check(host.cmd3_attempt[1].r1_error == 0u,
+			    "the duplicate CMD3 recorded an R1 error");
+			check(host.cmd3_attempt[1].poll_valid == 1u,
+			    "the duplicate CMD3 poll was not recorded");
+			check(host.cmd3_attempt[1].response[0] ==
+			    0x00000900u,
+			    "the duplicate CMD3 R1 response was lost");
+		} else {
+			check(host.cmd3_attempt[0].number == 1u,
+			    "the clean CMD3 record is missing");
+			check(host.cmd3_attempt[0].result == GTA4L_EMMC_OK,
+			    "the clean CMD3 result was not recorded");
+			check(host.cmd3_attempt[0].fail_valid == 0u,
+			    "a clean CMD3 recorded a failure");
+		}
 	} else if (scenario_is(scenario, "cmd7-cc-then-tc") ||
 	    scenario_is(scenario, "cmd7-tc-then-cc") ||
 	    scenario_is(scenario, "cmd7-simultaneous") ||
@@ -4191,6 +4280,7 @@ main(int argc, char **argv)
 			expected = scenario_is(scenario, "cmd-timeout") ||
 			    scenario_is(scenario, "cmd3-no-cc") ||
 			    scenario_is(scenario, "cmd3-late-cc") ||
+			    scenario_is(scenario, "cmd3-retry-fail") ||
 			    scenario_is(scenario, "cmd7-tc-only") ||
 			    scenario_is(scenario, "cmd7-fresh-window") ||
 			    scenario_is(scenario, "cmd7-busy-error") ||
@@ -4216,6 +4306,7 @@ main(int argc, char **argv)
 			    scenario_is(scenario,
 			    "cmd1-timeout-recovery-crc") ||
 			    scenario_is(scenario, "cmd1-crc-retire-short") ||
+			    scenario_is(scenario, "cmd3-retry-later-fail") ||
 			    scenario_is(scenario, "cmd9-late-error");
 			break;
 		case GTA4L_EMMC_ERR_CMD_INDEX:
@@ -4236,7 +4327,8 @@ main(int argc, char **argv)
 			    scenario_is(scenario, "cmd1-timeout-exhausted");
 			break;
 		case GTA4L_EMMC_ERR_CARD_STATUS:
-			expected = scenario_is(scenario, "cmd3-error");
+			expected = scenario_is(scenario, "cmd3-error") ||
+			    scenario_is(scenario, "cmd3-retry-status");
 			break;
 		case GTA4L_EMMC_ERR_UNSUPPORTED:
 			expected = scenario_is(scenario, "small-card") ||
@@ -4288,6 +4380,57 @@ main(int argc, char **argv)
 		if (scenario_is(scenario, "cmd9-late-error")) {
 			check(host.fail_index == GTA4L_EMMC_CMD9,
 			    "late CMD9 error did not capture CMD9");
+		}
+		if (scenario_is(scenario, "cmd3-retry-fail")) {
+			check(host.cmd3_attempt_count == 2u,
+			    "both CMD3 attempts were not recorded");
+			check(host.cmd3_retry_engaged == 1u &&
+			    host.cmd3_retry_ok == 0u,
+			    "the failed duplicate CMD3 flags are wrong");
+			check(sim.cmd3_count == 2u,
+			    "the core did not stop after the duplicate CMD3");
+			check(host.cmd3_attempt[0].result ==
+			    GTA4L_EMMC_ERR_CMD_TIMEOUT &&
+			    host.cmd3_attempt[1].result ==
+			    GTA4L_EMMC_ERR_CMD_TIMEOUT,
+			    "the two CMD3 timeout records differ");
+			check(host.cmd3_attempt[0].fail_valid == 1u &&
+			    host.cmd3_attempt[1].fail_valid == 1u,
+			    "a CMD3 timeout lost its fail record");
+			check(host.fail_index == GTA4L_EMMC_CMD3,
+			    "the terminal record is not CMD3");
+			check(sim.last_cmd == GTA4L_EMMC_CMD3,
+			    "a later command followed the failed retry");
+		}
+		if (scenario_is(scenario, "cmd3-retry-status")) {
+			check(host.cmd3_attempt_count == 2u,
+			    "the status-error retry was not recorded");
+			check(host.cmd3_attempt[0].result ==
+			    GTA4L_EMMC_ERR_CMD_TIMEOUT,
+			    "the first CMD3 did not time out");
+			check(host.cmd3_attempt[1].result ==
+			    GTA4L_EMMC_ERR_CARD_STATUS &&
+			    host.cmd3_attempt[1].r1_error == 1u,
+			    "the duplicate CMD3 R1 error was not recorded");
+			check((host.cmd3_attempt[1].response[0] &
+			    GTA4L_EMMC_R1_ERROR_MASK) != 0u,
+			    "the duplicate CMD3 R1 error bits were lost");
+			check(host.fail_valid == 0u,
+			    "an R1 status error was recorded as a transport "
+			    "failure");
+		}
+		if (scenario_is(scenario, "cmd3-retry-later-fail")) {
+			check(host.cmd3_attempt_count == 2u &&
+			    host.cmd3_retry_engaged == 1u &&
+			    host.cmd3_retry_ok == 1u,
+			    "the retry did not cleanly complete before the "
+			    "later failure");
+			check(host.cmd3_attempt[1].result == GTA4L_EMMC_OK,
+			    "the duplicate CMD3 result was not clean");
+			check(sim.cmd3_count == 2u,
+			    "the later failure issued another CMD3");
+			check(host.fail_index == GTA4L_EMMC_CMD9,
+			    "the later failure is not the CMD9 error");
 		}
 		if (scenario_is(scenario, "cmd1-crc-retire-short")) {
 			check(sim.cmd1_crc_retire_us ==

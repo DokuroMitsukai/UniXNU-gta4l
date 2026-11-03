@@ -104,6 +104,11 @@ SCENARIOS = [
     'cmd3-late-cc',
     'cmd9-timeout',
     'cmd3-identify',
+    'probe-h9-clean-no-fire',
+    'probe-h9-fire-pass',
+    'probe-h9-fire-fail',
+    'probe-h9-fire-second-ident',
+    'probe-h9-mismatch',
     'cmd7-tc-only',
     'cmd7-fresh-window',
     'cmd7-cc-then-tc',
@@ -175,6 +180,7 @@ SCENARIOS = [
     'report-width-md',
     'report-width-b1',
     'report-width-b2',
+    'report-width-h9',
     'report-width-budget-control',
 ]
 
@@ -185,6 +191,7 @@ WIDTH_SCENARIOS = (
     'report-width-md',
     'report-width-b1',
     'report-width-b2',
+    'report-width-h9',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'

@@ -242,6 +242,9 @@
 /* Bounded CMD7 status-transition trace. Each entry records an observed
  * change; further changes increment the overflow counter. */
 #define GTA4L_EMMC_CMD7_TRACE_ENTRIES      4u
+/* The H9 diagnostic allows exactly one duplicate CMD3 after a completion
+ * timeout. Two attempt slots keep the first record intact for the report. */
+#define GTA4L_EMMC_CMD3_ATTEMPTS           2u
 
 /* MMC command indexes. */
 #define GTA4L_EMMC_CMD0                    0u
@@ -397,6 +400,45 @@ struct gta4l_emmc_cmd7_trace {
 	uint32_t error;     /* error interrupt status at that sample */
 };
 
+/* One CMD3 attempt record for the H9 retry discriminator. Every field is a
+ * sequential register sample, not an atomic snapshot, and is diagnostics
+ * only. The first slot is copied before the failure state is cleared for the
+ * duplicate command, so it keeps the attempt-1 record the historical H8
+ * reports show. `number` is zero when the slot was not used. */
+struct gta4l_emmc_cmd3_capture {
+	uint32_t number;       /* 1 or 2; 0 when the attempt did not run */
+	int      result;       /* mapped command result */
+	uint32_t r1_error;     /* R1 error-mask bits were present */
+	uint32_t fail_valid;
+	uint32_t fail_index;
+	uint32_t fail_argument;
+	uint32_t fail_command;
+	uint32_t fail_error;
+	uint32_t fail_normal;
+	uint32_t fail_present;
+	uint32_t fail_step;
+	uint32_t fail_response[4];
+	uint32_t pre_valid;
+	uint32_t pre_normal;
+	uint32_t pre_error;
+	uint32_t pre_present;
+	uint32_t pre_normal_enable;
+	uint32_t pre_error_enable;
+	uint32_t timeout_valid;
+	uint32_t timeout_index;
+	uint32_t timeout_command;
+	uint32_t timeout_argument;
+	uint32_t timeout_response_stable;
+	uint32_t timeout_response[4];
+	uint32_t poll_valid;
+	uint32_t poll_iterations;
+	uint32_t poll_index;
+	uint32_t poll_first_normal;
+	uint32_t poll_last_normal;
+	uint64_t poll_ticks;
+	uint32_t response[4];  /* R1 after success; terminal words otherwise */
+};
+
 struct gta4l_emmc_host {
 	const struct gta4l_emmc_ops *ops;
 	void *context;
@@ -445,6 +487,20 @@ struct gta4l_emmc_host {
 	uint32_t pre_cmd3_normal_enable;
 	uint32_t pre_cmd3_error_enable;
 	uint8_t  pre_cmd3_capture_valid;
+	/* H9 CMD3 retry discriminator. `cmd3_retry_enabled` is caller opt-in;
+	 * the portable core never sets it. When enabled, a CMD3 completion
+	 * timeout triggers exactly one duplicate CMD3 with the same argument
+	 * and records both attempts. Every other result keeps the previous
+	 * fail-closed behavior. */
+	uint8_t  cmd3_retry_enabled;
+	uint8_t  cmd3_retry_engaged;
+	uint8_t  cmd3_retry_ok;
+	uint8_t  cmd3_attempt_count;
+	struct gta4l_emmc_cmd3_capture cmd3_attempt[GTA4L_EMMC_CMD3_ATTEMPTS];
+	/* Caller opt-in: stop the identification sequence after the TRAN
+	 * wait and before the EXT_CSD read. The H9 rung uses it so the rung
+	 * touches no EXT_CSD data; the portable core never sets it. */
+	uint8_t  identify_only;
 	uint32_t poll_first_normal; /* first normal status in the poll */
 	uint32_t poll_last_normal;  /* last normal status in the poll */
 	uint32_t poll_iterations;   /* poll iterations completed */

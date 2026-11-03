@@ -408,7 +408,10 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * passing 1-bit test falls through to the stage-5 flow unchanged. Stage 7
  * always reports and stops with the DTO report. Stage 8 is the HS-timing
  * rung: it switches byte 185, ramps to the 50 MHz HS row, repeats the
- * stage-A content pass and returns to legacy before its B2 report. */
+ * stage-A content pass and returns to legacy before its B2 report. Stage 9
+ * is the H9 identification rung: it runs the read-only identification
+ * sequence once with one designed duplicate CMD3 after a completion
+ * timeout, then always stops with the H9 report. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -417,7 +420,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 8)) {
+	if ((value < 1) || (value > 9)) {
 		return 0;
 	}
 	return value;
@@ -1286,6 +1289,127 @@ gta4l_emmc_probe_report_b2(const struct gta4l_emmc_host *host,
 	    host->fail_step);
 }
 
+/* H9 stop codes: 0 clean identification with no retry, 10 retry engaged and
+ * the duplicate CMD3 clean before a clean identification, 11 duplicate CMD3
+ * transport failure, 12 duplicate CMD3 clean but identification failed later,
+ * 13 duplicate CMD3 R1 status error, 14 no retry engaged and identification
+ * did not complete cleanly (the first CMD3 either failed at a non-timeout
+ * code or never ran), 15 attempt-1 CMD3 clean but identification failed
+ * later. */
+static int
+gta4l_emmc_probe_h9_stop(const struct gta4l_emmc_host *host, int result)
+{
+	if (host->cmd3_attempt_count == 0u) {
+		return (result == GTA4L_EMMC_OK) ? 0 : 14;
+	}
+	if (host->cmd3_attempt_count == 1u) {
+		if (host->cmd3_attempt[0].result != GTA4L_EMMC_OK) {
+			return 14;
+		}
+		return (result == GTA4L_EMMC_OK) ? 0 : 15;
+	}
+	if (host->cmd3_attempt[1].result != GTA4L_EMMC_OK) {
+		return (host->cmd3_attempt[1].result ==
+		    GTA4L_EMMC_ERR_CARD_STATUS) ? 13 : 11;
+	}
+	return (result == GTA4L_EMMC_OK) ? 10 : 12;
+}
+
+/* Report both CMD3 attempt records and the identification fields. The report
+ * never samples a new MMIO register; `regs` was captured by the caller behind
+ * the existing clock guard. A slot that did not run is printed with `n=0`
+ * and zero fields. */
+static void
+gta4l_emmc_probe_report_h9(const struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_regs *regs, int rc, int stop)
+{
+	struct gta4l_emmc_cmd3_capture none;
+	const struct gta4l_emmc_cmd3_capture *a1;
+	const struct gta4l_emmc_cmd3_capture *a2;
+
+	bzero(&none, sizeof(none));
+	a1 = (host->cmd3_attempt_count >= 1u) ?
+	    &host->cmd3_attempt[0] : &none;
+	a2 = (host->cmd3_attempt_count >= 2u) ?
+	    &host->cmd3_attempt[1] : &none;
+	panic("GTA4L-EMMC H9 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
+	    "rev=%u bw=%u ocr=%08x ext=%08x hci=%02x retry=%u/%u att=%u "
+	    "step=%u log=%u\n"
+	    "GTA4L-EMMC H9 A1 n=%u rc=%d r1=%u "
+	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u "
+	    "rsp=%08x,%08x,%08x,%08x\n"
+	    "GTA4L-EMMC H9 A1P c3p=%u/%04x/%04x/%08x/%04x/%04x "
+	    "c3t=%u/%u/%04x/%08x/%u/%08x,%08x,%08x,%08x\n"
+	    "GTA4L-EMMC H9 A1L c3l=%u/%u/%04x/%04x/%u/%08x%08x/%u\n"
+	    "GTA4L-EMMC H9 A2 n=%u rc=%d r1=%u "
+	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u "
+	    "rsp=%08x,%08x,%08x,%08x\n"
+	    "GTA4L-EMMC H9 A2P c3p=%u/%04x/%04x/%08x/%04x/%04x "
+	    "c3t=%u/%u/%04x/%08x/%u/%08x,%08x,%08x,%08x\n"
+	    "GTA4L-EMMC H9 A2L c3l=%u/%u/%04x/%04x/%u/%08x%08x/%u\n"
+	    "GTA4L-EMMC H9 C cid=%08x,%08x,%08x,%08x cmd1=%u/%u\n"
+	    "GTA4L-EMMC H9 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
+	    (unsigned int)host->ext_csd_rev, (unsigned int)host->bus_width,
+	    host->ocr, host->ext_csd_sum, (unsigned int)regs->host_control,
+	    (unsigned int)host->cmd3_retry_engaged,
+	    (unsigned int)host->cmd3_retry_ok,
+	    (unsigned int)host->cmd3_attempt_count,
+	    host->last_step, probe->log_count,
+	    a1->number, a1->result, a1->r1_error,
+	    a1->fail_valid, a1->fail_index, a1->fail_argument,
+	    a1->fail_command, (unsigned int)a1->fail_error,
+	    (unsigned int)a1->fail_normal, a1->fail_present,
+	    a1->fail_step, a1->fail_response[0], a1->fail_response[1],
+	    a1->fail_response[2], a1->fail_response[3],
+	    a1->pre_valid, (unsigned int)a1->pre_normal,
+	    (unsigned int)a1->pre_error, a1->pre_present,
+	    (unsigned int)a1->pre_normal_enable,
+	    (unsigned int)a1->pre_error_enable,
+	    a1->timeout_valid, a1->timeout_index,
+	    (unsigned int)a1->timeout_command, a1->timeout_argument,
+	    a1->timeout_response_stable, a1->timeout_response[0],
+	    a1->timeout_response[1], a1->timeout_response[2],
+	    a1->timeout_response[3],
+	    a1->poll_valid, a1->poll_index,
+	    (unsigned int)a1->poll_first_normal,
+	    (unsigned int)a1->poll_last_normal,
+	    a1->poll_iterations,
+	    (unsigned int)(a1->poll_ticks >> 32),
+	    (unsigned int)a1->poll_ticks,
+	    (unsigned int)probe->counter_hz,
+	    a2->number, a2->result, a2->r1_error,
+	    a2->fail_valid, a2->fail_index, a2->fail_argument,
+	    a2->fail_command, (unsigned int)a2->fail_error,
+	    (unsigned int)a2->fail_normal, a2->fail_present,
+	    a2->fail_step, a2->fail_response[0], a2->fail_response[1],
+	    a2->fail_response[2], a2->fail_response[3],
+	    a2->pre_valid, (unsigned int)a2->pre_normal,
+	    (unsigned int)a2->pre_error, a2->pre_present,
+	    (unsigned int)a2->pre_normal_enable,
+	    (unsigned int)a2->pre_error_enable,
+	    a2->timeout_valid, a2->timeout_index,
+	    (unsigned int)a2->timeout_command, a2->timeout_argument,
+	    a2->timeout_response_stable, a2->timeout_response[0],
+	    a2->timeout_response[1], a2->timeout_response[2],
+	    a2->timeout_response[3],
+	    a2->poll_valid, a2->poll_index,
+	    (unsigned int)a2->poll_first_normal,
+	    (unsigned int)a2->poll_last_normal,
+	    a2->poll_iterations,
+	    (unsigned int)(a2->poll_ticks >> 32),
+	    (unsigned int)a2->poll_ticks,
+	    (unsigned int)probe->counter_hz,
+	    host->cid[0], host->cid[1], host->cid[2], host->cid[3],
+	    host->cmd1_attempts, host->cmd1_timeouts,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
 /* Run the stage-8 HS-timing rung: sample the 400 kHz state (R), switch
  * byte 185 to high speed and ramp to the 50 MHz HS row (S), repeat the full
  * stage-A content pass at HS and compare it with the 400 kHz baseline (T),
@@ -1722,6 +1846,10 @@ gta4l_emmc_probe_run(void)
 	 * of that DT-derived state. See docs/emmc-driver.md. */
 	host.fixed_1v8 = 1;
 	host.pad_pwr_switch = 1;
+	/* H9 is the only stage that enables the duplicate CMD3 hook. */
+	host.cmd3_retry_enabled = (stage == 9) ? 1u : 0u;
+	/* H9 also stops after the identification sequence, before EXT_CSD. */
+	host.identify_only = (stage == 9) ? 1u : 0u;
 
 	if (stage == 2) {
 		result = gta4l_emmc_controller_init(&host);
@@ -1818,14 +1946,22 @@ gta4l_emmc_probe_run(void)
 		regs.bcr = bcr;
 		regs.apps_cbcr = apps_cbcr;
 		regs.ahb_cbcr = ahb_cbcr;
-		gta4l_emmc_probe_report_failure(&host, &probe, stage, result,
-		    &regs);
+		if (stage == 9) {
+			gta4l_emmc_probe_report_h9(&host, &probe, &regs,
+			    result,
+			    gta4l_emmc_probe_h9_stop(&host, result));
+		} else {
+			gta4l_emmc_probe_report_failure(&host, &probe, stage,
+			    result, &regs);
+		}
 	}
 
 	version = gta4l_emmc_probe_read32(&probe, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_MCI_VERSION);
 	power = gta4l_emmc_probe_read8(&probe, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_POWER_CONTROL);
+	host_control = gta4l_emmc_probe_read8(&probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
 	clock = gta4l_emmc_probe_read16(&probe, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_CLOCK_CONTROL);
 	host_control2 = gta4l_emmc_probe_read16(&probe,
@@ -1842,6 +1978,7 @@ gta4l_emmc_probe_run(void)
 	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_PWRCTL_STATUS);
 	regs.version = version;
 	regs.power = power;
+	regs.host_control = host_control;
 	regs.clock = clock;
 	regs.host_control2 = host_control2;
 	regs.host_version = host_version;
@@ -1850,6 +1987,11 @@ gta4l_emmc_probe_run(void)
 	regs.dll_status = dll_status;
 	regs.pwr_status = pwr_status;
 
+	if (stage == 9) {
+		gta4l_emmc_probe_report_h9(&host, &probe, &regs,
+		    GTA4L_EMMC_OK,
+		    gta4l_emmc_probe_h9_stop(&host, GTA4L_EMMC_OK));
+	}
 	if (stage == 2) {
 		panic("GTA4L-EMMC HOST REPORT: rc=0 mci=%08x pwr=%02x "
 		    "clk=%04x hc2=%04x ven=%08x dll=%08x dst=%08x "

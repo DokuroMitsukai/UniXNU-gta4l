@@ -184,6 +184,16 @@ partition layout, payload policy and packaging.
   DMA, CQE, ICE, HS200 or frequency-measurement result), and the cold boot
   is not part of that evidence. F3 remains unproven. The flash record and
   transcript are in `out/gta4l/ram-root-emmc-probe-b2-evidence/`.
+  The next rung is H9 (`gta4l-emmc-probe=9`), implemented and
+  simulator-tested: the standard read-only identification sequence runs once
+  with one designed duplicate CMD3 after the H8 completion timeout (same
+  argument and timing path, never a third attempt), then stops after the TRAN
+  wait before any EXT_CSD read or stage-A pass and always reports
+  `GTA4L-EMMC H9 REPORT`. It issues no CMD6, width switch or user-data
+  access; the only new card-facing action is the duplicate CMD3. Core 148/90
+  and probe 91/51; the `report-width-h9` fixture is the seventh width
+  materialization. The device run needs a fresh explicit BOOT-only approval
+  that names the duplicate CMD3.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

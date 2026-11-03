@@ -205,6 +205,10 @@ static int cmd3_no_cc;
 static int cmd3_late_cc;
 static int cmd3_cc_delay;
 static int cmd3_identify_status;
+static int cmd3_timeouts_remaining;
+static int cmd3_r1_error_after;
+static unsigned int cmd3_count;
+static uint32_t cmd3_arguments[4];
 static int cmd9_timeout;
 static unsigned int cmd17_fail_on;
 static uint16_t cmd17_fail_error;
@@ -775,14 +779,26 @@ sim_command(uint16_t command)
 		return;
 	}
 	if (index == GTA4L_EMMC_CMD3) {
+		uint32_t response = cmd3_identify_status ?
+		    0x00000500u : 0x00000900u;
+
 		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX)) {
 			bad_command_format = 1;
 		}
-		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
-		    cmd3_identify_status ? 0x00000500u : 0x00000900u);
+		if (cmd3_count < 4u) {
+			cmd3_arguments[cmd3_count] = last_argument;
+		}
+		cmd3_count++;
+		if ((cmd3_r1_error_after > 0) &&
+		    (cmd3_count >= (unsigned int)cmd3_r1_error_after)) {
+			response |= 0x00000080u;
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, response);
 		cmd3_normal_reads = 0;
-		if ((cmd3_no_cc == 0) && (cmd3_late_cc == 0) &&
+		if (cmd3_timeouts_remaining > 0) {
+			cmd3_timeouts_remaining--;
+		} else if ((cmd3_no_cc == 0) && (cmd3_late_cc == 0) &&
 		    (cmd3_cc_delay < 0)) {
 			normal_int |= GTA4L_EMMC_INT_CC;
 		}
@@ -1606,6 +1622,23 @@ static const uint8_t order_ident[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8
 };
+static const uint8_t order_h9_clean[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13
+};
+static const uint8_t order_h9_retry[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD3, GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7,
+	GTA4L_EMMC_CMD13
+};
+static const uint8_t order_h9_retry_fail[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD3
+};
+static const uint8_t order_h9_retry_later[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD3, GTA4L_EMMC_CMD9
+};
 static const uint8_t order_probe_block0[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
@@ -1983,6 +2016,39 @@ main(int argc, char **argv)
 		cmd7_tc_immediate = 1;
 		set_expected_order(order_ident,
 		    (unsigned int)(sizeof(order_ident) / sizeof(order_ident[0])));
+	} else if (strcmp(scenario, "probe-h9-clean-no-fire") == 0) {
+		stage = 9;
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_h9_clean,
+		    (unsigned int)(sizeof(order_h9_clean) /
+		    sizeof(order_h9_clean[0])));
+	} else if (strcmp(scenario, "probe-h9-fire-pass") == 0) {
+		stage = 9;
+		cmd3_timeouts_remaining = 1;
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_h9_retry,
+		    (unsigned int)(sizeof(order_h9_retry) /
+		    sizeof(order_h9_retry[0])));
+	} else if (strcmp(scenario, "probe-h9-fire-fail") == 0) {
+		stage = 9;
+		cmd3_timeouts_remaining = 2;
+		set_expected_order(order_h9_retry_fail,
+		    (unsigned int)(sizeof(order_h9_retry_fail) /
+		    sizeof(order_h9_retry_fail[0])));
+	} else if (strcmp(scenario, "probe-h9-fire-second-ident") == 0) {
+		stage = 9;
+		cmd3_timeouts_remaining = 1;
+		cmd9_timeout = 1;
+		set_expected_order(order_h9_retry_later,
+		    (unsigned int)(sizeof(order_h9_retry_later) /
+		    sizeof(order_h9_retry_later[0])));
+	} else if (strcmp(scenario, "probe-h9-mismatch") == 0) {
+		stage = 9;
+		cmd3_timeouts_remaining = 1;
+		cmd3_r1_error_after = 2;
+		set_expected_order(order_h9_retry_fail,
+		    (unsigned int)(sizeof(order_h9_retry_fail) /
+		    sizeof(order_h9_retry_fail[0])));
 	} else if (strcmp(scenario, "cmd9-timeout") == 0) {
 		/* CMD3 completes but CMD9 times out, so the timeout capture is
 		 * for a different command than the CMD3 poll history. */
@@ -2633,6 +2699,10 @@ main(int argc, char **argv)
 		    0xFFFFFFFFu);
 		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_STATUS, 4u,
 		    0xFFFFFFFFu);
+	} else if (strcmp(scenario, "report-width-h9") == 0) {
+		/* Synthetic H9 field-wise bound: the fixture fills both
+		 * attempt slots and the report formatter is called directly. */
+		width_form = 7;
 	} else if (strcmp(scenario, "report-width-budget-control") == 0) {
 		/* Negative control for the report-budget predicate: the last
 		 * byte that still leaves room for the NUL must be accepted and
@@ -3076,6 +3146,152 @@ main(int argc, char **argv)
 		check(strlen(panic_message) < 2048u,
 		    "the maximum-width failure report exceeds the 2048-byte "
 		    "panic-text budget");
+	} else if ((strcmp(scenario, "probe-h9-clean-no-fire") == 0) ||
+	    (strcmp(scenario, "probe-h9-fire-pass") == 0) ||
+	    (strcmp(scenario, "probe-h9-fire-fail") == 0) ||
+	    (strcmp(scenario, "probe-h9-fire-second-ident") == 0) ||
+	    (strcmp(scenario, "probe-h9-mismatch") == 0)) {
+		check(panicked == 1, "the H9 rung did not report");
+		check(bad_command_format == 0,
+		    "an H9 command used the wrong flags");
+		check(bad_command_order == 0,
+		    "the H9 run sent commands in the wrong order");
+		if (strcmp(scenario, "probe-h9-clean-no-fire") == 0) {
+			check(strstr(panic_message,
+			    "GTA4L-EMMC H9 REPORT: rc=0 stop=0") != NULL,
+			    "the clean H9 run does not name stop 0");
+			check(strstr(panic_message,
+			    "retry=0/0 att=1") != NULL,
+			    "the clean H9 run invented a retry");
+			check(strstr(panic_message,
+			    "A1 n=1 rc=0 r1=0 "
+			    "fail=0/0/0/00000000/0000/0000/00000000/0")
+			    != NULL,
+			    "the clean H9 attempt-1 record is wrong");
+			check(strstr(panic_message,
+			    "A1P c3p=1/0000/0000/00000000/0033/07ff")
+			    != NULL,
+			    "the clean H9 run lost the pre-CMD3 state");
+			check(strstr(panic_message,
+			    "A1L c3l=1/3/0001/0001/1/"
+			    "0000000000000000/1000000") != NULL,
+			    "the clean H9 run lost the CMD3 poll history");
+			check(strstr(panic_message, "A2 n=0 rc=0") != NULL,
+			    "the clean H9 run invented a second attempt");
+			check(strstr(panic_message,
+			    "C cid=15010044,5836384d,42009005,f4661900 "
+			    "cmd1=1/0") != NULL,
+			    "the clean H9 report lost the CID");
+			check(strstr(panic_message,
+			    "H9 FAIL fail=0/0/0/00000000/0000/0000/"
+			    "00000000/0") != NULL,
+			    "the clean H9 report invented a failure");
+			check(cmd_count == 7u,
+			    "the clean H9 run did not stop after TRAN");
+			check(last_index == GTA4L_EMMC_CMD13,
+			    "the clean H9 run did not stop at CMD13");
+		}
+		if (strcmp(scenario, "probe-h9-fire-pass") == 0) {
+			check(strstr(panic_message,
+			    "GTA4L-EMMC H9 REPORT: rc=0 stop=10") != NULL,
+			    "the H9 retry pass does not name stop 10");
+			check(strstr(panic_message,
+			    "retry=1/1 att=2") != NULL,
+			    "the H9 retry pass lost the retry state");
+			check(strstr(panic_message,
+			    "A1 n=1 rc=-7 r1=0 "
+			    "fail=1/3/65536/0000031a/0000/0000/00000000/9")
+			    != NULL,
+			    "the H9 attempt-1 timeout record is wrong");
+			check(strstr(panic_message,
+			    "A1L c3l=1/3/0000/0000/100000/"
+			    "00000000000f4240/1000000") != NULL,
+			    "the H9 attempt-1 poll history is wrong");
+			check(strstr(panic_message,
+			    "A2 n=2 rc=0 r1=0 "
+			    "fail=0/0/0/00000000/0000/0000/00000000/0")
+			    != NULL,
+			    "the H9 duplicate CMD3 record is wrong");
+			check(strstr(panic_message,
+			    "A2P c3p=1/0000/0000/00000000/0033/07ff")
+			    != NULL,
+			    "the duplicate CMD3 lost its pre-command state");
+			check(strstr(panic_message,
+			    "A2L c3l=1/3/0001/0001/1/"
+			    "0000000000000000/1000000") != NULL,
+			    "the duplicate CMD3 poll history is wrong");
+			check(strstr(panic_message,
+			    "C cid=15010044,5836384d,42009005,f4661900")
+			    != NULL,
+			    "the H9 retry pass lost the CID");
+			check(cmd_count == 8u,
+			    "the H9 retry pass did not issue exactly one "
+			    "duplicate");
+			check(last_index == GTA4L_EMMC_CMD13,
+			    "the H9 retry pass did not stop after TRAN");
+		}
+		if (strcmp(scenario, "probe-h9-fire-fail") == 0) {
+			check(strstr(panic_message,
+			    "GTA4L-EMMC H9 REPORT: rc=-7 stop=11") != NULL,
+			    "the H9 double timeout does not name stop 11");
+			check(strstr(panic_message,
+			    "retry=1/0 att=2") != NULL,
+			    "the H9 double timeout lost the retry state");
+			check((strstr(panic_message, "A1 n=1 rc=-7") != NULL) &&
+			    (strstr(panic_message, "A2 n=2 rc=-7") != NULL),
+			    "the H9 double timeout lost an attempt record");
+			check(strstr(panic_message,
+			    "A2 n=2 rc=-7 r1=0 fail=1/3/65536/0000031a/")
+			    != NULL,
+			    "the duplicate CMD3 timeout record is wrong");
+			check(cmd_count == 5u,
+			    "the H9 double timeout issued more than two CMD3 "
+			    "attempts or a later command");
+			check(last_index == GTA4L_EMMC_CMD3,
+			    "the H9 double timeout stopped after an unexpected "
+			    "command");
+		}
+		if (strcmp(scenario, "probe-h9-fire-second-ident") == 0) {
+			check(strstr(panic_message,
+			    "GTA4L-EMMC H9 REPORT: rc=-7 stop=12") != NULL,
+			    "the later H9 failure does not name stop 12");
+			check(strstr(panic_message,
+			    "retry=1/1 att=2") != NULL,
+			    "the later H9 failure lost the retry state");
+			check(strstr(panic_message,
+			    "A2 n=2 rc=0 r1=0") != NULL,
+			    "the later H9 failure lost the clean duplicate");
+			check(strstr(panic_message,
+			    "H9 FAIL fail=1/9/65536/00000909/") != NULL,
+			    "the later H9 failure did not name the CMD9 "
+			    "timeout");
+			check(cmd_count == 6u,
+			    "the later H9 failure did not stop at CMD9");
+			check(last_index == GTA4L_EMMC_CMD9,
+			    "the later H9 failure stopped after an unexpected "
+			    "command");
+		}
+		if (strcmp(scenario, "probe-h9-mismatch") == 0) {
+			check(strstr(panic_message,
+			    "GTA4L-EMMC H9 REPORT: rc=-15 stop=13") != NULL,
+			    "the H9 R1 mismatch does not name stop 13");
+			check(strstr(panic_message,
+			    "retry=1/0 att=2") != NULL,
+			    "the H9 R1 mismatch lost the retry state");
+			check(strstr(panic_message,
+			    "A2 n=2 rc=-15 r1=1") != NULL,
+			    "the H9 R1 mismatch lost the status record");
+			check(strstr(panic_message,
+			    "H9 FAIL fail=0/0/0/00000000/0000/0000/"
+			    "00000000/0") != NULL,
+			    "the H9 R1 mismatch invented a transport failure");
+			check(cmd_count == 5u,
+			    "the H9 R1 mismatch issued more than two CMD3 "
+			    "attempts");
+			check(last_index == GTA4L_EMMC_CMD3,
+			    "the H9 R1 mismatch stopped after an unexpected "
+			    "command");
+		}
 	} else if (strcmp(scenario, "cmd3-identify") == 0) {
 		check(panicked == 1, "the identification success did not report");
 		check(strstr(panic_message,
@@ -4582,6 +4798,50 @@ main(int argc, char **argv)
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width B2 report does not fit the "
 		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-h9") == 0) {
+		check(panicked == 1, "the synthetic width H9 report did not "
+		    "panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9 REPORT: rc=-18 stop=13 mci=ffffffff "
+		    "rca=1 cap=4294967295 rev=255 bw=15 ocr=ffffffff "
+		    "ext=ffffffff hci=ff retry=1/0 att=2 step=24 log=99999")
+		    != NULL,
+		    "the synthetic width H9 report lost the widest header");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9 A1 n=1 rc=-18 r1=1 "
+		    "fail=1/63/4294967295/0000ffff/ffff/ffff/ffffffff/24 "
+		    "rsp=ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width H9 report lost the widest first "
+		    "attempt");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9 A1P c3p=1/ffff/ffff/ffffffff/ffff/ffff "
+		    "c3t=1/63/ffff/ffffffff/1/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width H9 report lost the widest first "
+		    "pre-command and timeout capture");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9 A1L c3l=1/63/ffff/ffff/100000/"
+		    "ffffffffffffffff/1000000000") != NULL,
+		    "the synthetic width H9 report lost the widest first "
+		    "poll history");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9 A2 n=2 rc=-18 r1=1 "
+		    "fail=1/63/4294967295/0000ffff/ffff/ffff/ffffffff/24 "
+		    "rsp=ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width H9 report lost the widest second "
+		    "attempt");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9 C cid=ffffffff,ffffffff,ffffffff,ffffffff "
+		    "cmd1=20/20") != NULL,
+		    "the synthetic width H9 report lost the widest card data");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9 FAIL fail=1/63/4294967295/0000ffff/"
+		    "ffff/ffff/ffffffff/24") != NULL,
+		    "the synthetic width H9 report lost the widest failure "
+		    "record");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width H9 report does not fit the "
+		    "2048-byte panic buffer including the NUL");
 	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
 	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
 	    (strcmp(scenario, "cmd7-busy-error") == 0) ||
@@ -4965,7 +5225,8 @@ main(int argc, char **argv)
 	if ((strncmp(scenario, "probe-b1c-", 10u) == 0) ||
 	    (strncmp(scenario, "probe-b1-1bit-", 15u) == 0) ||
 	    (strncmp(scenario, "probe-dto-", 10u) == 0) ||
-	    (strncmp(scenario, "probe-b2-", 9u) == 0)) {
+	    (strncmp(scenario, "probe-b2-", 9u) == 0) ||
+	    (strncmp(scenario, "probe-h9-", 9u) == 0)) {
 		check(bad_command_format == 0,
 		    "a B1C command used the wrong flags");
 		check(bad_command_order == 0,

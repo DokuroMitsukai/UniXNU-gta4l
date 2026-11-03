@@ -238,12 +238,13 @@ payload hash. Replay inputs:
 
 The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2`,
 `emmc-probe-3`, `emmc-probe-4`, `emmc-probe-5`, `emmc-probe-6`,
-`emmc-probe-7` and `emmc-probe-8`, mapping to
-`gta4l-emmc-probe=1/2/3/4/5/6/7/8` (the
+`emmc-probe-7`, `emmc-probe-8` and `emmc-probe-9`, mapping to
+`gta4l-emmc-probe=1/2/3/4/5/6/7/8/9` (the
 `emmc-probe-4` mapping was added for the 2026-11-02 Stage-B1 build,
 `emmc-probe-5` for the Stage-B1C continuation build, `emmc-probe-6` for the
 1-bit CMD19/CMD14 discriminator build, `emmc-probe-7` for the data-timeout
-audit build and `emmc-probe-8` for the Stage-B2 HS-timing build). The stage-2
+audit build, `emmc-probe-8` for the Stage-B2 HS-timing build and
+`emmc-probe-9` for the Stage-H9 CMD3-completion retry build). The stage-2
 image built on
 2026-10-31 is
 `out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img`

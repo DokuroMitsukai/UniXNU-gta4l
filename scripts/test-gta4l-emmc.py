@@ -97,6 +97,11 @@ SCENARIOS = [
     'cmd3-stale-cc',
     'cmd3-identify',
     'cmd3-enable-readback',
+    'cmd3-retry-clean',
+    'cmd3-retry-pass',
+    'cmd3-retry-fail',
+    'cmd3-retry-status',
+    'cmd3-retry-later-fail',
     'cmd9-late-error',
     'cmd7-tc-only',
     'cmd7-fresh-window',
@@ -527,8 +532,10 @@ def main() -> int:
              '\tconfig |= GTA4L_EMMC_DLL_RST;\n',
              'Gta4lEmmc.c', (), 'success'),
             ('cmd1-retire-missing',
-             '\t\tgta4l_emmc_clear_failure(host);\n',
-             '\t\t/* recovered CMD1 timeout retained by mutation */\n',
+             '\t\tgta4l_emmc_clear_failure(host);\n'
+             '\t\thost->cmd1_attempts++;\n',
+             '\t\t/* recovered CMD1 timeout retained by mutation */\n'
+             '\t\thost->cmd1_attempts++;\n',
              'Gta4lEmmc.c', ('-Wno-unused-function',),
              'cmd1-timeout-recovery-crc'),
             ('crc-response-snapshot-missing',
@@ -1129,6 +1136,26 @@ def main() -> int:
              '\t}\n'
              '\trc = gta4l_emmc_wait_tran(host);\n',
              'Gta4lEmmc.c', (), 'hs-timing-cmd6-error'),
+            ('cmd3-retry-silent',
+             '\t\t\thost->cmd3_retry_engaged = 1;\n',
+             '\t\t\thost->cmd3_retry_engaged = 0;\n',
+             'Gta4lEmmc.c', (), 'cmd3-retry-pass'),
+            ('cmd3-retry-no-first-timeout',
+             '\t\tif (result == GTA4L_EMMC_ERR_CMD_TIMEOUT) {\n',
+             '\t\tif (result != GTA4L_EMMC_ERR_ARG) {\n',
+             'Gta4lEmmc.c', (), 'cmd3-retry-clean'),
+            ('cmd3-retry-changed-argument',
+             '\t\t\tresult = gta4l_emmc_send_command(host,\n'
+             '\t\t\t    GTA4L_EMMC_CMD3,\n'
+             '\t\t\t    GTA4L_EMMC_DEFAULT_RCA << 16,\n',
+             '\t\t\tresult = gta4l_emmc_send_command(host,\n'
+             '\t\t\t    GTA4L_EMMC_CMD3,\n'
+             '\t\t\t    (GTA4L_EMMC_DEFAULT_RCA << 16) + 1u,\n',
+             'Gta4lEmmc.c', (), 'cmd3-retry-pass'),
+            ('cmd3-retry-extra',
+             '\t\tif (result == GTA4L_EMMC_ERR_CMD_TIMEOUT) {\n',
+             '\t\twhile (result == GTA4L_EMMC_ERR_CMD_TIMEOUT) {\n',
+             'Gta4lEmmc.c', (), 'cmd3-retry-fail'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -1231,6 +1258,14 @@ def main() -> int:
                 'HS enter failed',
             'hs-ignore-switch-error':
                 'CMD6 SWITCH_ERROR was not reported',
+            'cmd3-retry-silent':
+                'CMD3 retry engagement flag mismatch',
+            'cmd3-retry-no-first-timeout':
+                'CMD3 attempt count mismatch',
+            'cmd3-retry-changed-argument':
+                'the duplicate CMD3 did not use the same argument',
+            'cmd3-retry-extra':
+                'FAIL: cmd3-retry-fail returned 0',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)

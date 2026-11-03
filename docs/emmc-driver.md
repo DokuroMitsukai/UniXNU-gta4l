@@ -34,7 +34,11 @@ identification,
 single-block sector reads and
 a partial multi-block data phase are therefore observed; a complete
 multi-block read, a filesystem, block-device publication, DMA/CQE/ICE and F3
-remain `[U]`. The
+remain `[U]`. The next rung is the H9 CMD3-completion retry discriminator
+(`gta4l-emmc-probe=9`): it runs the read-only identification sequence once
+with one designed duplicate CMD3 after a completion timeout, stops before
+EXT_CSD and the stage-A pass, and always reports (§5.3.21). It is implemented
+and host-tested; no device run exists yet. The
 core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
@@ -54,9 +58,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 143 scenarios and 86 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 148 scenarios and 90 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 85 scenarios and 51 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 91 scenarios and 51 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -2114,6 +2118,56 @@ implied. The H8 class remains an independent pre-B2 flake.
 F4 moves from `[U]` to `[C]` at the stated 1-bit/50 MHz content scope. F3
 remains `[U]`; `trc=-20` remains unobserved and the byte-183 readback
 paradox is unchanged.
+
+### 5.3.21 Stage-H9 CMD3-completion retry discriminator (gta4l-emmc-probe=9, host batch 2026-11-03)
+
+The `gta4l-emmc-probe=9` stage runs the standard read-only identification
+sequence exactly once, preserving the pinned 8-us post-ready CMD1 delay, and
+adds one designed hook: if CMD3 ends in the H8 completion timeout
+(`GTA4L_EMMC_ERR_CMD_TIMEOUT`), the core snapshots attempt 1 and re-issues
+exactly one CMD3 with the identical argument (`0x00010000`) and timing path.
+There is never a third attempt, never a silent retry and no fall-through.
+The stage stops after the TRAN wait, before any EXT_CSD read and before the
+stage-A pass; it issues no CMD6, no width switch and no user-data access.
+The only new card-facing action relative to the identification sequence is
+the duplicate CMD3.
+
+The portable core keeps the hook opt-in through `cmd3_retry_enabled`; the
+probe sets it only for stage 9. A second opt-in, `identify_only`, stops
+`gta4l_emmc_init()` after `wait_tran()` so the rung touches no EXT_CSD data.
+Each attempt is folded into a two-slot capture (result, R1 error flag, the
+live fail record, the pre-CMD3 sample, the timeout sample and the poll
+history), and the live failure state is cleared before the duplicate so the
+attempt-1 record cannot be overwritten.
+
+The stage always emits `GTA4L-EMMC H9 REPORT`: a header with `rc`, `stop`,
+the identification fields, `retry=engaged/ok`, `att`, `step` and `log`; one
+`A1`/`A2` attempt line each with `n`, `rc`, `r1`, the fail record and the
+response words; `A1P`/`A2P` with the pre-command `c3p` and timeout `c3t`
+samples; `A1L`/`A2L` with the CMD3 poll history `c3l`; a `C` line with the
+CID and CMD1 attempts/timeouts; and a terminal `H9 FAIL` line. A slot that
+did not run prints `n=0` and zero fields.
+
+Stop codes: 0 clean identification with no retry; 10 retry engaged, the
+duplicate clean and identification clean; 11 duplicate CMD3 transport
+failure; 12 duplicate clean but identification failed later; 13 duplicate
+R1 status error; 14 no retry engaged and identification did not complete
+cleanly (the first CMD3 either failed at a non-timeout code or never ran);
+15 attempt-1 clean but identification failed later. The report does not add
+a new MMIO sample: `regs` is the caller's existing clock-guarded capture.
+
+Host checks: core 148 scenarios and 90 mutation controls (was 143/86),
+adding `cmd3-retry-clean`, `cmd3-retry-pass`, `cmd3-retry-fail`,
+`cmd3-retry-status` and `cmd3-retry-later-fail` plus four mutations (silent
+retry, retry without a first timeout, retry with a changed argument and an
+unbounded retry loop). The probe suite is 91 scenarios and 51 mutation
+controls (was 85/51), adding `probe-h9-clean-no-fire`, `probe-h9-fire-pass`,
+`probe-h9-fire-fail`, `probe-h9-fire-second-ident`, `probe-h9-mismatch` and
+the `report-width-h9` width materialization (the seventh). The diagnostic
+wrapper and payload gate accept `emmc-probe-9`.
+
+No build, flash or boot has been performed. The device run needs a fresh
+explicit BOOT-only approval that names the duplicate CMD3. F3 remains `[U]`.
 
 ## 6. Expected report
 

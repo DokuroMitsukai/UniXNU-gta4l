@@ -2119,6 +2119,65 @@ supported: a cold-start B2 pass; a width, write, DMA, CQE, ICE, HS200 or
 frequency-measurement result; a cause for the H8 pre-B2 stops; the byte-183
 readback paradox; the `trc=-20` class; or F3.
 
+### 2.25 Stage-H9 host batch: the CMD3 retry discriminator is simulator-tested (2026-11-03)
+
+The stage-9 rung (`gta4l-emmc-probe=9`, driver §5.3.21) is the H9
+identification-stage CMD3-completion retry discriminator. It runs the
+standard read-only identification sequence exactly once, preserving the
+pinned 8-us post-ready CMD1 delay, and on the H8 completion timeout
+(`GTA4L_EMMC_ERR_CMD_TIMEOUT`) captures attempt 1 and re-issues exactly one
+identical CMD3 (`0x00010000`, same timing path). There is never a third
+attempt and no fall-through. The rung stops after the TRAN wait, before any
+EXT_CSD read and before the stage-A pass, so it issues no CMD6, no width
+switch and no user-data access; the only new card-facing action is the
+duplicate CMD3.
+
+The core keeps the hook opt-in (`cmd3_retry_enabled`); the probe enables it
+only for stage 9. `identify_only` stops `gta4l_emmc_init()` after
+`wait_tran()`, so the rung touches no EXT_CSD data. Each attempt is folded
+into a two-slot capture (result, R1 error flag, live fail record, pre-CMD3
+sample, timeout sample and poll history); attempt 1 is copied before the
+live failure state is cleared for the duplicate, so its historical H8 record
+survives. The stage always emits `GTA4L-EMMC H9 REPORT` with the
+identification header (`rc`, `stop`, `retry=engaged/ok`, `att`, `step`,
+`log`), `A1`/`A2` per-attempt lines, `A1P`/`A2P` pre-command and timeout
+samples, `A1L`/`A2L` poll histories, the `C` CID/CMD1 line and a terminal
+`H9 FAIL` line. The report adds no new MMIO sample; it reuses the caller's
+clock-guarded register capture.
+
+Stop codes: 0 clean identification with no retry; 10 retry engaged and the
+duplicate clean before a clean identification; 11 duplicate CMD3 transport
+failure; 12 duplicate clean but identification failed later; 13 duplicate
+R1 status error; 14 no retry engaged and identification did not complete
+cleanly; 15 attempt-1 clean but identification failed later. Decision rows:
+attempt-1 clean → no datapoint beyond a batch boot; attempt-1 timeout and
+attempt-2 clean with `rc=0` → transient completion miss, a bounded retry is
+viable for future rungs; attempt-2 clean but a later failure → bind the
+later failure as its own row; both attempts timeout with identical `fail`
+shapes → sticky class, closed by two field-identical reports; a different
+attempt-2 R1 → card-state ambiguity and its own row.
+
+The host batch is implemented and simulator-tested: core 148 scenarios and
+90 mutation controls (was 143/86), adding `cmd3-retry-clean`,
+`cmd3-retry-pass`, `cmd3-retry-fail`, `cmd3-retry-status` and
+`cmd3-retry-later-fail` plus four mutations (silent retry, retry without a
+first timeout, changed duplicate argument and an unbounded retry loop);
+probe 91 scenarios and 51 mutation controls (was 85/51), adding
+`probe-h9-clean-no-fire`, `probe-h9-fire-pass`, `probe-h9-fire-fail`,
+`probe-h9-fire-second-ident` and `probe-h9-mismatch`, plus the
+`report-width-h9` materialization (the seventh width fixture). The
+diagnostic wrapper and payload gate accept `emmc-probe-9`. No build, flash
+or boot has been performed; the device run needs a fresh explicit BOOT-only
+approval that names the duplicate CMD3.
+
+Supported by this section: the stage-9 design and stop-code table, the
+opt-in retry hook and `identify_only` stop, the two-attempt capture shape,
+the H9 report fields, the simulator scenarios and mutation outcomes, and the
+width materialization. Not supported: any device retry result, a transient
+or sticky CMD3-completion classification, a card-state interpretation of a
+changed attempt-2 R1, a duplicate-CMD3 effect on later identification, or a
+change to F3.
+
 ---
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout

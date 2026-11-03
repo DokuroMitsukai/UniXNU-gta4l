@@ -313,6 +313,69 @@ gta4l_emmc_clear_failure(struct gta4l_emmc_host *host)
 	host->multi_stop_capture_valid = 0;
 }
 
+/* Fold one CMD3 attempt into its H9 capture slot. The fail, pre-command,
+ * timeout and poll fields are sequential register samples; the capture is a
+ * diagnostic record, not an atomic snapshot. */
+static void
+gta4l_emmc_cmd3_snapshot(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_cmd3_capture *capture, uint32_t number, int result,
+    const uint32_t response[4])
+{
+	uint32_t index;
+
+	capture->number = number;
+	capture->result = result;
+	capture->r1_error = (result == GTA4L_EMMC_ERR_CARD_STATUS) ? 1u : 0u;
+	capture->fail_valid = host->fail_valid;
+	capture->fail_index = host->fail_index;
+	capture->fail_argument = host->fail_argument;
+	capture->fail_command = host->fail_command;
+	capture->fail_error = host->fail_error;
+	capture->fail_normal = host->fail_normal;
+	capture->fail_present = host->fail_present;
+	capture->fail_step = host->fail_step;
+	capture->pre_valid = host->pre_cmd3_capture_valid;
+	capture->pre_normal = host->pre_cmd3_normal;
+	capture->pre_error = host->pre_cmd3_error;
+	capture->pre_present = host->pre_cmd3_present;
+	capture->pre_normal_enable = host->pre_cmd3_normal_enable;
+	capture->pre_error_enable = host->pre_cmd3_error_enable;
+	capture->timeout_valid = host->timeout_capture_valid;
+	capture->timeout_index = host->timeout_index;
+	capture->timeout_command = host->timeout_command;
+	capture->timeout_argument = host->timeout_argument;
+	capture->timeout_response_stable = host->timeout_response_stable;
+	capture->poll_valid = host->poll_capture_valid;
+	capture->poll_iterations = host->poll_iterations;
+	capture->poll_index = host->poll_index;
+	capture->poll_first_normal = host->poll_first_normal;
+	capture->poll_last_normal = host->poll_last_normal;
+	capture->poll_ticks = host->poll_ticks;
+	for (index = 0; index < 4u; index++) {
+		capture->fail_response[index] = host->fail_response[index];
+		capture->timeout_response[index] =
+		    host->timeout_response[index];
+		if ((result == GTA4L_EMMC_OK) ||
+		    (result == GTA4L_EMMC_ERR_CARD_STATUS)) {
+			capture->response[index] = response[index];
+		} else {
+			capture->response[index] =
+			    host->fail_response[index];
+		}
+	}
+}
+
+/* Map a completed CMD3 R1 status to the core's status error. */
+static int
+gta4l_emmc_cmd3_result(int result, const uint32_t response[4])
+{
+	if ((result == GTA4L_EMMC_OK) &&
+	    ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0)) {
+		return GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+	return result;
+}
+
 static uint32_t
 gta4l_emmc_poll_iterations(uint32_t timeout_us)
 {
@@ -2131,6 +2194,11 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 	if (host == 0) {
 		return GTA4L_EMMC_ERR_ARG;
 	}
+	host->cmd3_retry_engaged = 0;
+	host->cmd3_retry_ok = 0;
+	host->cmd3_attempt_count = 0;
+	host->cmd3_attempt[0].number = 0;
+	host->cmd3_attempt[1].number = 0;
 	result = gta4l_emmc_controller_init(host);
 	if (result != GTA4L_EMMC_OK) {
 		return result;
@@ -2173,11 +2241,35 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 	    GTA4L_EMMC_DEFAULT_RCA << 16, GTA4L_EMMC_CMD_RESP_SHORT |
 	    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX,
 	    GTA4L_EMMC_CMD_TIMEOUT_US, response);
+	result = gta4l_emmc_cmd3_result(result, response);
+	if (host->cmd3_retry_enabled != 0) {
+		host->cmd3_attempt_count = 1;
+		gta4l_emmc_cmd3_snapshot(host, &host->cmd3_attempt[0], 1u,
+		    result, response);
+		if (result == GTA4L_EMMC_ERR_CMD_TIMEOUT) {
+			/* H9: one designed duplicate CMD3 with the identical
+			 * argument and timing path. The attempt-1 record was
+			 * copied above, so clearing the live failure state
+			 * cannot lose it. Never a third attempt. */
+			host->cmd3_retry_engaged = 1;
+			gta4l_emmc_clear_failure(host);
+			result = gta4l_emmc_send_command(host,
+			    GTA4L_EMMC_CMD3,
+			    GTA4L_EMMC_DEFAULT_RCA << 16,
+			    GTA4L_EMMC_CMD_RESP_SHORT |
+			    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX,
+			    GTA4L_EMMC_CMD_TIMEOUT_US, response);
+			result = gta4l_emmc_cmd3_result(result, response);
+			host->cmd3_attempt_count = 2;
+			gta4l_emmc_cmd3_snapshot(host, &host->cmd3_attempt[1],
+			    2u, result, response);
+			if (result == GTA4L_EMMC_OK) {
+				host->cmd3_retry_ok = 1;
+			}
+		}
+	}
 	if (result != GTA4L_EMMC_OK) {
 		return result;
-	}
-	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
-		return GTA4L_EMMC_ERR_CARD_STATUS;
 	}
 	/* eMMC CMD3 is SET_RELATIVE_ADDR: the host assigns the RCA in the
 	 * argument and the response is R1 status, not a returned RCA. */
@@ -2215,6 +2307,11 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 		return result;
 	}
 	host->last_step = GTA4L_EMMC_STEP_TRAN;
+
+	if (host->identify_only != 0) {
+		/* H9 stops with the card in TRAN, before any EXT_CSD access. */
+		return GTA4L_EMMC_OK;
+	}
 
 	result = gta4l_emmc_read_ext_csd(host, ext_csd);
 	if (result != GTA4L_EMMC_OK) {
