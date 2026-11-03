@@ -418,7 +418,11 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * is the H11 width-value continuation: it replays the H10 4-bit switch as a
  * record-only sample, attempts the 8-bit BUS_WIDTH value at HS, and runs the
  * CMD19 round trip and content pass at 8-bit/50 MHz only when that switch is
- * honored; it reverts both and stops with the H11 report. */
+ * honored; it reverts both and stops with the H11 report. Stage 12 is the
+ * H12 record-only DDR attempt: after the stage-A pass it enters HS, issues
+ * one CMD6 SET byte 183 = 4, reads the value back at the 4-bit SDR DAT
+ * width without applying any controller DDR mode, reverts both and stops
+ * with the H12 report. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -427,7 +431,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 11)) {
+	if ((value < 1) || (value > 12)) {
 		return 0;
 	}
 	return value;
@@ -2091,6 +2095,250 @@ gta4l_emmc_probe_h11_run(struct gta4l_emmc_host *host,
 	    h11.w8_rc, (unwind != 0) ? unwind : 12);
 }
 
+/* H12 record-only DDR-width capture. R holds the 400 kHz identity samples,
+ * S the HS entry, WDDR the record-only CMD6 SET byte 183 = 4 attempt and
+ * its verification re-read, VR the width revert, X the HS revert and Q the
+ * recovery read. The controller DDR configuration is never touched. */
+struct gta4l_emmc_probe_h12 {
+	struct gta4l_emmc_hs_result hs;
+	struct gta4l_emmc_hs_result hs_revert;
+	struct gta4l_emmc_bus_result wddr;
+	struct gta4l_emmc_bus_result width_revert;
+	uint32_t pre_hs;
+	uint32_t pre_width;
+	uint32_t pre_clock;
+	uint32_t pre_hc;
+	uint32_t pre_sum;
+	uint32_t pre_qdsd;
+	uint32_t pre_dll;
+	uint32_t pre_dst;
+	int      switch_rc;
+	int      wddr_rc;
+	int      width_revert_rc;
+	int      hs_revert_rc;
+	int      q_result;
+	uint32_t q_block0_sum;
+};
+
+static void
+gta4l_emmc_probe_report_h12(const struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_h12 *h12, int rc, int stop)
+{
+	uint8_t hci = gta4l_emmc_probe_read8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	uint32_t qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	uint32_t dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	uint32_t dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+
+	panic("GTA4L-EMMC H12 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
+	    "rev=%u hci=%02x step=%u log=%u bw=%02x\n"
+	    "GTA4L-EMMC H12 R clk=%04x hs=%02x bw=%02x hc=%02x es=%08x\n"
+	    "GTA4L-EMMC H12 S rc=%d sw=%d c6=%08x hs=%02x clk=%04x "
+	    "rcg=%08x sum=%08x\n"
+	    "GTA4L-EMMC H12 WDDR rc=%d sw=%u swrc=%d c6=%08x es=%08x\n"
+	    "GTA4L-EMMC H12 VR rc=%d sw=%u swrc=%d c6=%08x hb=%02x "
+	    "ha=%02x es=%08x\n"
+	    "GTA4L-EMMC H12 X rc=%d sw=%d c6=%08x hs=%02x clk=%04x "
+	    "rcg=%08x sum=%08x\n"
+	    "GTA4L-EMMC H12 Q rc=%d qb0=%08x\n"
+	    "GTA4L-EMMC H12 PAD pre=%08x/%08x/%08x post=%08x/%08x/%08x\n"
+	    "GTA4L-EMMC H12 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
+	    (unsigned int)host->ext_csd_rev, (unsigned int)hci,
+	    host->last_step, probe->log_count,
+	    (unsigned int)host->bus_width,
+	    (unsigned int)h12->pre_clock, (unsigned int)h12->pre_hs,
+	    (unsigned int)h12->pre_width, (unsigned int)h12->pre_hc,
+	    h12->pre_sum,
+	    h12->switch_rc, h12->hs.switch_result,
+	    h12->hs.switch_status,
+	    (unsigned int)h12->hs.hs_after, (unsigned int)h12->hs.clock,
+	    h12->hs.rcg_after, h12->hs.readback_sum,
+	    h12->wddr_rc, h12->wddr.switched, h12->wddr.switch_result,
+	    h12->wddr.switch_status, h12->wddr.readback_sum,
+	    h12->width_revert_rc, h12->width_revert.switched,
+	    h12->width_revert.switch_result,
+	    h12->width_revert.switch_status,
+	    (unsigned int)h12->width_revert.host_before,
+	    (unsigned int)h12->width_revert.host_after,
+	    h12->width_revert.readback_sum,
+	    h12->hs_revert_rc, h12->hs_revert.switch_result,
+	    h12->hs_revert.switch_status,
+	    (unsigned int)h12->hs_revert.hs_after,
+	    (unsigned int)h12->hs_revert.clock,
+	    h12->hs_revert.rcg_after, h12->hs_revert.readback_sum,
+	    h12->q_result, h12->q_block0_sum,
+	    h12->pre_qdsd, h12->pre_dll, h12->pre_dst, qdsd, dll, dst,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
+/* H12 outcome classes: 0 = clean refusal (byte 183 stays 0 and the sum is
+ * the 1-bit-at-HS sum), 1 = honored (byte 183 = 4 and the sum grew by 4),
+ * 2 = a DDR-verification failure (transport/R1 error, empty read, or a
+ * readback that disagrees with its own sum). */
+static int
+gta4l_emmc_probe_h12_class(const struct gta4l_emmc_bus_result *wddr,
+    int rc, uint32_t pre_sum)
+{
+	if ((rc == GTA4L_EMMC_OK) && (wddr->switched == 4u) &&
+	    (wddr->readback_sum == pre_sum + 1u + 4u)) {
+		return 1;
+	}
+	if ((rc == GTA4L_EMMC_ERR_BUS_WIDTH) && (wddr->switched == 0u) &&
+	    (wddr->readback_sum == pre_sum + 1u)) {
+		return 0;
+	}
+	return 2;
+}
+
+/* Revert the width at HS and then the timing class. Best effort: the HS
+ * revert runs even when the width revert fails. Returns 0, 14 (width
+ * revert) or 15 (HS revert). */
+static int
+gta4l_emmc_probe_h12_unwind(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe_h12 *h12)
+{
+	h12->width_revert_rc = gta4l_emmc_set_bus_width(host, 1u,
+	    &h12->width_revert);
+	h12->hs_revert_rc = gta4l_emmc_set_hs_timing(host, 0u,
+	    &h12->hs_revert);
+	if (h12->width_revert_rc != GTA4L_EMMC_OK) {
+		return 14;
+	}
+	if (h12->hs_revert_rc != GTA4L_EMMC_OK) {
+		return 15;
+	}
+	return 0;
+}
+
+/* Unwind, prove block 0 is intact and report. `stop` is 0 for the clean
+ * refusal row or 13 for the honored row. */
+static void
+gta4l_emmc_probe_h12_finish(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe, struct gta4l_emmc_probe_h12 *h12,
+    uint32_t block0_sum, int stop)
+{
+	static uint8_t qblock[GTA4L_EMMC_BLOCK_BYTES];
+	int unwind;
+
+	unwind = gta4l_emmc_probe_h12_unwind(host, h12);
+	if (unwind != 0) {
+		gta4l_emmc_probe_report_h12(host, probe, h12,
+		    (unwind == 14) ? h12->width_revert_rc :
+		    h12->hs_revert_rc, unwind);
+	}
+	h12->q_result = gta4l_emmc_read_block(host, 0u, qblock);
+	if (h12->q_result != GTA4L_EMMC_OK) {
+		gta4l_emmc_probe_report_h12(host, probe, h12, h12->q_result,
+		    15);
+	}
+	h12->q_block0_sum = gta4l_emmc_probe_sum(qblock,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	if (h12->q_block0_sum != block0_sum) {
+		gta4l_emmc_probe_report_h12(host, probe, h12,
+		    GTA4L_EMMC_PROBE_ERR_CONTENT, 15);
+	}
+	gta4l_emmc_probe_report_h12(host, probe, h12, GTA4L_EMMC_OK, stop);
+}
+
+/* Run the stage-12 record-only DDR attempt: stage-A at 400 kHz/1-bit is the
+ * baseline, then HS entry, the CMD6 SET byte 183 = 4 attempt and its
+ * verification re-read, the width and timing reverts and the recovery read.
+ * The controller DDR configuration is never touched and no data moves in
+ * DDR framing. Report and stop in every case; no retry. */
+static void
+gta4l_emmc_probe_h12_run(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe, struct gta4l_emmc_probe_range *range,
+    const uint8_t *block0, const uint8_t *block1)
+{
+	struct gta4l_emmc_probe_h12 h12;
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t index;
+	uint32_t sum;
+	uint32_t block0_sum;
+	int klass;
+	int unwind;
+	int rc;
+
+	bzero(&h12, sizeof(h12));
+	block0_sum = gta4l_emmc_probe_sum(block0, GTA4L_EMMC_BLOCK_BYTES);
+	/* The stage-A pass already ran; block1 is unused by this rung. */
+	(void)range;
+	(void)block1;
+
+	h12.pre_clock = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CLOCK_CONTROL);
+	h12.pre_hc = gta4l_emmc_probe_read8(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
+	h12.pre_qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	h12.pre_dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	h12.pre_dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		h12.switch_rc = rc;
+		gta4l_emmc_probe_report_h12(host, probe, &h12, rc, 10);
+	}
+	h12.pre_hs = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
+	h12.pre_width = ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF];
+	for (index = 0, sum = 0; index < GTA4L_EMMC_EXT_CSD_BYTES;
+	    index++) {
+		sum += ext_csd[index];
+	}
+	h12.pre_sum = sum;
+
+	h12.switch_rc = gta4l_emmc_set_hs_timing(host, 1u, &h12.hs);
+	if (h12.switch_rc != GTA4L_EMMC_OK) {
+		h12.hs_revert_rc = gta4l_emmc_set_hs_timing(host, 0u,
+		    &h12.hs_revert);
+		gta4l_emmc_probe_report_h12(host, probe, &h12,
+		    h12.switch_rc,
+		    (h12.hs.clock_result != GTA4L_EMMC_OK) ? 11 : 10);
+	}
+
+	/* WDDR: the record-only 4-bit DDR value. The helper follows the
+	 * 4-bit DAT width for the verification read but never applies a
+	 * controller DDR mode. */
+	h12.wddr_rc = gta4l_emmc_set_bus_width_ddr(host, &h12.wddr);
+	klass = gta4l_emmc_probe_h12_class(&h12.wddr, h12.wddr_rc,
+	    h12.pre_sum);
+	if (klass == 0) {
+		gta4l_emmc_probe_h12_finish(host, probe, &h12, block0_sum,
+		    0);
+	}
+	if (klass == 1) {
+		gta4l_emmc_probe_h12_finish(host, probe, &h12, block0_sum,
+		    13);
+	}
+
+	/* DDR-verification failure: revert both and stop with the failure.
+	 * A transport/R1 error keeps its code; a refused or disagreeing
+	 * readback reports the width-mismatch result. */
+	unwind = gta4l_emmc_probe_h12_unwind(host, &h12);
+	if (unwind != 0) {
+		gta4l_emmc_probe_report_h12(host, probe, &h12,
+		    (unwind == 14) ? h12.width_revert_rc :
+		    h12.hs_revert_rc, unwind);
+	}
+	if ((h12.wddr_rc == GTA4L_EMMC_OK) ||
+	    (h12.wddr_rc == GTA4L_EMMC_ERR_BUS_WIDTH)) {
+		rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+	} else {
+		rc = h12.wddr_rc;
+	}
+	gta4l_emmc_probe_report_h12(host, probe, &h12, rc, 12);
+}
+
 /* Run the stage-7 audit: read back the timeout configuration (R1), arm the
  * minimum data timeout and read 8 blocks (E1), re-read block 0 to prove the bus
  * recovered (Q), then repeat the 1-bit CMD19 write test under the extended
@@ -2679,6 +2927,11 @@ gta4l_emmc_probe_run(void)
 
 	if (stage == 11) {
 		gta4l_emmc_probe_h11_run(&host, &probe, &range, block0,
+		    block1);
+	}
+
+	if (stage == 12) {
+		gta4l_emmc_probe_h12_run(&host, &probe, &range, block0,
 		    block1);
 	}
 

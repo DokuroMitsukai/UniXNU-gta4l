@@ -189,6 +189,17 @@ SCENARIOS = [
     'probe-h11-width-revert-fail',
     'probe-h11-hs-revert-fail',
     'probe-h11-q-fail',
+    'probe-h12-refused-pass',
+    'probe-h12-honored',
+    'probe-h12-wddr-err',
+    'probe-h12-wddr-paradox',
+    'probe-h12-wddr-empty',
+    'probe-h12-hs-ignored',
+    'probe-h12-clock-busy',
+    'probe-h12-width-revert-fail',
+    'probe-h12-hs-revert-fail',
+    'probe-h12-q-fail',
+    'probe-h12-pre-read-fail',
     'probe-b1c-success',
     'probe-b1c-pass',
     'probe-b1c-late-commit',
@@ -206,6 +217,7 @@ SCENARIOS = [
     'report-width-b1',
     'report-width-b2',
     'report-width-h9',
+    'report-width-h12',
     'report-width-budget-control',
 ]
 
@@ -219,6 +231,7 @@ WIDTH_SCENARIOS = (
     'report-width-h9',
     'report-width-h10',
     'report-width-h11',
+    'report-width-h12',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'
@@ -900,7 +913,38 @@ MUTATIONS = [
      '\t\treturn 6u;\n'
      '\t}\n',
      'probe-h11-honored-pass',
-     'the H11 rung issued a byte-183 DDR variant',
+     'a stage 1..11 rung issued a byte-183 DDR variant',
+     'core'),
+    ('h12-wddr-step-skipped',
+     '\th12.wddr_rc = gta4l_emmc_set_bus_width_ddr(host, &h12.wddr);\n',
+     '\th12.wddr_rc = GTA4L_EMMC_OK;\n',
+     'probe-h12-honored',
+     'the honored H12 pass does not name its stop'),
+    ('h12-wrong-stop',
+     '\t\tgta4l_emmc_probe_h12_finish(host, probe, &h12, block0_sum,\n'
+     '\t\t    13);\n',
+     '\t\tgta4l_emmc_probe_h12_finish(host, probe, &h12, block0_sum,\n'
+     '\t\t    12);\n',
+     'probe-h12-honored',
+     'the honored H12 pass does not name its stop'),
+    ('h12-silent-revert',
+     '\th12->width_revert_rc = gta4l_emmc_set_bus_width(host, 1u,\n'
+     '\t    &h12->width_revert);\n',
+     '\th12->width_revert_rc = GTA4L_EMMC_OK;\n',
+     'probe-h12-honored',
+     'the honored H12 pass did not revert the width'),
+    ('h12-q-skipped',
+     '\th12->q_result = gta4l_emmc_read_block(host, 0u, qblock);\n',
+     '\th12->q_result = GTA4L_EMMC_OK;\n',
+     'probe-h12-q-fail',
+     'the failed H12 recovery read lost its core code'),
+    ('h12-ddr-code-wrong',
+     '\treturn gta4l_emmc_set_bus_width_value(host, 4u,\n'
+     '\t    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR, result);\n',
+     '\treturn gta4l_emmc_set_bus_width_value(host, 4u,\n'
+     '\t    5u, result);\n',
+     'probe-h12-refused-pass',
+     'the H12 pass did not issue exactly one byte-183 value-4 attempt',
      'core'),
 ]
 

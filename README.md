@@ -247,6 +247,22 @@ partition layout, payload policy and packaging.
   remains unproven; the open owner questions are the DDR bit-plane and the
   CMD19 write-phase wedge. The flash and boot records are in
   `out/gta4l/ram-root-emmc-probe-h11-evidence/`.
+  The next rung is H12 (`gta4l-emmc-probe=12`), the record-only DDR
+  attempt, implemented and simulator-tested: after the stage-A pass it
+  enters HS and issues one CMD6 SET of byte 183 = 4 (the 4-bit DDR code),
+  waits TRAN, applies only the 4-bit SDR host DAT width for the
+  verification read, re-reads EXT_CSD, reverts byte 183 to 0 and the
+  timing to legacy, and reads block 0. The controller DDR configuration is
+  never touched. A clean refusal (readback 0 and a sum that changed only
+  by byte 185) closes the width-study conclusion; a readback of 4 is the
+  honored row and stops for an owner decision; a disagreeing
+  readback/sum pair is the byte-183 paradox row. It always reports
+  (`GTA4L-EMMC H12 REPORT`) and stops with 0/10/11/12/13/14/15; it issues
+  no value 5, no CMD19/CMD14, no CMD18/CMD25 and no user-data write. Core
+  148/90 unchanged; probe 128/69 (was 116/64); the `report-width-h12`
+  fixture is the tenth width materialization. The device run needs a fresh
+  explicit BOOT-only approval naming the byte-183 = 4 write, its re-read
+  and its revert. F3 remains unproven.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

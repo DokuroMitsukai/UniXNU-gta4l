@@ -135,6 +135,7 @@ static unsigned long sdhci_accesses;
 static unsigned long sdhci_writes;
 static unsigned long gcc_accesses;
 static unsigned int sdhci_read_count[SIM_WINDOW];
+static unsigned int h12_rung_write_count[SIM_WINDOW];
 static unsigned int gcc_read_count[SIM_WINDOW];
 static uint64_t counter_value;
 static uint16_t normal_int;
@@ -201,9 +202,13 @@ static int cmd6_ignore_revert;
  * byte 183 = 2 while its byte sum stays at the 1-bit-at-HS value. */
 static int cmd19_8bit_timeout;
 static int cmd6_width_ddr;
+static unsigned int cmd6_value4_count;
 static int cmd6_fail_bus_width8;
+static int cmd6_fail_bus_width_ddr;
 static int w8_paradox;
 static int w8_paradox_pending;
+static int wddr_paradox;
+static int wddr_paradox_pending;
 static uint8_t bus_test_written[GTA4L_EMMC_BUS_TEST_8_BYTES];
 static unsigned int bus_test_written_count;
 static uint16_t bus_test_width;
@@ -211,7 +216,7 @@ static uint32_t width_corrupt_lba = 0xFFFFFFFFu;
 static uint8_t width_corrupt_code;
 static uint8_t sim_host_width_code(void);
 /* B1 readback-cause modeling. ext_csd_zero_width makes the CMD8 read at that
- * card width return an all-zero buffer without an error, which models a
+ * host width code return an all-zero buffer without an error, which models a
  * data-path readback that never filled the buffer. host_width_ignore drops the
  * SDHCI width bits from the HOST_CONTROL write and makes the CMD8 read at a
  * switched width fail with a data CRC, which models a host width that did not
@@ -899,6 +904,23 @@ sim_command(uint16_t command)
 		cmd6_argument = last_argument;
 		value = (last_argument >> 8) & 0xFFu;
 		ext_index = (last_argument >> 16) & 0xFFu;
+		if ((ext_index == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF) &&
+		    (value == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR)) {
+			/* Count every value-4 attempt, including an R1 refusal,
+			 * so the H12 scope check can bind the DDR request. */
+			cmd6_value4_count++;
+			cmd6_width_ddr = 1;
+		}
+		if ((cmd6_fail_bus_width_ddr != 0) &&
+		    (ext_index == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF) &&
+		    (value == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR)) {
+			/* The H12 DDR value is refused with an R1 error before
+			 * any commit or host-width change. */
+			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+			    0x0000A000u);
+			normal_int |= GTA4L_EMMC_INT_CC;
+			return;
+		}
 		if ((cmd6_fail_bus_width8 != 0) &&
 		    (ext_index == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF) &&
 		    (value == 2u)) {
@@ -945,6 +967,11 @@ sim_command(uint16_t command)
 				    (uint8_t)value;
 				if ((w8_paradox != 0) && (value == 2u)) {
 					w8_paradox_pending = 1;
+				}
+				if ((wddr_paradox != 0) &&
+				    (value ==
+				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR)) {
+					wddr_paradox_pending = 1;
 				}
 			}
 		}
@@ -1166,8 +1193,7 @@ sim_command(uint16_t command)
 				return;
 			}
 			if ((ext_csd_zero_width != 0u) &&
-			    (ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] ==
-			    ext_csd_zero_width)) {
+			    (sim_host_width_code() == ext_csd_zero_width)) {
 				memset(buffer_data, 0, sizeof(buffer_data));
 			} else {
 				sim_fill_buffer_words(ext_csd);
@@ -1183,6 +1209,20 @@ sim_command(uint16_t command)
 					buffer_data[
 					    GTA4L_EMMC_EXT_CSD_REV_OFF / 4u] -=
 					    2u << (8u *
+					    (GTA4L_EMMC_EXT_CSD_REV_OFF % 4u));
+				}
+				if ((wddr_paradox_pending != 0) &&
+				    (ext_csd[
+				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] ==
+				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR)) {
+					/* Keep byte 183 = 4 but drop the
+					 * sum by 4, so the readback word
+					 * and the re-read sum disagree
+					 * (the H12 DDR paradox row). */
+					wddr_paradox_pending = 0;
+					buffer_data[
+					    GTA4L_EMMC_EXT_CSD_REV_OFF / 4u] -=
+					    4u << (8u *
 					    (GTA4L_EMMC_EXT_CSD_REV_OFF % 4u));
 				}
 			}
@@ -1378,6 +1418,10 @@ gta4l_emmc_probe_test_write8(uint32_t space, uint32_t offset, uint8_t value)
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
 		sdhci_accesses++;
 		sdhci_writes++;
+		if ((offset < SIM_WINDOW) && (stage == 12) &&
+		    (cmd17_count >= 25u)) {
+			h12_rung_write_count[offset]++;
+		}
 		/* The software-reset bits are self-clearing. Model the
 		 * completion so later stages can be exercised. */
 		if (offset == GTA4L_EMMC_REG_SOFTWARE_RESET) {
@@ -1404,6 +1448,10 @@ gta4l_emmc_probe_test_write16(uint32_t space, uint32_t offset, uint16_t value)
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
 		sdhci_accesses++;
 		sdhci_writes++;
+		if ((offset < SIM_WINDOW) && (stage == 12) &&
+		    (cmd17_count >= 25u)) {
+			h12_rung_write_count[offset]++;
+		}
 		if (offset == GTA4L_EMMC_REG_BLOCK_SIZE) {
 			block_size = value;
 		}
@@ -1484,6 +1532,10 @@ gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset, uint32_t value)
 	if (space == GTA4L_EMMC_SPACE_SDHCI) {
 		sdhci_accesses++;
 		sdhci_writes++;
+		if ((offset < SIM_WINDOW) && (stage == 12) &&
+		    (cmd17_count >= 25u)) {
+			h12_rung_write_count[offset]++;
+		}
 		if (offset == GTA4L_EMMC_REG_ARGUMENT) {
 			last_argument = value;
 		}
@@ -2162,6 +2214,66 @@ static const uint8_t h11_suffix_no_q[] = {
 	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
 	GTA4L_EMMC_CMD8
 };
+/* Stage 12: the stage-A pass, then the H12 sequence - the pre-rung EXT_CSD
+ * read, the HS enter, the record-only byte-183 value-4 DDR attempt and its
+ * verification read, the width revert, the HS revert and one block-0
+ * recovery read. A failure is a prefix of this order. */
+static const uint8_t order_probe_h12[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17
+};
+#define ORDER_H12_BASE 33u
+static uint8_t h12_order_buffer[64];
+static const uint8_t h12_suffix_pre_read[] = {
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h12_suffix_hs_ignored[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h12_suffix_clock_busy[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h12_suffix_wddr_err[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h12_suffix_no_q[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
 /* The B2 failure paths deviate from the full order only after the switch
  * step. Each suffix below is spliced after the shared 33-command init plus
  * stage-A prefix. */
@@ -2274,6 +2386,20 @@ set_h11_order(const uint8_t *suffix, unsigned int count)
 		h11_order_buffer[ORDER_H11_BASE + index] = suffix[index];
 	}
 	set_expected_order(h11_order_buffer, ORDER_H11_BASE + count);
+}
+
+static void
+set_h12_order(const uint8_t *suffix, unsigned int count)
+{
+	unsigned int index;
+
+	for (index = 0; index < ORDER_H12_BASE; index++) {
+		h12_order_buffer[index] = order_probe_h12[index];
+	}
+	for (index = 0; index < count; index++) {
+		h12_order_buffer[ORDER_H12_BASE + index] = suffix[index];
+	}
+	set_expected_order(h12_order_buffer, ORDER_H12_BASE + count);
 }
 
 int
@@ -3103,6 +3229,95 @@ main(int argc, char **argv)
 		    "probe-h11-honored-pass") == 0) {
 			cmd6_ignore_width4 = 1;
 		}
+	} else if ((strcmp(scenario, "probe-h12-refused-pass") == 0) ||
+	    (strcmp(scenario, "probe-h12-honored") == 0) ||
+	    (strcmp(scenario, "probe-h12-hs-ignored") == 0) ||
+	    (strcmp(scenario, "probe-h12-clock-busy") == 0) ||
+	    (strcmp(scenario, "probe-h12-wddr-err") == 0) ||
+	    (strcmp(scenario, "probe-h12-wddr-empty") == 0) ||
+	    (strcmp(scenario, "probe-h12-wddr-paradox") == 0) ||
+	    (strcmp(scenario, "probe-h12-width-revert-fail") == 0) ||
+	    (strcmp(scenario, "probe-h12-hs-revert-fail") == 0) ||
+	    (strcmp(scenario, "probe-h12-q-fail") == 0) ||
+	    (strcmp(scenario, "probe-h12-pre-read-fail") == 0)) {
+		/* Stage 12: record-only DDR-width attempt. The stage-A pass
+		 * runs at 400 kHz/1-bit, then the HS enter, the byte-183
+		 * value-4 attempt and its verification read, the width and
+		 * HS reverts and the recovery read. One fault per failure
+		 * case; the non-prefix failure orders splice their own
+		 * suffix after the shared base. */
+		stage = 12;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		if (strcmp(scenario, "probe-h12-pre-read-fail") == 0) {
+			set_h12_order(h12_suffix_pre_read,
+			    (unsigned int)(sizeof(h12_suffix_pre_read) /
+			    sizeof(h12_suffix_pre_read[0])));
+		} else if (strcmp(scenario, "probe-h12-hs-ignored") == 0) {
+			set_h12_order(h12_suffix_hs_ignored,
+			    (unsigned int)(sizeof(h12_suffix_hs_ignored) /
+			    sizeof(h12_suffix_hs_ignored[0])));
+		} else if (strcmp(scenario, "probe-h12-clock-busy") == 0) {
+			set_h12_order(h12_suffix_clock_busy,
+			    (unsigned int)(sizeof(h12_suffix_clock_busy) /
+			    sizeof(h12_suffix_clock_busy[0])));
+		} else if (strcmp(scenario, "probe-h12-wddr-err") == 0) {
+			set_h12_order(h12_suffix_wddr_err,
+			    (unsigned int)(sizeof(h12_suffix_wddr_err) /
+			    sizeof(h12_suffix_wddr_err[0])));
+		} else if ((strcmp(scenario,
+		    "probe-h12-wddr-empty") == 0) ||
+		    (strcmp(scenario,
+		    "probe-h12-wddr-paradox") == 0) ||
+		    (strcmp(scenario,
+		    "probe-h12-width-revert-fail") == 0) ||
+		    (strcmp(scenario,
+		    "probe-h12-hs-revert-fail") == 0)) {
+			set_h12_order(h12_suffix_no_q,
+			    (unsigned int)(sizeof(h12_suffix_no_q) /
+			    sizeof(h12_suffix_no_q[0])));
+		} else {
+			set_expected_order(order_probe_h12,
+			    (unsigned int)(sizeof(order_probe_h12) /
+			    sizeof(order_probe_h12[0])));
+		}
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-h12-refused-pass") == 0) {
+			cmd6_ignore = 1;
+		} else if (strcmp(scenario,
+		    "probe-h12-hs-ignored") == 0) {
+			hs_timing_ignore_enter = 1;
+		} else if (strcmp(scenario,
+		    "probe-h12-clock-busy") == 0) {
+			rcg_stuck_after = 1u;
+		} else if (strcmp(scenario,
+		    "probe-h12-wddr-err") == 0) {
+			cmd6_fail_bus_width_ddr = 1;
+		} else if (strcmp(scenario,
+		    "probe-h12-wddr-empty") == 0) {
+			ext_csd_zero_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-h12-wddr-paradox") == 0) {
+			wddr_paradox = 1;
+		} else if (strcmp(scenario,
+		    "probe-h12-width-revert-fail") == 0) {
+			cmd6_ignore_revert = 1;
+		} else if (strcmp(scenario,
+		    "probe-h12-hs-revert-fail") == 0) {
+			hs_timing_ignore_exit = 1;
+		} else if (strcmp(scenario,
+		    "probe-h12-q-fail") == 0) {
+			cmd17_fail_on = 26u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-h12-pre-read-fail") == 0) {
+			cmd8_fail_on = 2u;
+			cmd8_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		}
 	} else if ((strcmp(scenario, "probe-dto-fired") == 0) ||
 	    (strcmp(scenario, "probe-dto-silent") == 0) ||
 	    (strcmp(scenario, "probe-dto-q-fail") == 0) ||
@@ -3256,6 +3471,18 @@ main(int argc, char **argv)
 		 * and the report formatter samples the live header and pad
 		 * registers. */
 		width_form = 9;
+		sim_store(sdhci, GTA4L_EMMC_REG_HOST_CONTROL, 1u, 0xFFu);
+		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
+		    0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_STATUS, 4u,
+		    0xFFFFFFFFu);
+	} else if (strcmp(scenario, "report-width-h12") == 0) {
+		/* Synthetic H12 field-wise bound: the fixture fills the
+		 * record-only DDR attempt and every switch/revert field, and
+		 * the report formatter samples the live header and pad
+		 * registers. */
+		width_form = 10;
 		sim_store(sdhci, GTA4L_EMMC_REG_HOST_CONTROL, 1u, 0xFFu);
 		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
 		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
@@ -5430,6 +5657,276 @@ main(int argc, char **argv)
 		    "the failed H11 recovery read lost its core code");
 		check(cmd17_count == 51u,
 		    "the failed H11 recovery read did not stop at Q");
+	} else if (strcmp(scenario, "probe-h12-refused-pass") == 0) {
+		check(panicked == 1, "the H12 pass did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=0 stop=0") != NULL,
+		    "the H12 pass does not name its stop");
+		check(strstr(panic_message,
+		    "H12 R clk=0007 hs=00 bw=00 hc=00 es=0000018e") != NULL,
+		    "the H12 R line lost the 400 kHz identity");
+		check(strstr(panic_message,
+		    "H12 S rc=0 sw=0 c6=00000900 hs=01 clk=0007 "
+		    "rcg=0000020b sum=0000018f") != NULL,
+		    "the H12 S line lost the HS switch or the 50 MHz RCG");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=-19 sw=0 swrc=-19 c6=00000900 "
+		    "es=0000018f") != NULL,
+		    "the H12 clean refusal did not record the ignored "
+		    "DDR value");
+		check(strstr(panic_message,
+		    "H12 VR rc=0 sw=0 swrc=0 c6=00000900 hb=00 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H12 clean refusal did not revert the width");
+		check(strstr(panic_message,
+		    "H12 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017 sum=0000018e") != NULL,
+		    "the H12 clean refusal did not revert HS");
+		check(strstr(panic_message,
+		    "H12 Q rc=0 qb0=5c510100") != NULL,
+		    "the H12 recovery read did not match block 0");
+		check(strstr(panic_message,
+		    "H12 PAD pre=00009fe4/60000000/00000000 "
+		    "post=00009fe4/60000000/00000000") != NULL,
+		    "the H12 pad samples changed");
+		check(strstr(panic_message,
+		    "H12 FAIL fail=0/0/0/00000000/0000/0000/00000000/0")
+		    != NULL,
+		    "the H12 pass invented a failure record");
+		check(cmd6_count == 4u,
+		    "the H12 pass did not issue the DDR attempt and both "
+		    "reverts");
+		check(cmd17_count == 26u,
+		    "the H12 pass did not run the stage-A reads and Q");
+		check(cmd6_value4_count == 1u,
+		    "the H12 pass did not issue exactly one byte-183 "
+		    "value-4 attempt");
+	} else if (strcmp(scenario, "probe-h12-honored") == 0) {
+		check(panicked == 1, "the honored H12 pass did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=0 stop=13") != NULL,
+		    "the honored H12 pass does not name its stop");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=0 sw=4 swrc=0 c6=00000900 "
+		    "es=00000193") != NULL,
+		    "the honored H12 pass lost the DDR readback");
+		check(strstr(panic_message,
+		    "H12 VR rc=0 sw=0 swrc=0 c6=00000900 hb=02 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the honored H12 pass did not revert the width");
+		check(strstr(panic_message,
+		    "H12 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017 sum=0000018e") != NULL,
+		    "the honored H12 pass did not revert HS");
+		check(strstr(panic_message,
+		    "H12 Q rc=0 qb0=5c510100") != NULL,
+		    "the honored H12 recovery read did not match block 0");
+		check(cmd6_count == 4u,
+		    "the honored H12 pass did not issue the DDR attempt and "
+		    "both reverts");
+		check(cmd17_count == 26u,
+		    "the honored H12 pass did not run the stage-A reads "
+		    "and Q");
+		check(cmd6_value4_count == 1u,
+		    "the honored H12 pass did not issue exactly one byte-183 "
+		    "value-4 attempt");
+	} else if (strcmp(scenario, "probe-h12-hs-ignored") == 0) {
+		check(panicked == 1, "the ignored H12 HS switch did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-22 stop=10") != NULL,
+		    "the ignored H12 HS switch does not keep stop 10");
+		check(strstr(panic_message,
+		    "H12 S rc=-22 sw=-22 c6=00000900 hs=00 clk=0000 "
+		    "rcg=00000000 sum=0000018e") != NULL,
+		    "the ignored H12 HS switch did not record the readback "
+		    "mismatch");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=0 sw=0 swrc=0 c6=00000000") != NULL,
+		    "the ignored H12 HS switch continued to the DDR step");
+		check(strstr(panic_message,
+		    "H12 VR rc=0 sw=0 swrc=0 c6=00000000") != NULL,
+		    "the ignored H12 HS switch ran the width revert");
+		check(strstr(panic_message,
+		    "H12 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017 sum=0000018e") != NULL,
+		    "the ignored H12 HS switch did not revert cleanly");
+		check(cmd17_count == 25u,
+		    "the ignored H12 HS switch ran Q");
+		check(cmd6_count == 2u,
+		    "the ignored H12 HS switch did not issue both byte-185 "
+		    "commands");
+		check(cmd6_value4_count == 0u,
+		    "the ignored H12 HS switch issued a byte-183 DDR "
+		    "attempt");
+	} else if (strcmp(scenario, "probe-h12-clock-busy") == 0) {
+		check(panicked == 1, "the busy H12 RCG did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-5 stop=11") != NULL,
+		    "the busy H12 RCG does not keep stop 11");
+		check(strstr(panic_message,
+		    "H12 S rc=-5 sw=0 c6=00000900 hs=01 clk=0000") != NULL,
+		    "the busy H12 RCG lost the completed switch or the "
+		    "failed clock");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=0 sw=0 swrc=0 c6=00000000") != NULL,
+		    "the busy H12 RCG ran the DDR work");
+		check(strstr(panic_message,
+		    "H12 X rc=-5 sw=0 c6=00000000 hs=00") != NULL,
+		    "the busy H12 RCG revert failure was not recorded");
+		check(cmd17_count == 25u,
+		    "the busy H12 RCG ran Q");
+		check(cmd6_count == 1u,
+		    "the busy H12 RCG issued a width command");
+		check(cmd6_value4_count == 0u,
+		    "the busy H12 RCG issued a byte-183 DDR attempt");
+		check((sim_load(sdhci, GTA4L_EMMC_REG_CLOCK_CONTROL, 2u) &
+		    GTA4L_EMMC_CLOCK_CARD_EN) == 0u,
+		    "the busy H12 RCG left the card clock enabled");
+	} else if (strcmp(scenario, "probe-h12-wddr-err") == 0) {
+		check(panicked == 1, "the refused H12 DDR value did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-15 stop=12") != NULL,
+		    "the refused H12 DDR value does not keep stop 12");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=-15 sw=0 swrc=-15 c6=0000a000 "
+		    "es=00000000") != NULL,
+		    "the refused H12 DDR value did not record the R1 "
+		    "refusal");
+		check(strstr(panic_message,
+		    "H12 VR rc=0 sw=0 swrc=0 c6=00000900 hb=00 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the refused H12 DDR value did not revert the width");
+		check(strstr(panic_message,
+		    "H12 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017 sum=0000018e") != NULL,
+		    "the refused H12 DDR value did not revert HS");
+		check(cmd17_count == 25u,
+		    "the refused H12 DDR value ran Q");
+		check(cmd6_count == 4u,
+		    "the refused H12 DDR value did not issue the attempt "
+		    "and both reverts");
+		check(cmd6_value4_count == 1u,
+		    "the refused H12 DDR value did not issue exactly one "
+		    "byte-183 value-4 attempt");
+	} else if (strcmp(scenario, "probe-h12-wddr-empty") == 0) {
+		check(panicked == 1, "the empty H12 DDR readback did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-19 stop=12") != NULL,
+		    "the empty H12 DDR readback does not keep stop 12");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=-19 sw=0 swrc=-19 c6=00000900 "
+		    "es=00000000") != NULL,
+		    "the empty H12 DDR readback did not record the empty "
+		    "verification read");
+		check(strstr(panic_message,
+		    "H12 VR rc=0 sw=0 swrc=0 c6=00000900 hb=00 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the empty H12 DDR readback did not revert the width");
+		check(cmd17_count == 25u,
+		    "the empty H12 DDR readback ran Q");
+		check(cmd6_count == 4u,
+		    "the empty H12 DDR readback did not issue the attempt "
+		    "and both reverts");
+		check(cmd6_value4_count == 1u,
+		    "the empty H12 DDR readback did not issue exactly one "
+		    "byte-183 value-4 attempt");
+	} else if (strcmp(scenario, "probe-h12-wddr-paradox") == 0) {
+		check(panicked == 1, "the H12 DDR paradox did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-19 stop=12") != NULL,
+		    "the H12 DDR paradox does not keep stop 12");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=0 sw=4 swrc=0 c6=00000900 "
+		    "es=0000018f") != NULL,
+		    "the H12 DDR paradox did not record the disagreeing "
+		    "readback and re-read");
+		check(strstr(panic_message,
+		    "H12 VR rc=0 sw=0 swrc=0 c6=00000900 hb=02 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H12 DDR paradox did not revert the width");
+		check(cmd17_count == 25u,
+		    "the H12 DDR paradox ran Q");
+		check(cmd6_count == 4u,
+		    "the H12 DDR paradox did not issue the attempt and both "
+		    "reverts");
+	} else if (strcmp(scenario, "probe-h12-width-revert-fail") == 0) {
+		check(panicked == 1, "the H12 width-revert failure did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-19 stop=14") != NULL,
+		    "the H12 width-revert failure does not keep stop 14");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=0 sw=4 swrc=0 c6=00000900 "
+		    "es=00000193") != NULL,
+		    "the H12 width-revert failure lost the honored DDR "
+		    "readback");
+		check(strstr(panic_message,
+		    "H12 VR rc=-19 sw=4 swrc=-19 c6=00000900 hb=02 ha=00 "
+		    "es=00000193") != NULL,
+		    "the H12 width-revert failure did not record the "
+		    "byte-183 mismatch");
+		check(strstr(panic_message,
+		    "H12 X rc=0 sw=0 c6=00000900 hs=00") != NULL,
+		    "the H12 width-revert failure did not revert HS");
+		check(sim_host_width_code() ==
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4,
+		    "the H12 width-revert failure did not leave the host "
+		    "width at the failed value");
+		check(cmd17_count == 25u,
+		    "the H12 width-revert failure ran Q");
+	} else if (strcmp(scenario, "probe-h12-hs-revert-fail") == 0) {
+		check(panicked == 1, "the H12 HS-revert failure did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-22 stop=15") != NULL,
+		    "the H12 HS-revert failure does not keep stop 15");
+		check(strstr(panic_message,
+		    "H12 VR rc=0 sw=0 swrc=0 c6=00000900 hb=02 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H12 HS-revert failure lost the clean width revert");
+		check(strstr(panic_message,
+		    "H12 X rc=-22 sw=-22 c6=00000900 hs=01 clk=0007 "
+		    "rcg=00002017 sum=0000018f") != NULL,
+		    "the H12 HS-revert failure did not record the byte-185 "
+		    "mismatch");
+		check(cmd17_count == 25u,
+		    "the H12 HS-revert failure ran Q");
+	} else if (strcmp(scenario, "probe-h12-q-fail") == 0) {
+		check(panicked == 1, "the failed H12 recovery read did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-12 stop=15") != NULL,
+		    "the failed H12 recovery read does not keep stop 15");
+		check(strstr(panic_message,
+		    "H12 Q rc=-12 qb0=00000000") != NULL,
+		    "the failed H12 recovery read lost its core code");
+		check(cmd17_count == 26u,
+		    "the failed H12 recovery read did not stop at Q");
+	} else if (strcmp(scenario, "probe-h12-pre-read-fail") == 0) {
+		check(panicked == 1, "the failed H12 pre-read did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-12 stop=10") != NULL,
+		    "the failed H12 pre-read does not keep stop 10");
+		check(strstr(panic_message,
+		    "H12 R clk=0007 hs=00 bw=00 hc=00 es=00000000") != NULL,
+		    "the failed H12 pre-read lost the 400 kHz identity");
+		check(strstr(panic_message,
+		    "H12 S rc=-12 sw=0 c6=00000000 hs=00") != NULL,
+		    "the failed H12 pre-read still issued a CMD6");
+		check(strstr(panic_message,
+		    "H12 WDDR rc=0 sw=0 swrc=0 c6=00000000") != NULL,
+		    "the failed H12 pre-read continued to the DDR step");
+		check(cmd6_count == 0u,
+		    "the failed H12 pre-read issued a CMD6");
+		check(cmd17_count == 25u,
+		    "the failed H12 pre-read ran Q");
+		check(cmd6_value4_count == 0u,
+		    "the failed H12 pre-read issued a byte-183 DDR "
+		    "attempt");
 	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
 		check(panicked == 1, "the fired DTO audit did not report");
 		check(strstr(panic_message,
@@ -6017,6 +6514,55 @@ main(int argc, char **argv)
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width H10 report does not fit the "
 		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-h12") == 0) {
+		check(panicked == 1,
+		    "the synthetic width H12 report did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 REPORT: rc=-18 stop=13 mci=ffffffff "
+		    "rca=1 cap=4294967295 rev=255 hci=ff step=24 log=99999 "
+		    "bw=0f") != NULL,
+		    "the synthetic width H12 report lost the widest header");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 R clk=ffff hs=ff bw=ff hc=ff "
+		    "es=ffffffff") != NULL,
+		    "the synthetic width H12 report lost the 400 kHz "
+		    "identity line");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 S rc=-22 sw=-22 c6=ffffffff hs=ff "
+		    "clk=ffff rcg=ffffffff sum=ffffffff") != NULL,
+		    "the synthetic width H12 report lost the widest HS "
+		    "switch fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 WDDR rc=-19 sw=255 swrc=-19 c6=ffffffff "
+		    "es=ffffffff") != NULL,
+		    "the synthetic width H12 report lost the widest DDR "
+		    "switch fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 VR rc=-19 sw=255 swrc=-19 c6=ffffffff "
+		    "hb=ff ha=ff es=ffffffff") != NULL,
+		    "the synthetic width H12 report lost the widest width "
+		    "revert fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 X rc=-22 sw=-22 c6=ffffffff hs=ff "
+		    "clk=ffff rcg=ffffffff sum=ffffffff") != NULL,
+		    "the synthetic width H12 report lost the widest HS "
+		    "revert fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 Q rc=-12 qb0=ffffffff") != NULL,
+		    "the synthetic width H12 report lost the recovery read");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 PAD pre=ffffffff/ffffffff/ffffffff "
+		    "post=ffffffff/ffffffff/ffffffff") != NULL,
+		    "the synthetic width H12 report lost the before/after "
+		    "pad/DLL state");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H12 FAIL fail=1/4294967295/4294967295/"
+		    "ffffffff/ffff/ffff/ffffffff/24") != NULL,
+		    "the synthetic width H12 report lost the widest failure "
+		    "record");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width H12 report does not fit the "
+		    "2048-byte panic buffer including the NUL");
 	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
 	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
 	    (strcmp(scenario, "cmd7-busy-error") == 0) ||
@@ -6402,7 +6948,8 @@ main(int argc, char **argv)
 	    (strncmp(scenario, "probe-dto-", 10u) == 0) ||
 	    (strncmp(scenario, "probe-b2-", 9u) == 0) ||
 	    (strncmp(scenario, "probe-h9-", 9u) == 0) ||
-	    (strncmp(scenario, "probe-h11-", 10u) == 0)) {
+	    (strncmp(scenario, "probe-h11-", 10u) == 0) ||
+	    (strncmp(scenario, "probe-h12-", 10u) == 0)) {
 		check(bad_command_format == 0,
 		    "a B1C command used the wrong flags");
 		check(bad_command_order == 0,
@@ -6410,9 +6957,12 @@ main(int argc, char **argv)
 		check(bad_command_argument == 0,
 		    "the B1C content pass read the wrong LBA list");
 	}
-	if (strncmp(scenario, "probe-h11-", 10u) == 0) {
+	if ((strncmp(scenario, "probe-", 6u) == 0) &&
+	    (strncmp(scenario, "probe-h12-", 10u) != 0)) {
 		check(cmd6_width_ddr == 0,
-		    "the H11 rung issued a byte-183 DDR variant");
+		    "a stage 1..11 rung issued a byte-183 DDR variant");
+	}
+	if (strncmp(scenario, "probe-h11-", 10u) == 0) {
 		if ((strcmp(scenario, "probe-h11-width-revert-fail") != 0) &&
 		    (strcmp(scenario, "probe-h11-bustest-timeout") != 0) &&
 		    (strcmp(scenario, "probe-h11-bustest-mismatch") != 0)) {
@@ -6420,6 +6970,25 @@ main(int argc, char **argv)
 			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1,
 			    "the H11 run did not restore the 1-bit host "
 			    "width");
+		}
+	}
+	if (strncmp(scenario, "probe-h12-", 10u) == 0) {
+		check(h12_rung_write_count[GTA4L_EMMC_REG_CORE_DDR_CONFIG] ==
+		    0u,
+		    "the H12 rung wrote CORE_DDR_CONFIG");
+		check(h12_rung_write_count[GTA4L_EMMC_REG_HOST_CONTROL2] ==
+		    0u,
+		    "the H12 rung wrote HOST_CONTROL2");
+		if ((strcmp(scenario, "probe-h12-hs-ignored") == 0) ||
+		    (strcmp(scenario, "probe-h12-clock-busy") == 0) ||
+		    (strcmp(scenario, "probe-h12-pre-read-fail") == 0)) {
+			check(cmd6_value4_count == 0u,
+			    "the H12 early failure issued a byte-183 DDR "
+			    "attempt");
+		} else {
+			check(cmd6_value4_count == 1u,
+			    "the H12 rung did not issue exactly one "
+			    "byte-183 value-4 attempt");
 		}
 	}
 	if (strncmp(scenario, "probe-dto-", 10u) == 0) {

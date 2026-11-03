@@ -273,6 +273,9 @@
 #define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1     0u
 #define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4     1u
 #define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8     2u
+/* JEDEC BUS_WIDTH bit 2 selects DDR signalling; 4 is 4-bit DDR. The
+ * portable core only uses it for the record-only H12 attempt. */
+#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR 4u
 #define GTA4L_EMMC_SWITCH_ACCESS_WRITE     0x03000000u
 #define GTA4L_EMMC_SWITCH_CMD_SET_NORMAL   0x00000001u
 
@@ -628,6 +631,15 @@ struct gta4l_emmc_bus_result {
  * 4 or 8; 1 is the identification width used to unwind a failed ramp. The
  * caller's `initialized` flag must already be set. */
 int gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_result *result);
+
+/* Record-only 4-bit DDR BUS_WIDTH attempt (byte 183 = 4). The host applies
+ * the matching 4-bit SDR DAT width for the verification read, but the
+ * controller DDR configuration (CORE_DDR_CONFIG and the HOST_CONTROL2
+ * MCLK_SEL/HC_SELECT_IN fields) is left untouched. A refused value returns
+ * GTA4L_EMMC_ERR_BUS_WIDTH after restoring the previous host width. The
+ * caller's `initialized` flag must already be set. */
+int gta4l_emmc_set_bus_width_ddr(struct gta4l_emmc_host *host,
     struct gta4l_emmc_bus_result *result);
 
 /* CMD19/CMD14 bus-test round trip at the active width. `bits` may be 1, 4

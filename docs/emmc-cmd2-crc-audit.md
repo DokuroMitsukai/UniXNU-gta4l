@@ -2409,6 +2409,56 @@ independent and covers both nonzero SDR values tried — a whole-SDR-field
 refusal. F3 remains `[U]`; the open owner questions are the DDR
 bit-plane and the CMD19 write-phase wedge.
 
+### 2.29 Stage-H12 host batch: the record-only DDR attempt is simulator-tested (2026-11-03)
+
+The stage-12 rung (`gta4l-emmc-probe=12`, driver §5.3.26) is the H12
+record-only DDR attempt: the standard read-only identification once (no
+CMD3 retry), the unchanged stage-A content pass at 400 kHz/1-bit as the
+baseline, HS entry exactly as H10/H11, one CMD6 SET of EXT_CSD byte 183 to
+4 (the 4-bit DDR code; JEDEC bit 2 set over SDR value 1) with its CMD13
+TRAN wait, the matching 4-bit SDR `HOST_CONTROL` DAT width for the
+verification read, the byte-183 readback and a fresh EXT_CSD re-read with
+its byte sum, the width revert (byte 183 = 0 at HS), the HS revert (clock
+to 400 kHz first, then byte 185 = 0) and a block-0 recovery read. It always
+emits a `GTA4L-EMMC H12 REPORT` (R, S, WDDR, VR, X, Q lines plus the shared
+PAD and terminal FAIL record) and stops with 0/10/11/12/13/14/15; it issues
+no byte-183 value 5, no CMD19/CMD14, no CMD18/CMD25, no retry and no
+user-data write. The controller DDR configuration is never touched: the
+4-bit DDR code is a card-field probe only.
+
+The rung answers the last unmeasured byte-183 plane. H11 closed decision
+row 1: the card refuses SDR values 1 and 2 at 400 kHz and HS, so the whole
+SDR field is refused. The DDR values 4/5 were never issued. A clean
+refusal at value 4 (readback 0, the legacy tuple and an `es` sum that
+changed only by the byte-185 switch) closes the width-study conclusion: the
+field is refused in every plane tried. A readback of 4 (or an `es` sum that
+grew by exactly 4) is the honored row: the card discriminates the DDR bit,
+so the next step is an owner decision and controller DDR mode is out of
+this rung's scope. A readback that disagrees with its own re-read sum is
+the byte-183 paradox row, and any transport/R1 error or empty read is the
+verification-failure row.
+
+Host checks: the probe suite is 128 scenarios and 69 mutation controls
+(was 116/64), adding `probe-h12-refused-pass`, `probe-h12-honored`,
+`probe-h12-wddr-err`, `probe-h12-wddr-paradox`, `probe-h12-wddr-empty`,
+`probe-h12-hs-ignored`, `probe-h12-clock-busy`,
+`probe-h12-width-revert-fail`, `probe-h12-hs-revert-fail`,
+`probe-h12-q-fail` and `probe-h12-pre-read-fail` plus five mutation
+controls (a skipped WDDR step, a wrong stop code, a silent width revert, a
+skipped recovery read and a wrong DDR code that issues value 5). The
+existing `h11-width-ddr` core mutation now rejects any DDR value from
+stages 1..11. The core suite is unchanged at 148/90. The
+`report-width-h12` fixture is the tenth width materialization and bounds
+the H12 report inside 2048 bytes; the diagnostic wrapper and payload gate
+accept `emmc-probe-12`.
+
+No build, flash or boot has been performed; F3 remains `[U]`. The device
+run needs a fresh explicit BOOT-only approval that names the record-only
+byte-183 = 4 write, its CMD13 TRAN wait, its EXT_CSD re-read at the 4-bit
+SDR DAT width and its revert to 0; no controller DDR mode, no value-5
+variant, no CMD19/CMD14, no CMD18/CMD25, no user-data write and no
+HS200/HS400.
+
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 
 ### 3.1 Command sequence

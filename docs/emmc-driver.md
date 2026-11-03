@@ -60,7 +60,7 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
 | `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 148 scenarios and 90 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 116 scenarios and 64 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 128 scenarios and 69 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -2419,6 +2419,73 @@ performed. Evidence:
 `out/gta4l/ram-root-emmc-probe-h11-evidence/` (`flash-record.json`,
 `device-run-record.json`, `device-run-transcript.txt`,
 `postflash-hashes.txt`, `postboot-reread.txt`).
+
+### 5.3.26 Stage-H12 record-only DDR attempt (gta4l-emmc-probe=12, host batch 2026-11-03)
+
+The `gta4l-emmc-probe=12` stage runs the standard read-only identification
+sequence once (no retry hook), the unchanged stage-A content pass at
+400 kHz/1-bit as the baseline, then HS entry exactly as H10/H11 (byte 185 = 1,
+RCG `0x20B`, readbacks), one record-only CMD6 SET of EXT_CSD byte 183 to 4
+(the JEDEC 4-bit DDR code, bit 2 set over the SDR 4-bit value 1), its CMD13
+TRAN wait, the matching 4-bit SDR `HOST_CONTROL` DAT width for the
+verification read, the byte-183 readback and a fresh EXT_CSD re-read with its
+byte sum, the width revert (byte 183 = 0 at HS), the HS revert (clock to
+400 kHz first, then byte 185 = 0) and a block-0 recovery read. It always
+emits `GTA4L-EMMC H12 REPORT` and stops; there is no on-device retry and no
+fall-through. The controller DDR configuration (`CORE_DDR_CONFIG` and the
+`HOST_CONTROL2` MCLK_SEL/HC_SELECT_IN fields) is never touched, and no
+CMD19/CMD14, CMD18/CMD25 or user-data write is issued. The only card-state
+writes are bytes 185 and 183, and the only byte-183 values issued are the
+record-only 4 and its revert 0, so there is no 8-bit DDR value 5, HS200 or
+HS400 step.
+
+The stage reuses `gta4l_emmc_set_hs_timing()`, `gta4l_emmc_set_bus_width()`
+and the shared content/sum helpers, and adds
+`gta4l_emmc_set_bus_width_ddr()` in the portable core: a raw-value wrapper
+around the existing switch path that passes the 4-bit DDR code 4 while
+applying only the 4-bit SDR host DAT width for the verification read.
+`gta4l_emmc_set_bus_width()` keeps accepting only 1/4/8 bits, and the DDR
+helper is used only by stage 12. The stage parser accepts 1..12. The report
+carries a header (`rc`, `stop`, the identification fields, `hci`, `step`,
+`log`, `bw`), an `R` identity line, an `S` line (HS entry), a `WDDR` line
+(the record-only DDR attempt and its verification read), a `VR` line (width
+revert), an `X` line (HS revert), a `Q` line (recovery read), the shared
+`PAD` line and the terminal `FAIL` record.
+
+The outcome classes are decided from the WDDR tuple and the pre-rung sum:
+a clean refusal is `wddr_rc = -19` (`GTA4L_EMMC_ERR_BUS_WIDTH`), byte-183
+readback 0 and the re-read sum equal to the 1-bit-at-HS sum (the pre-rung sum
+plus the byte-185 change), and stops with 0; an honored row is `wddr_rc = 0`,
+byte-183 readback 4 and the re-read sum equal to the 1-bit-at-HS sum plus 4,
+and stops with 13 before any controller DDR work; any other shape (a
+transport/R1 error, an empty read or a readback that disagrees with its own
+sum) is the DDR-verification failure and stops with 12 after both reverts.
+
+Stop codes: 0 clean refusal; 10 pre-rung EXT_CSD read failure or HS switch
+failure; 11 HS clock failure; 12 DDR-verification failure; 13 honored; 14
+width-revert failure; 15 HS-revert failure, recovery-read failure or block-0
+content mismatch. A refused or honored row always runs both reverts and the
+recovery read; a stop-12 row reverts both before reporting.
+
+Host checks: the probe suite is 128 scenarios and 69 mutation controls
+(was 116/64), adding `probe-h12-refused-pass`, `probe-h12-honored`,
+`probe-h12-wddr-err`, `probe-h12-wddr-paradox`, `probe-h12-wddr-empty`,
+`probe-h12-hs-ignored`, `probe-h12-clock-busy`,
+`probe-h12-width-revert-fail`, `probe-h12-hs-revert-fail`,
+`probe-h12-q-fail` and `probe-h12-pre-read-fail`, plus five mutations (a
+skipped WDDR step, a wrong stop code, a silent width revert, a skipped
+recovery read and a wrong DDR code that issues value 5 instead of 4). The
+existing `h11-width-ddr` core scope control now rejects any byte-183 DDR
+value from stages 1..11, so the stage-12 raw-value helper is the only path
+that can issue value 4. The core suite is unchanged at 148/90. The
+`report-width-h12` fixture is the tenth width materialization, and the
+diagnostic wrapper and payload gate accept `emmc-probe-12`.
+
+No build, flash or boot has been performed. The device run needs a fresh
+explicit BOOT-only approval that names the record-only byte-183 = 4 write,
+its CMD13 TRAN wait, its EXT_CSD re-read at the 4-bit SDR DAT width and its
+revert to 0; no controller DDR mode, no value-5 variant, no CMD19/CMD14, no
+CMD18/CMD25, no user-data write and no HS200/HS400. F3 remains `[U]`.
 
 ## 6. Expected report
 
