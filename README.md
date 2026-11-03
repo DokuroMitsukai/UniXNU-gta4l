@@ -213,9 +213,17 @@ partition layout, payload policy and packaging.
   0/10/11/12/13/14/15/16/17; it issues no 8-bit step, no retry and no
   user-data write. Core 148/90 unchanged; probe 102/56 (was 91/51); the
   `report-width-h10` fixture is the eighth width materialization. The
-  device run needs a fresh explicit BOOT-only approval naming the
-  byte-185/byte-183/CMD19 combination and the 50 MHz ramp. F3 remains
-  unproven.
+  device run followed on 2026-11-03 (BOOT-only flash, p69 `25385fd7…` →
+  `38c74815…`, 15 boots without reflashing): one H10 verdict (boot 2) —
+  `rc=-19 stop=12` with the legacy width tuple at HS (`sw=0`,
+  `swrc=-19`, clean CMD6 R1, host width set and read back, byte-183
+  readback 0, EXT_CSD re-read equal to the 1-bit-at-HS sum) — so the card
+  ignores the 4-bit BUS_WIDTH write at HS exactly as at 400 kHz and the
+  timing-class model is excluded; the other 14 boots were pre-HS CMD3
+  completion-silent stops (including both cold boots), and the verdict
+  carries a single-sample caveat because the two-matching rule was not
+  met. F3 remains unproven. The flash and boot records are in
+  `out/gta4l/ram-root-emmc-probe-h10-evidence/`.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

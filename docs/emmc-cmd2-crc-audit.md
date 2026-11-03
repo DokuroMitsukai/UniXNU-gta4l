@@ -2323,10 +2323,24 @@ suite is unchanged at 148/90. The `report-width-h10` fixture is the eighth
 width materialization and bounds the H10 report inside 2048 bytes; the
 diagnostic wrapper and payload gate accept `emmc-probe-10`.
 
-No build, flash or boot has been performed; F3 remains `[U]`. The device
-run needs a fresh explicit BOOT-only approval that names the byte-185
-enter/clear, the byte-183 4-bit switch and its revert, the CMD19/CMD14
-4-byte pattern and the 50 MHz HS clock ramp.
+The device run followed in the same session. The stage-10 image was
+flashed BOOT only (p69 `25385fd7…` → `38c74815…`, post-batch re-read
+`38c74815…`) and booted 15 times without reflashing (12-boot batch plus
+an owner-approved 3-boot extension; two cold starts, boots 1 and 6).
+Boot 2 was the only H10 verdict: `rc=-19 stop=12` with the legacy width
+tuple at HS — clean CMD6 R1 (`c6=00000900`), host width applied and read
+back (`hb=00`→`ha=02`), byte-183 readback 0 (`sw=0`, `swrc=-19`), and
+the EXT_CSD re-read equal to the 1-bit-at-HS sum (`es=000009cc`) — plus
+clean V/X reverts and the zero-initialized not-run `B`/`T`/`Q` fields
+(`log=33` matching the committed failure path and the simulator
+fingerprint). The other fourteen boots were pre-HS CMD3
+completion-silent stops (`PROBE FAILED stage=10 rc=-7`, step 9),
+including both cold boots: facts only, re-run not retried. The
+timing-class model for the BUS_WIDTH refusal is therefore excluded; the
+verdict carries the single-sample caveat (`N=1`; the two-matching rule
+was not met and the 15-boot cap was reached). The CMD19-at-4-bit/HS
+question stays unmeasured because the designed stop precedes the bus
+test. F3 remains `[U]`.
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 

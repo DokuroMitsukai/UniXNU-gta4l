@@ -2255,10 +2255,60 @@ at 148/90. The `report-width-h10` fixture is the eighth width
 materialization, and the diagnostic wrapper and payload gate accept
 `emmc-probe-10`.
 
-No build, flash or boot has been performed. The device run needs a fresh
-explicit BOOT-only approval that names the byte-185 enter and clear, the
-byte-183 4-bit switch and its revert, the CMD19/CMD14 4-byte pattern and
-the 50 MHz HS clock ramp. F3 remains `[U]`.
+The device run followed in the same session; the as-run result is in
+§5.3.24.
+
+### 5.3.24 Stage-H10 hardware run: the width is refused at HS too (2026-11-03)
+
+The stage-10 image was built from the `912e257` host batch with the
+payload-gate fix (`076a548`) in the working tree (kernel `87be83e6…`,
+payload `b046acf5…` with a 7/7 contract, boot image `26bab7b2…` with an
+18/18 gate against the `ce4d76e8…` v5 baseline; the probe archive
+`906188e0…` matches the committed sources), flashed BOOT only (pre p69
+`25385fd7…`, post p69 `38c74815…`, image prefix `26bab7b2…`, unchanged
+tail `a28b4ea2…`, RECOVERY/EFS/sec_efs unchanged, pulled gates 18/18 and
+7/7) and booted fifteen times without reflashing: the 12-boot batch
+(boot 1 cold, boot 2 warm and the only clean identification, boots 3–5
+warm), a cold boot 6 after an accidental power-off, then boots 7–12 and
+the owner-approved extension boots 13–15. The post-batch p69 re-read
+matched `38c74815…`, binding every boot.
+
+Boot 2 was the only H10 verdict: `rc=-19 stop=12`. HS entry was clean
+(`S rc=0 sw=0 c6=00000900 hs=01 clk=0007 rcg=0000020b sum=000009cc`
+against the `R es=000009cb` baseline), then the 4-bit switch at HS
+returned the legacy tuple — clean CMD6 R1 (`c6=00000900`), the host width
+set and read back (`hb=00` → `ha=02`), the byte-183 readback still 0
+(`sw=0`, `swrc=-19`), and the EXT_CSD re-read equal to the 1-bit-at-HS
+sum (`es=000009cc`, baseline+1, not a 4-bit sum). The width revert V and
+the HS revert X were clean (1-bit at HS, then byte 185 = 0, legacy RCG
+`0x2017`, sum back to `0x9cb`); `B`/`T`/`Q` carry the zero-initialized
+not-run fields because the designed stop precedes them, and `log=33`
+(7 identification commands + 1 pre-rung read + 25 stage-A CMD17s)
+matches the committed failure path and the simulator's
+`probe-h10-width-ignored` fingerprint field-for-field.
+
+The other fourteen boots stopped pre-HS with the H8-class CMD3
+completion-silent stop (`PROBE FAILED stage=10 rc=-7`, `step=9`,
+`fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, the CMD2-tail response
+window `00000500,5836384d,42009005,f4661978`, and the full
+100,000-iteration ≈1.13–1.14 s poll window; the `c31` ticks differ per
+boot). They are facts only, not H10 verdicts: a completion-timeout boot
+is re-run, never retried (the H9 verdict). Both cold boots (1 and the
+accidental boot 6) flaked, so unlike the B2 batch's warm-only pairing the
+cold path is covered; this batch's flake ran 14/15 (vs 3/4 in H9), facts
+that do not measure a rate.
+
+Verdict: the §3.2.3 decision-table row "W fails with the legacy tuple" is
+taken — the card ignores the BUS_WIDTH write at HS exactly as at
+400 kHz, so the timing-class model for the legacy refusal is excluded.
+The byte-185 writes are honored in the same CMD6 shape (content `0x9cb`
+↔ `0x9cc`, readbacks 1/0), so the write mechanism works and the refusal
+is targeted to the byte-183 field. The verdict carries the single-sample
+caveat (`N=1`: the two-matching rule was not met and the 15-boot cap was
+reached; the verdict sample's fields match the committed fingerprint).
+The CMD19-at-4-bit/HS question stays unmeasured because the designed
+stop precedes the bus test. F3 stays `[U]`; no 8-bit step, user-data
+write, CMD18 or CMD25 was performed.
 
 ## 6. Expected report
 
