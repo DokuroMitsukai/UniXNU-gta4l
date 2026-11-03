@@ -224,6 +224,22 @@ partition layout, payload policy and packaging.
   carries a single-sample caveat because the two-matching rule was not
   met. F3 remains unproven. The flash and boot records are in
   `out/gta4l/ram-root-emmc-probe-h10-evidence/`.
+  The next rung is H11 (`gta4l-emmc-probe=11`), the width-value
+  continuation, implemented and simulator-tested: it replays the H10
+  4-bit switch at HS as a record-only sample, attempts the 8-bit
+  BUS_WIDTH value (byte 183 = 2, still SDR) at HS, and only when that
+  switch is honored runs one CMD19/CMD14 round trip and the content pass
+  at 8-bit/HS before reverting the width and the timing and reading
+  block 0. A clean-shape W4 mismatch re-opens the H10 verdict as
+  per-boot random; a W8 readback that disagrees with its own re-read sum
+  is the byte-183 paradox row. It always reports (`GTA4L-EMMC H11
+  REPORT`) and stops with 0/10/11/12/13/14/15/16/17/18; it issues no
+  DDR variant, no CMD18/CMD25, no retry and no user-data write. Core
+  148/90 unchanged; probe 116/64 (was 102/56); the `report-width-h11`
+  fixture is the ninth width materialization. The device run needs a
+  fresh explicit BOOT-only approval naming the byte-183 = 1 and = 2
+  writes, the 8-bit DAT application, the CMD19/CMD14 round trip and the
+  50 MHz ramp. F3 remains unproven.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

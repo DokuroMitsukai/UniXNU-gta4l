@@ -153,8 +153,9 @@ static uint32_t buffer_data[GTA4L_EMMC_BLOCK_BYTES / 4u];
 static uint32_t buffer_index;
 static unsigned char ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
 /* Stage-B1 bus-width modeling. cmd6_ignore leaves EXT_CSD[183] unchanged so
- * the readback disagrees with the requested code; cmd6_ignore_width8 does that
- * only for the 8-bit write. bus_test_bad returns the written pattern instead of
+ * the readback disagrees with the requested code; cmd6_ignore_width8 and
+ * cmd6_ignore_width4 do that only for the named SDR value. bus_test_bad
+ * returns the written pattern instead of
  * its complement at bus_test_bad_width (0 = every width). width_corrupt_lba
  * changes one CMD17 payload at width_corrupt_code so the per-width content
  * comparison differs. */
@@ -162,6 +163,7 @@ static unsigned int cmd6_count;
 static uint32_t cmd6_argument;
 static int cmd6_ignore;
 static int cmd6_ignore_width8;
+static int cmd6_ignore_width4;
 static uint32_t cmd6_status = 0x00000900u;
 static int cmd6_late_commit;
 static uint32_t cmd6_late_value;
@@ -191,6 +193,17 @@ static int cmd19_1bit_timeout;
  * byte 183 at 1 for the value-0 revert so the width unwind fails. */
 static int cmd19_4bit_timeout;
 static int cmd6_ignore_revert;
+/* Stage-H11 width-value continuation modeling. cmd19_8bit_timeout is the
+ * same write-phase stall with the host driving 8-bit. cmd6_width_ddr flags
+ * any CMD6 BUS_WIDTH value above the SDR 8-bit code so a scope control can
+ * reject a DDR variant. cmd6_fail_bus_width8 makes the value-2 write return
+ * an R1 error, and w8_paradox makes the value-2 verification re-read keep
+ * byte 183 = 2 while its byte sum stays at the 1-bit-at-HS value. */
+static int cmd19_8bit_timeout;
+static int cmd6_width_ddr;
+static int cmd6_fail_bus_width8;
+static int w8_paradox;
+static int w8_paradox_pending;
 static uint8_t bus_test_written[GTA4L_EMMC_BUS_TEST_8_BYTES];
 static unsigned int bus_test_written_count;
 static uint16_t bus_test_width;
@@ -886,8 +899,25 @@ sim_command(uint16_t command)
 		cmd6_argument = last_argument;
 		value = (last_argument >> 8) & 0xFFu;
 		ext_index = (last_argument >> 16) & 0xFFu;
+		if ((cmd6_fail_bus_width8 != 0) &&
+		    (ext_index == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF) &&
+		    (value == 2u)) {
+			/* The H11 8-bit attempt is refused with an R1 error
+			 * before any commit or host-width change. */
+			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+			    0x0000A000u);
+			normal_int |= GTA4L_EMMC_INT_CC;
+			return;
+		}
 		if ((cmd6_status & GTA4L_EMMC_R1_ERROR_MASK) == 0u) {
 			cmd8_after_cmd6 = 0;
+			if ((ext_index ==
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF) &&
+			    (value > GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8)) {
+				/* DDR (or any non-SDR) BUS_WIDTH value: the
+				 * H11 rung must never issue one. */
+				cmd6_width_ddr = 1;
+			}
 			if (ext_index ==
 			    GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF) {
 				if (((value == 1u) &&
@@ -907,10 +937,15 @@ sim_command(uint16_t command)
 			} else if ((cmd6_ignore == 0) &&
 			    ((cmd6_ignore_width8 == 0) ||
 			    (value != 2u)) &&
+			    ((cmd6_ignore_width4 == 0) ||
+			    (value != 1u)) &&
 			    ((cmd6_ignore_revert == 0) ||
 			    (value != 0u))) {
 				ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] =
 				    (uint8_t)value;
+				if ((w8_paradox != 0) && (value == 2u)) {
+					w8_paradox_pending = 1;
+				}
 			}
 		}
 		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, cmd6_status);
@@ -950,6 +985,19 @@ sim_command(uint16_t command)
 			/* Same terminal class as the 1-bit wedge, now with the
 			 * host driving 4-bit: the write phase ACKs but never
 			 * completes. */
+			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+			    0x00000900u);
+			sim_store(sdhci, GTA4L_EMMC_REG_PRESENT_STATE, 4u,
+			    0x03f801f6u);
+			normal_int |= GTA4L_EMMC_INT_CC |
+			    GTA4L_EMMC_INT_BWR;
+			return;
+		}
+		if ((cmd19_8bit_timeout != 0) &&
+		    (sim_host_width_code() ==
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8)) {
+			/* The H11 8-bit/HS form of the same write-phase
+			 * wedge. */
 			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
 			    0x00000900u);
 			sim_store(sdhci, GTA4L_EMMC_REG_PRESENT_STATE, 4u,
@@ -1123,6 +1171,20 @@ sim_command(uint16_t command)
 				memset(buffer_data, 0, sizeof(buffer_data));
 			} else {
 				sim_fill_buffer_words(ext_csd);
+				if ((w8_paradox_pending != 0) &&
+				    (ext_csd[
+				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] ==
+				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8)) {
+					/* Keep byte 183 = 2 but drop the
+					 * sum by 2, so the readback word
+					 * and the re-read sum disagree
+					 * (the H11 W8 paradox row). */
+					w8_paradox_pending = 0;
+					buffer_data[
+					    GTA4L_EMMC_EXT_CSD_REV_OFF / 4u] -=
+					    2u << (8u *
+					    (GTA4L_EMMC_EXT_CSD_REV_OFF % 4u));
+				}
 			}
 		} else {
 			cmd17_count++;
@@ -1444,7 +1506,10 @@ gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset, uint32_t value)
 					    (cmd6_count == 0u)) ||
 					    ((cmd19_4bit_timeout != 0) &&
 					    (sim_host_width_code() ==
-					    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4))) {
+					    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4)) ||
+					    ((cmd19_8bit_timeout != 0) &&
+					    (sim_host_width_code() ==
+					    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8))) {
 						/* Write-phase timeout: BufferWriteReady
 						 * stays latched and TC never
 						 * follows. */
@@ -1976,6 +2041,127 @@ static const uint8_t h10_suffix_content_read[] = {
 	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
 	GTA4L_EMMC_CMD8
 };
+/* Stage 11: the stage-A pass, then the H11 sequence - the pre-rung EXT_CSD
+ * read, the HS enter, the record-only 4-bit replay, the 8-bit attempt, one
+ * CMD19/CMD14 round trip, the 25-value content pass at 8-bit/HS, the width
+ * revert, the HS revert and one block-0 recovery read. A failure is a prefix
+ * of this order. */
+static const uint8_t order_probe_h11[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17
+};
+#define ORDER_H11_BASE 33u
+static uint8_t h11_order_buffer[180];
+static const uint8_t h11_suffix_clock_busy[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h11_suffix_w4_anomaly[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h11_suffix_w8_close[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h11_suffix_w8_err[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h11_suffix_bustest_timeout[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19
+};
+static const uint8_t h11_suffix_bustest_mismatch[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14
+};
+static const uint8_t h11_suffix_content_read[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
+static const uint8_t h11_suffix_no_q[] = {
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
+	GTA4L_EMMC_CMD8
+};
 /* The B2 failure paths deviate from the full order only after the switch
  * step. Each suffix below is spliced after the shared 33-command init plus
  * stage-A prefix. */
@@ -2074,6 +2260,20 @@ set_h10_order(const uint8_t *suffix, unsigned int count)
 		h10_order_buffer[ORDER_H10_BASE + index] = suffix[index];
 	}
 	set_expected_order(h10_order_buffer, ORDER_H10_BASE + count);
+}
+
+static void
+set_h11_order(const uint8_t *suffix, unsigned int count)
+{
+	unsigned int index;
+
+	for (index = 0; index < ORDER_H11_BASE; index++) {
+		h11_order_buffer[index] = order_probe_h11[index];
+	}
+	for (index = 0; index < count; index++) {
+		h11_order_buffer[ORDER_H11_BASE + index] = suffix[index];
+	}
+	set_expected_order(h11_order_buffer, ORDER_H11_BASE + count);
 }
 
 int
@@ -2774,6 +2974,135 @@ main(int argc, char **argv)
 			cmd17_fail_on = 51u;
 			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
 		}
+	} else if ((strcmp(scenario, "probe-h11-honored-pass") == 0) ||
+	    (strcmp(scenario, "probe-h11-w4-replay") == 0) ||
+	    (strcmp(scenario, "probe-h11-w4-mismatch") == 0) ||
+	    (strcmp(scenario, "probe-h11-w8-div") == 0) ||
+	    (strcmp(scenario, "probe-h11-w8-err") == 0) ||
+	    (strcmp(scenario, "probe-h11-w4-anomaly") == 0) ||
+	    (strcmp(scenario, "probe-h11-clock-busy") == 0) ||
+	    (strcmp(scenario, "probe-h11-bustest-timeout") == 0) ||
+	    (strcmp(scenario, "probe-h11-bustest-mismatch") == 0) ||
+	    (strcmp(scenario, "probe-h11-content-read") == 0) ||
+	    (strcmp(scenario, "probe-h11-content-div") == 0) ||
+	    (strcmp(scenario, "probe-h11-width-revert-fail") == 0) ||
+	    (strcmp(scenario, "probe-h11-hs-revert-fail") == 0) ||
+	    (strcmp(scenario, "probe-h11-q-fail") == 0)) {
+		/* Stage 11: width-value continuation. The stage-A pass runs at
+		 * 400 kHz/1-bit, then the HS enter, the record-only 4-bit
+		 * replay, the 8-bit attempt, one CMD19/CMD14 round trip, the
+		 * content pass at 8-bit/HS, the width and HS reverts and the
+		 * recovery read. One fault per failure case; the non-prefix
+		 * failure orders splice their own suffix after the shared
+		 * base. */
+		stage = 11;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		if ((strcmp(scenario, "probe-h11-w4-replay") == 0) ||
+		    (strcmp(scenario, "probe-h11-w4-mismatch") == 0) ||
+		    (strcmp(scenario, "probe-h11-w8-div") == 0)) {
+			set_h11_order(h11_suffix_w8_close,
+			    (unsigned int)(sizeof(h11_suffix_w8_close) /
+			    sizeof(h11_suffix_w8_close[0])));
+		} else if (strcmp(scenario, "probe-h11-w8-err") == 0) {
+			set_h11_order(h11_suffix_w8_err,
+			    (unsigned int)(sizeof(h11_suffix_w8_err) /
+			    sizeof(h11_suffix_w8_err[0])));
+		} else if (strcmp(scenario,
+		    "probe-h11-w4-anomaly") == 0) {
+			set_h11_order(h11_suffix_w4_anomaly,
+			    (unsigned int)(sizeof(h11_suffix_w4_anomaly) /
+			    sizeof(h11_suffix_w4_anomaly[0])));
+		} else if (strcmp(scenario,
+		    "probe-h11-clock-busy") == 0) {
+			set_h11_order(h11_suffix_clock_busy,
+			    (unsigned int)(sizeof(h11_suffix_clock_busy) /
+			    sizeof(h11_suffix_clock_busy[0])));
+		} else if (strcmp(scenario,
+		    "probe-h11-bustest-timeout") == 0) {
+			set_h11_order(h11_suffix_bustest_timeout,
+			    (unsigned int)(sizeof(h11_suffix_bustest_timeout) /
+			    sizeof(h11_suffix_bustest_timeout[0])));
+		} else if (strcmp(scenario,
+		    "probe-h11-bustest-mismatch") == 0) {
+			set_h11_order(h11_suffix_bustest_mismatch,
+			    (unsigned int)(sizeof(h11_suffix_bustest_mismatch) /
+			    sizeof(h11_suffix_bustest_mismatch[0])));
+		} else if (strcmp(scenario,
+		    "probe-h11-content-read") == 0) {
+			set_h11_order(h11_suffix_content_read,
+			    (unsigned int)(sizeof(h11_suffix_content_read) /
+			    sizeof(h11_suffix_content_read[0])));
+		} else if ((strcmp(scenario,
+		    "probe-h11-content-div") == 0) ||
+		    (strcmp(scenario,
+		    "probe-h11-width-revert-fail") == 0) ||
+		    (strcmp(scenario,
+		    "probe-h11-hs-revert-fail") == 0)) {
+			set_h11_order(h11_suffix_no_q,
+			    (unsigned int)(sizeof(h11_suffix_no_q) /
+			    sizeof(h11_suffix_no_q[0])));
+		} else {
+			set_expected_order(order_probe_h11,
+			    (unsigned int)(sizeof(order_probe_h11) /
+			    sizeof(order_probe_h11[0])));
+		}
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-h11-w4-replay") == 0) {
+			cmd6_ignore = 1;
+		} else if (strcmp(scenario,
+		    "probe-h11-w4-mismatch") == 0) {
+			cmd6_ignore_width8 = 1;
+		} else if (strcmp(scenario, "probe-h11-w8-div") == 0) {
+			cmd6_ignore_width4 = 1;
+			w8_paradox = 1;
+		} else if (strcmp(scenario, "probe-h11-w8-err") == 0) {
+			cmd6_ignore_width4 = 1;
+			cmd6_fail_bus_width8 = 1;
+		} else if (strcmp(scenario,
+		    "probe-h11-w4-anomaly") == 0) {
+			ext_csd_zero_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-h11-clock-busy") == 0) {
+			rcg_stuck_after = 1u;
+		} else if (strcmp(scenario,
+		    "probe-h11-bustest-timeout") == 0) {
+			cmd6_ignore_width4 = 1;
+			cmd19_8bit_timeout = 1;
+		} else if (strcmp(scenario,
+		    "probe-h11-bustest-mismatch") == 0) {
+			cmd6_ignore_width4 = 1;
+			bus_test_bad = 1;
+			bus_test_bad_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;
+		} else if (strcmp(scenario,
+		    "probe-h11-content-read") == 0) {
+			cmd6_ignore_width4 = 1;
+			cmd17_fail_on = 26u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-h11-content-div") == 0) {
+			cmd6_ignore_width4 = 1;
+			hs_content_lba = SIM_GPT_FIRST_USABLE;
+		} else if (strcmp(scenario,
+		    "probe-h11-width-revert-fail") == 0) {
+			cmd6_ignore_width4 = 1;
+			cmd6_ignore_revert = 1;
+		} else if (strcmp(scenario,
+		    "probe-h11-hs-revert-fail") == 0) {
+			cmd6_ignore_width4 = 1;
+			hs_timing_ignore_exit = 1;
+		} else if (strcmp(scenario, "probe-h11-q-fail") == 0) {
+			cmd6_ignore_width4 = 1;
+			cmd17_fail_on = 51u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-h11-honored-pass") == 0) {
+			cmd6_ignore_width4 = 1;
+		}
 	} else if ((strcmp(scenario, "probe-dto-fired") == 0) ||
 	    (strcmp(scenario, "probe-dto-silent") == 0) ||
 	    (strcmp(scenario, "probe-dto-q-fail") == 0) ||
@@ -2915,6 +3244,18 @@ main(int argc, char **argv)
 		 * switch/test/content/revert field and the report formatter
 		 * samples the live header and pad registers. */
 		width_form = 8;
+		sim_store(sdhci, GTA4L_EMMC_REG_HOST_CONTROL, 1u, 0xFFu);
+		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
+		    0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_STATUS, 4u,
+		    0xFFFFFFFFu);
+	} else if (strcmp(scenario, "report-width-h11") == 0) {
+		/* Synthetic H11 field-wise bound: the fixture fills both
+		 * width attempts and every switch/test/content/revert field,
+		 * and the report formatter samples the live header and pad
+		 * registers. */
+		width_form = 9;
 		sim_store(sdhci, GTA4L_EMMC_REG_HOST_CONTROL, 1u, 0xFFu);
 		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
 		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
@@ -4764,6 +5105,331 @@ main(int argc, char **argv)
 		    "the failed H10 recovery read lost its core code");
 		check(cmd17_count == 51u,
 		    "the failed H10 recovery read did not stop at Q");
+	} else if (strcmp(scenario, "probe-h11-honored-pass") == 0) {
+		check(panicked == 1, "the H11 honored pass did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=0 stop=0") != NULL,
+		    "the H11 honored pass does not name its stop");
+		check(strstr(panic_message,
+		    "H11 R clk=0007 hs=00 bw=00 hc=00 es=0000018e") != NULL,
+		    "the H11 R line lost the 400 kHz identity");
+		check(strstr(panic_message,
+		    "H11 S rc=0 sw=0 c6=00000900 hs=01 clk=0007 "
+		    "rcg=0000020b sum=0000018f") != NULL,
+		    "the H11 S line lost the HS switch or the 50 MHz RCG");
+		check(strstr(panic_message,
+		    "H11 W4 rc=-19 sw=0 swrc=-19 c6=00000900 hb=00 ha=02 "
+		    "es=0000018f") != NULL,
+		    "the H11 W4 line did not replay the H10 legacy tuple");
+		check(strstr(panic_message,
+		    "H11 W8 rc=0 sw=2 swrc=0 c6=00000900 hb=00 ha=20 "
+		    "es=00000191") != NULL,
+		    "the H11 W8 line lost the honored 8-bit switch");
+		check(strstr(panic_message,
+		    "H11 B rc=0 tt=1 trc=0 tw=000055aa te=000055aa")
+		    != NULL,
+		    "the H11 bus test did not pass at 8-bit/HS");
+		check(strstr(panic_message,
+		    "H11 T rc=0 att=1 same=1 div=0") != NULL,
+		    "the H11 content pass did not match");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0 c6=00000900 hb=20 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H11 width revert did not restore 1-bit");
+		check(strstr(panic_message,
+		    "H11 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017 sum=0000018e") != NULL,
+		    "the H11 HS revert did not restore legacy timing");
+		check(strstr(panic_message,
+		    "H11 Q rc=0 qb0=5c510100") != NULL,
+		    "the H11 recovery read did not match block 0");
+		check(strstr(panic_message,
+		    "H11 PAD pre=00009fe4/60000000/00000000 "
+		    "post=00009fe4/60000000/00000000") != NULL,
+		    "the H11 pad samples changed");
+		check(strstr(panic_message,
+		    "H11 FAIL fail=0/0/0/00000000/0000/0000/00000000/0")
+		    != NULL,
+		    "the H11 pass invented a failure record");
+		check(cmd6_count == 5u,
+		    "the H11 pass did not issue both width attempts and "
+		    "both reverts");
+		check(cmd17_count == 51u,
+		    "the H11 pass did not run both content passes and Q");
+	} else if (strcmp(scenario, "probe-h11-w4-replay") == 0) {
+		check(panicked == 1, "the H11 W4 replay did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-19 stop=12") != NULL,
+		    "the H11 W4 replay does not keep stop 12");
+		check(strstr(panic_message,
+		    "H11 W4 rc=-19 sw=0 swrc=-19 c6=00000900 hb=00 ha=02 "
+		    "es=0000018f") != NULL,
+		    "the H11 W4 replay did not reproduce the H10 tuple");
+		check(strstr(panic_message,
+		    "H11 W8 rc=-19 sw=0 swrc=-19 c6=00000900 hb=00 ha=20 "
+		    "es=0000018f") != NULL,
+		    "the H11 W4 replay did not record the ignored 8-bit "
+		    "attempt");
+		check(strstr(panic_message,
+		    "H11 B rc=0 tt=0 trc=0 tw=00000000 te=00000000")
+		    != NULL,
+		    "the H11 W4 replay ran the bus test on an unproven "
+		    "framing");
+		check(strstr(panic_message,
+		    "H11 T rc=0 att=0") != NULL,
+		    "the H11 W4 replay ran the content pass on an unproven "
+		    "framing");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0 c6=00000900 hb=00 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H11 W4 replay did not unwind to 1-bit");
+		check(strstr(panic_message,
+		    "H11 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017 sum=0000018e") != NULL,
+		    "the H11 W4 replay did not revert HS");
+		check(cmd17_count == 25u,
+		    "the H11 W4 replay ran the content pass");
+		check(cmd6_count == 5u,
+		    "the H11 W4 replay did not issue both attempts and both "
+		    "reverts");
+	} else if (strcmp(scenario, "probe-h11-w4-mismatch") == 0) {
+		check(panicked == 1, "the H11 W4 mismatch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-19 stop=12") != NULL,
+		    "the H11 W4 mismatch does not keep stop 12");
+		check(strstr(panic_message,
+		    "H11 W4 rc=0 sw=1 swrc=0 c6=00000900 hb=00 ha=02 "
+		    "es=00000190") != NULL,
+		    "the H11 W4 mismatch did not record the honored 4-bit "
+		    "replay");
+		check(strstr(panic_message,
+		    "H11 W8 rc=-19 sw=1 swrc=-19 c6=00000900 hb=02 ha=20 "
+		    "es=00000190") != NULL,
+		    "the H11 W4 mismatch did not record the ignored 8-bit "
+		    "attempt from the 4-bit host state");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0 c6=00000900 hb=02 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H11 W4 mismatch did not unwind to 1-bit");
+		check(cmd17_count == 25u,
+		    "the H11 W4 mismatch ran the content pass");
+		check(cmd6_count == 5u,
+		    "the H11 W4 mismatch did not issue both attempts and "
+		    "both reverts");
+	} else if (strcmp(scenario, "probe-h11-w8-div") == 0) {
+		check(panicked == 1, "the H11 W8 paradox did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-19 stop=12") != NULL,
+		    "the H11 W8 paradox does not keep stop 12");
+		check(strstr(panic_message,
+		    "H11 W4 rc=-19 sw=0 swrc=-19 c6=00000900 hb=00 ha=02 "
+		    "es=0000018f") != NULL,
+		    "the H11 W8 paradox lost the record-only 4-bit replay");
+		check(strstr(panic_message,
+		    "H11 W8 rc=-19 sw=2 swrc=0 c6=00000900 hb=00 ha=20 "
+		    "es=0000018f") != NULL,
+		    "the H11 W8 paradox did not record the disagreeing "
+		    "readback and re-read");
+		check(strstr(panic_message,
+		    "H11 B rc=0 tt=0") != NULL,
+		    "the H11 W8 paradox ran the bus test on an unproven "
+		    "framing");
+		check(strstr(panic_message,
+		    "H11 T rc=0 att=0") != NULL,
+		    "the H11 W8 paradox ran the content pass on an unproven "
+		    "framing");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0 c6=00000900 hb=20 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H11 W8 paradox did not revert the width");
+		check(cmd17_count == 25u,
+		    "the H11 W8 paradox ran the content pass");
+	} else if (strcmp(scenario, "probe-h11-w8-err") == 0) {
+		check(panicked == 1, "the H11 W8 error did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-15 stop=12") != NULL,
+		    "the H11 W8 error does not keep stop 12");
+		check(strstr(panic_message,
+		    "H11 W8 rc=-15 sw=0 swrc=-15 c6=0000a000 hb=00 ha=00 "
+		    "es=00000000") != NULL,
+		    "the H11 W8 error did not record the R1 refusal");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0 c6=00000900 hb=00 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H11 W8 error did not revert the width");
+		check(cmd17_count == 25u,
+		    "the H11 W8 error ran the content pass");
+		check(cmd6_count == 5u,
+		    "the H11 W8 error did not issue both attempts and both "
+		    "reverts");
+	} else if (strcmp(scenario, "probe-h11-w4-anomaly") == 0) {
+		check(panicked == 1, "the H11 W4 anomaly did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-19 stop=18") != NULL,
+		    "the H11 W4 anomaly does not keep stop 18");
+		check(strstr(panic_message,
+		    "H11 W4 rc=-19 sw=0 swrc=-19 c6=00000900 hb=00 ha=02 "
+		    "es=00000000") != NULL,
+		    "the H11 W4 anomaly did not record the empty re-read");
+		check(strstr(panic_message,
+		    "H11 W8 rc=0 sw=0 swrc=0 c6=00000000 hb=00 ha=00 "
+		    "es=00000000") != NULL,
+		    "the H11 W4 anomaly continued to the 8-bit attempt");
+		check(strstr(panic_message,
+		    "H11 T rc=0 att=0") != NULL,
+		    "the H11 W4 anomaly ran the content pass");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0 c6=00000900 hb=00 ha=00 "
+		    "es=0000018f") != NULL,
+		    "the H11 W4 anomaly did not unwind the width");
+		check(strstr(panic_message,
+		    "H11 X rc=0 sw=0 c6=00000900 hs=00 clk=0007 "
+		    "rcg=00002017 sum=0000018e") != NULL,
+		    "the H11 W4 anomaly did not revert HS");
+		check(cmd17_count == 25u,
+		    "the H11 W4 anomaly ran the content pass");
+		check(cmd6_count == 4u,
+		    "the H11 W4 anomaly issued the 8-bit attempt");
+	} else if (strcmp(scenario, "probe-h11-clock-busy") == 0) {
+		check(panicked == 1, "the busy H11 RCG did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-5 stop=11") != NULL,
+		    "the busy H11 RCG does not keep stop 11");
+		check(strstr(panic_message,
+		    "H11 S rc=-5 sw=0 c6=00000900 hs=01 clk=0000") != NULL,
+		    "the busy H11 RCG lost the completed switch or the "
+		    "failed clock");
+		check(strstr(panic_message,
+		    "H11 W4 rc=0 sw=0 swrc=0 c6=00000000") != NULL,
+		    "the busy H11 RCG ran the width work");
+		check(strstr(panic_message,
+		    "H11 X rc=-5 sw=0 c6=00000000 hs=00") != NULL,
+		    "the busy H11 RCG revert failure was not recorded");
+		check(cmd17_count == 25u,
+		    "the busy H11 RCG still ran the content pass");
+		check(cmd6_count == 1u,
+		    "the busy H11 RCG issued a width command");
+		check((sim_load(sdhci, GTA4L_EMMC_REG_CLOCK_CONTROL, 2u) &
+		    GTA4L_EMMC_CLOCK_CARD_EN) == 0u,
+		    "the busy H11 RCG left the card clock enabled");
+	} else if (strcmp(scenario, "probe-h11-bustest-timeout") == 0) {
+		check(panicked == 1, "the H11 bus-test timeout did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-11 stop=13") != NULL,
+		    "the H11 bus-test timeout does not keep stop 13");
+		check(strstr(panic_message,
+		    "H11 W8 rc=0 sw=2 swrc=0 c6=00000900 hb=00 ha=20 "
+		    "es=00000191") != NULL,
+		    "the H11 bus-test timeout lost the honored 8-bit switch");
+		check(strstr(panic_message,
+		    "H11 B rc=-11 tt=1 trc=-11 tw=00000000 te=00000000")
+		    != NULL,
+		    "the H11 bus-test timeout lost the 8-bit write-phase "
+		    "class");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0") != NULL,
+		    "the H11 bus-test timeout did not restore 1-bit");
+		check(strstr(panic_message,
+		    "H11 X rc=0 sw=0 c6=00000000 hs=00 clk=0000 "
+		    "rcg=00000000 sum=00000000") != NULL,
+		    "the H11 bus-test failure walked back into the inhibited "
+		    "controller");
+		check(cmd17_count == 25u,
+		    "the H11 bus-test timeout ran the content pass");
+	} else if (strcmp(scenario, "probe-h11-bustest-mismatch") == 0) {
+		check(panicked == 1, "the H11 bus-test mismatch did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-20 stop=13") != NULL,
+		    "the H11 bus-test mismatch does not keep stop 13");
+		check(strstr(panic_message,
+		    "H11 B rc=-20 tt=1 trc=-20 tw=0000aa55 te=000055aa")
+		    != NULL,
+		    "the H11 bus-test mismatch did not bind the pattern "
+		    "words");
+		check(cmd17_count == 25u,
+		    "the H11 bus-test mismatch ran the content pass");
+	} else if (strcmp(scenario, "probe-h11-content-div") == 0) {
+		check(panicked == 1, "the H11 content divergence did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-21 stop=14") != NULL,
+		    "the H11 divergence does not keep stop 14");
+		check(strstr(panic_message,
+		    "H11 T rc=0 att=1 same=0 div=34") != NULL,
+		    "the H11 divergence did not name the first differing "
+		    "LBA");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0 c6=00000900") != NULL,
+		    "the H11 divergence run did not revert the width");
+		check(strstr(panic_message,
+		    "H11 X rc=0 sw=0 c6=00000900 hs=00") != NULL,
+		    "the H11 divergence run did not revert HS");
+		check(cmd17_count == 50u,
+		    "the H11 divergence did not stop at Q");
+	} else if (strcmp(scenario, "probe-h11-content-read") == 0) {
+		check(panicked == 1, "the H11 content read error did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-12 stop=14") != NULL,
+		    "the H11 content read error does not keep stop 14");
+		check(strstr(panic_message,
+		    "H11 T rc=-12 att=1") != NULL,
+		    "the H11 content read error lost its core code");
+		check(cmd17_count == 26u,
+		    "the H11 content read error did not stop at the first "
+		    "8-bit read");
+	} else if (strcmp(scenario, "probe-h11-width-revert-fail") == 0) {
+		check(panicked == 1, "the H11 width-revert failure did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-19 stop=15") != NULL,
+		    "the H11 width-revert failure does not keep stop 15");
+		check(strstr(panic_message,
+		    "H11 T rc=0 att=1 same=1 div=0") != NULL,
+		    "the H11 width-revert failure lost the passing content "
+		    "pass");
+		check(strstr(panic_message,
+		    "H11 V rc=-19 sw=2 swrc=-19 c6=00000900 hb=20 ha=00 "
+		    "es=00000191") != NULL,
+		    "the H11 width-revert failure did not record the "
+		    "byte-183 mismatch");
+		check(strstr(panic_message,
+		    "H11 X rc=0 sw=0 c6=00000900 hs=00") != NULL,
+		    "the H11 width-revert failure did not revert HS");
+		check(sim_host_width_code() ==
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8,
+		    "the H11 width-revert failure did not leave the host "
+		    "width at the failed value");
+		check(cmd17_count == 50u,
+		    "the H11 width-revert failure ran Q");
+	} else if (strcmp(scenario, "probe-h11-hs-revert-fail") == 0) {
+		check(panicked == 1, "the H11 HS-revert failure did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-22 stop=16") != NULL,
+		    "the H11 HS-revert failure does not keep stop 16");
+		check(strstr(panic_message,
+		    "H11 V rc=0 sw=0 swrc=0") != NULL,
+		    "the H11 HS-revert failure lost the clean width revert");
+		check(strstr(panic_message,
+		    "H11 X rc=-22 sw=-22 c6=00000900 hs=01") != NULL,
+		    "the H11 HS-revert failure did not record the byte-185 "
+		    "mismatch");
+		check(cmd17_count == 50u,
+		    "the H11 HS-revert failure ran Q");
+	} else if (strcmp(scenario, "probe-h11-q-fail") == 0) {
+		check(panicked == 1, "the failed H11 recovery read did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H11 REPORT: rc=-12 stop=17") != NULL,
+		    "the failed H11 recovery read does not keep stop 17");
+		check(strstr(panic_message,
+		    "H11 Q rc=-12 qb0=00000000") != NULL,
+		    "the failed H11 recovery read lost its core code");
+		check(cmd17_count == 51u,
+		    "the failed H11 recovery read did not stop at Q");
 	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
 		check(panicked == 1, "the fired DTO audit did not report");
 		check(strstr(panic_message,
@@ -5735,13 +6401,26 @@ main(int argc, char **argv)
 	    (strncmp(scenario, "probe-b1-1bit-", 15u) == 0) ||
 	    (strncmp(scenario, "probe-dto-", 10u) == 0) ||
 	    (strncmp(scenario, "probe-b2-", 9u) == 0) ||
-	    (strncmp(scenario, "probe-h9-", 9u) == 0)) {
+	    (strncmp(scenario, "probe-h9-", 9u) == 0) ||
+	    (strncmp(scenario, "probe-h11-", 10u) == 0)) {
 		check(bad_command_format == 0,
 		    "a B1C command used the wrong flags");
 		check(bad_command_order == 0,
 		    "the B1C run sent commands in the wrong order");
 		check(bad_command_argument == 0,
 		    "the B1C content pass read the wrong LBA list");
+	}
+	if (strncmp(scenario, "probe-h11-", 10u) == 0) {
+		check(cmd6_width_ddr == 0,
+		    "the H11 rung issued a byte-183 DDR variant");
+		if ((strcmp(scenario, "probe-h11-width-revert-fail") != 0) &&
+		    (strcmp(scenario, "probe-h11-bustest-timeout") != 0) &&
+		    (strcmp(scenario, "probe-h11-bustest-mismatch") != 0)) {
+			check(sim_host_width_code() ==
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1,
+			    "the H11 run did not restore the 1-bit host "
+			    "width");
+		}
 	}
 	if (strncmp(scenario, "probe-dto-", 10u) == 0) {
 		check(bad_mb_command == 0,

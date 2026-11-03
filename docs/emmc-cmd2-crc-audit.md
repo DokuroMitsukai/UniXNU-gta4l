@@ -2342,6 +2342,58 @@ was not met and the 15-boot cap was reached). The CMD19-at-4-bit/HS
 question stays unmeasured because the designed stop precedes the bus
 test. F3 remains `[U]`.
 
+### 2.28 Stage-H11 host batch: the width-value continuation is simulator-tested (2026-11-03)
+
+The stage-11 rung (`gta4l-emmc-probe=11`, driver §5.3.25) is the H11
+width-value continuation: the standard read-only identification once (no
+CMD3 retry), the unchanged stage-A content pass at 400 kHz/1-bit as the
+baseline, HS entry exactly as H10, the record-only replay of the H10
+4-bit switch at HS (W4), the 8-bit BUS_WIDTH attempt at HS (W8, byte
+183 = 2, still SDR), one CMD19/CMD14 round trip and the content pass at
+8-bit/HS only when W8 is honored, the width and HS reverts and a block-0
+recovery read. It always emits a `GTA4L-EMMC H11 REPORT` (R, S, W4, W8,
+B, T, V, X, Q lines plus the shared BLOCKS/PAD and terminal FAIL record)
+and stops with 0/10/11/12/13/14/15/16/17/18; it issues no byte-183 DDR
+variant, no CMD18/CMD25, no retry and no user-data write.
+
+The rung exists for two open questions. First, the H10 verdict — the card
+ignores the 4-bit BUS_WIDTH write at HS — carries the single-sample
+caveat (`N=1`), and nothing separates a deterministic byte-183 refusal
+from a per-boot random refusal yet. W4 replays the exact H10 tuple as a
+record-only sample: a clean-shape match is the second sample closing the
+caveat, and a clean-shape mismatch re-opens H10 as per-boot random; only
+a true anomaly (CMD6/R1 error, empty readback, transport rc) stops the
+rung before W8. Second, every measured refusal carried value 1 (4-bit)
+and every honored byte-183 write carried value 0 (the reverts), so the
+8-bit value is the one remaining F3 path that does not require a
+held-ignored width. W8 therefore attempts byte 183 = 2 at HS; a W8
+readback that disagrees with its own re-read sum is the byte-183 paradox
+row, recorded with both words and stopped after the reverts with no B/T
+on the unproven framing.
+
+Host checks: the probe suite is 116 scenarios and 64 mutation controls
+(was 102/56), adding `probe-h11-honored-pass`, `probe-h11-w4-replay`,
+`probe-h11-w4-mismatch`, `probe-h11-w8-div`, `probe-h11-w8-err`,
+`probe-h11-w4-anomaly`, `probe-h11-clock-busy`,
+`probe-h11-bustest-timeout`, `probe-h11-bustest-mismatch`,
+`probe-h11-content-read`, `probe-h11-content-div`,
+`probe-h11-width-revert-fail`, `probe-h11-hs-revert-fail` and
+`probe-h11-q-fail` plus eight mutation controls (a skipped W4 step, a
+skipped W8 step, a bus test at the wrong width, a silent width revert, a
+wrong W8 stop code, a skipped content pass, a host width not restored
+and a must-refuse byte-183 DDR scope control). The core suite is
+unchanged at 148/90. The `report-width-h11` fixture is the ninth width
+materialization and bounds the H11 report inside 2048 bytes; the
+diagnostic wrapper and payload gate accept `emmc-probe-11`.
+
+No build, flash or boot has been performed; F3 remains `[U]`. The device
+run needs a fresh explicit BOOT-only approval that names the record-only
+byte-183 = 1 write and its normalize path, the byte-183 = 2 write and
+its revert to 0, the 8-bit host DAT-width application while the byte-183
+readback may still disagree, the CMD19/CMD14 pattern write at the
+produced width, and the 50 MHz HS clock ramp with byte 185 = 1 and its
+clear.
+
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 
 ### 3.1 Command sequence

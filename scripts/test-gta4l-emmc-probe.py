@@ -175,6 +175,20 @@ SCENARIOS = [
     'probe-h10-width-revert-fail',
     'probe-h10-hs-revert-fail',
     'probe-h10-q-fail',
+    'probe-h11-honored-pass',
+    'probe-h11-w4-replay',
+    'probe-h11-w4-mismatch',
+    'probe-h11-w8-div',
+    'probe-h11-w8-err',
+    'probe-h11-w4-anomaly',
+    'probe-h11-clock-busy',
+    'probe-h11-bustest-timeout',
+    'probe-h11-bustest-mismatch',
+    'probe-h11-content-read',
+    'probe-h11-content-div',
+    'probe-h11-width-revert-fail',
+    'probe-h11-hs-revert-fail',
+    'probe-h11-q-fail',
     'probe-b1c-success',
     'probe-b1c-pass',
     'probe-b1c-late-commit',
@@ -204,6 +218,7 @@ WIDTH_SCENARIOS = (
     'report-width-b2',
     'report-width-h9',
     'report-width-h10',
+    'report-width-h11',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'
@@ -834,6 +849,59 @@ MUTATIONS = [
      '\t\t(void)rc;\n\t}\n',
      'probe-h10-bustest-timeout',
      'the H10 bus-test timeout does not keep stop 13'),
+    ('h11-w4-step-skipped',
+     '\th11.w4_rc = gta4l_emmc_set_bus_width(host, 4u, &h11.w4);\n',
+     '\th11.w4_rc = GTA4L_EMMC_OK;\n',
+     'probe-h11-w4-replay',
+     'the H11 W4 replay did not reproduce the H10 tuple'),
+    ('h11-w8-step-skipped',
+     '\th11.w8_rc = gta4l_emmc_set_bus_width(host, 8u, &h11.w8);\n',
+     '\th11.w8_rc = GTA4L_EMMC_OK;\n',
+     'probe-h11-honored-pass',
+     'the H11 honored pass does not name its stop'),
+    ('h11-bustest-wrong-width',
+     '\t\trc = gta4l_emmc_bus_test(host, 8u, &h11.bus_test);\n',
+     '\t\trc = gta4l_emmc_bus_test(host, 4u, &h11.bus_test);\n',
+     'probe-h11-honored-pass',
+     'the H11 honored pass does not name its stop'),
+    ('h11-silent-revert',
+     '\th11->width_revert_rc = gta4l_emmc_set_bus_width(host, 1u,\n'
+     '\t    &h11->width_revert);\n',
+     '\th11->width_revert_rc = GTA4L_EMMC_OK;\n',
+     'probe-h11-content-div',
+     'the H11 divergence run did not revert the width'),
+    ('h11-w8-wrong-stop',
+     '\tunwind = gta4l_emmc_probe_h11_unwind(host, &h11);\n'
+     '\tgta4l_emmc_probe_report_h11(host, probe, &h11,\n'
+     '\t    h11.w8_rc, (unwind != 0) ? unwind : 12);\n',
+     '\tunwind = gta4l_emmc_probe_h11_unwind(host, &h11);\n'
+     '\tgta4l_emmc_probe_report_h11(host, probe, &h11,\n'
+     '\t    h11.w8_rc, (unwind != 0) ? unwind : 13);\n',
+     'probe-h11-w4-replay',
+     'the H11 W4 replay does not keep stop 12'),
+    ('h11-content-skipped',
+     '\t\th11.content_rc = gta4l_emmc_probe_b1_content(host, range,\n'
+     '\t\t    &h11.content, 0);\n',
+     '\t\th11.content_rc = GTA4L_EMMC_OK;\n',
+     'probe-h11-honored-pass',
+     'the H11 honored pass does not name its stop'),
+    ('h11-host-width-stuck',
+     '\th11->width_revert_rc = gta4l_emmc_set_bus_width(host, 1u,\n'
+     '\t    &h11->width_revert);\n',
+     '\th11->width_revert_rc = gta4l_emmc_set_bus_width(host, 8u,\n'
+     '\t    &h11->width_revert);\n',
+     'probe-h11-honored-pass',
+     'the H11 width revert did not restore 1-bit'),
+    ('h11-width-ddr',
+     '\tif (bits == 8u) {\n'
+     '\t\treturn GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;\n'
+     '\t}\n',
+     '\tif (bits == 8u) {\n'
+     '\t\treturn 6u;\n'
+     '\t}\n',
+     'probe-h11-honored-pass',
+     'the H11 rung issued a byte-183 DDR variant',
+     'core'),
 ]
 
 

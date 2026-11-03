@@ -414,7 +414,11 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * timeout, then always stops with the H9 report. Stage 10 is the H10
  * width-at-HS continuation: after the stage-A pass it enters HS, switches
  * the BUS_WIDTH to 4-bit at HS, runs one CMD19 round trip and the content
- * pass at 4-bit/50 MHz, reverts both and stops with the H10 report. */
+ * pass at 4-bit/50 MHz, reverts both and stops with the H10 report. Stage 11
+ * is the H11 width-value continuation: it replays the H10 4-bit switch as a
+ * record-only sample, attempts the 8-bit BUS_WIDTH value at HS, and runs the
+ * CMD19 round trip and content pass at 8-bit/50 MHz only when that switch is
+ * honored; it reverts both and stops with the H11 report. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -423,7 +427,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 10)) {
+	if ((value < 1) || (value > 11)) {
 		return 0;
 	}
 	return value;
@@ -1771,6 +1775,322 @@ gta4l_emmc_probe_h10_run(struct gta4l_emmc_host *host,
 	    GTA4L_EMMC_OK, 0);
 }
 
+/* H11 width-value continuation capture. R holds the 400 kHz identity
+ * samples, S the HS entry, W4 the record-only 4-bit replay at HS, W8 the
+ * 8-bit attempt at HS, B the CMD19/CMD14 round trip at the width W8
+ * produced, T the content pass at 8-bit/HS, V the width revert, X the HS
+ * revert and Q the recovery read. Every value is an observed sample. */
+struct gta4l_emmc_probe_h11 {
+	struct gta4l_emmc_hs_result hs;
+	struct gta4l_emmc_hs_result hs_revert;
+	struct gta4l_emmc_bus_result w4;
+	struct gta4l_emmc_bus_result w8;
+	struct gta4l_emmc_bus_result width_revert;
+	struct gta4l_emmc_bus_result bus_test;
+	struct gta4l_emmc_probe_bus content;
+	uint32_t pre_hs;
+	uint32_t pre_width;
+	uint32_t pre_clock;
+	uint32_t pre_hc;
+	uint32_t pre_sum;
+	uint32_t pre_qdsd;
+	uint32_t pre_dll;
+	uint32_t pre_dst;
+	uint32_t content_attempted;
+	uint32_t tested;
+	int      switch_rc;
+	int      w4_rc;
+	int      w8_rc;
+	int      content_rc;
+	int      width_revert_rc;
+	int      hs_revert_rc;
+	int      q_result;
+	uint32_t q_block0_sum;
+};
+
+static void
+gta4l_emmc_probe_report_h11(const struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_h11 *h11, int rc, int stop)
+{
+	uint8_t hci = gta4l_emmc_probe_read8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	uint32_t qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	uint32_t dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	uint32_t dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+
+	panic("GTA4L-EMMC H11 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
+	    "rev=%u hci=%02x step=%u log=%u bw=%02x\n"
+	    "GTA4L-EMMC H11 R clk=%04x hs=%02x bw=%02x hc=%02x es=%08x\n"
+	    "GTA4L-EMMC H11 S rc=%d sw=%d c6=%08x hs=%02x clk=%04x "
+	    "rcg=%08x sum=%08x\n"
+	    "GTA4L-EMMC H11 W4 rc=%d sw=%u swrc=%d c6=%08x hb=%02x "
+	    "ha=%02x es=%08x\n"
+	    "GTA4L-EMMC H11 W8 rc=%d sw=%u swrc=%d c6=%08x hb=%02x "
+	    "ha=%02x es=%08x\n"
+	    "GTA4L-EMMC H11 B rc=%d tt=%u trc=%d tw=%08x te=%08x\n"
+	    "GTA4L-EMMC H11 T rc=%d att=%u same=%u div=%u b0=%08x "
+	    "b1=%08x data=%08x last=%08x\n"
+	    "GTA4L-EMMC H11 V rc=%d sw=%u swrc=%d c6=%08x hb=%02x "
+	    "ha=%02x es=%08x\n"
+	    "GTA4L-EMMC H11 X rc=%d sw=%d c6=%08x hs=%02x clk=%04x "
+	    "rcg=%08x sum=%08x\n"
+	    "GTA4L-EMMC H11 Q rc=%d qb0=%08x\n"
+	    "GTA4L-EMMC H11 BLOCKS"
+	    " 2=%08x 3=%08x 4=%08x 5=%08x 6=%08x 7=%08x 8=%08x 9=%08x"
+	    " 10=%08x 11=%08x 12=%08x 13=%08x 14=%08x 15=%08x 16=%08x"
+	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
+	    "GTA4L-EMMC H11 PAD pre=%08x/%08x/%08x post=%08x/%08x/%08x\n"
+	    "GTA4L-EMMC H11 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
+	    (unsigned int)host->ext_csd_rev, (unsigned int)hci,
+	    host->last_step, probe->log_count,
+	    (unsigned int)host->bus_width,
+	    (unsigned int)h11->pre_clock, (unsigned int)h11->pre_hs,
+	    (unsigned int)h11->pre_width, (unsigned int)h11->pre_hc,
+	    h11->pre_sum,
+	    h11->switch_rc, h11->hs.switch_result,
+	    h11->hs.switch_status,
+	    (unsigned int)h11->hs.hs_after, (unsigned int)h11->hs.clock,
+	    h11->hs.rcg_after, h11->hs.readback_sum,
+	    h11->w4_rc, h11->w4.switched, h11->w4.switch_result,
+	    h11->w4.switch_status,
+	    (unsigned int)h11->w4.host_before,
+	    (unsigned int)h11->w4.host_after,
+	    h11->w4.readback_sum,
+	    h11->w8_rc, h11->w8.switched, h11->w8.switch_result,
+	    h11->w8.switch_status,
+	    (unsigned int)h11->w8.host_before,
+	    (unsigned int)h11->w8.host_after,
+	    h11->w8.readback_sum,
+	    h11->bus_test.test_result, h11->tested,
+	    h11->bus_test.test_result, h11->bus_test.test_word,
+	    h11->bus_test.test_expected,
+	    h11->content_rc, h11->content_attempted,
+	    h11->content.same, h11->content.div,
+	    h11->content.block0_sum, h11->content.block1_sum,
+	    h11->content.data_sum, h11->content.last_sum,
+	    h11->width_revert_rc, h11->width_revert.switched,
+	    h11->width_revert.switch_result,
+	    h11->width_revert.switch_status,
+	    (unsigned int)h11->width_revert.host_before,
+	    (unsigned int)h11->width_revert.host_after,
+	    h11->width_revert.readback_sum,
+	    h11->hs_revert_rc, h11->hs_revert.switch_result,
+	    h11->hs_revert.switch_status,
+	    (unsigned int)h11->hs_revert.hs_after,
+	    (unsigned int)h11->hs_revert.clock,
+	    h11->hs_revert.rcg_after, h11->hs_revert.readback_sum,
+	    h11->q_result, h11->q_block0_sum,
+	    h11->content.blocks[0], h11->content.blocks[1],
+	    h11->content.blocks[2], h11->content.blocks[3],
+	    h11->content.blocks[4], h11->content.blocks[5],
+	    h11->content.blocks[6], h11->content.blocks[7],
+	    h11->content.blocks[8], h11->content.blocks[9],
+	    h11->content.blocks[10], h11->content.blocks[11],
+	    h11->content.blocks[12], h11->content.blocks[13],
+	    h11->content.blocks[14], h11->content.blocks[15],
+	    h11->content.blocks[16], h11->content.blocks[17],
+	    h11->content.blocks[18], h11->content.blocks[19],
+	    h11->content.blocks[20],
+	    h11->pre_qdsd, h11->pre_dll, h11->pre_dst, qdsd, dll, dst,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
+/* H11 clean-shape predicate: the width step's EXT_CSD re-read must be
+ * non-empty and its byte sum must agree with the byte-183 code the same read
+ * returned. `pre_sum` is the 400 kHz/1-bit sum read before the HS entry, and
+ * the HS entry adds exactly one (byte 185 = 1). */
+static int
+gta4l_emmc_probe_h11_coherent(const struct gta4l_emmc_bus_result *width,
+    uint32_t pre_sum)
+{
+	if (width->readback_sum == 0u) {
+		return 0;
+	}
+	return (width->readback_sum == pre_sum + 1u + width->switched) ? 1 : 0;
+}
+
+/* Revert the width at HS and then the timing class. Best effort: the HS
+ * revert runs even when the width revert fails. Returns 0, 15 (width
+ * revert) or 16 (HS revert). */
+static int
+gta4l_emmc_probe_h11_unwind(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe_h11 *h11)
+{
+	h11->width_revert_rc = gta4l_emmc_set_bus_width(host, 1u,
+	    &h11->width_revert);
+	h11->hs_revert_rc = gta4l_emmc_set_hs_timing(host, 0u,
+	    &h11->hs_revert);
+	if (h11->width_revert_rc != GTA4L_EMMC_OK) {
+		return 15;
+	}
+	if (h11->hs_revert_rc != GTA4L_EMMC_OK) {
+		return 16;
+	}
+	return 0;
+}
+
+/* Run the stage-11 width-value continuation: stage-A at 400 kHz/1-bit is
+ * the baseline, then HS entry, the record-only 4-bit replay, the 8-bit
+ * attempt, one CMD19/CMD14 round trip and the stage-A content pass at
+ * 8-bit/HS only when the 8-bit switch is honored, the reverts and the
+ * recovery read. Report and stop in every case; no retry. */
+static void
+gta4l_emmc_probe_h11_run(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe, struct gta4l_emmc_probe_range *range,
+    const uint8_t *block0, const uint8_t *block1)
+{
+	static uint8_t qblock[GTA4L_EMMC_BLOCK_BYTES];
+	struct gta4l_emmc_probe_bus base;
+	struct gta4l_emmc_probe_h11 h11;
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t index;
+	uint32_t sum;
+	int unwind;
+	int rc;
+
+	bzero(&base, sizeof(base));
+	bzero(&h11, sizeof(h11));
+	base.block0_sum = gta4l_emmc_probe_sum(block0,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	base.block1_sum = gta4l_emmc_probe_sum(block1,
+	    GTA4L_EMMC_BLOCK_BYTES);
+	for (index = 0; index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
+		base.blocks[index] = range->array[index];
+	}
+	base.data_sum = range->data_sum;
+	base.last_sum = range->last_sum;
+
+	h11.pre_clock = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CLOCK_CONTROL);
+	h11.pre_hc = gta4l_emmc_probe_read8(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
+	h11.pre_qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	h11.pre_dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	h11.pre_dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		h11.switch_rc = rc;
+		gta4l_emmc_probe_report_h11(host, probe, &h11, rc, 10);
+	}
+	h11.pre_hs = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
+	h11.pre_width = ext_csd[GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF];
+	for (index = 0, sum = 0; index < GTA4L_EMMC_EXT_CSD_BYTES;
+	    index++) {
+		sum += ext_csd[index];
+	}
+	h11.pre_sum = sum;
+
+	h11.switch_rc = gta4l_emmc_set_hs_timing(host, 1u, &h11.hs);
+	if (h11.switch_rc != GTA4L_EMMC_OK) {
+		h11.hs_revert_rc = gta4l_emmc_set_hs_timing(host, 0u,
+		    &h11.hs_revert);
+		gta4l_emmc_probe_report_h11(host, probe, &h11,
+		    h11.switch_rc,
+		    (h11.hs.clock_result != GTA4L_EMMC_OK) ? 11 : 10);
+	}
+
+	/* W4: replay the H10 4-bit switch as a record-only sample. A
+	 * clean-shape tuple match or mismatch is only a verdict input; only
+	 * a true anomaly (a CMD6/R1 or transport error, or an empty
+	 * EXT_CSD re-read) stops before W8. */
+	h11.w4_rc = gta4l_emmc_set_bus_width(host, 4u, &h11.w4);
+	if (((h11.w4_rc != GTA4L_EMMC_OK) &&
+	    (h11.w4_rc != GTA4L_EMMC_ERR_BUS_WIDTH)) ||
+	    ((h11.w4.switch_result != GTA4L_EMMC_OK) &&
+	    (h11.w4.switch_result != GTA4L_EMMC_ERR_BUS_WIDTH)) ||
+	    (h11.w4.readback_sum == 0u)) {
+		if ((h11.w4_rc == GTA4L_EMMC_OK) &&
+		    (h11.w4.readback_sum == 0u)) {
+			h11.w4_rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+		}
+		unwind = gta4l_emmc_probe_h11_unwind(host, &h11);
+		gta4l_emmc_probe_report_h11(host, probe, &h11,
+		    h11.w4_rc, (unwind != 0) ? unwind : 18);
+	}
+
+	/* W8: the 8-bit attempt at HS. B/T/(V/X/Q) run only when the switch
+	 * was honored and the re-read agrees with it; a readback that
+	 * disagrees with its own sum is the byte-183 paradox row, recorded
+	 * and stopped after the reverts. */
+	h11.w8_rc = gta4l_emmc_set_bus_width(host, 8u, &h11.w8);
+	if ((h11.w8_rc == GTA4L_EMMC_OK) &&
+	    (gta4l_emmc_probe_h11_coherent(&h11.w8, h11.pre_sum) != 0)) {
+		h11.tested = 1u;
+		rc = gta4l_emmc_bus_test(host, 8u, &h11.bus_test);
+		if ((rc != GTA4L_EMMC_OK) &&
+		    (h11.bus_test.test_result == GTA4L_EMMC_OK)) {
+			h11.bus_test.test_result = rc;
+		}
+		if (rc != GTA4L_EMMC_OK) {
+			/* The CMD19 wedge leaves the controller inhibited; as
+			 * in H10 the width/timing reverts are recorded as
+			 * not-run and the panic reboot resets the card. */
+			gta4l_emmc_probe_report_h11(host, probe, &h11, rc, 13);
+		}
+
+		h11.content_attempted = 1u;
+		h11.content_rc = gta4l_emmc_probe_b1_content(host, range,
+		    &h11.content, 0);
+		if (h11.content_rc == GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_b1_compare(range, &base,
+			    &h11.content);
+		}
+		unwind = gta4l_emmc_probe_h11_unwind(host, &h11);
+		if (h11.content_rc != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_h11(host, probe, &h11,
+			    h11.content_rc, (unwind != 0) ? unwind : 14);
+		}
+		if (h11.content.same == 0u) {
+			gta4l_emmc_probe_report_h11(host, probe, &h11,
+			    GTA4L_EMMC_PROBE_ERR_CONTENT,
+			    (unwind != 0) ? unwind : 14);
+		}
+		if (unwind != 0) {
+			gta4l_emmc_probe_report_h11(host, probe, &h11,
+			    (unwind == 15) ? h11.width_revert_rc :
+			    h11.hs_revert_rc, unwind);
+		}
+
+		h11.q_result = gta4l_emmc_read_block(host, 0u, qblock);
+		if (h11.q_result != GTA4L_EMMC_OK) {
+			gta4l_emmc_probe_report_h11(host, probe, &h11,
+			    h11.q_result, 17);
+		}
+		h11.q_block0_sum = gta4l_emmc_probe_sum(qblock,
+		    GTA4L_EMMC_BLOCK_BYTES);
+		if (h11.q_block0_sum != base.block0_sum) {
+			gta4l_emmc_probe_report_h11(host, probe, &h11,
+			    GTA4L_EMMC_PROBE_ERR_CONTENT, 17);
+		}
+		gta4l_emmc_probe_report_h11(host, probe, &h11,
+		    GTA4L_EMMC_OK, 0);
+	}
+
+	/* W8 ignored or anomalous: no B/T on an unproven framing. Revert
+	 * both and stop in the H10 failure-path shape. A readback word that
+	 * disagrees with its own re-read sum is the byte-183 paradox row and
+	 * is reported with the width-mismatch result. */
+	if ((h11.w8_rc == GTA4L_EMMC_OK) &&
+	    (gta4l_emmc_probe_h11_coherent(&h11.w8, h11.pre_sum) == 0)) {
+		h11.w8_rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+	}
+	unwind = gta4l_emmc_probe_h11_unwind(host, &h11);
+	gta4l_emmc_probe_report_h11(host, probe, &h11,
+	    h11.w8_rc, (unwind != 0) ? unwind : 12);
+}
+
 /* Run the stage-7 audit: read back the timeout configuration (R1), arm the
  * minimum data timeout and read 8 blocks (E1), re-read block 0 to prove the bus
  * recovered (Q), then repeat the 1-bit CMD19 write test under the extended
@@ -2354,6 +2674,11 @@ gta4l_emmc_probe_run(void)
 
 	if (stage == 10) {
 		gta4l_emmc_probe_h10_run(&host, &probe, &range, block0,
+		    block1);
+	}
+
+	if (stage == 11) {
+		gta4l_emmc_probe_h11_run(&host, &probe, &range, block0,
 		    block1);
 	}
 
