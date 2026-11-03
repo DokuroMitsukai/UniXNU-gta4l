@@ -168,6 +168,18 @@ SCENARIOS = [
     'bus-test-width',
     'bus-test-1bit',
     'bus-test-1bit-width',
+    'bus-reset-pass',
+    'bus-reset-mismatch',
+    'bus-reset-read-timeout',
+    'bus-reset-read-crc',
+    'bus-reset-read-status',
+    'bus-reset-reset-stuck',
+    'bus-reset-inhibit',
+    'bus-reset-write-crc',
+    'bus-reset-normal',
+    'bus-reset-width',
+    'bus-reset-arg',
+    'bus-reset-without-init',
     'hs-timing-enter',
     'hs-timing-stuck',
     'hs-timing-cmd6-error',
@@ -1108,6 +1120,53 @@ def main() -> int:
              'GTA4L_EMMC_BUS_TEST_1_BYTES        4u',
              'GTA4L_EMMC_BUS_TEST_1_BYTES        8u',
              'Gta4lEmmc.h', (), 'bus-test-1bit'),
+            ('br-no-reset',
+             '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_DATA);\n'
+             '\tgta4l_emmc_barrier(host);\n'
+             '\titerations = gta4l_emmc_poll_iterations(GTA4L_EMMC_RESET_TIMEOUT_US);\n',
+             '\t/* data reset removed by mutation */\n'
+             '\tgta4l_emmc_barrier(host);\n'
+             '\titerations = gta4l_emmc_poll_iterations(GTA4L_EMMC_RESET_TIMEOUT_US);\n',
+             'Gta4lEmmc.c', (), 'bus-reset-pass'),
+            ('br-reset-all',
+             '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_DATA);\n',
+             '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_ALL);\n',
+             'Gta4lEmmc.c', (), 'bus-reset-inhibit'),
+            ('br-ignore-reset-clear',
+             '\tif (readback != 0u) {\n'
+             '\t\treturn GTA4L_EMMC_ERR_RESET;\n'
+             '\t}\n',
+             '\tif (0) {\n'
+             '\t\treturn GTA4L_EMMC_ERR_RESET;\n'
+             '\t}\n',
+             'Gta4lEmmc.c', (), 'bus-reset-reset-stuck'),
+            ('br-no-pattern-compare',
+             '\t\tif (((uint32_t)pattern[index] ^\n'
+             '\t\t    (uint32_t)actual[index]) != 0xFFu) {\n',
+             '\t\tif (0) {\n',
+             'Gta4lEmmc.c', (), 'bus-reset-mismatch'),
+            ('br-wrong-fail-index',
+             '\t\tif ((rc != GTA4L_EMMC_OK) && (host->fail_valid != 0) &&\n'
+             '\t\t    (host->fail_index == GTA4L_EMMC_CMD19)) {\n',
+             '\t\tif ((rc != GTA4L_EMMC_OK) && (host->fail_valid != 0) &&\n'
+             '\t\t    (host->fail_index == GTA4L_EMMC_CMD14)) {\n',
+             'Gta4lEmmc.c', (), 'bus-reset-pass'),
+            ('br-skip-reset-poll',
+             '\tfor (index = 1; (readback != 0u) && (index < iterations); index++) {\n',
+             '\tfor (index = 1; 0; index++) {\n',
+             'Gta4lEmmc.c', ('-Wno-unused-but-set-variable',),
+             'bus-reset-reset-stuck'),
+            ('br-no-dat-inhibit-read',
+             '\t\tresult->dat_inhibit = present & GTA4L_EMMC_PRESENT_DAT_INHIBIT;\n',
+             '\t\tresult->dat_inhibit = 0u;\n',
+             'Gta4lEmmc.c', (), 'bus-reset-inhibit'),
+            ('br-reset-data-value',
+             'GTA4L_EMMC_RESET_DATA              0x04u',
+             'GTA4L_EMMC_RESET_DATA              0x01u',
+             'Gta4lEmmc.h', (), 'bus-reset-inhibit'),
             ('hs-no-readback',
              '\tif (readback != timing) {\n',
              '\tif (0) {\n',
@@ -1252,6 +1311,22 @@ def main() -> int:
                 '1-bit bus-test pattern is not 0x5a',
             'bw-test-len-1':
                 'one-bit bus test failed',
+            'br-no-reset':
+                'rung-1 reset pass was not reported as OK',
+            'br-reset-all':
+                'surviving data inhibit was not reported',
+            'br-ignore-reset-clear':
+                'stuck data reset was not reported',
+            'br-no-pattern-compare':
+                'rung-1 CMD14 mismatch was not reported',
+            'br-wrong-fail-index':
+                'rung-1 reset pass lost CC + BufferWriteReady',
+            'br-skip-reset-poll':
+                'stuck data reset lost its poll evidence',
+            'br-no-dat-inhibit-read':
+                'surviving data inhibit lost its post-reset evidence',
+            'br-reset-data-value':
+                'surviving data inhibit was not reported',
             'hs-no-readback':
                 'stuck HS_TIMING readback was not reported',
             'hs-wrong-divider':

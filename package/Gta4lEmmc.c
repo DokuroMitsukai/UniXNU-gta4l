@@ -2011,6 +2011,177 @@ gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
 	return GTA4L_EMMC_OK;
 }
 
+/* CMD19 write, bounded data-circuit reset and CMD14 read. This is the
+ * rung-1 recovery form of the bus test: the write phase may end in the
+ * recorded CC + BufferWriteReady timeout with no TC and no error bit, so
+ * the data circuit is reset before the read half is attempted. The reset
+ * is local to this diagnostic helper; no other timeout path changes. */
+int
+gta4l_emmc_bus_test_reset(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_reset_result *result)
+{
+	uint8_t pattern[GTA4L_EMMC_BUS_TEST_8_BYTES];
+	uint8_t actual[GTA4L_EMMC_BUS_TEST_8_BYTES];
+	uint32_t response[4];
+	uint32_t length;
+	uint32_t code;
+	uint32_t control;
+	uint32_t present;
+	uint32_t index;
+	uint32_t iterations;
+	uint32_t test_word = 0;
+	uint32_t expected_word = 0;
+	uint8_t readback;
+	const struct gta4l_emmc_bus_reset_result zero = { 0 };
+	int rc;
+
+	if ((host == 0) || (host->initialized == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	code = gta4l_emmc_bus_width_code(bits);
+	if (code == 0xFFFFFFFFu) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	control = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	if (host->bus_width != (uint8_t)code) {
+		return GTA4L_EMMC_ERR_BUS_WIDTH;
+	}
+	if (bits == 1u) {
+		if ((control & (GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT)) != 0u) {
+			return GTA4L_EMMC_ERR_BUS_WIDTH;
+		}
+	} else if (bits == 4u) {
+		if ((control & (GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT)) !=
+		    GTA4L_EMMC_HOST_CONTROL_4BIT) {
+			return GTA4L_EMMC_ERR_BUS_WIDTH;
+		}
+	} else if ((control & (GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT)) != GTA4L_EMMC_HOST_CONTROL_8BIT) {
+		return GTA4L_EMMC_ERR_BUS_WIDTH;
+	}
+	if (result != 0) {
+		*result = zero;
+		result->requested = bits;
+		result->host_control = control;
+	}
+
+	length = (bits == 8u) ? GTA4L_EMMC_BUS_TEST_8_BYTES :
+	    (bits == 1u) ? GTA4L_EMMC_BUS_TEST_1_BYTES :
+	    GTA4L_EMMC_BUS_TEST_4_BYTES;
+	for (index = 0; index < GTA4L_EMMC_BUS_TEST_8_BYTES; index++) {
+		pattern[index] = 0;
+		actual[index] = 0;
+	}
+	if (bits == 1u) {
+		pattern[0] = GTA4L_EMMC_BUS_TEST_PATTERN_1;
+	} else if (bits == 4u) {
+		pattern[0] = GTA4L_EMMC_BUS_TEST_PATTERN_4;
+	} else {
+		pattern[0] = GTA4L_EMMC_BUS_TEST_PATTERN_8_0;
+		pattern[1] = GTA4L_EMMC_BUS_TEST_PATTERN_8_1;
+	}
+
+	rc = gta4l_emmc_write_data(host, GTA4L_EMMC_CMD19, 0,
+	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX, pattern, length, response);
+	if (result != 0) {
+		result->write_result = rc;
+		/* The terminal sample belongs to the first failure, which the
+		 * probe's stage-A gate makes this CMD19 write. Do not copy an
+		 * older tuple if a previous failure is still latched. */
+		if ((rc != GTA4L_EMMC_OK) && (host->fail_valid != 0) &&
+		    (host->fail_index == GTA4L_EMMC_CMD19)) {
+			result->write_error = host->fail_error;
+			result->write_normal = host->fail_normal;
+			result->write_present = host->fail_present;
+		}
+	}
+
+	/* One bounded data-circuit reset. The bit is self-clearing; the poll
+	 * records how many status reads it took and leaves the last value for
+	 * the report. */
+	if (result != 0) {
+		result->reset_written = GTA4L_EMMC_RESET_DATA;
+	}
+	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_DATA);
+	gta4l_emmc_barrier(host);
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_RESET_TIMEOUT_US);
+	readback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_SOFTWARE_RESET);
+	for (index = 1; (readback != 0u) && (index < iterations); index++) {
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+		readback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_SOFTWARE_RESET);
+	}
+	if (result != 0) {
+		result->reset_readback = readback;
+		result->reset_iterations = index;
+		result->reset_result = (readback == 0u) ? GTA4L_EMMC_OK :
+		    GTA4L_EMMC_ERR_RESET;
+	}
+	if (readback != 0u) {
+		return GTA4L_EMMC_ERR_RESET;
+	}
+
+	present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_PRESENT_STATE);
+	if (result != 0) {
+		result->post_present = present;
+		result->dat_inhibit = present & GTA4L_EMMC_PRESENT_DAT_INHIBIT;
+	}
+	if ((present & GTA4L_EMMC_PRESENT_DAT_INHIBIT) != 0u) {
+		if (result != 0) {
+			result->test_result = GTA4L_EMMC_ERR_INHIBIT;
+		}
+		return GTA4L_EMMC_ERR_INHIBIT;
+	}
+
+	rc = gta4l_emmc_read_data(host, GTA4L_EMMC_CMD14, 0,
+	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX, actual, length, response);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->test_result = rc;
+		}
+		return rc;
+	}
+	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
+		host->card_status = response[0];
+		if (result != 0) {
+			result->test_result = GTA4L_EMMC_ERR_CARD_STATUS;
+		}
+		return GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+
+	for (index = 0; index < length / 4u; index++) {
+		test_word |= (uint32_t)actual[index] << (index * 8u);
+		expected_word |=
+		    (uint32_t)(uint8_t)(~pattern[index]) << (index * 8u);
+	}
+	if (result != 0) {
+		result->test_word = test_word;
+		result->test_expected = expected_word;
+	}
+	host->last_step = GTA4L_EMMC_STEP_BUS_TEST;
+	for (index = 0; index < length / 4u; index++) {
+		if (((uint32_t)pattern[index] ^
+		    (uint32_t)actual[index]) != 0xFFu) {
+			if (result != 0) {
+				result->test_result = GTA4L_EMMC_ERR_BUS_TEST;
+			}
+			gta4l_emmc_log(host, GTA4L_EMMC_LOG_BUS,
+			    0x80000000u | bits, test_word);
+			return GTA4L_EMMC_ERR_BUS_TEST;
+		}
+	}
+	gta4l_emmc_log(host, GTA4L_EMMC_LOG_BUS, bits, test_word);
+	return GTA4L_EMMC_OK;
+}
+
 int
 gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
     struct gta4l_emmc_hs_result *result)

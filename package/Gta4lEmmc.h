@@ -80,6 +80,7 @@
 #define GTA4L_EMMC_CLOCK_INT_STABLE        0x0002u
 #define GTA4L_EMMC_CLOCK_CARD_EN           0x0004u
 #define GTA4L_EMMC_RESET_ALL               0x01u
+#define GTA4L_EMMC_RESET_DATA              0x04u
 #define GTA4L_EMMC_TIMEOUT_MAX             0x0Eu
 #define GTA4L_EMMC_PRESENT_CMD_INHIBIT     0x00000001u
 #define GTA4L_EMMC_PRESENT_DAT_INHIBIT     0x00000002u
@@ -651,6 +652,42 @@ int gta4l_emmc_set_bus_width_ddr(struct gta4l_emmc_host *host,
  * the identification width. */
 int gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_result *result);
+
+/* Evidence for the rung-1 write-phase recovery: one CMD19 write, one
+ * bounded SDHCI data-circuit reset, the post-reset present state and one
+ * CMD14 read. The write fields are the terminal sample the core latched for
+ * a failing CMD19 data phase (zero on a clean write); the reset fields are
+ * the SOFTWARE_RESET value written, the value read back, the number of
+ * status polls and the post-reset PRESENT_STATE (with its DAT_INHIBIT bit);
+ * the test fields are the CMD14 result and the first 32 bits of the
+ * returned and expected pattern words. */
+struct gta4l_emmc_bus_reset_result {
+	uint32_t requested;      /* requested width in bits (1, 4 or 8) */
+	uint32_t host_control;   /* HOST_CONTROL before the write */
+	int      write_result;   /* CMD19 write result */
+	uint16_t write_error;    /* latched ERROR_INT_STATUS after the write */
+	uint16_t write_normal;   /* latched NORMAL_INT_STATUS after the write */
+	uint32_t write_present;  /* PRESENT_STATE after the write */
+	int      reset_result;   /* GTA4L_EMMC_OK or GTA4L_EMMC_ERR_RESET */
+	uint8_t  reset_written;  /* value written to SOFTWARE_RESET */
+	uint8_t  reset_readback; /* last SOFTWARE_RESET value read */
+	uint32_t reset_iterations; /* SOFTWARE_RESET status reads */
+	uint32_t post_present;   /* PRESENT_STATE after the reset */
+	uint32_t dat_inhibit;    /* DAT_INHIBIT bit of post_present */
+	int      test_result;    /* GTA4L_EMMC_OK or the failing code */
+	uint32_t test_word;      /* raw CMD14 response, little endian */
+	uint32_t test_expected;  /* expected CMD14 word, little endian */
+};
+
+/* CMD19 write, bounded data-circuit reset and CMD14 read at the active
+ * width. `bits` may be 1, 4 or 8; the host must already be in the same
+ * width as the card. The reset is local to this diagnostic helper and
+ * changes no other timeout path. A reset that does not self-clear returns
+ * GTA4L_EMMC_ERR_RESET; a post-reset DAT_INHIBIT returns
+ * GTA4L_EMMC_ERR_INHIBIT before CMD14 is issued; a pattern disagreement
+ * returns GTA4L_EMMC_ERR_BUS_TEST and still fills the observed words. */
+int gta4l_emmc_bus_test_reset(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_reset_result *result);
 
 /* Evidence for one HS_TIMING rung step. `hs_before`/`hs_after` are EXT_CSD
  * byte 185 read before and after the CMD6 switch; the RCG fields are the GCC

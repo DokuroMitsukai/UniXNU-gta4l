@@ -32,6 +32,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	struct gta4l_emmc_probe_h10 h10;
 	struct gta4l_emmc_probe_h11 h11;
 	struct gta4l_emmc_probe_h12 h12;
+	struct gta4l_emmc_probe_h13 h13;
 	struct gta4l_emmc_host host;
 	uint32_t index;
 
@@ -45,6 +46,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	memset(&h10, 0, sizeof(h10));
 	memset(&h11, 0, sizeof(h11));
 	memset(&h12, 0, sizeof(h12));
+	memset(&h13, 0, sizeof(h13));
 	memset(&host, 0, sizeof(host));
 	memset(block0, 0xFF, sizeof(block0));
 	memset(block1, 0xFF, sizeof(block1));
@@ -625,6 +627,45 @@ gta4l_emmc_probe_width_fixture(int form)
 		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		gta4l_emmc_probe_report_h12(&host, &probe, &h12,
+		    GTA4L_EMMC_ERR_UNSUPPORTED, 13);
+	} else if (form == 10) {
+		/* H13 form: the rung-1 write-phase wedge, the bounded data
+		 * reset, the post-reset present state and the CMD14 read at
+		 * their field bounds, and a failed recovery read. */
+		h13.pre_clock = 0xFFFFu;
+		h13.pre_hc = 0xFFu;
+		h13.pre_bw = 0xFFu;
+		h13.pre_sum = 0xFFFFFFFFu;
+		h13.pre_qdsd = 0xFFFFFFFFu;
+		h13.pre_dll = 0xFFFFFFFFu;
+		h13.pre_dst = 0xFFFFFFFFu;
+		h13.bus.requested = 1u;
+		h13.bus.host_control = 0xFFu;
+		h13.bus.write_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+		h13.bus.write_error = 0xFFFFu;
+		h13.bus.write_normal = 0xFFFFu;
+		h13.bus.write_present = 0xFFFFFFFFu;
+		h13.bus.reset_result = GTA4L_EMMC_ERR_RESET;
+		h13.bus.reset_written = 0xFFu;
+		h13.bus.reset_readback = 0xFFu;
+		h13.bus.reset_iterations = 0xFFFFFFFFu;
+		h13.bus.post_present = 0xFFFFFFFFu;
+		h13.bus.dat_inhibit = 0xFFFFFFFFu;
+		h13.bus.test_result = GTA4L_EMMC_ERR_BUS_TEST;
+		h13.bus.test_word = 0xFFFFFFFFu;
+		h13.bus.test_expected = 0xFFFFFFFFu;
+		h13.q_result = GTA4L_EMMC_ERR_DATA_CRC;
+		h13.q_block0_sum = 0xFFFFFFFFu;
+		host.fail_valid = 1u;
+		host.fail_index = 0xFFFFFFFFu;
+		host.fail_argument = 0xFFFFFFFFu;
+		host.fail_command = 0xFFFFFFFFu;
+		host.fail_error = 0xFFFFu;
+		host.fail_normal = 0xFFFFu;
+		host.fail_present = 0xFFFFFFFFu;
+		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		gta4l_emmc_probe_report_h13(&host, &probe, &h13,
 		    GTA4L_EMMC_ERR_UNSUPPORTED, 13);
 	}
 }

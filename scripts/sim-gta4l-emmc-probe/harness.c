@@ -136,6 +136,7 @@ static unsigned long sdhci_writes;
 static unsigned long gcc_accesses;
 static unsigned int sdhci_read_count[SIM_WINDOW];
 static unsigned int h12_rung_write_count[SIM_WINDOW];
+static unsigned int h13_reset_write_count;
 static unsigned int gcc_read_count[SIM_WINDOW];
 static uint64_t counter_value;
 static uint16_t normal_int;
@@ -224,6 +225,15 @@ static uint8_t sim_host_width_code(void);
 static uint8_t ext_csd_zero_width;
 static int host_width_ignore;
 static int cmd19_error;
+/* Stage-H13 rung-1 modeling. cmd19_1bit_timeout supplies the recorded
+ * write-phase wedge; h13_reset_stuck keeps the data-reset bit from
+ * self-clearing, h13_inhibit_survives leaves DAT_INHIBIT set after the
+ * reset, cmd14_error injects a CMD14 transport error and cmd14_status sets
+ * the R1 error bit. */
+static int h13_reset_stuck;
+static int h13_inhibit_survives;
+static int cmd14_error;
+static int cmd14_status;
 static int cmd2_crc_fail;
 static int cmd3_no_cc;
 static int cmd3_late_cc;
@@ -238,6 +248,8 @@ static unsigned int cmd17_fail_on;
 static uint16_t cmd17_fail_error;
 static unsigned int cmd17_count;
 static unsigned int cmd17_index;
+static unsigned int cmd19_count;
+static unsigned int cmd14_count;
 static int gpt_bad_field;
 static int bad_command_argument;
 static const uint32_t *expected_lbas;
@@ -980,6 +992,7 @@ sim_command(uint16_t command)
 		return;
 	}
 	if (index == GTA4L_EMMC_CMD19) {
+		cmd19_count++;
 		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
 		    GTA4L_EMMC_CMD_DATA)) {
@@ -1046,6 +1059,7 @@ sim_command(uint16_t command)
 		uint32_t index2;
 		uint32_t width_code;
 
+		cmd14_count++;
 		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX |
 		    GTA4L_EMMC_CMD_DATA)) {
@@ -1085,6 +1099,14 @@ sim_command(uint16_t command)
 			    ((uint32_t)payload[index2 + 3u] << 24);
 		}
 		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0x00000900u);
+		if (cmd14_status != 0) {
+			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+			    0x00000980u);
+		}
+		if (cmd14_error != 0) {
+			error_int |= (uint16_t)cmd14_error;
+			return;
+		}
 		normal_int |= GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_BRR |
 		    GTA4L_EMMC_INT_TC;
 		return;
@@ -1422,10 +1444,35 @@ gta4l_emmc_probe_test_write8(uint32_t space, uint32_t offset, uint8_t value)
 		    (cmd17_count >= 25u)) {
 			h12_rung_write_count[offset]++;
 		}
+		if ((stage == 13) &&
+		    (offset == GTA4L_EMMC_REG_SOFTWARE_RESET) &&
+		    ((value & GTA4L_EMMC_RESET_DATA) != 0)) {
+			h13_reset_write_count++;
+		}
 		/* The software-reset bits are self-clearing. Model the
-		 * completion so later stages can be exercised. */
+		 * completion so later stages can be exercised. The rung-1
+		 * data reset also clears the recorded data inhibit unless a
+		 * fault keeps the bit set. */
 		if (offset == GTA4L_EMMC_REG_SOFTWARE_RESET) {
-			value = 0;
+			if ((value & GTA4L_EMMC_RESET_DATA) != 0) {
+				if (h13_reset_stuck == 0) {
+					value = 0;
+					if (h13_inhibit_survives == 0) {
+						uint32_t present =
+						    sim_load(sdhci,
+						    GTA4L_EMMC_REG_PRESENT_STATE,
+						    4u);
+
+						present &= (uint32_t)
+						    ~GTA4L_EMMC_PRESENT_DAT_INHIBIT;
+						sim_store(sdhci,
+						    GTA4L_EMMC_REG_PRESENT_STATE,
+						    4u, present);
+					}
+				}
+			} else {
+				value = 0;
+			}
 		}
 		if ((offset == GTA4L_EMMC_REG_HOST_CONTROL) &&
 		    (host_width_ignore != 0)) {
@@ -2274,6 +2321,30 @@ static const uint8_t h12_suffix_no_q[] = {
 	GTA4L_EMMC_CMD8, GTA4L_EMMC_CMD6, GTA4L_EMMC_CMD13,
 	GTA4L_EMMC_CMD8
 };
+/* Stage 13: the stage-A pass, then the rung-1 sequence - one 1-bit CMD19
+ * write, one bounded data reset, one CMD14 read and one block-0 recovery
+ * read. A reset that does not self-clear or a surviving DAT_INHIBIT stops
+ * before CMD14, so its order is a prefix with no CMD14 entry. */
+static const uint8_t order_probe_h13[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
+	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD17,
+	GTA4L_EMMC_CMD19, GTA4L_EMMC_CMD14,
+	GTA4L_EMMC_CMD17
+};
+#define ORDER_H13_BASE 33u
+static uint8_t h13_order_buffer[64];
+static const uint8_t h13_suffix_no_cmd14[] = {
+	GTA4L_EMMC_CMD19
+};
 /* The B2 failure paths deviate from the full order only after the switch
  * step. Each suffix below is spliced after the shared 33-command init plus
  * stage-A prefix. */
@@ -2400,6 +2471,20 @@ set_h12_order(const uint8_t *suffix, unsigned int count)
 		h12_order_buffer[ORDER_H12_BASE + index] = suffix[index];
 	}
 	set_expected_order(h12_order_buffer, ORDER_H12_BASE + count);
+}
+
+static void
+set_h13_order(const uint8_t *suffix, unsigned int count)
+{
+	unsigned int index;
+
+	for (index = 0; index < ORDER_H13_BASE; index++) {
+		h13_order_buffer[index] = order_probe_h13[index];
+	}
+	for (index = 0; index < count; index++) {
+		h13_order_buffer[ORDER_H13_BASE + index] = suffix[index];
+	}
+	set_expected_order(h13_order_buffer, ORDER_H13_BASE + count);
 }
 
 int
@@ -3318,6 +3403,63 @@ main(int argc, char **argv)
 			cmd8_fail_on = 2u;
 			cmd8_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
 		}
+	} else if ((strcmp(scenario, "probe-h13-pass") == 0) ||
+	    (strcmp(scenario, "probe-h13-reset-stuck") == 0) ||
+	    (strcmp(scenario, "probe-h13-inhibit") == 0) ||
+	    (strcmp(scenario, "probe-h13-mismatch") == 0) ||
+	    (strcmp(scenario, "probe-h13-read-timeout") == 0) ||
+	    (strcmp(scenario, "probe-h13-read-crc") == 0) ||
+	    (strcmp(scenario, "probe-h13-read-status") == 0) ||
+	    (strcmp(scenario, "probe-h13-write-crc") == 0) ||
+	    (strcmp(scenario, "probe-h13-normal") == 0) ||
+	    (strcmp(scenario, "probe-h13-q-fail") == 0)) {
+		/* Stage 13: rung-1 write-phase recovery. The stage-A pass
+		 * runs at 400 kHz/1-bit, then one CMD19 write, one bounded
+		 * data reset, one CMD14 read and the block-0 recovery read.
+		 * A reset that does not clear stops before CMD14. */
+		stage = 13;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if ((strcmp(scenario, "probe-h13-reset-stuck") == 0) ||
+		    (strcmp(scenario, "probe-h13-inhibit") == 0)) {
+			set_h13_order(h13_suffix_no_cmd14,
+			    (unsigned int)(sizeof(h13_suffix_no_cmd14) /
+			    sizeof(h13_suffix_no_cmd14[0])));
+		} else {
+			set_expected_order(order_probe_h13,
+			    (unsigned int)(sizeof(order_probe_h13) /
+			    sizeof(order_probe_h13[0])));
+		}
+		if ((strcmp(scenario, "probe-h13-normal") != 0) &&
+		    (strcmp(scenario, "probe-h13-write-crc") != 0)) {
+			cmd19_1bit_timeout = 1;
+		}
+		if (strcmp(scenario, "probe-h13-reset-stuck") == 0) {
+			h13_reset_stuck = 1;
+		} else if (strcmp(scenario, "probe-h13-inhibit") == 0) {
+			h13_inhibit_survives = 1;
+		} else if (strcmp(scenario, "probe-h13-mismatch") == 0) {
+			bus_test_bad = 1;
+			bus_test_bad_width = 0u;
+		} else if (strcmp(scenario,
+		    "probe-h13-read-timeout") == 0) {
+			cmd14_error = GTA4L_EMMC_INT_ERR_DATA_TIMEOUT;
+		} else if (strcmp(scenario, "probe-h13-read-crc") == 0) {
+			cmd14_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-h13-read-status") == 0) {
+			cmd14_status = 1;
+		} else if (strcmp(scenario, "probe-h13-write-crc") == 0) {
+			cmd19_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario, "probe-h13-q-fail") == 0) {
+			cmd17_fail_on = 26u;
+			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		}
 	} else if ((strcmp(scenario, "probe-dto-fired") == 0) ||
 	    (strcmp(scenario, "probe-dto-silent") == 0) ||
 	    (strcmp(scenario, "probe-dto-q-fail") == 0) ||
@@ -3483,6 +3625,17 @@ main(int argc, char **argv)
 		 * the report formatter samples the live header and pad
 		 * registers. */
 		width_form = 10;
+		sim_store(sdhci, GTA4L_EMMC_REG_HOST_CONTROL, 1u, 0xFFu);
+		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
+		    0xFFFFFFFFu);
+		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_STATUS, 4u,
+		    0xFFFFFFFFu);
+	} else if (strcmp(scenario, "report-width-h13") == 0) {
+		/* Synthetic H13 field-wise bound: the fixture fills the
+		 * rung-1 write/reset/read fields, and the report formatter
+		 * samples the live header and pad registers. */
+		width_form = 11;
 		sim_store(sdhci, GTA4L_EMMC_REG_HOST_CONTROL, 1u, 0xFFu);
 		sim_store(tlmm, GTA4L_EMMC_TLMM_SDC1_QDSD, 4u, 0xFFFFFFFFu);
 		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_CONFIG, 4u,
@@ -5927,6 +6080,185 @@ main(int argc, char **argv)
 		check(cmd6_value4_count == 0u,
 		    "the failed H12 pre-read issued a byte-183 DDR "
 		    "attempt");
+	} else if (strcmp(scenario, "probe-h13-pass") == 0) {
+		check(panicked == 1, "the H13 rung-1 pass did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=0 stop=0") != NULL,
+		    "the H13 rung-1 pass does not keep stop 0");
+		check(strstr(panic_message,
+		    "H13 R clk=0007 hc=00 bw=00 es=0000018e") != NULL,
+		    "the H13 rung-1 pass lost the 400 kHz identity");
+		check(strstr(panic_message,
+		    "H13 W wrc=-11 err=0000 nrm=0011 pst=03f801f6") != NULL,
+		    "the H13 rung-1 pass lost the write-phase wedge tuple");
+		check(strstr(panic_message,
+		    "H13 RST rc=0 wr=04 rb=00 it=1 pst=03f801f4 dinh=0")
+		    != NULL,
+		    "the H13 rung-1 pass lost the self-clearing data reset");
+		check(strstr(panic_message,
+		    "H13 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "the H13 rung-1 pass lost the matching CMD14 word");
+		check(strstr(panic_message,
+		    "H13 Q rc=0 qb0=5c510100") != NULL,
+		    "the H13 recovery read did not match block 0");
+		check(strstr(panic_message,
+		    "H13 PAD pre=00009fe4/60000000/00000000 "
+		    "post=00009fe4/60000000/00000000") != NULL,
+		    "the H13 pad samples changed");
+		check(strstr(panic_message,
+		    "H13 FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/18")
+		    != NULL,
+		    "the H13 rung-1 pass lost the first CMD19 failure");
+		check(cmd19_count == 1u && cmd14_count == 1u,
+		    "the H13 rung-1 pass command counts mismatch");
+		check(cmd17_count == 26u,
+		    "the H13 rung-1 pass did not run the stage-A reads and Q");
+		check(sim_host_width_code() ==
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1,
+		    "the H13 rung-1 pass changed the host width");
+	} else if (strcmp(scenario, "probe-h13-reset-stuck") == 0) {
+		check(panicked == 1, "the stuck H13 data reset did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-4 stop=10") != NULL,
+		    "the stuck H13 data reset does not keep stop 10");
+		check(strstr(panic_message,
+		    "H13 RST rc=-4 wr=04 rb=04 it=10000 pst=00000000 "
+		    "dinh=0") != NULL,
+		    "the stuck H13 data reset lost its poll evidence");
+		check(strstr(panic_message,
+		    "H13 T trc=0 tw=00000000 te=00000000") != NULL,
+		    "the stuck H13 data reset still compared a CMD14 word");
+		check(strstr(panic_message,
+		    "H13 Q rc=-17 qb0=00000000") != NULL,
+		    "the stuck H13 data reset still read block 0");
+		check(cmd19_count == 1u && cmd14_count == 0u,
+		    "the stuck H13 data reset still issued CMD14");
+		check(cmd17_count == 25u,
+		    "the stuck H13 data reset walked into the inhibited "
+		    "controller");
+	} else if (strcmp(scenario, "probe-h13-inhibit") == 0) {
+		check(panicked == 1, "the surviving H13 data inhibit did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-17 stop=11") != NULL,
+		    "the surviving H13 data inhibit does not keep stop 11");
+		check(strstr(panic_message,
+		    "H13 RST rc=0 wr=04 rb=00 it=1 pst=03f801f6 dinh=2")
+		    != NULL,
+		    "the surviving H13 data inhibit lost its post-reset "
+		    "evidence");
+		check(strstr(panic_message,
+		    "H13 T trc=-17 tw=00000000 te=00000000") != NULL,
+		    "the surviving H13 data inhibit did not record its "
+		    "refusal");
+		check(cmd19_count == 1u && cmd14_count == 0u,
+		    "the surviving H13 data inhibit still issued CMD14");
+		check(cmd17_count == 25u,
+		    "the surviving H13 data inhibit walked into the "
+		    "inhibited controller");
+	} else if (strcmp(scenario, "probe-h13-mismatch") == 0) {
+		check(panicked == 1, "the H13 CMD14 mismatch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-20 stop=13") != NULL,
+		    "the H13 CMD14 mismatch does not keep stop 13");
+		check(strstr(panic_message,
+		    "H13 T trc=-20 tw=0000005a te=000000a5") != NULL,
+		    "the H13 CMD14 mismatch did not bind the pattern words");
+		check(strstr(panic_message,
+		    "H13 Q rc=0 qb0=5c510100") != NULL,
+		    "the H13 CMD14 mismatch lost the recovery read");
+		check(cmd19_count == 1u && cmd14_count == 1u,
+		    "the H13 CMD14 mismatch command counts mismatch");
+	} else if (strcmp(scenario, "probe-h13-read-timeout") == 0) {
+		check(panicked == 1, "the H13 CMD14 timeout did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-11 stop=14") != NULL,
+		    "the H13 CMD14 timeout does not keep stop 14");
+		check(strstr(panic_message,
+		    "H13 T trc=-11 tw=00000000 te=00000000") != NULL,
+		    "the H13 CMD14 timeout lost its core code");
+		check(cmd19_count == 1u && cmd14_count == 1u,
+		    "the H13 CMD14 timeout command counts mismatch");
+	} else if (strcmp(scenario, "probe-h13-read-crc") == 0) {
+		check(panicked == 1, "the H13 CMD14 CRC did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-12 stop=14") != NULL,
+		    "the H13 CMD14 CRC does not keep stop 14");
+		check(strstr(panic_message,
+		    "H13 T trc=-12 tw=00000000 te=00000000") != NULL,
+		    "the H13 CMD14 CRC lost its core code");
+		check(cmd19_count == 1u && cmd14_count == 1u,
+		    "the H13 CMD14 CRC command counts mismatch");
+	} else if (strcmp(scenario, "probe-h13-read-status") == 0) {
+		check(panicked == 1, "the H13 CMD14 status error did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-15 stop=14") != NULL,
+		    "the H13 CMD14 status error does not keep stop 14");
+		check(strstr(panic_message,
+		    "H13 T trc=-15 tw=00000000 te=00000000") != NULL,
+		    "the H13 CMD14 status error lost its core code");
+		check(cmd19_count == 1u && cmd14_count == 1u,
+		    "the H13 CMD14 status error command counts mismatch");
+	} else if (strcmp(scenario, "probe-h13-write-crc") == 0) {
+		check(panicked == 1, "the H13 write CRC did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-12 stop=17") != NULL,
+		    "the H13 write CRC does not keep stop 17");
+		check(strstr(panic_message,
+		    "H13 W wrc=-12 err=0020 nrm=0000 pst=00000000") != NULL,
+		    "the H13 write CRC lost the terminal write tuple");
+		check(strstr(panic_message,
+		    "H13 RST rc=0 wr=04 rb=00 it=1") != NULL,
+		    "the H13 write CRC did not run the clean reset");
+		check(cmd19_count == 1u && cmd14_count == 1u,
+		    "the H13 write CRC command counts mismatch");
+	} else if (strcmp(scenario, "probe-h13-normal") == 0) {
+		check(panicked == 1, "the H13 non-wedge write did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=0 stop=16") != NULL,
+		    "the H13 non-wedge write does not keep stop 16");
+		check(strstr(panic_message,
+		    "H13 W wrc=0 err=0000 nrm=0000 pst=00000000") != NULL,
+		    "the H13 non-wedge write lost the clean completion");
+		check(strstr(panic_message,
+		    "H13 RST rc=0 wr=04 rb=00 it=1 pst=00000000 dinh=0")
+		    != NULL,
+		    "the H13 non-wedge write lost the clean reset");
+		check(strstr(panic_message,
+		    "H13 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "the H13 non-wedge write lost the matching CMD14 word");
+		check(strstr(panic_message,
+		    "H13 FAIL fail=0/0/0/00000000/0000/0000/00000000/0")
+		    != NULL,
+		    "the H13 non-wedge write invented a failure record");
+		check(cmd19_count == 1u && cmd14_count == 1u,
+		    "the H13 non-wedge write command counts mismatch");
+		check(cmd17_count == 26u,
+		    "the H13 non-wedge write did not run the stage-A reads "
+		    "and Q");
+	} else if (strcmp(scenario, "probe-h13-q-fail") == 0) {
+		check(panicked == 1, "the failed H13 recovery read did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-12 stop=15") != NULL,
+		    "the failed H13 recovery read does not keep stop 15");
+		check(strstr(panic_message,
+		    "H13 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "the failed H13 recovery read lost the passing CMD14 "
+		    "word");
+		check(strstr(panic_message,
+		    "H13 Q rc=-12 qb0=00000000") != NULL,
+		    "the failed H13 recovery read lost its core code");
+		check(strstr(panic_message,
+		    "H13 FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/18")
+		    != NULL,
+		    "the failed H13 recovery read replaced the first "
+		    "failure");
+		check(cmd17_count == 26u,
+		    "the failed H13 recovery read did not stop at Q");
 	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
 		check(panicked == 1, "the fired DTO audit did not report");
 		check(strstr(panic_message,
@@ -6563,6 +6895,50 @@ main(int argc, char **argv)
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width H12 report does not fit the "
 		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-h13") == 0) {
+		check(panicked == 1,
+		    "the synthetic width H13 report did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 REPORT: rc=-18 stop=13 mci=ffffffff "
+		    "rca=1 cap=4294967295 rev=255 hci=ff step=24 log=99999 "
+		    "bw=0f") != NULL,
+		    "the synthetic width H13 report lost the widest header");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 R clk=ffff hc=ff bw=ff es=ffffffff")
+		    != NULL,
+		    "the synthetic width H13 report lost the 400 kHz "
+		    "identity line");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 W wrc=-18 err=ffff nrm=ffff pst=ffffffff")
+		    != NULL,
+		    "the synthetic width H13 report lost the widest "
+		    "write-phase fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 RST rc=-4 wr=ff rb=ff it=4294967295 "
+		    "pst=ffffffff dinh=4294967295") != NULL,
+		    "the synthetic width H13 report lost the widest reset "
+		    "fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 T trc=-20 tw=ffffffff te=ffffffff")
+		    != NULL,
+		    "the synthetic width H13 report lost the widest CMD14 "
+		    "fields");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 Q rc=-12 qb0=ffffffff") != NULL,
+		    "the synthetic width H13 report lost the recovery read");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 PAD pre=ffffffff/ffffffff/ffffffff "
+		    "post=ffffffff/ffffffff/ffffffff") != NULL,
+		    "the synthetic width H13 report lost the before/after "
+		    "pad/DLL state");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H13 FAIL fail=1/4294967295/4294967295/"
+		    "ffffffff/ffff/ffff/ffffffff/24") != NULL,
+		    "the synthetic width H13 report lost the widest failure "
+		    "record");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width H13 report does not fit the "
+		    "2048-byte panic buffer including the NUL");
 	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
 	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
 	    (strcmp(scenario, "cmd7-busy-error") == 0) ||
@@ -6949,7 +7325,8 @@ main(int argc, char **argv)
 	    (strncmp(scenario, "probe-b2-", 9u) == 0) ||
 	    (strncmp(scenario, "probe-h9-", 9u) == 0) ||
 	    (strncmp(scenario, "probe-h11-", 10u) == 0) ||
-	    (strncmp(scenario, "probe-h12-", 10u) == 0)) {
+	    (strncmp(scenario, "probe-h12-", 10u) == 0) ||
+	    (strncmp(scenario, "probe-h13-", 10u) == 0)) {
 		check(bad_command_format == 0,
 		    "a B1C command used the wrong flags");
 		check(bad_command_order == 0,
@@ -6990,6 +7367,14 @@ main(int argc, char **argv)
 			    "the H12 rung did not issue exactly one "
 			    "byte-183 value-4 attempt");
 		}
+	}
+	if (strncmp(scenario, "probe-h13-", 10u) == 0) {
+		check(cmd6_count == 0u,
+		    "the H13 rung issued a CMD6");
+		check(cmd6_width_ddr == 0,
+		    "the H13 rung issued a byte-183 DDR variant");
+		check(h13_reset_write_count == 1u,
+		    "the H13 rung did not issue exactly one data reset");
 	}
 	if (strncmp(scenario, "probe-dto-", 10u) == 0) {
 		check(bad_mb_command == 0,

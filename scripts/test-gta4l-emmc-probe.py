@@ -200,6 +200,16 @@ SCENARIOS = [
     'probe-h12-hs-revert-fail',
     'probe-h12-q-fail',
     'probe-h12-pre-read-fail',
+    'probe-h13-pass',
+    'probe-h13-reset-stuck',
+    'probe-h13-inhibit',
+    'probe-h13-mismatch',
+    'probe-h13-read-timeout',
+    'probe-h13-read-crc',
+    'probe-h13-read-status',
+    'probe-h13-write-crc',
+    'probe-h13-normal',
+    'probe-h13-q-fail',
     'probe-b1c-success',
     'probe-b1c-pass',
     'probe-b1c-late-commit',
@@ -218,6 +228,7 @@ SCENARIOS = [
     'report-width-b2',
     'report-width-h9',
     'report-width-h12',
+    'report-width-h13',
     'report-width-budget-control',
 ]
 
@@ -232,6 +243,7 @@ WIDTH_SCENARIOS = (
     'report-width-h10',
     'report-width-h11',
     'report-width-h12',
+    'report-width-h13',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'

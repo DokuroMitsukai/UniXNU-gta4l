@@ -422,7 +422,11 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * H12 record-only DDR attempt: after the stage-A pass it enters HS, issues
  * one CMD6 SET byte 183 = 4, reads the value back at the 4-bit SDR DAT
  * width without applying any controller DDR mode, reverts both and stops
- * with the H12 report. */
+ * with the H12 report. Stage 13 is the rung-1 write-phase recovery: after
+ * the stage-A pass it runs one 1-bit CMD19 write, one bounded SDHCI
+ * data-circuit reset, records the post-reset present state, issues one
+ * CMD14 read and the block-0 recovery read, then stops with the H13
+ * report. It issues no CMD6, CMD18, CMD25 or user-data write. */
 static int
 gta4l_emmc_probe_stage(void)
 {
@@ -431,7 +435,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 12)) {
+	if ((value < 1) || (value > 13)) {
 		return 0;
 	}
 	return value;
@@ -2339,6 +2343,152 @@ gta4l_emmc_probe_h12_run(struct gta4l_emmc_host *host,
 	gta4l_emmc_probe_report_h12(host, probe, &h12, rc, 12);
 }
 
+struct gta4l_emmc_probe_h13 {
+	struct gta4l_emmc_bus_reset_result bus;
+	uint32_t pre_clock;
+	uint32_t pre_hc;
+	uint32_t pre_bw;
+	uint32_t pre_sum;
+	uint32_t pre_qdsd;
+	uint32_t pre_dll;
+	uint32_t pre_dst;
+	int      q_result;
+	uint32_t q_block0_sum;
+};
+
+static void
+gta4l_emmc_probe_report_h13(const struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_h13 *h13, int rc, int stop)
+{
+	uint8_t hci = gta4l_emmc_probe_read8(probe, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	uint32_t qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	uint32_t dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	uint32_t dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+
+	panic("GTA4L-EMMC H13 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
+	    "rev=%u hci=%02x step=%u log=%u bw=%02x\n"
+	    "GTA4L-EMMC H13 R clk=%04x hc=%02x bw=%02x es=%08x\n"
+	    "GTA4L-EMMC H13 W wrc=%d err=%04x nrm=%04x pst=%08x\n"
+	    "GTA4L-EMMC H13 RST rc=%d wr=%02x rb=%02x it=%u pst=%08x "
+	    "dinh=%u\n"
+	    "GTA4L-EMMC H13 T trc=%d tw=%08x te=%08x\n"
+	    "GTA4L-EMMC H13 Q rc=%d qb0=%08x\n"
+	    "GTA4L-EMMC H13 PAD pre=%08x/%08x/%08x post=%08x/%08x/%08x\n"
+	    "GTA4L-EMMC H13 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
+	    (unsigned int)host->ext_csd_rev, (unsigned int)hci,
+	    host->last_step, probe->log_count,
+	    (unsigned int)host->bus_width,
+	    h13->pre_clock, (unsigned int)h13->pre_hc,
+	    (unsigned int)h13->pre_bw, h13->pre_sum,
+	    h13->bus.write_result, (unsigned int)h13->bus.write_error,
+	    (unsigned int)h13->bus.write_normal, h13->bus.write_present,
+	    h13->bus.reset_result, (unsigned int)h13->bus.reset_written,
+	    (unsigned int)h13->bus.reset_readback,
+	    h13->bus.reset_iterations, h13->bus.post_present,
+	    h13->bus.dat_inhibit,
+	    h13->bus.test_result, h13->bus.test_word,
+	    h13->bus.test_expected,
+	    h13->q_result, h13->q_block0_sum,
+	    h13->pre_qdsd, h13->pre_dll, h13->pre_dst, qdsd, dll, dst,
+	    (unsigned int)host->fail_valid, host->fail_index,
+	    host->fail_argument, host->fail_command,
+	    (unsigned int)host->fail_error,
+	    (unsigned int)host->fail_normal, host->fail_present,
+	    host->fail_step);
+}
+
+/* Run the rung-1 write-phase recovery: the stage-A pass at 400 kHz/1-bit is
+ * the baseline, then one CMD19 write at 1-bit, one bounded data-circuit
+ * reset, the post-reset present state, one CMD14 read and the block-0
+ * recovery read. The reset is local to this rung; no other timeout path is
+ * changed. Report and stop in every case; no retry.
+ *
+ * Stop codes: 0 = the recorded CC + BufferWriteReady/no-TC write, with the
+ * reset clear and CMD14 returning the expected pattern; 10 = the reset did
+ * not self-clear; 11 = DAT_INHIBIT survived the reset (CMD14 not issued);
+ * 12 = the width/argument precondition refused the helper; 13 = CMD14
+ * pattern mismatch; 14 = CMD14 transport or card-status failure; 15 = the
+ * block-0 recovery read failed or disagreed; 16 = the write completed
+ * normally (no wedge) and the rest passed; 17 = the write failed with a
+ * non-timeout error and the rest passed. */
+static void
+gta4l_emmc_probe_h13_run(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe *probe,
+    const struct gta4l_emmc_probe_range *range, const uint8_t *block0)
+{
+	static uint8_t qblock[GTA4L_EMMC_BLOCK_BYTES];
+	struct gta4l_emmc_probe_h13 h13;
+	uint32_t block0_sum;
+	int rc;
+	int stop;
+
+	bzero(&h13, sizeof(h13));
+	(void)range;
+	block0_sum = gta4l_emmc_probe_sum(block0, GTA4L_EMMC_BLOCK_BYTES);
+	h13.pre_clock = gta4l_emmc_probe_read16(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CLOCK_CONTROL);
+	h13.pre_hc = gta4l_emmc_probe_read8(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
+	h13.pre_bw = host->bus_width;
+	h13.pre_sum = host->ext_csd_sum;
+	h13.pre_qdsd = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_TLMM, GTA4L_EMMC_TLMM_SDC1_QDSD);
+	h13.pre_dll = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	h13.pre_dst = gta4l_emmc_probe_read32(probe,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+
+	rc = gta4l_emmc_bus_test_reset(host, 1u, &h13.bus);
+	if ((rc == GTA4L_EMMC_ERR_ARG) ||
+	    (rc == GTA4L_EMMC_ERR_BUS_WIDTH)) {
+		gta4l_emmc_probe_report_h13(host, probe, &h13, rc, 12);
+	}
+
+	h13.q_result = gta4l_emmc_read_block(host, 0u, qblock);
+	if (h13.q_result == GTA4L_EMMC_OK) {
+		h13.q_block0_sum = gta4l_emmc_probe_sum(qblock,
+		    GTA4L_EMMC_BLOCK_BYTES);
+	}
+
+	if (h13.bus.reset_result != GTA4L_EMMC_OK) {
+		rc = h13.bus.reset_result;
+		stop = 10;
+	} else if (h13.bus.dat_inhibit != 0u) {
+		rc = GTA4L_EMMC_ERR_INHIBIT;
+		stop = 11;
+	} else if ((h13.bus.write_result != GTA4L_EMMC_OK) &&
+	    (h13.bus.write_result != GTA4L_EMMC_ERR_DATA_TIMEOUT)) {
+		/* A write that failed before the observed completion class is
+		 * the headline; CMD14 can only be inconclusive after it. */
+		rc = h13.bus.write_result;
+		stop = 17;
+	} else if (h13.bus.test_result == GTA4L_EMMC_ERR_BUS_TEST) {
+		rc = GTA4L_EMMC_ERR_BUS_TEST;
+		stop = 13;
+	} else if (h13.bus.test_result != GTA4L_EMMC_OK) {
+		rc = h13.bus.test_result;
+		stop = 14;
+	} else if ((h13.q_result != GTA4L_EMMC_OK) ||
+	    (h13.q_block0_sum != block0_sum)) {
+		rc = (h13.q_result != GTA4L_EMMC_OK) ? h13.q_result :
+		    GTA4L_EMMC_PROBE_ERR_CONTENT;
+		stop = 15;
+	} else if (h13.bus.write_result == GTA4L_EMMC_OK) {
+		rc = GTA4L_EMMC_OK;
+		stop = 16;
+	} else {
+		rc = GTA4L_EMMC_OK;
+		stop = 0;
+	}
+	gta4l_emmc_probe_report_h13(host, probe, &h13, rc, stop);
+}
+
 /* Run the stage-7 audit: read back the timeout configuration (R1), arm the
  * minimum data timeout and read 8 blocks (E1), re-read block 0 to prove the bus
  * recovered (Q), then repeat the 1-bit CMD19 write test under the extended
@@ -2933,6 +3083,10 @@ gta4l_emmc_probe_run(void)
 	if (stage == 12) {
 		gta4l_emmc_probe_h12_run(&host, &probe, &range, block0,
 		    block1);
+	}
+
+	if (stage == 13) {
+		gta4l_emmc_probe_h13_run(&host, &probe, &range, block0);
 	}
 
 	/* Stage B1: switch the card/host to 4-bit then 8-bit, run the

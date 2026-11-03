@@ -329,6 +329,16 @@ struct sim {
 	int bus_test_read_status;
 	int bus_test_corrupt_word;
 	uint32_t bus_test_corrupt_xor;
+	/* Rung-1 data-circuit reset model. bus_test_write_timeout latches
+	 * CC + BufferWriteReady but never TC (the observed wedge) and leaves
+	 * DAT_INHIBIT set until a data reset clears it.
+	 * bus_test_reset_stuck keeps the SOFTWARE_RESET data bit from
+	 * self-clearing; bus_test_reset_no_inhibit_clear lets the bit clear
+	 * while DAT_INHIBIT survives. */
+	int bus_test_write_timeout;
+	int bus_test_dat_inhibit;
+	int bus_test_reset_stuck;
+	int bus_test_reset_no_inhibit_clear;
 	int access_violation;
 	int command_error;
 };
@@ -785,7 +795,8 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			    ((uint32_t)sim->sdhci[offset + 3u] << 24);
 
 			if ((sim->cmd7_busy != 0) ||
-			    (sim->mb_dat_inhibit != 0)) {
+			    (sim->mb_dat_inhibit != 0) ||
+			    (sim->bus_test_dat_inhibit != 0)) {
 				value |= GTA4L_EMMC_PRESENT_DAT_INHIBIT;
 			}
 			return value;
@@ -845,18 +856,34 @@ sim_write8(void *context, uint32_t space, uint32_t offset, uint8_t value)
 		sim->sdhci[offset] = value;
 		if (offset == GTA4L_EMMC_REG_SOFTWARE_RESET) {
 			sim->reset_written = 1;
-			if (!sim->reset_timeout) {
-				sim->sdhci[offset] = 0;
-				/* RESET_ALL resets HOST_CONTROL2 in hardware,
-				 * so a later init sees VDD_180 clear and raises
-				 * the IO request again. A controller that keeps
-				 * the bit across reset is modelled separately. */
-				if (sim->preserve_host_control2 == 0) {
-					sim->sdhci[
-					    GTA4L_EMMC_REG_HOST_CONTROL2] = 0;
-					sim->sdhci[
-					    GTA4L_EMMC_REG_HOST_CONTROL2 +
-					    1u] = 0;
+			if ((value & GTA4L_EMMC_RESET_ALL) != 0) {
+				if (!sim->reset_timeout) {
+					sim->sdhci[offset] = 0;
+					sim->bus_test_dat_inhibit = 0;
+					/* RESET_ALL resets HOST_CONTROL2 in
+					 * hardware, so a later init sees
+					 * VDD_180 clear and raises the IO
+					 * request again. A controller that
+					 * keeps the bit across reset is
+					 * modelled separately. */
+					if (sim->preserve_host_control2 == 0) {
+						sim->sdhci[
+						    GTA4L_EMMC_REG_HOST_CONTROL2]
+						    = 0;
+						sim->sdhci[
+						    GTA4L_EMMC_REG_HOST_CONTROL2 +
+						    1u] = 0;
+					}
+				}
+			} else if ((value & GTA4L_EMMC_RESET_DATA) != 0) {
+				/* The data-circuit reset is self-clearing and
+				 * clears the data inhibit; the two fault knobs
+				 * model a stuck bit and a surviving inhibit. */
+				if (!sim->bus_test_reset_stuck) {
+					sim->sdhci[offset] = 0;
+					if (!sim->bus_test_reset_no_inhibit_clear) {
+						sim->bus_test_dat_inhibit = 0;
+					}
 				}
 			}
 		}
@@ -1443,6 +1470,15 @@ sim_command(struct sim *sim, uint16_t command)
 		if (sim->bus_test_data_timeout != 0) {
 			break;
 		}
+		if (sim->bus_test_write_timeout != 0) {
+			/* The observed write-phase wedge: CC and
+			 * BufferWriteReady latch, the buffer drains, TC never
+			 * follows and no error bit is set. The data inhibit
+			 * stays raised until a data-circuit reset. */
+			sim->bus_test_dat_inhibit = 1;
+			sim->normal_int |= SIM_INT_BWR;
+			break;
+		}
 		sim->bus_test_active = 1;
 		sim->normal_int |= SIM_INT_BWR;
 		break;
@@ -1805,7 +1841,9 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 			return;
 		}
 		if (offset == GTA4L_EMMC_REG_BUFFER_DATA_PORT) {
-			if ((sim->bus_test_active != 0) &&
+			if (((sim->bus_test_active != 0) ||
+			    ((sim->bus_test_write_timeout != 0) &&
+			    (sim->last_cmd == GTA4L_EMMC_CMD19))) &&
 			    (sim->bus_test_written_words <
 			    (sim->bus_test_size / 4u))) {
 				uint32_t slot = sim->bus_test_written_words;
@@ -1830,11 +1868,16 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 				}
 				if (sim->bus_test_written_words ==
 				    (sim->bus_test_size / 4u)) {
-					sim->bus_test_active = 0;
-					sim->normal_int &=
-					    (uint16_t)~SIM_INT_BWR;
-					sim->normal_int |=
-					    GTA4L_EMMC_INT_TC;
+					if (sim->bus_test_write_timeout != 0) {
+						/* BWR stays latched and TC
+						 * never follows. */
+					} else {
+						sim->bus_test_active = 0;
+						sim->normal_int &=
+						    (uint16_t)~SIM_INT_BWR;
+						sim->normal_int |=
+						    GTA4L_EMMC_INT_TC;
+					}
 				}
 			}
 			return;
@@ -2142,6 +2185,7 @@ main(int argc, char **argv)
 	uint8_t block5[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t ext[GTA4L_EMMC_EXT_CSD_BYTES];
 	struct gta4l_emmc_bus_result bus;
+	struct gta4l_emmc_bus_reset_result bus_reset;
 	struct gta4l_emmc_hs_result hs;
 	static uint8_t mb_blocks[SIM_MB_TEST_BLOCKS * GTA4L_EMMC_BLOCK_BYTES];
 	int result;
@@ -2601,6 +2645,35 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario, "bus-test-mismatch-1")) {
 		sim.bus_test_corrupt_word = 0;
 		sim.bus_test_corrupt_xor = 0x00000001u;
+	} else if (scenario_is(scenario, "bus-reset-pass") ||
+	    scenario_is(scenario, "bus-reset-mismatch") ||
+	    scenario_is(scenario, "bus-reset-read-timeout") ||
+	    scenario_is(scenario, "bus-reset-read-crc") ||
+	    scenario_is(scenario, "bus-reset-read-status")) {
+		/* The recorded rung-1 input: the CMD19 write drains but never
+		 * latches TC and leaves DAT_INHIBIT raised until the data
+		 * reset. */
+		sim.bus_test_write_timeout = 1;
+		if (scenario_is(scenario, "bus-reset-mismatch")) {
+			sim.bus_test_corrupt_word = 0;
+			sim.bus_test_corrupt_xor = 0x00000001u;
+		} else if (scenario_is(scenario,
+		    "bus-reset-read-timeout")) {
+			sim.bus_test_read_timeout = 1;
+		} else if (scenario_is(scenario, "bus-reset-read-crc")) {
+			sim.bus_test_read_crc = 1;
+		} else if (scenario_is(scenario,
+		    "bus-reset-read-status")) {
+			sim.bus_test_read_status = 1;
+		}
+	} else if (scenario_is(scenario, "bus-reset-reset-stuck")) {
+		sim.bus_test_write_timeout = 1;
+		sim.bus_test_reset_stuck = 1;
+	} else if (scenario_is(scenario, "bus-reset-inhibit")) {
+		sim.bus_test_write_timeout = 1;
+		sim.bus_test_reset_no_inhibit_clear = 1;
+	} else if (scenario_is(scenario, "bus-reset-write-crc")) {
+		sim.bus_test_data_crc = 1;
 	}
 
 	sim.trace_armed = 1;
@@ -2655,6 +2728,18 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "bus-test-mismatch-4") ||
 	    scenario_is(scenario, "bus-test-mismatch-8") ||
 	    scenario_is(scenario, "bus-test-mismatch-1") ||
+	    scenario_is(scenario, "bus-reset-pass") ||
+	    scenario_is(scenario, "bus-reset-mismatch") ||
+	    scenario_is(scenario, "bus-reset-read-timeout") ||
+	    scenario_is(scenario, "bus-reset-read-crc") ||
+	    scenario_is(scenario, "bus-reset-read-status") ||
+	    scenario_is(scenario, "bus-reset-reset-stuck") ||
+	    scenario_is(scenario, "bus-reset-inhibit") ||
+	    scenario_is(scenario, "bus-reset-write-crc") ||
+	    scenario_is(scenario, "bus-reset-normal") ||
+	    scenario_is(scenario, "bus-reset-width") ||
+	    scenario_is(scenario, "bus-reset-arg") ||
+	    scenario_is(scenario, "bus-reset-without-init") ||
 	    scenario_is(scenario, "bus-test-width") ||
 	    scenario_is(scenario, "bus-test-1bit") ||
 	    scenario_is(scenario, "bus-test-1bit-width") ||
@@ -3743,6 +3828,167 @@ main(int argc, char **argv)
 		    "1-bit failing word was not bound exactly");
 		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
 		    "1-bit mismatch command counts mismatch");
+	} else if (scenario_is(scenario, "bus-reset-pass")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_OK,
+		    "rung-1 reset pass was not reported as OK");
+		check(bus_reset.requested == 1u &&
+		    bus_reset.host_control == 0u,
+		    "rung-1 reset pass lost the width or HOST_CONTROL");
+		check(bus_reset.write_result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "rung-1 reset pass lost the write-phase timeout");
+		check(bus_reset.write_error == 0u &&
+		    bus_reset.write_normal ==
+		    (GTA4L_EMMC_INT_CC | SIM_INT_BWR),
+		    "rung-1 reset pass lost CC + BufferWriteReady");
+		check((bus_reset.write_present &
+		    GTA4L_EMMC_PRESENT_DAT_INHIBIT) != 0u,
+		    "rung-1 reset pass lost the write-phase data inhibit");
+		check(bus_reset.reset_result == GTA4L_EMMC_OK &&
+		    bus_reset.reset_written == GTA4L_EMMC_RESET_DATA &&
+		    bus_reset.reset_readback == 0u &&
+		    bus_reset.reset_iterations == 1u,
+		    "rung-1 reset pass lost the self-clearing data reset");
+		check((bus_reset.post_present &
+		    GTA4L_EMMC_PRESENT_DAT_INHIBIT) == 0u &&
+		    bus_reset.dat_inhibit == 0u,
+		    "rung-1 reset pass kept DAT_INHIBIT after the reset");
+		check(bus_reset.test_result == GTA4L_EMMC_OK &&
+		    bus_reset.test_word == 0x000000A5u &&
+		    bus_reset.test_expected == 0x000000A5u,
+		    "rung-1 reset pass lost the matching CMD14 word");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "rung-1 reset pass command counts mismatch");
+		check(sim.bus_test_dat_inhibit == 0,
+		    "rung-1 reset pass left the simulated data inhibit set");
+	} else if (scenario_is(scenario, "bus-reset-mismatch")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_BUS_TEST,
+		    "rung-1 CMD14 mismatch was not reported");
+		check(bus_reset.test_result == GTA4L_EMMC_ERR_BUS_TEST &&
+		    bus_reset.test_word == 0x000000A4u &&
+		    bus_reset.test_expected == 0x000000A5u,
+		    "rung-1 CMD14 mismatch word was not bound exactly");
+		check(bus_reset.write_result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "rung-1 CMD14 mismatch lost the write-phase timeout");
+		check(bus_reset.reset_result == GTA4L_EMMC_OK,
+		    "rung-1 CMD14 mismatch lost the clean reset");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "rung-1 CMD14 mismatch command counts mismatch");
+	} else if (scenario_is(scenario, "bus-reset-read-timeout")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "rung-1 CMD14 timeout was not reported");
+		check(bus_reset.test_result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "rung-1 CMD14 timeout result field mismatch");
+		check(bus_reset.reset_result == GTA4L_EMMC_OK &&
+		    bus_reset.write_result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "rung-1 CMD14 timeout lost the write/reset evidence");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "rung-1 CMD14 timeout command counts mismatch");
+		check(host.fail_valid == 1 &&
+		    host.fail_index == GTA4L_EMMC_CMD19,
+		    "rung-1 CMD14 timeout replaced the first failure");
+	} else if (scenario_is(scenario, "bus-reset-read-crc")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_DATA_CRC,
+		    "rung-1 CMD14 CRC was not reported");
+		check(bus_reset.test_result == GTA4L_EMMC_ERR_DATA_CRC,
+		    "rung-1 CMD14 CRC result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "rung-1 CMD14 CRC command counts mismatch");
+	} else if (scenario_is(scenario, "bus-reset-read-status")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "rung-1 CMD14 card status was not reported");
+		check(bus_reset.test_result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "rung-1 CMD14 status result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "rung-1 CMD14 status command counts mismatch");
+	} else if (scenario_is(scenario, "bus-reset-reset-stuck")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_RESET,
+		    "stuck data reset was not reported");
+		check(bus_reset.reset_result == GTA4L_EMMC_ERR_RESET &&
+		    bus_reset.reset_readback == GTA4L_EMMC_RESET_DATA &&
+		    bus_reset.reset_iterations ==
+		    (GTA4L_EMMC_RESET_TIMEOUT_US /
+		    GTA4L_EMMC_POLL_STEP_US),
+		    "stuck data reset lost its poll evidence");
+		check(sim.cmd14_count == 0u,
+		    "stuck data reset still issued CMD14");
+	} else if (scenario_is(scenario, "bus-reset-inhibit")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_INHIBIT,
+		    "surviving data inhibit was not reported");
+		check(bus_reset.reset_result == GTA4L_EMMC_OK &&
+		    bus_reset.dat_inhibit ==
+		    GTA4L_EMMC_PRESENT_DAT_INHIBIT &&
+		    bus_reset.test_result == GTA4L_EMMC_ERR_INHIBIT,
+		    "surviving data inhibit lost its post-reset evidence");
+		check(sim.cmd14_count == 0u,
+		    "surviving data inhibit still issued CMD14");
+	} else if (scenario_is(scenario, "bus-reset-write-crc")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_BUS_TEST,
+		    "rung-1 write CRC did not leave the CMD14 verdict");
+		check(bus_reset.write_result == GTA4L_EMMC_ERR_DATA_CRC &&
+		    (bus_reset.write_error &
+		    GTA4L_EMMC_INT_ERR_DATA_CRC) != 0u,
+		    "rung-1 write CRC lost the terminal write tuple");
+		check(bus_reset.reset_result == GTA4L_EMMC_OK,
+		    "rung-1 write CRC did not run the clean reset");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "rung-1 write CRC command counts mismatch");
+	} else if (scenario_is(scenario, "bus-reset-normal")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
+		check(result == GTA4L_EMMC_OK,
+		    "rung-1 non-wedge write did not pass");
+		check(bus_reset.write_result == GTA4L_EMMC_OK,
+		    "rung-1 non-wedge write was reported as a timeout");
+		check(bus_reset.reset_result == GTA4L_EMMC_OK &&
+		    bus_reset.test_result == GTA4L_EMMC_OK,
+		    "rung-1 non-wedge write lost the reset or test result");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "rung-1 non-wedge write command counts mismatch");
+	} else if (scenario_is(scenario, "bus-reset-width")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 4u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_BUS_WIDTH,
+		    "rung-1 reset ran at a width the card and host do not "
+		    "share");
+		check(sim.cmd19_count == 0u && sim.cmd14_count == 0u,
+		    "width-mismatched rung-1 reset issued a command");
+	} else if (scenario_is(scenario, "bus-reset-arg")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		result = gta4l_emmc_bus_test_reset(&host, 2u, &bus_reset);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "rung-1 reset accepted an invalid width");
+		check(sim.cmd19_count == 0u && sim.cmd14_count == 0u,
+		    "invalid-width rung-1 reset issued a command");
+	} else if (scenario_is(scenario, "bus-reset-without-init")) {
+		struct gta4l_emmc_host blank;
+		struct gta4l_emmc_bus_reset_result blank_reset;
+
+		memset(&blank, 0, sizeof(blank));
+		memset(&blank_reset, 0, sizeof(blank_reset));
+		blank.ops = &sim_ops;
+		blank.context = &sim;
+		result = gta4l_emmc_bus_test_reset(&blank, 1u,
+		    &blank_reset);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "uninitialized host accepted a rung-1 reset");
+		check(sim.cmd19_count == 0u && sim.cmd14_count == 0u,
+		    "uninitialized host issued a rung-1 command");
 	} else if (scenario_is(scenario, "bus-test-1bit-width")) {
 		host.bus_width = 1u;
 		result = gta4l_emmc_bus_test(&host, 1u, &bus);
