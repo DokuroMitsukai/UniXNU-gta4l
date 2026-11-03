@@ -2342,7 +2342,7 @@ was not met and the 15-boot cap was reached). The CMD19-at-4-bit/HS
 question stays unmeasured because the designed stop precedes the bus
 test. F3 remains `[U]`.
 
-### 2.28 Stage-H11 host batch: the width-value continuation is simulator-tested (2026-11-03)
+### 2.28 Stage-H11 host batch and hardware run: the whole SDR field is refused (2026-11-03)
 
 The stage-11 rung (`gta4l-emmc-probe=11`, driver §5.3.25) is the H11
 width-value continuation: the standard read-only identification once (no
@@ -2386,13 +2386,28 @@ unchanged at 148/90. The `report-width-h11` fixture is the ninth width
 materialization and bounds the H11 report inside 2048 bytes; the
 diagnostic wrapper and payload gate accept `emmc-probe-11`.
 
-No build, flash or boot has been performed; F3 remains `[U]`. The device
-run needs a fresh explicit BOOT-only approval that names the record-only
-byte-183 = 1 write and its normalize path, the byte-183 = 2 write and
-its revert to 0, the 8-bit host DAT-width application while the byte-183
-readback may still disagree, the CMD19/CMD14 pattern write at the
-produced width, and the 50 MHz HS clock ramp with byte 185 = 1 and its
-clear.
+The device run followed in the same session. The stage-11 image was
+flashed BOOT only (p69 `38c74815…` → `2f6deba3…`, image prefix
+`3dc561cd…`, unchanged tail `a28b4ea2…`; RECOVERY/EFS/sec_efs
+unchanged) and booted five times without reflashing by the owner; the
+per-boot cold/warm method was not captured. The post-boot p69 re-read
+matched `2f6deba3…` (battery 100% Full), binding every boot. Boots 1–4
+were pre-identification CMD3 completion-silent stops (`PROBE FAILED
+stage=11 rc=-7`, `step=9`, the historical H8 tuple and 100,000-iteration
+poll window): facts only, re-run not retried. Boot 5 was the only H11
+verdict: `rc=-19 stop=12`, matching the committed `probe-h11-w4-replay`
+fingerprint field-for-field. W4 replayed the H10 4-bit switch at HS and
+returned the legacy tuple (`sw=0`, `swrc=-19`, `c6=00000900`, `hb=00`→
+`ha=02`, `es=000009cc`), the second matching sample that closes the H10
+`N=1` caveat. W8 then attempted byte 183 = 2: the host applied the
+8-bit code (`ha=20`) but the card returned the same legacy tuple, so
+the 8-bit value is refused exactly as value 1 was. The V/X reverts were
+clean, `PAD` pre equals post, and `B`/`T`/`Q` are the zero-initialized
+not-run records (the designed stop precedes them; `log=33`). Decision
+row 1 is closed: the byte-183 refusal is sticky, timing-class-
+independent and covers both nonzero SDR values tried — a whole-SDR-field
+refusal. F3 remains `[U]`; the open owner questions are the DDR
+bit-plane and the CMD19 write-phase wedge.
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 

@@ -2303,14 +2303,16 @@ taken — the card ignores the BUS_WIDTH write at HS exactly as at
 400 kHz, so the timing-class model for the legacy refusal is excluded.
 The byte-185 writes are honored in the same CMD6 shape (content `0x9cb`
 ↔ `0x9cc`, readbacks 1/0), so the write mechanism works and the refusal
-is targeted to the byte-183 field. The verdict carries the single-sample
+is targeted to the byte-183 field. The verdict carried the single-sample
 caveat (`N=1`: the two-matching rule was not met and the 15-boot cap was
 reached; the verdict sample's fields match the committed fingerprint).
-The CMD19-at-4-bit/HS question stays unmeasured because the designed
-stop precedes the bus test. F3 stays `[U]`; no 8-bit step, user-data
-write, CMD18 or CMD25 was performed.
+The H11 W4 replay (§5.3.25) produced the matching second sample, so that
+caveat is closed: the byte-183 refusal is sticky and covers both nonzero
+SDR values tried. The CMD19-at-4-bit/HS question stays unmeasured because
+the designed stop precedes the bus test. F3 stays `[U]`; no 8-bit step,
+user-data write, CMD18 or CMD25 was performed.
 
-### 5.3.25 Stage-H11 width-value continuation (gta4l-emmc-probe=11, host batch 2026-11-03)
+### 5.3.25 Stage-H11 width-value continuation (gta4l-emmc-probe=11, host batch and hardware run 2026-11-03)
 
 The `gta4l-emmc-probe=11` stage runs the standard read-only identification
 sequence once (no retry hook), the unchanged stage-A content pass at
@@ -2367,12 +2369,56 @@ must-refuse byte-183 DDR scope control). The core suite is unchanged at
 148/90. The `report-width-h11` fixture is the ninth width materialization,
 and the diagnostic wrapper and payload gate accept `emmc-probe-11`.
 
-No build, flash or boot has been performed. The device run needs a fresh
-explicit BOOT-only approval that names the record-only byte-183 = 1 write
-and its normalize path, the byte-183 = 2 write and its revert to 0, the
-8-bit host DAT-width application while the byte-183 readback may still
-disagree, the CMD19/CMD14 pattern write at the produced width, and the
-50 MHz HS clock ramp with byte 185 = 1 and its clear. F3 remains `[U]`.
+No build, flash or boot had been performed when the host batch landed.
+The device run followed on 2026-11-03. The stage-11 image was built from
+the clean `6b0b8e5` base (kernel `ac69000a…`, payload `e78a7f9e…` with a
+7/7 contract, boot image `3dc561cd…` with an 18/18 gate against the
+`ce4d76e8…` v5 baseline; the probe archive `18c3532e…` matches the
+committed sources), flashed BOOT only (pre p69 `38c74815…`, post p69
+`2f6deba3…`, image prefix `3dc561cd…`, unchanged tail `a28b4ea2…`,
+RECOVERY/EFS/sec_efs unchanged, battery 100%) and booted five times
+without reflashing by the owner. The per-boot cold/warm method and the
+reboot methods were not captured. The post-boot p69 re-read matched
+`2f6deba3…` (battery 100% Full), binding every boot to the flashed
+bytes.
+
+Boots 1–4 stopped pre-identification with the H8 CMD3 completion-silent
+class (`PROBE FAILED stage=11 rc=-7`, `step=9`,
+`fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, the CMD2-tail response
+window `00000500,5836384d,42009005,f4661978`, the full 100,000-iteration
+≈1.14 s poll window; only the `c31` ticks and the stack pages/free
+differ). They are facts only, not H11 verdicts: a completion-timeout boot
+is re-run, never retried (the H9 verdict).
+
+Boot 5 was the only H11 verdict: `rc=-19 stop=12`, matching the
+committed `probe-h11-w4-replay` simulator fingerprint field-for-field.
+HS entry was clean (`S rc=0 sw=0 c6=00000900 hs=01 clk=0007 rcg=0000020b
+sum=000009cc` against the `R es=000009cb` baseline). W4 replayed the
+H10 4-bit switch at HS and returned the legacy tuple field-for-field
+(`rc=-19 sw=0 swrc=-19 c6=00000900 hb=00 ha=02 es=000009cc`), the
+matching second sample that closes the H10 `N=1` caveat. W8 then
+attempted byte 183 = 2 at HS: the host applied and read back the 8-bit
+code (`ha=20`) but the card again returned the legacy tuple (`sw=0`,
+`swrc=-19`, clean `c6=00000900`, `es=000009cc`), so the 8-bit value is
+refused exactly as value 1 was. The width revert V and the HS revert X
+were clean (host back at 1-bit, `hs=00`, legacy RCG `0x2017`, sum
+`0x9cb`), `PAD` pre equals post, and `B`/`T`/`Q` carry the
+zero-initialized not-run records because the designed stop precedes the
+bus test, content pass and recovery read (`log=33` = 7 identification
+commands + 1 pre-rung read + 25 stage-A CMD17s, the same failure-path
+count class as H10).
+
+Verdict: the §3.2.4 decision-table row 1 is closed. The byte-183 refusal
+is sticky per boot, timing-class-independent (400 kHz and HS) and covers
+both nonzero SDR values tried (1 and 2), so the card refuses the whole
+SDR field rather than only the 4-bit value. F3 stays `[U]`; the open
+owner questions are the DDR bit-plane (byte-183 bit 4) and the CMD19
+write-phase wedge, with no new rung scheduled. No CMD18/CMD25,
+user-data write, DDR value, HS200 or second 8-bit transition was
+performed. Evidence:
+`out/gta4l/ram-root-emmc-probe-h11-evidence/` (`flash-record.json`,
+`device-run-record.json`, `device-run-transcript.txt`,
+`postflash-hashes.txt`, `postboot-reread.txt`).
 
 ## 6. Expected report
 

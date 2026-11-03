@@ -236,10 +236,17 @@ partition layout, payload policy and packaging.
   REPORT`) and stops with 0/10/11/12/13/14/15/16/17/18; it issues no
   DDR variant, no CMD18/CMD25, no retry and no user-data write. Core
   148/90 unchanged; probe 116/64 (was 102/56); the `report-width-h11`
-  fixture is the ninth width materialization. The device run needs a
-  fresh explicit BOOT-only approval naming the byte-183 = 1 and = 2
-  writes, the 8-bit DAT application, the CMD19/CMD14 round trip and the
-  50 MHz ramp. F3 remains unproven.
+  fixture is the ninth width materialization. The device run followed on
+  2026-11-03 (BOOT-only flash, p69 `38c74815…` → `2f6deba3…`, five boots
+  without reflashing): boots 1–4 stopped pre-identification at the H8 CMD3
+  completion timeout (facts only), and boot 5 was the only H11 verdict —
+  `rc=-19 stop=12`, with the W4 replay matching the H10 legacy tuple
+  field-for-field and the W8 8-bit attempt ignored with the same tuple, so
+  the byte-183 refusal is sticky and covers both nonzero SDR values (the
+  whole SDR field). The V/X reverts were clean and B/T/Q were not run. F3
+  remains unproven; the open owner questions are the DDR bit-plane and the
+  CMD19 write-phase wedge. The flash and boot records are in
+  `out/gta4l/ram-root-emmc-probe-h11-evidence/`.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and
