@@ -260,9 +260,22 @@ partition layout, payload policy and packaging.
   (`GTA4L-EMMC H12 REPORT`) and stops with 0/10/11/12/13/14/15; it issues
   no value 5, no CMD19/CMD14, no CMD18/CMD25 and no user-data write. Core
   148/90 unchanged; probe 128/69 (was 116/64); the `report-width-h12`
-  fixture is the tenth width materialization. The device run needs a fresh
-  explicit BOOT-only approval naming the byte-183 = 4 write, its re-read
-  and its revert. F3 remains unproven.
+  fixture is the tenth width materialization. The device run followed on
+  2026-11-03 (BOOT-only flash, p69 `2f6deba3…` → `0f7ec22c…`, five boots
+  without reflashing): boots 1, 2 and 4 stopped pre-identification at the
+  H8 CMD3 completion timeout and boot 3 at a block-1 CMD17 data timeout
+  (facts only), and boot 5 was the only H12 verdict — `rc=-15 stop=12`.
+  The record-only byte-183 = 4 CMD6 answered clean (`c6=00000900`) but
+  the 4-bit SDR verification re-read failed with card status (`sw=0`,
+  `swrc=-15`, `es=00000000`); no byte-183 = 4 readback was obtained, and
+  the V/X reverts and Q recovery read were clean. With the only written
+  value differing (4 versus the refused 1 and 2), the post-switch
+  behavior changed, coherent with the card toggling into 4-bit DDR for
+  data: the paradox row is measured but unverified and the whole-field
+  refusal row is not closed. F3 remains unproven; the next step is the
+  host-only write-phase wedge audit, followed by an owner-gated rung from
+  the surviving hypotheses. The flash and boot records are in
+  `out/gta4l/ram-root-emmc-probe-h12-evidence/`.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

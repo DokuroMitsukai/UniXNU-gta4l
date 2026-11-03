@@ -377,6 +377,31 @@ no manifest row, and keeps the table at 45 rows;
 `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, the
 probe simulator/fixture/test, the diagnostic builder/wrapper/gate scripts
 and this document are outside the table or not listed.
+One more refresh on `2026-11-03` records the Stage-H12 record-only DDR
+hardware run (`docs/emmc-driver.md` §5.3.26,
+`docs/emmc-cmd2-crc-audit.md` §2.29): the stage-12 image was built from
+clean `dc1a85a` (kernel `75a4661a…`, payload `27d8228f…` with a 7/7
+contract, boot image `e5744884…` with an 18/18 gate against the
+`ce4d76e8…` v5 baseline), flashed BOOT only (p69 `2f6deba3…` →
+`0f7ec22c…`, image prefix `e5744884…`, unchanged tail `a28b4ea2…`;
+RECOVERY/EFS/sec_efs unchanged) and booted five times without reflashing
+by the owner; the per-boot cold/warm method was not captured. The
+post-boot p69 re-read matched `0f7ec22c…` (battery 97%), binding every
+boot. Boots 1, 2 and 4 were pre-identification CMD3 completion-silent
+stops (`PROBE FAILED stage=12 rc=-7`, step 9) and boot 3 was a block-1
+CMD17 data timeout (`rc=-11`, step 15, TC only, no error) — facts only,
+re-run not retried. Boot 5 was the only H12 verdict: `rc=-15 stop=12`.
+The byte-183 = 4 CMD6 answered clean (`c6=00000900`) but the 4-bit SDR
+verification re-read failed with card status (`sw=0`, `swrc=-15`,
+`es=00000000`); no byte-183 = 4 readback was obtained. The V/X reverts
+and Q recovery read were clean, `PAD` pre equals post, and `log=33`.
+This is not the clean-refusal fingerprint (`swrc=-19`, `es=0x9cc`) and
+not the honored row (`sw=4`, `es=0x9cd`), so the byte-183 paradox row is
+measured but unverified and the whole-field-refusal conclusion remains
+open; F3 remains `[U]`. That change refreshes the `README.md`,
+`docs/emmc-driver.md` and `porting.toml` rows, adds no manifest row, and
+keeps the table at 45 rows; `docs/emmc-cmd2-crc-audit.md` and this
+document are outside the table.
 This document's own hash is not listed. Hashes describe
 the working tree at the snapshot and change with later edits; re-run the
 commands in §6 before reusing them. The snapshot is intended to be committed
@@ -433,8 +458,8 @@ and update the table.
 | Thirty-seventh Stage-H9 hardware-run paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Thirty-ninth Stage-H10 device-run record paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
 | Forty-first Stage-H11 device-run record paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
-| Forty-second Stage-H12 host-batch paths at this snapshot | 17 modified (`README.md`, `docs/diagnostic-payload-input-inventory.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-cmd7-timeout-finding.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `package/Gta4lEmmc.c`, `package/Gta4lEmmc.h`, `package/Gta4lEmmcProbe.c`, `porting.toml`, `scripts/build-gta4l-diagnostic-payload.py`, `scripts/check-gta4l-payload.py`, `scripts/package-gta4l-diagnostic.py`, `scripts/sim-gta4l-emmc-probe/harness.c`, `scripts/sim-gta4l-emmc-probe/report-width-fixture.c`, `scripts/test-gta4l-diagnostic-payload.py`, `scripts/test-gta4l-emmc-probe.py`) |
-| Dirty entries at the hash snapshot | 17, exactly the forty-second paths above |
+| Forty-third Stage-H12 device-run record paths at this snapshot | 5 modified (`README.md`, `docs/emmc-cmd2-crc-audit.md`, `docs/emmc-driver.md`, `docs/evidence-baseline.md`, `porting.toml`) |
+| Dirty entries at the hash snapshot | 5, exactly the forty-third paths above |
 | Staging and commits | None at the snapshot; the tree remains unstaged and uncommitted, and no staging or commit is authorized |
 
 The hash table describes the thirty-sixth working-tree snapshot: the
@@ -879,13 +904,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `0e027f6325989e1e6968ac69781162c38d4d0d359908ed4a57ed9dc58c1bc45a` |
+| Repository README | `README.md` | `196be17a760789e796eeb2721a8bce567d590f49b6ce08301a1b16c6e28f90fe` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `ba767c7ff95358a5eca290befd5a43a49bfc265eccad95ebd2851b90b364889a` |
+| Porting record | `porting.toml` | `1dac69213aaa4866c79afb006aa440d8ebbeb231debc0121760d42ababc25633` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `3ce941cac90972617332c433304b2f3a7e313650059442ccae9441a8542a4085` |
+| eMMC driver record | `docs/emmc-driver.md` | `8f0493a2815bcbe704f6d073139f1d9be55ce5ff9c8d08b85474b85f49a63031` |
 | eMMC core header | `package/Gta4lEmmc.h` | `f57bed74b75f3757396facaa513f0d489623b3e68ef327f0e0452096b0149caa` |
 | eMMC core source | `package/Gta4lEmmc.c` | `d4ecf50eddba968be52922f05328998b0bfce607881aea4550ba74a31dc609b1` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `3b4488cb4e8cd74e2218b7ae66865b99d87396da0fd8642ee9b9b544eac50c55` |

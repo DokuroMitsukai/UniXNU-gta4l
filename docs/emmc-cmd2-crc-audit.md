@@ -2409,7 +2409,7 @@ independent and covers both nonzero SDR values tried — a whole-SDR-field
 refusal. F3 remains `[U]`; the open owner questions are the DDR
 bit-plane and the CMD19 write-phase wedge.
 
-### 2.29 Stage-H12 host batch: the record-only DDR attempt is simulator-tested (2026-11-03)
+### 2.29 Stage-H12 host batch and hardware run: the DDR value 4 changes post-switch behavior (2026-11-03)
 
 The stage-12 rung (`gta4l-emmc-probe=12`, driver §5.3.26) is the H12
 record-only DDR attempt: the standard read-only identification once (no
@@ -2452,12 +2452,54 @@ stages 1..11. The core suite is unchanged at 148/90. The
 the H12 report inside 2048 bytes; the diagnostic wrapper and payload gate
 accept `emmc-probe-12`.
 
-No build, flash or boot has been performed; F3 remains `[U]`. The device
-run needs a fresh explicit BOOT-only approval that names the record-only
-byte-183 = 4 write, its CMD13 TRAN wait, its EXT_CSD re-read at the 4-bit
-SDR DAT width and its revert to 0; no controller DDR mode, no value-5
-variant, no CMD19/CMD14, no CMD18/CMD25, no user-data write and no
-HS200/HS400.
+The device run followed on 2026-11-03. The stage-12 image was built from
+the clean `dc1a85a` base (kernel `75a4661a…`, payload `27d8228f…` with a
+7/7 contract, boot image `e5744884…` with an 18/18 gate against the
+`ce4d76e8…` v5 baseline; the probe archive `2c63e623…` matches the
+committed sources), flashed BOOT only (pre p69 `2f6deba3…`, post p69
+`0f7ec22c…`, image prefix `e5744884…`, unchanged tail `a28b4ea2…`;
+RECOVERY/EFS/sec_efs unchanged) and booted five times without reflashing
+by the owner; the per-boot cold/warm method was not captured. The
+post-boot p69 re-read matched `0f7ec22c…` with battery 97%, binding every
+boot.
+
+Boots 1, 2 and 4 stopped pre-identification with the H8 CMD3
+completion-silent class (`PROBE FAILED stage=12 rc=-7`, `step=9`,
+`fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, the CMD2-tail response
+window `00000500,5836384d,42009005,f4661978`, the full 100,000-iteration
+≈1.14 s poll window; only the `c31` ticks and the stack pages/free
+differ): facts only, re-run not retried. Boot 3 stopped during
+identification at the block-1 CMD17 with `rc=-11`
+(`GTA4L_EMMC_ERR_DATA_TIMEOUT`), `step=15` (`STEP_READY`) and
+`fail=1/17/1/0000113a/0000/0002/03f800f0/15` (CMD17, present `0x0002` =
+TC only, no error bit), the same TC-only/no-error CMD17 class recorded in
+earlier batches and a new pre-rung class for stage 12: facts only.
+
+Boot 5 was the only H12 verdict: `rc=-15 stop=12`. HS entry was clean
+(`S rc=0 sw=0 c6=00000900 hs=01 clk=0007 rcg=0000020b sum=000009cc`
+against the `R es=000009cb` baseline). The record-only byte-183 = 4 CMD6
+answered clean (`c6=00000900`, the same legacy tuple every refused SDR
+value returned; not the `wddr-err` shape `c6=0000a000`), so the switch
+command was accepted. The 4-bit SDR verification re-read then failed
+with `GTA4L_EMMC_ERR_CARD_STATUS` (`swrc=-15`); the helper restored the
+previous host width before returning, so `sw=0` and `es=00000000` are
+the unset readback fields, not a readback of 0. No byte-183 = 4 readback
+was obtained. The width revert VR and the HS revert X were clean (host
+back at 1-bit, `hs=00`, legacy RCG `0x2017`, sum `0x9cb`), the Q recovery
+read returned block 0 (`qb0=00000000`), `PAD` pre equals post, and
+`log=33` is the same failure-path count class as H10/H11.
+
+This tuple is not enumerated by any committed H12 simulator scenario.
+The clean-refusal fingerprint expects `sw=0 swrc=-19 es=0x9cc`; the
+honored fingerprint expects `sw=4` and `es=0x9cd`. Here the only written
+value differed (4 versus the refused 1 and 2) while the host
+configuration was otherwise identical, and the post-switch re-read
+changed from a clean EXT_CSD read to a card-status error: coherent with
+the card actually toggling its data path for 4-bit DDR. That is the
+byte-183 paradox row measured, but with no readback and no matching
+fingerprint it stays unverified, and the whole-field-refusal conclusion
+(row 1) is not closed. F3 remains `[U]`; the open owner questions remain
+the DDR bit-plane and the CMD19 write-phase wedge.
 
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 

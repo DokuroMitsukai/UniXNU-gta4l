@@ -2420,7 +2420,7 @@ performed. Evidence:
 `device-run-record.json`, `device-run-transcript.txt`,
 `postflash-hashes.txt`, `postboot-reread.txt`).
 
-### 5.3.26 Stage-H12 record-only DDR attempt (gta4l-emmc-probe=12, host batch 2026-11-03)
+### 5.3.26 Stage-H12 record-only DDR attempt (gta4l-emmc-probe=12, host batch and hardware run 2026-11-03)
 
 The `gta4l-emmc-probe=12` stage runs the standard read-only identification
 sequence once (no retry hook), the unchanged stage-A content pass at
@@ -2481,11 +2481,53 @@ that can issue value 4. The core suite is unchanged at 148/90. The
 `report-width-h12` fixture is the tenth width materialization, and the
 diagnostic wrapper and payload gate accept `emmc-probe-12`.
 
-No build, flash or boot has been performed. The device run needs a fresh
-explicit BOOT-only approval that names the record-only byte-183 = 4 write,
-its CMD13 TRAN wait, its EXT_CSD re-read at the 4-bit SDR DAT width and its
-revert to 0; no controller DDR mode, no value-5 variant, no CMD19/CMD14, no
-CMD18/CMD25, no user-data write and no HS200/HS400. F3 remains `[U]`.
+No build, flash or boot had been performed when the host batch landed. The
+device run followed on 2026-11-03. The stage-12 image was built from the
+clean `dc1a85a` base (kernel `75a4661a…`, payload `27d8228f…` with a 7/7
+contract, boot image `e5744884…` with an 18/18 gate against the
+`ce4d76e8…` v5 baseline; the probe archive `2c63e623…` matches the
+committed sources), flashed BOOT only (pre p69 `2f6deba3…`, post p69
+`0f7ec22c…`, image prefix `e5744884…`, unchanged tail `a28b4ea2…`,
+RECOVERY/EFS/sec_efs unchanged) and booted five times without reflashing
+by the owner. The per-boot cold/warm method was not captured. The
+post-boot p69 re-read matched `0f7ec22c…` (battery 97%), binding every
+boot to the flashed bytes.
+
+Boots 1, 2 and 4 stopped pre-identification with the H8 CMD3
+completion-silent class (`PROBE FAILED stage=12 rc=-7`, `step=9`,
+`fail=1/3/65536/0000031a/0000/0000/03f800f0/9`, the full
+100,000-iteration ≈1.14 s poll window): facts only, re-run not retried.
+Boot 3 stopped during identification at the block-1 CMD17 with `rc=-11`
+(`GTA4L_EMMC_ERR_DATA_TIMEOUT`), `step=15` (`STEP_READY`) and
+`fail=1/17/1/0000113a/0000/0002/03f800f0/15` (TC only, no error bit), the
+known TC-only/no-error CMD17 class: facts only.
+
+Boot 5 was the only H12 verdict: `rc=-15 stop=12`. HS entry was clean
+(`S rc=0 sw=0 c6=00000900 hs=01 clk=0007 rcg=0000020b sum=000009cc`
+against `R es=000009cb`). The byte-183 = 4 CMD6 answered clean
+(`c6=00000900`, the legacy tuple; not the `wddr-err` R1-error shape), so
+the card accepted the command, but the verification EXT_CSD re-read at
+the 4-bit SDR DAT width failed with `GTA4L_EMMC_ERR_CARD_STATUS`
+(`swrc=-15`). The helper restored the previous host width, so `sw=0` and
+`es=00000000` are the unset readback fields and no byte-183 = 4 readback
+was obtained. The VR width revert and X HS revert were clean (1-bit,
+`hs=00`, legacy RCG `0x2017`, sum `0x9cb`), the Q recovery read returned
+block 0, `PAD` pre equals post, and `log=33` matches the H10/H11
+failure-path count class.
+
+The tuple is not enumerated by any committed H12 scenario: the clean
+refusal expects `swrc=-19`/`es=0x9cc` and the honored row expects
+`sw=4`/`es=0x9cd`. With the only written value differing (4 versus the
+refused 1 and 2) and the host configuration otherwise identical, the
+post-switch re-read changed from a clean EXT_CSD read to a card-status
+error, coherent with the card toggling into 4-bit DDR for data. The
+byte-183 paradox row is measured but unverified, the whole-field-refusal
+row is not closed, and F3 remains `[U]`. The open owner questions remain
+the DDR bit-plane and the CMD19 write-phase wedge; the next step is the
+host-only write-phase wedge audit. Evidence:
+`out/gta4l/ram-root-emmc-probe-h12-evidence/` (`flash-record.json`,
+`device-run-record.json`, `device-run-transcript.txt`,
+`postflash-hashes.txt`, `postboot-reread.txt`).
 
 ## 6. Expected report
 
