@@ -42,8 +42,13 @@ failure. The stage-7 timeout audit wrote `CLOCK_CONTROL`, not the
 1-bit bus test now uses the JEDEC `0x80`/two-bit rule. CMD18 now uses live
 FIFO readiness and acknowledges BRR; older `mb=N` values are software drain
 ordinals. H14 is paused. H15 (`gta4l-emmc-probe=15`) is the corrected
-verified-width rung, host-tested only; no device run exists. Raw reports and
-images remain unchanged evidence.
+verified-width rung. Its first cold boot passed the verified 4-bit SDR switch
+(`c6=00000900`, host `00→02`, `vf=1`) and then reproduced the CMD19 write
+timeout at 4-bit (`trc=-11`, `pst=03f801f6`), so the wedge is not a 1-bit-only
+effect. The old revert was blocked by the latched `DAT_INHIBIT` before CMD6;
+the report/recovery fix and the content-only H16 rung are recorded in
+`docs/emmc-driver.md` §5.3.31. Raw reports and images remain unchanged
+evidence.
 
 **Hardware-tested source (2026-10-31 image):** `Gta4lEmmc.c 722110a5…`,
 `Gta4lEmmc.h 7abc7d87…`, `Gta4lEmmcProbe.c d541514b…`, simulator

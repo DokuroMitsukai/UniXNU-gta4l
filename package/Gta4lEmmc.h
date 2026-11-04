@@ -654,6 +654,8 @@ struct gta4l_emmc_bus_result {
 	 * byte-183 observation (diagnostic only, normally 0). */
 	uint32_t verified;       /* read-only EXT_CSD comparison passed */
 	int      rollback_result; /* card+host restore result after a failure */
+	uint32_t cmd6_attempts;  /* CMD6 writes this step issued, including
+	                          * any restore retries */
 };
 
 /* Switch the card BUS_WIDTH (CMD6) and the SDHCI host width. `bits` may be 1,
@@ -677,6 +679,19 @@ int gta4l_emmc_set_bus_width_reserved4(struct gta4l_emmc_host *host,
  * GTA4L_EMMC_ERR_WIDTH_RESTORE so the caller stops with unknown framing. */
 int gta4l_emmc_set_bus_width_verified(struct gta4l_emmc_host *host,
     uint32_t bits, struct gta4l_emmc_bus_result *result);
+
+/* Restore a width after a failed data operation, using a read-only EXT_CSD
+ * baseline captured while the data path was healthy. Unlike the verified
+ * switch this never reads EXT_CSD before issuing CMD6: the command path is
+ * independent of the DAT state, while a wedged DAT path would block the
+ * pre-read and leave the card and host at the failed width. The function
+ * issues the CMD6, applies the host width, clears a latched DAT inhibit with
+ * one bounded local data-circuit reset and proves the restore with an EXT_CSD
+ * properties comparison. A card command failure, an inhibit that survives the
+ * reset, or a failed comparison returns GTA4L_EMMC_ERR_WIDTH_RESTORE. */
+int gta4l_emmc_set_bus_width_recover(struct gta4l_emmc_host *host,
+    uint32_t bits, const uint8_t *baseline,
+    struct gta4l_emmc_bus_result *result);
 
 /* Corrected CMD19/CMD14 bus test: ignores a lone CMD14 data-CRC indication
  * (optional pattern CRC16), uses the JEDEC 1-bit 0x80 pattern with the

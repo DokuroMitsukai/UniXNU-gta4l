@@ -487,6 +487,11 @@ gta4l_emmc_enable_status(struct gta4l_emmc_host *host)
 	gta4l_emmc_barrier(host);
 }
 
+/* Wait for the controller to accept the next command. DAT_INHIBIT is
+ * checked as well: after an R1b busy command it is the controller's only
+ * observable guard that the card is still driving DAT0. A stale inhibit left
+ * by an aborted data transfer is cleared by the recovery path's bounded data
+ * reset before it issues CMD6. */
 static int
 gta4l_emmc_wait_inhibit(struct gta4l_emmc_host *host)
 {
@@ -1801,7 +1806,7 @@ gta4l_emmc_width_cmd6(struct gta4l_emmc_host *host, uint32_t code,
 	rc = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD6, argument,
 	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
 	    GTA4L_EMMC_CMD_INDEX, GTA4L_EMMC_CMD_TIMEOUT_US, response);
-	if (switch_status != 0) {
+	if ((rc == GTA4L_EMMC_OK) && (switch_status != 0)) {
 		*switch_status = response[0];
 	}
 	if (rc != GTA4L_EMMC_OK) {
@@ -1832,6 +1837,9 @@ gta4l_emmc_width_rollback(struct gta4l_emmc_host *host, uint32_t previous_code,
 		result->rollback_result = GTA4L_EMMC_ERR_WIDTH_RESTORE;
 	}
 	if (attempted_code != previous_code) {
+		if (result != 0) {
+			result->cmd6_attempts++;
+		}
 		rc = gta4l_emmc_width_cmd6(host, previous_code, &status);
 		if (rc == GTA4L_EMMC_OK) {
 			gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
@@ -1857,6 +1865,9 @@ gta4l_emmc_width_rollback(struct gta4l_emmc_host *host, uint32_t previous_code,
 	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_HOST_CONTROL, previous_control);
 	gta4l_emmc_barrier(host);
+	if (result != 0) {
+		result->cmd6_attempts++;
+	}
 	rc = gta4l_emmc_width_cmd6(host, previous_code, &status);
 	if (rc != GTA4L_EMMC_OK) {
 		return GTA4L_EMMC_ERR_WIDTH_RESTORE;
@@ -1870,6 +1881,70 @@ gta4l_emmc_width_rollback(struct gta4l_emmc_host *host, uint32_t previous_code,
 	if (result != 0) {
 		result->rollback_result = GTA4L_EMMC_OK;
 		result->host_control = previous_control;
+	}
+	return GTA4L_EMMC_OK;
+}
+
+/* Reset one bus-result record to the values observed before a width step.
+ * `control` is the HOST_CONTROL byte read before the step. */
+static void
+gta4l_emmc_bus_result_init(struct gta4l_emmc_bus_result *result,
+    uint32_t bits, uint32_t control)
+{
+	if (result == 0) {
+		return;
+	}
+	result->requested = bits;
+	result->switched = 0;
+	result->switch_result = GTA4L_EMMC_OK;
+	result->test_result = GTA4L_EMMC_OK;
+	result->test_word = 0;
+	result->test_expected = 0;
+	result->host_control = control;
+	result->switch_status = 0;
+	result->host_before = (uint8_t)control;
+	result->host_after = (uint8_t)control;
+	result->readback_sum = 0;
+	result->verified = 0;
+	result->rollback_result = GTA4L_EMMC_OK;
+	result->cmd6_attempts = 0;
+}
+
+/* Clear a latched DAT inhibit with one bounded local data-circuit reset.
+ * Returns GTA4L_EMMC_OK only when the reset self-cleared and PRESENT_STATE
+ * reports no DAT inhibit; the card-side framing is still proven separately by
+ * the read-only EXT_CSD comparison. */
+static int
+gta4l_emmc_clear_dat_inhibit(struct gta4l_emmc_host *host)
+{
+	uint32_t present;
+	uint32_t readback;
+	uint32_t iterations;
+	uint32_t index;
+
+	present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_PRESENT_STATE);
+	if ((present & GTA4L_EMMC_PRESENT_DAT_INHIBIT) == 0u) {
+		return GTA4L_EMMC_OK;
+	}
+	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_DATA);
+	gta4l_emmc_barrier(host);
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_RESET_TIMEOUT_US);
+	readback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_SOFTWARE_RESET);
+	for (index = 1; (readback != 0u) && (index < iterations); index++) {
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+		readback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_SOFTWARE_RESET);
+	}
+	if (readback != 0u) {
+		return GTA4L_EMMC_ERR_RESET;
+	}
+	present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_PRESENT_STATE);
+	if ((present & GTA4L_EMMC_PRESENT_DAT_INHIBIT) != 0u) {
+		return GTA4L_EMMC_ERR_INHIBIT;
 	}
 	return GTA4L_EMMC_OK;
 }
@@ -1900,21 +1975,7 @@ gta4l_emmc_set_bus_width_value(struct gta4l_emmc_host *host, uint32_t bits,
 	previous_code = (uint32_t)host->bus_width;
 	previous_control = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_HOST_CONTROL);
-	if (result != 0) {
-		result->requested = bits;
-		result->switched = 0;
-		result->switch_result = GTA4L_EMMC_OK;
-		result->test_result = GTA4L_EMMC_OK;
-		result->test_word = 0;
-		result->test_expected = 0;
-		result->host_control = (uint8_t)previous_control;
-		result->switch_status = 0;
-		result->host_before = (uint8_t)previous_control;
-		result->host_after = (uint8_t)previous_control;
-		result->readback_sum = 0;
-		result->verified = 0;
-		result->rollback_result = GTA4L_EMMC_OK;
-	}
+	gta4l_emmc_bus_result_init(result, bits, previous_control);
 	if (verify_readonly != 0) {
 		rc = gta4l_emmc_read_ext_csd(host, baseline);
 		if (rc != GTA4L_EMMC_OK) {
@@ -1935,6 +1996,9 @@ gta4l_emmc_set_bus_width_value(struct gta4l_emmc_host *host, uint32_t bits,
 		return GTA4L_EMMC_OK;
 	}
 
+	if (result != 0) {
+		result->cmd6_attempts++;
+	}
 	rc = gta4l_emmc_width_cmd6(host, code,
 	    (result != 0) ? &result->switch_status : 0);
 	if (rc != GTA4L_EMMC_OK) {
@@ -2088,6 +2152,125 @@ gta4l_emmc_set_bus_width_reserved4(struct gta4l_emmc_host *host,
 {
 	return gta4l_emmc_set_bus_width_value(host, 4u,
 	    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_RESERVED_4, result, 0);
+}
+
+int
+gta4l_emmc_set_bus_width_recover(struct gta4l_emmc_host *host, uint32_t bits,
+    const uint8_t *baseline, struct gta4l_emmc_bus_result *result)
+{
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t code;
+	uint32_t control;
+	uint32_t previous_control;
+	uint32_t expected_mask;
+	uint32_t readback;
+	uint32_t status;
+	int rc;
+	int attempt;
+
+	if ((host == 0) || (host->initialized == 0) || (baseline == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	code = gta4l_emmc_bus_width_code(bits);
+	if (code == 0xFFFFFFFFu) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	previous_control = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	gta4l_emmc_bus_result_init(result, bits, previous_control);
+
+	control = previous_control;
+	control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT);
+	if (bits == 4u) {
+		control |= GTA4L_EMMC_HOST_CONTROL_4BIT;
+	} else if (bits == 8u) {
+		control |= GTA4L_EMMC_HOST_CONTROL_8BIT;
+	}
+	expected_mask = (bits == 4u) ? GTA4L_EMMC_HOST_CONTROL_4BIT :
+	    ((bits == 8u) ? GTA4L_EMMC_HOST_CONTROL_8BIT : 0u);
+
+	/* Two attempts cover a lost CMD6 write and a data reset that had not
+	 * yet cleared the inhibit. The command path is width-independent, so
+	 * the card can be restored even when the DAT path is still wedged. */
+	for (attempt = 0; attempt < 2; attempt++) {
+		/* A failed data transfer can leave DAT_INHIBIT latched. The
+		 * bounded local reset is the only way to regain command
+		 * admission, so it runs before CMD6; the card command itself
+		 * is width-independent. */
+		rc = gta4l_emmc_clear_dat_inhibit(host);
+		if (rc != GTA4L_EMMC_OK) {
+			if (result != 0) {
+				result->switch_result = rc;
+				result->rollback_result =
+				    GTA4L_EMMC_ERR_WIDTH_RESTORE;
+			}
+			return GTA4L_EMMC_ERR_WIDTH_RESTORE;
+		}
+		if (result != 0) {
+			result->cmd6_attempts++;
+		}
+		rc = gta4l_emmc_width_cmd6(host, code, &status);
+		if (result != 0) {
+			result->switch_status = status;
+		}
+		if (rc != GTA4L_EMMC_OK) {
+			/* The card command failed; put the host back at the
+			 * width it was driving and report unknown framing. */
+			gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_HOST_CONTROL,
+			    (uint8_t)previous_control);
+			gta4l_emmc_barrier(host);
+			if (result != 0) {
+				result->switch_result = rc;
+				result->rollback_result =
+				    GTA4L_EMMC_ERR_WIDTH_RESTORE;
+			}
+			return GTA4L_EMMC_ERR_WIDTH_RESTORE;
+		}
+
+		gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL, control);
+		gta4l_emmc_barrier(host);
+		readback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL);
+		if (result != 0) {
+			result->host_after = (uint8_t)readback;
+			result->host_control = control;
+		}
+		if ((readback & (GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT)) != expected_mask) {
+			rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+		} else {
+			rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+			if ((rc == GTA4L_EMMC_OK) &&
+			    (gta4l_emmc_ext_csd_properties_same(
+			    baseline, ext_csd) != 0)) {
+				host->bus_width = (uint8_t)code;
+				if (result != 0) {
+					result->verified = 1;
+					result->rollback_result =
+					    GTA4L_EMMC_OK;
+					result->readback_sum =
+					    gta4l_emmc_ext_csd_sum(
+					    ext_csd);
+				}
+				return GTA4L_EMMC_OK;
+			}
+		}
+
+		/* Put the host back where the failed step left it before the
+		 * retry, so both attempts present the same width to the card. */
+		gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL,
+		    (uint8_t)previous_control);
+		gta4l_emmc_barrier(host);
+	}
+	if (result != 0) {
+		result->switch_result = rc;
+		result->rollback_result = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+	}
+	return GTA4L_EMMC_ERR_WIDTH_RESTORE;
 }
 
 /* CMD19/CMD14 bus test. 4-bit and 8-bit patterns/comparison follow Linux

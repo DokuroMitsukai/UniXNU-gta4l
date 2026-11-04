@@ -158,6 +158,9 @@ SCENARIOS = [
     'bus-width-verified-mismatch',
     'bus-width-verified-rollback-fail',
     'bus-width-verified-cmd6-error',
+    'bus-width-recover',
+    'bus-width-recover-unproven',
+    'bus-width-recover-mismatch',
     'bus-test-verified-crc',
     'bus-test-4',
     'bus-test-8',
@@ -1149,6 +1152,9 @@ def main() -> int:
              'GTA4L_EMMC_BUS_TEST_1_BYTES        8u',
              'Gta4lEmmc.h', (), 'bus-test-1bit'),
             ('br-no-reset',
+             '\tif (result != 0) {\n'
+             '\t\tresult->reset_written = GTA4L_EMMC_RESET_DATA;\n'
+             '\t}\n'
              '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
              '\t    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_DATA);\n'
              '\tgta4l_emmc_barrier(host);\n'
@@ -1158,15 +1164,27 @@ def main() -> int:
              '\titerations = gta4l_emmc_poll_iterations(GTA4L_EMMC_RESET_TIMEOUT_US);\n',
              'Gta4lEmmc.c', (), 'bus-reset-pass'),
             ('br-reset-all',
+             '\tif (result != 0) {\n'
+             '\t\tresult->reset_written = GTA4L_EMMC_RESET_DATA;\n'
+             '\t}\n'
              '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
              '\t    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_DATA);\n',
+             '\tif (result != 0) {\n'
+             '\t\tresult->reset_written = GTA4L_EMMC_RESET_DATA;\n'
+             '\t}\n'
              '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
              '\t    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_ALL);\n',
              'Gta4lEmmc.c', (), 'bus-reset-inhibit'),
             ('br-ignore-reset-clear',
+             '\t\tresult->reset_result = (readback == 0u) ? GTA4L_EMMC_OK :\n'
+             '\t\t    GTA4L_EMMC_ERR_RESET;\n'
+             '\t}\n'
              '\tif (readback != 0u) {\n'
              '\t\treturn GTA4L_EMMC_ERR_RESET;\n'
              '\t}\n',
+             '\t\tresult->reset_result = (readback == 0u) ? GTA4L_EMMC_OK :\n'
+             '\t\t    GTA4L_EMMC_ERR_RESET;\n'
+             '\t}\n'
              '\tif (0) {\n'
              '\t\treturn GTA4L_EMMC_ERR_RESET;\n'
              '\t}\n',
@@ -1186,7 +1204,25 @@ def main() -> int:
              '\t\t    (host->fail_index == GTA4L_EMMC_CMD14)) {\n',
              'Gta4lEmmc.c', (), 'bus-reset-pass'),
             ('br-skip-reset-poll',
+             '\tif (result != 0) {\n'
+             '\t\tresult->reset_written = GTA4L_EMMC_RESET_DATA;\n'
+             '\t}\n'
+             '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_DATA);\n'
+             '\tgta4l_emmc_barrier(host);\n'
+             '\titerations = gta4l_emmc_poll_iterations(GTA4L_EMMC_RESET_TIMEOUT_US);\n'
+             '\treadback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_SOFTWARE_RESET);\n'
              '\tfor (index = 1; (readback != 0u) && (index < iterations); index++) {\n',
+             '\tif (result != 0) {\n'
+             '\t\tresult->reset_written = GTA4L_EMMC_RESET_DATA;\n'
+             '\t}\n'
+             '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_SOFTWARE_RESET, GTA4L_EMMC_RESET_DATA);\n'
+             '\tgta4l_emmc_barrier(host);\n'
+             '\titerations = gta4l_emmc_poll_iterations(GTA4L_EMMC_RESET_TIMEOUT_US);\n'
+             '\treadback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_SOFTWARE_RESET);\n'
              '\tfor (index = 1; 0; index++) {\n',
              'Gta4lEmmc.c', ('-Wno-unused-but-set-variable',),
              'bus-reset-reset-stuck'),

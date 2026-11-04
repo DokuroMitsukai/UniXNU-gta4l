@@ -321,6 +321,7 @@ struct sim {
 	int bus_width_verify_mismatch;
 	int bus_width_rollback_fail;
 	int bus_width_readback_zero;
+	int bus_width_recover_mismatch;
 	int bus_width_busy;
 	int bus_width_busy_polls;
 	int hs_timing_stuck;
@@ -1641,6 +1642,17 @@ sim_command(struct sim *sim, uint16_t command)
 					    1u << (8u *
 					    (GTA4L_EMMC_EXT_CSD_REV_OFF % 4u));
 				}
+				if ((sim->bus_width_recover_mismatch != 0) &&
+				    ((sim->sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+				    (SIM_HOST_CONTROL_4BIT |
+				    SIM_HOST_CONTROL_8BIT)) == 0u)) {
+					/* The recovery verification read at
+					 * 1-bit does not carry the baseline
+					 * read-only identity. */
+					sim->buffer_data[
+					    GTA4L_EMMC_EXT_CSD_PROPERTIES_OFF /
+					    4u] ^= 1u;
+				}
 				sim->normal_int |= GTA4L_EMMC_INT_BRR;
 			}
 			if (sim->no_tc == 0) {
@@ -2236,6 +2248,7 @@ main(int argc, char **argv)
 	uint8_t block5[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t ext[GTA4L_EMMC_EXT_CSD_BYTES];
 	struct gta4l_emmc_bus_result bus;
+	struct gta4l_emmc_bus_result recover;
 	struct gta4l_emmc_bus_reset_result bus_reset;
 	struct gta4l_emmc_post_write_drain_result drain;
 	struct gta4l_emmc_hs_result hs;
@@ -2678,6 +2691,11 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario,
 	    "bus-width-verified-cmd6-error")) {
 		sim.bus_width_switch_error = 1;
+	} else if (scenario_is(scenario, "bus-width-recover") ||
+	    scenario_is(scenario, "bus-width-recover-unproven") ||
+	    scenario_is(scenario, "bus-width-recover-mismatch")) {
+		/* The scenario body injects the wedge after the verified
+		 * switch, so the setup needs no fault. */
 	} else if (scenario_is(scenario, "bus-width-busy")) {
 		/* wait_tran allows ten CMD13 attempts; the switch arms a poll
 		 * budget beyond that so the bounded wait must expire. */
@@ -2795,6 +2813,9 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "bus-width-verified-mismatch") ||
 	    scenario_is(scenario, "bus-width-verified-rollback-fail") ||
 	    scenario_is(scenario, "bus-width-verified-cmd6-error") ||
+	    scenario_is(scenario, "bus-width-recover") ||
+	    scenario_is(scenario, "bus-width-recover-unproven") ||
+	    scenario_is(scenario, "bus-width-recover-mismatch") ||
 	    scenario_is(scenario, "bus-width-busy") ||
 	    scenario_is(scenario, "bus-width-invalid") ||
 	    scenario_is(scenario, "bus-width-without-init") ||
@@ -3807,6 +3828,63 @@ main(int argc, char **argv)
 		    "the failed restore recorded a clean rollback");
 		check(sim.cmd6_count == 3u,
 		    "the failed switch did not attempt both restore paths");
+	} else if (scenario_is(scenario, "bus-width-recover") ||
+	    scenario_is(scenario, "bus-width-recover-unproven") ||
+	    scenario_is(scenario, "bus-width-recover-mismatch")) {
+		result = gta4l_emmc_read_ext_csd(&host, ext);
+		check(result == GTA4L_EMMC_OK,
+		    "recover baseline read failed");
+		result = gta4l_emmc_set_bus_width_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK,
+		    "recover setup switch failed");
+		sim.bus_test_dat_inhibit = 1;
+		if (scenario_is(scenario,
+		    "bus-width-recover-unproven")) {
+			sim.bus_test_reset_no_inhibit_clear = 1;
+		}
+		if (scenario_is(scenario,
+		    "bus-width-recover-mismatch")) {
+			sim.bus_width_recover_mismatch = 1;
+		}
+		memset(&recover, 0, sizeof(recover));
+		result = gta4l_emmc_set_bus_width_recover(&host, 1u, ext,
+		    &recover);
+		if (scenario_is(scenario, "bus-width-recover")) {
+			check(result == GTA4L_EMMC_OK,
+			    "clean recovery failed");
+			check(recover.verified == 1u &&
+			    recover.cmd6_attempts == 1u,
+			    "clean recovery did not verify in one CMD6");
+			check(host.bus_width == 0u,
+			    "clean recovery did not update the core width");
+			check(sim.bus_test_dat_inhibit == 0 &&
+			    sim.cmd6_count == 2u,
+			    "clean recovery did not clear the inhibit or "
+			    "issue one revert");
+		} else if (scenario_is(scenario,
+		    "bus-width-recover-unproven")) {
+			check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+			    "a surviving inhibit was reported as a clean "
+			    "recovery");
+			check(recover.cmd6_attempts == 0u &&
+			    recover.switch_result ==
+			    GTA4L_EMMC_ERR_INHIBIT,
+			    "the surviving inhibit did not stop before CMD6");
+			check(sim.cmd6_count == 1u,
+			    "an unproven recovery issued a CMD6");
+		} else {
+			check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+			    "a mismatched properties read was accepted");
+			check(recover.cmd6_attempts == 2u &&
+			    recover.verified == 0u,
+			    "the mismatched recovery did not retry twice");
+			check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+			    (SIM_HOST_CONTROL_4BIT |
+			    SIM_HOST_CONTROL_8BIT)) ==
+			    SIM_HOST_CONTROL_4BIT,
+			    "the mismatched recovery did not return the host "
+			    "to the attempted width");
+		}
 	} else if (scenario_is(scenario, "bus-width-busy")) {
 		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
 		check(result == GTA4L_EMMC_ERR_CARD_NOT_READY,

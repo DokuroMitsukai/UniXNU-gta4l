@@ -3647,9 +3647,16 @@ main(int argc, char **argv)
 		}
 	} else if ((strcmp(scenario, "probe-h15-pass") == 0) ||
 	    (strcmp(scenario, "probe-h15-crc") == 0) ||
-	    (strcmp(scenario, "probe-h15-content-div") == 0)) {
+	    (strcmp(scenario, "probe-h15-content-div") == 0) ||
+	    (strcmp(scenario, "probe-h15-bustest-wedge") == 0) ||
+	    (strcmp(scenario,
+	    "probe-h15-bustest-wedge-unproven") == 0)) {
 		/* Stage 15: verified 4-bit SDR switch, corrected CMD19/CMD14
-		 * test, content pass, verified revert and recovery read. */
+		 * test, content pass, verified revert and recovery read. The
+		 * wedge scenarios reproduce the observed 4-bit write-phase
+		 * timeout, which latches DAT_INHIBIT and blocks a pre-read
+		 * revert; the second keeps the inhibit latched so the
+		 * recovery cannot prove the framing. */
 		stage = 15;
 		ext_csd_count = 61071360u;
 		sim_init_ext_csd();
@@ -3662,6 +3669,30 @@ main(int argc, char **argv)
 			cmd14_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
 		} else if (strcmp(scenario,
 		    "probe-h15-content-div") == 0) {
+			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
+			width_corrupt_code =
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-h15-bustest-wedge") == 0) {
+			cmd19_4bit_timeout = 1;
+		} else if (strcmp(scenario,
+		    "probe-h15-bustest-wedge-unproven") == 0) {
+			cmd19_4bit_timeout = 1;
+			h13_inhibit_survives = 1;
+		}
+	} else if ((strcmp(scenario, "probe-h16-pass") == 0) ||
+	    (strcmp(scenario, "probe-h16-content-div") == 0)) {
+		/* Stage 16: the content-only isolation rung. No CMD19 or
+		 * CMD14 is issued at all. */
+		stage = 16;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-h16-content-div") == 0) {
 			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
 			width_corrupt_code =
 			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
@@ -6730,17 +6761,18 @@ main(int argc, char **argv)
 		    "the H15 verified switch did not pass");
 		check(strstr(panic_message,
 		    "H15 W rc=0 req=4 sw=") != NULL &&
-		    strstr(panic_message, " vf=1 ") != NULL,
+		    strstr(panic_message, " vf=1 c6at=1 ") != NULL,
 		    "the H15 W line does not show the read-only verification");
-		check(strstr(panic_message, "H15 B trc=0 tw=000000a5 "
+		check(strstr(panic_message, "H15 B att=1 trc=0 tw=000000a5 "
 		    "te=000000a5") != NULL,
 		    "the H15 4-bit bus test lost its pattern");
 		check(strstr(panic_message,
-		    "H15 T att=1 same=1 div=0") != NULL,
+		    "H15 T att=1 rc=0 same=1 div=0") != NULL,
 		    "the H15 4-bit content pass diverged");
 		check(strstr(panic_message,
-		    "H15 V rc=0 sw=") != NULL &&
-		    strstr(panic_message, "H15 Q rc=0 qb0=5c510100") != NULL,
+		    "H15 V att=1 rc=0 sw=0 vf=1 c6at=1 ") != NULL &&
+		    strstr(panic_message, "H15 Q att=1 rc=0 qb0=5c510100")
+		    != NULL,
 		    "the H15 verified revert or recovery read failed");
 		check(cmd6_count == 2u,
 		    "the H15 run did not issue the switch and its verified "
@@ -6757,8 +6789,77 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC H15 REPORT: rc=-21 stop=14") != NULL,
 		    "the H15 content divergence did not keep stop 14");
 		check(strstr(panic_message,
-		    "H15 T att=1 same=0 div=34") != NULL,
+		    "H15 T att=1 rc=0 same=0 div=34") != NULL,
 		    "the H15 content divergence did not name LBA 34");
+	} else if (strcmp(scenario, "probe-h15-bustest-wedge") == 0) {
+		check(panicked == 1, "the H15 4-bit write wedge did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H15 REPORT: rc=-11 stop=13") != NULL,
+		    "the H15 4-bit write wedge did not keep stop 13");
+		check(strstr(panic_message,
+		    "H15 B att=1 trc=-11 tw=00000000 te=00000000") != NULL,
+		    "the H15 4-bit write wedge lost the CMD19 timeout");
+		check(strstr(panic_message,
+		    "H15 T att=0 rc=0 same=0") != NULL,
+		    "the H15 4-bit write wedge reported a content pass it "
+		    "did not run");
+		check(strstr(panic_message,
+		    "H15 V att=1 rc=0 sw=0 vf=1 c6at=1 ") != NULL &&
+		    strstr(panic_message, "H15 Q att=0 rc=0 qb0=00000000")
+		    != NULL,
+		    "the H15 4-bit write wedge did not recover the width");
+		check(cmd6_count == 2u && cmd14_count == 0u,
+		    "the H15 4-bit write wedge command counts mismatch");
+	} else if (strcmp(scenario,
+	    "probe-h15-bustest-wedge-unproven") == 0) {
+		check(panicked == 1, "the unproven H15 recovery did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H15 REPORT: rc=-23 stop=15") != NULL,
+		    "a surviving DAT inhibit did not keep stop 15");
+		check(strstr(panic_message,
+		    "H15 V att=1 rc=-17 sw=0 vf=0 c6at=0 ") != NULL,
+		    "the unproven H15 recovery did not report the surviving "
+		    "inhibit before CMD6");
+		check(cmd6_count == 1u && cmd14_count == 0u,
+		    "the unproven H15 recovery command counts mismatch");
+	} else if (strcmp(scenario, "probe-h16-pass") == 0) {
+		check(panicked == 1, "the H16 content-only rung did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H16 REPORT: rc=0 stop=0") != NULL,
+		    "the H16 content-only rung did not pass");
+		check(strstr(panic_message,
+		    "H16 B att=0 trc=0 tw=00000000 te=00000000") != NULL,
+		    "the H16 rung issued a bus test");
+		check(strstr(panic_message,
+		    "H16 T att=1 rc=0 same=1 div=0") != NULL,
+		    "the H16 4-bit content pass diverged");
+		check(strstr(panic_message,
+		    "H16 V att=1 rc=0 sw=0 vf=1 c6at=1 ") != NULL &&
+		    strstr(panic_message, "H16 Q att=1 rc=0 qb0=5c510100")
+		    != NULL,
+		    "the H16 verified revert or recovery read failed");
+		check(cmd19_count == 0u && cmd14_count == 0u &&
+		    cmd6_count == 2u,
+		    "the H16 rung issued CMD19/CMD14 or missed a CMD6");
+		check(cmd17_count == 51u,
+		    "the H16 rung did not run both content passes plus Q");
+	} else if (strcmp(scenario, "probe-h16-content-div") == 0) {
+		check(panicked == 1, "the H16 divergent content pass did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H16 REPORT: rc=-21 stop=14") != NULL,
+		    "the H16 content divergence did not keep stop 14");
+		check(strstr(panic_message,
+		    "H16 T att=1 rc=0 same=0 div=34") != NULL,
+		    "the H16 content divergence did not name LBA 34");
+		check(strstr(panic_message,
+		    "H16 V att=1 rc=0 sw=0 vf=1 c6at=1 ") != NULL,
+		    "the H16 divergence did not restore 1-bit framing");
+		check(cmd19_count == 0u && cmd14_count == 0u,
+		    "the H16 divergence issued CMD19/CMD14");
 	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
 		check(panicked == 1, "the fired DTO audit did not report");
 		check(strstr(panic_message,

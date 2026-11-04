@@ -19,7 +19,11 @@ stage-7 "forced TOUTVAL" experiment wrote bits of `CLOCK_CONTROL`, not the
 The recommended rung 2 (forced post-write CMD12/CMD13 drain) conflicted with
 this document's own row 3 ("CMD12 is not appropriate for a single-block
 write"); H14 is paused pending a corrected design. H15 is the verified-width
-rung and is host-tested only.
+rung. Its 2026-11-05 cold boot verified the 4-bit SDR switch and then
+reproduced the CMD19 write timeout at 4-bit, so the wedge is not a 1-bit-only
+effect; the old revert was blocked by the latched `DAT_INHIBIT` before CMD6.
+The report/recovery fix and the content-only H16 rung are recorded in
+`docs/emmc-driver.md` §5.3.31.
 
 ## 1. What is being explained
 

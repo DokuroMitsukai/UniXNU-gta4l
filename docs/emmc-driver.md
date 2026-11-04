@@ -37,8 +37,12 @@ multi-block read, a filesystem, block-device publication, DMA/CQE/ICE and F3
 remain `[U]`. The 2026-11-04 protocol correction (§1a) withdraws the
 byte-183 refusal, H12 DDR, stage-7 timeout and H13 CMD14-CRC causal claims
 and fixes the underlying width, bus-test, timeout and CMD18-readiness logic.
-The corrected width rung is H15 (`gta4l-emmc-probe=15`), host-tested only;
-H14 is paused and no device run of H15 exists. The core is opt-in. The runs were made under the owner's approval for each exact procedure,
+The corrected width rung is H15 (`gta4l-emmc-probe=15`). Its first cold boot
+(§5.3.31) verified the 4-bit SDR switch (`vf=1`, host `00→02`) and then hit
+the CMD19 write-phase timeout at 4-bit, after which the old revert was blocked
+by a latched DAT inhibit and no CMD6 was issued. The report and recovery are
+fixed and a content-only H16 rung is added; H14 remains paused. The core is
+opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
 `sdhc-bus-power-activation` NO-GO still applies to any operation not separately
 approved.
@@ -56,9 +60,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 173 scenarios and 104 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 176 scenarios and 104 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 154 scenarios and 77 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 158 scenarios and 77 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -110,9 +114,18 @@ raw reports and images remain unchanged evidence.
 - **H15 is the corrected width rung.** `gta4l-emmc-probe=15` runs the
   stage-A baseline, a verified 4-bit SDR switch, the corrected CMD19/CMD14
   test, a 4-bit content pass, a verified return to 1-bit and the recovery
-  read. It is host-tested only; no device run exists. H14 is paused rather
-  than advanced: CMD12 is not appropriate for the single-block CMD19 write,
-  and its stop-code mapping conflated distinct failures.
+  read. Its first cold boot (§5.3.31) passed the switch and verified 4-bit
+  data transfer, then reproduced the CMD19 write timeout at 4-bit. The
+  original revert's pre-switch EXT_CSD read was blocked by a latched
+  `DAT_INHIBIT`, so no CMD6 was issued. The report now prints an explicit
+  attempted flag on B/T/V/Q and a result code on T, and the new
+  `gta4l_emmc_set_bus_width_recover()` clears the data circuit before CMD6
+  and verifies against a baseline captured while the path was healthy.
+  `gta4l-emmc-probe=16` is the content-only isolation rung: the same
+  baseline and verified 4-bit switch, the 4-bit content pass and the
+  baseline-based recovery, with no CMD19 or CMD14 at all. H14 is paused
+  rather than advanced: CMD12 is not appropriate for the single-block CMD19
+  write, and its stop-code mapping conflated distinct failures.
 
 ## 2. Sequence
 
@@ -2819,6 +2832,82 @@ helper drain, a removed CMD12 DAT_INHIBIT exemption, a wrong stop-code
 mapping, a skipped CMD13, a lost R1 record and a wrong stop response
 type. The diagnostic wrapper and payload gate accept `emmc-probe-14`.
 No build, flash or boot was performed when the host batch landed.
+
+### 5.3.31 Stage-H15 device run (first cold boot, 2026-11-05)
+
+The H15 image from commit `9facb6b` was flashed to BOOT only and booted once.
+Identification completed normally (no pre-identification CMD3 stop). The
+owner-supplied report is preserved at
+`out/gta4l/ram-root-emmc-probe-h15-evidence/device-run-transcript.txt`:
+
+```
+GTA4L-EMMC H15 REPORT: rc=4294967279 stop=15 mci=10000072 rca=1 cap=61071360 rev=8 hci=02 step=20 log=32 bw=01
+GTA4L-EMMC H15 R clk=0007 hc=00 bw=00 es=000009cb
+GTA4L-EMMC H15 W rc=0 req=4 sw=1 vf=1 c6=00000900 hb=00 ha=02 es=000009cb rb=0
+GTA4L-EMMC H15 B trc=4294967285 tw=00000000 te=00000000
+GTA4L-EMMC H15 T att=1 same=0 div=0 b0=00000000 b1=00000000 data=00000000 last=00000000
+GTA4L-EMMC H15 V rc=4294967279 sw=0 vf=0 c6=00000000 hb=02 ha=02 es=00000000 rb=0
+GTA4L-EMMC H15 Q rc=0 qb0=00000000
+GTA4L-EMMC H15 PAD pre=00009fe4/6000642c/00000000 post=00009fe4/6000642c/00000000
+GTA4L-EMMC H15 FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/20 @Gta41EmmcProbe.c:2748
+```
+
+Interpretation:
+
+- The verified switch passed: CMD6 returned `0x00000900`, the host width
+  moved `00→02`, and the read-only EXT_CSD comparison passed (`vf=1`). This
+  is the first positive evidence that the card and host carried a 4-bit
+  DAT path at 400 kHz. It also ends the byte-183 "refusal" reading: the
+  switch is not observable in byte 183, but the data path demonstrably
+  switched.
+- The single CMD19 write failed with `trc=-11` (data timeout). The terminal
+  tuple `err=0000 nrm=0011 pst=03f801f6` shows command completion and
+  BufferWriteReady with `DAT_INHIBIT` still set, the same write-phase wedge
+  previously seen at 1-bit. It is therefore not a 1-bit-only effect and not
+  evidence that the 4-bit switch failed.
+- The H15 revert used `gta4l_emmc_set_bus_width_verified()`, which reads
+  EXT_CSD before issuing CMD6. That read was refused by the latched
+  `DAT_INHIBIT` (`rc=-17`), so no CMD6 was issued (`c6=00000000`) and the
+  host stayed at 4-bit. This is a recovery-order defect in the stage, not a
+  card verdict.
+- The 4-bit content pass and the block-0 recovery read did not run. The old
+  report format printed `T att=1` unconditionally and left `Q rc=0` as a
+  default; neither line is a result. They are not evidence of a successful
+  content pass or recovery read.
+- The PAD samples are identical before and after (`qdsd=00009fe4`,
+  `dll=6000642c`, `dst=00000000`), so this run changed no pad or DLL
+  configuration.
+
+Corrective host batch:
+
+- `GTA4L_EMMC_ERR_WIDTH_RESTORE` is now the only "framing unknown" result,
+  and the H15/H16 `V` line distinguishes an attempted revert from a clean
+  one.
+- The new `gta4l_emmc_set_bus_width_recover()` takes a read-only EXT_CSD
+  baseline captured while the path was healthy, clears a latched
+  `DAT_INHIBIT` with one bounded local data reset, then issues CMD6 and
+  verifies with the properties comparison. It never pre-reads the possibly
+  wedged data path.
+- B/T/V/Q now print explicit `att` flags and T prints its result code.
+- Stage 16 (`gta4l-emmc-probe=16`) is the content-only isolation rung: the
+  stage-A baseline, the verified 4-bit switch, the 4-bit content pass, the
+  baseline-based recovery and the block-0 recovery read, with no CMD19 or
+  CMD14 at all. It answers whether 4-bit sector reads work without the
+  write-phase wedge.
+- Stop codes for H15/H16: 0 all clean; 10 the pre-switch baseline EXT_CSD
+  read failed; 11 the switch or its verification failed with framing
+  restored; 12 unknown framing after a failed restore; 13 the 4-bit bus test
+  failed; 14 the 4-bit content pass diverged or its read failed; 15 the
+  width recovery could not prove the framing; 16 the recovery read failed.
+  H16 omits 13 because it never issues CMD19/CMD14.
+
+Host checks after the batch: core 176 scenarios and 104 mutation controls,
+probe 158 scenarios and 77 mutation controls, including the reproduced 4-bit
+write wedge with a clean baseline-based recovery and the surviving-inhibit
+case that stops before CMD6. No new image was built or flashed for this
+record. A rebuilt H15 is therefore not byte-identical to the flashed `9facb6b`
+image: the report prints the new `att`/`c6at` fields and the revert uses the
+baseline-based recovery.
 
 ## 6. Expected report
 

@@ -47,10 +47,13 @@ partition layout, payload policy and packaging.
   switch primitives (`gta4l_emmc_set_bus_width_verified`,
   `gta4l_emmc_bus_test_verified`) restore both the host and the card on
   failure and report `GTA4L_EMMC_ERR_WIDTH_RESTORE` when framing is unknown.
-  Stage H15 (`gta4l-emmc-probe=15`) is the corrected 4-bit SDR rung and is
-  host-tested only; no device run has been performed, the already-flashed H14
-  image is not a prerequisite, and F3 remains open. Historical device reports
-  and raw evidence are preserved, not rewritten.
+  Stage H15 (`gta4l-emmc-probe=15`) is the corrected 4-bit SDR rung. Its
+  first cold boot (2026-11-05) passed the verified switch and then reproduced
+  the CMD19 write timeout at 4-bit; the old revert was blocked by the latched
+  DAT inhibit. The report/recovery fixes and the content-only H16 rung are
+  documented in `docs/emmc-driver.md` §5.3.31; the already-flashed H14 image
+  is not a prerequisite, and F3 remains open. Historical device reports and
+  raw evidence are preserved, not rewritten.
 - A native SDHCI v5/eMMC core is implemented and host-tested in
   `package/Gta4lEmmc.c`: controller reset, GCC 400 kHz, retained-rail power
   handshake, CMD3 RCA assignment, enumeration, capacity/partition validation
@@ -352,17 +355,25 @@ partition layout, payload policy and packaging.
   stop-code mapping conflated distinct failures. The BOOT-only image was
   flashed, but no boot or report is required and it is not a prerequisite
   for H15.** F3 remains unproven.
-  The corrected width rung is H15 (`gta4l-emmc-probe=15`), host-tested only:
-  after the stage-A baseline it performs a verified 4-bit SDR switch (CMD6,
-  CMD13 TRAN wait, host width apply/readback, and an EXT_CSD read whose
-  read-only properties must match the 1-bit baseline), the corrected
-  CMD19/CMD14 test (optional pattern CRC tolerated; JEDEC 1-bit
-  `0x80`/two-bit rule), the full 4-bit content pass, a verified return to
-  1-bit and the block-0 recovery read. It emits `GTA4L-EMMC H15 REPORT` and
-  stops with 0/11/12/13/14/15/16; 12 is unknown framing after a failed
-  restore. No HS, DDR, 8-bit, CMD18, CMD25 or user-data write; no build,
-  flash or boot has been performed. Core 173/104 and probe 154/77; F3
-  remains `[U]`.
+  The corrected width rung is H15 (`gta4l-emmc-probe=15`): after the stage-A
+  baseline it performs a verified 4-bit SDR switch (CMD6, CMD13 TRAN wait,
+  host width apply/readback, and an EXT_CSD read whose read-only properties
+  must match the 1-bit baseline), the corrected CMD19/CMD14 test (optional
+  pattern CRC tolerated; JEDEC 1-bit `0x80`/two-bit rule), the full 4-bit
+  content pass, a verified return to 1-bit and the block-0 recovery read. Its
+  first cold boot (2026-11-05) **passed the verified 4-bit switch**
+  (`vf=1`, host `00→02`) and then reproduced the CMD19 write-phase timeout
+  at 4-bit; the old revert's pre-switch EXT_CSD read was blocked by the
+  latched `DAT_INHIBIT`, so no revert CMD6 was issued. The report now prints
+  explicit attempted flags and a T result code, and the baseline-based
+  recovery clears the data circuit before CMD6. The content-only isolation
+  rung is H16 (`gta4l-emmc-probe=16`): the same verified switch and content
+  pass with no CMD19/CMD14 at all. H15/H16 stop codes are
+  0/10/11/12/13/14/15/16, with 10 (baseline read failed) and 13 (bus test,
+  H15 only) being the additions. No HS, DDR, 8-bit, CMD18, CMD25 or
+  user-data write. Core 176/104 and probe 158/77; F3 remains `[U]` because
+  no 4-bit sector-read content pass has completed on hardware and no
+  CMD19 round trip has succeeded at 4-bit.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and
