@@ -84,6 +84,10 @@
 #define GTA4L_EMMC_TIMEOUT_MAX             0x0Eu
 #define GTA4L_EMMC_PRESENT_CMD_INHIBIT     0x00000001u
 #define GTA4L_EMMC_PRESENT_DAT_INHIBIT     0x00000002u
+/* Live FIFO readiness, not the latched interrupt bit (Linux
+ * SDHCI_DATA_AVAILABLE, sdhci.h:89). A read must check this bit before
+ * draining the buffer port; BRR can stay latched after the FIFO is empty. */
+#define GTA4L_EMMC_PRESENT_BUFFER_READ_READY 0x00000800u
 
 /* Host Control 2 (0x3E). Preserve the reserved and vendor fields and change
  * only the UHS/tuning/1.8 V signalling fields. */
@@ -274,22 +278,31 @@
 #define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1     0u
 #define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4     1u
 #define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8     2u
-/* JEDEC BUS_WIDTH bit 2 selects DDR signalling; 4 is 4-bit DDR. The
- * portable core only uses it for the record-only H12 attempt. */
-#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR 4u
+/* JESD84-B51 7.4.67 Table 145: values 5 and 6 are 4-bit and 8-bit DDR;
+ * values 3 and 4 are reserved. BUS_WIDTH is W/E_P and is NOT readable, so
+ * a readback of the field cannot verify a switch. Linux instead verifies
+ * with a bus test or by comparing read-only EXT_CSD fields
+ * (mmc_select_bus_width()). */
+#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR 5u
+#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8_DDR 6u
+#define GTA4L_EMMC_EXT_CSD_BUS_WIDTH_RESERVED_4 4u
+/* The properties segment (bytes 192..511) is read-only and is the portable
+ * substitute for a byte-183 readback. */
+#define GTA4L_EMMC_EXT_CSD_PROPERTIES_OFF  192u
 #define GTA4L_EMMC_SWITCH_ACCESS_WRITE     0x03000000u
 #define GTA4L_EMMC_SWITCH_CMD_SET_NORMAL   0x00000001u
 
-/* CMD19/CMD14 bus-test data lengths and patterns (Linux
- * mmc_send_bus_test()). The card returns the complement of the first
- * len/4 bytes; only those bits cover the first two bits per data line.
- * The 1-bit form uses a 4-byte block because the SDHCI PIO buffer is
- * 32-bit; only its first returned byte is compared, and that byte carries
- * the first two pattern bits on the single line. */
+/* CMD19/CMD14 bus-test data lengths and patterns. Linux mmc_bus_test()
+ * skips 1-bit; JESD84-B51 6.6.4/Annex A.6.3 define the 1-bit transmit
+ * pattern as 0x80 and check only the first two returned bits. The 4-bit
+ * and 8-bit forms follow Linux mmc_send_bus_test() and compare the full
+ * complement byte for each lane group. */
 #define GTA4L_EMMC_BUS_TEST_1_BYTES        4u
 #define GTA4L_EMMC_BUS_TEST_4_BYTES        4u
 #define GTA4L_EMMC_BUS_TEST_8_BYTES        8u
-#define GTA4L_EMMC_BUS_TEST_PATTERN_1      0x5Au
+#define GTA4L_EMMC_BUS_TEST_PATTERN_1      0x80u
+#define GTA4L_EMMC_BUS_TEST_1_EXPECT_MASK  0xC0u
+#define GTA4L_EMMC_BUS_TEST_1_EXPECT       0x40u
 #define GTA4L_EMMC_BUS_TEST_PATTERN_4      0x5Au
 #define GTA4L_EMMC_BUS_TEST_PATTERN_8_0    0x55u
 #define GTA4L_EMMC_BUS_TEST_PATTERN_8_1    0xAAu
@@ -331,6 +344,10 @@
 #define GTA4L_EMMC_ERR_BUS_WIDTH         -19
 #define GTA4L_EMMC_ERR_BUS_TEST          -20
 #define GTA4L_EMMC_ERR_TIMING            -22
+/* A width switch failed and the card/host framing could not be proven back
+ * at the previous width. The caller must stop: the active bus width is
+ * unknown. */
+#define GTA4L_EMMC_ERR_WIDTH_RESTORE     -23
 
 /* Diagnostic event codes passed to the log callback. */
 #define GTA4L_EMMC_LOG_RESET              1u
@@ -586,6 +603,12 @@ struct gta4l_emmc_host {
 	 * controller timeout can still be observed; the portable core never
 	 * sets it. Only the CMD19 write path reads it. */
 	uint32_t bus_test_window_us;
+	/* Set only around a CMD14 bus-test read. JESD84-B51 6.6.4 and Linux
+	 * sdhci_data_irq() exclude BUS_TEST_R from the data-CRC failure path:
+	 * the pattern may carry an optional CRC16 that the host ignores. The
+	 * condition is one DATA_CRC indication with no other error bit. */
+	uint8_t  bus_test_data_crc_ok;
+	uint8_t  bus_test_ignored_crc;
 };
 
 /* Controller reset, GCC 400 kHz setup, retained-rail power handshake, pads. */
@@ -626,6 +649,11 @@ struct gta4l_emmc_bus_result {
 	uint8_t  host_before;    /* HOST_CONTROL before the width write */
 	uint8_t  host_after;     /* HOST_CONTROL read back after the write */
 	uint32_t readback_sum;   /* byte sum of the EXT_CSD read at the width */
+	/* The verified switch replaces the invalid byte-183 equality gate with
+	 * a read-only properties-segment comparison. `switched` remains the raw
+	 * byte-183 observation (diagnostic only, normally 0). */
+	uint32_t verified;       /* read-only EXT_CSD comparison passed */
+	int      rollback_result; /* card+host restore result after a failure */
 };
 
 /* Switch the card BUS_WIDTH (CMD6) and the SDHCI host width. `bits` may be 1,
@@ -634,13 +662,26 @@ struct gta4l_emmc_bus_result {
 int gta4l_emmc_set_bus_width(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_result *result);
 
-/* Record-only 4-bit DDR BUS_WIDTH attempt (byte 183 = 4). The host applies
- * the matching 4-bit SDR DAT width for the verification read, but the
- * controller DDR configuration (CORE_DDR_CONFIG and the HOST_CONTROL2
- * MCLK_SEL/HC_SELECT_IN fields) is left untouched. A refused value returns
- * GTA4L_EMMC_ERR_BUS_WIDTH after restoring the previous host width. The
- * caller's `initialized` flag must already be set. */
-int gta4l_emmc_set_bus_width_ddr(struct gta4l_emmc_host *host,
+/* Historical H12 probe of the RESERVED BUS_WIDTH value 4 (not DDR; DDR is
+ * 5/6). Kept only to decode the already-flashed H12 image class; new work
+ * must not use it. The host applies the matching 4-bit SDR DAT width for
+ * the diagnostic read, but no controller DDR configuration is touched. */
+int gta4l_emmc_set_bus_width_reserved4(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_bus_result *result);
+
+/* Verified width switch: CMD6, CMD13 TRAN wait, host width apply/readback,
+ * then an EXT_CSD read at the new width whose read-only properties segment
+ * must equal the pre-switch baseline. Byte 183 is not readable and is never
+ * used as proof. On any failure both the host and the card are restored to
+ * the previous width and verified; a failed restore returns
+ * GTA4L_EMMC_ERR_WIDTH_RESTORE so the caller stops with unknown framing. */
+int gta4l_emmc_set_bus_width_verified(struct gta4l_emmc_host *host,
+    uint32_t bits, struct gta4l_emmc_bus_result *result);
+
+/* Corrected CMD19/CMD14 bus test: ignores a lone CMD14 data-CRC indication
+ * (optional pattern CRC16), uses the JEDEC 1-bit 0x80 pattern with the
+ * two-bit check, and still requires the returned pattern. */
+int gta4l_emmc_bus_test_verified(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_result *result);
 
 /* CMD19/CMD14 bus-test round trip at the active width. `bits` may be 1, 4

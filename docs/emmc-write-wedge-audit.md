@@ -7,6 +7,20 @@ B1.51, ranks the candidate causes, states what the evidence does not
 distinguish, and names the next owner-gated rung. It does not establish a card
 defect, a write-path verdict or permission to run a device.
 
+**Correction (2026-11-04):** the rung-1 CMD14 result in the H13 device run
+(`trc=-12`) was originally treated as a failed card data conversation. JEDEC
+6.6.4 permits an optional pattern CRC16 that the host ignores, and pinned
+Linux `sdhci_data_irq()` exempts `MMC_BUS_TEST_R` from its data-CRC failure
+path, so that row is inconclusive rather than card-side proof. The core now
+tolerates exactly one CMD14 data-CRC indication and still requires the
+returned pattern. The 1-bit pattern is the JEDEC `0x80`/two-bit form. The
+stage-7 "forced TOUTVAL" experiment wrote bits of `CLOCK_CONTROL`, not the
+`TIMEOUT_CONTROL` byte, so its armed-minimum interpretation is withdrawn.
+The recommended rung 2 (forced post-write CMD12/CMD13 drain) conflicted with
+this document's own row 3 ("CMD12 is not appropriate for a single-block
+write"); H14 is paused pending a corrected design. H15 is the verified-width
+rung and is host-tested only.
+
 ## 1. What is being explained
 
 The bus-test write phase fails identically at both measured widths:

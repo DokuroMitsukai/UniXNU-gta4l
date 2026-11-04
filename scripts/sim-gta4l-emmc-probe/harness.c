@@ -128,8 +128,10 @@ static int map_fail;
 static int branch_stuck;
 static int rcg_stuck;
 static int clock_timeout;
-static unsigned int clock_drop_write;
-static unsigned int clock_write_count;
+/* Models a TIMEOUT_CONTROL write that does not stick (readback 5), used by
+ * the DTO arming-guard scenario. */
+static int timeout_arm_stuck;
+static unsigned int timeout_rung_writes;
 static int bad_access;
 static unsigned long sdhci_accesses;
 static unsigned long sdhci_writes;
@@ -278,6 +280,8 @@ static uint32_t mb_argument;
 static uint32_t mb_count;
 static uint32_t mb_done;
 static int mb_active;
+/* Live PIO readiness, separate from the latched BRR bit. */
+static int buffer_ready;
 static int mb_stop_no_tc;
 static int mb_r1_error;
 static uint32_t mb_corrupt_lba = 0xFFFFFFFFu;
@@ -374,6 +378,7 @@ sim_fill_buffer_words(const uint8_t *bytes)
 		    ((uint32_t)bytes[index + 2u] << 16) |
 		    ((uint32_t)bytes[index + 3u] << 24);
 	}
+	buffer_ready = 1;
 }
 
 static void
@@ -936,7 +941,7 @@ sim_command(uint16_t command)
 		value = (last_argument >> 8) & 0xFFu;
 		ext_index = (last_argument >> 16) & 0xFFu;
 		if ((ext_index == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF) &&
-		    (value == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR)) {
+		    (value == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_RESERVED_4)) {
 			/* Count every value-4 attempt, including an R1 refusal,
 			 * so the H12 scope check can bind the DDR request. */
 			cmd6_value4_count++;
@@ -944,7 +949,7 @@ sim_command(uint16_t command)
 		}
 		if ((cmd6_fail_bus_width_ddr != 0) &&
 		    (ext_index == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF) &&
-		    (value == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR)) {
+		    (value == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_RESERVED_4)) {
 			/* The H12 DDR value is refused with an R1 error before
 			 * any commit or host-width change. */
 			sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
@@ -1001,7 +1006,7 @@ sim_command(uint16_t command)
 				}
 				if ((wddr_paradox != 0) &&
 				    (value ==
-				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR)) {
+				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_RESERVED_4)) {
 					wddr_paradox_pending = 1;
 				}
 			}
@@ -1124,8 +1129,14 @@ sim_command(uint16_t command)
 		}
 		if (cmd14_error != 0) {
 			error_int |= (uint16_t)cmd14_error;
-			return;
+			/* The optional pattern CRC16 is ignored by the host;
+			 * deliver the data so the verified path can compare it.
+			 * Every other injected error stays terminal. */
+			if (cmd14_error != GTA4L_EMMC_INT_ERR_DATA_CRC) {
+				return;
+			}
 		}
+		buffer_ready = 1;
 		normal_int |= GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_BRR |
 		    GTA4L_EMMC_INT_TC;
 		return;
@@ -1285,7 +1296,7 @@ sim_command(uint16_t command)
 				if ((wddr_paradox_pending != 0) &&
 				    (ext_csd[
 				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF] ==
-				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4_DDR)) {
+				    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_RESERVED_4)) {
 					/* Keep byte 183 = 4 but drop the
 					 * sum by 4, so the readback word
 					 * and the re-read sum disagree
@@ -1421,6 +1432,16 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) {
 			return pwr_status;
 		}
+		if (offset == GTA4L_EMMC_REG_PRESENT_STATE) {
+			uint32_t value = sim_load(sdhci,
+			    GTA4L_EMMC_REG_PRESENT_STATE, 4u);
+
+			if (buffer_ready != 0) {
+				value |=
+				    GTA4L_EMMC_PRESENT_BUFFER_READ_READY;
+			}
+			return value;
+		}
 		if (offset == GTA4L_EMMC_REG_BUFFER_DATA_PORT) {
 			uint32_t word = 0;
 
@@ -1429,6 +1450,10 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 				word = buffer_data[buffer_index];
 			}
 			buffer_index++;
+			if (buffer_index >=
+			    (GTA4L_EMMC_BLOCK_BYTES / 4u)) {
+				buffer_ready = 0;
+			}
 			if ((mb_active != 0) &&
 			    (buffer_index >=
 			    (GTA4L_EMMC_BLOCK_BYTES / 4u))) {
@@ -1523,6 +1548,19 @@ gta4l_emmc_probe_test_write8(uint32_t space, uint32_t offset, uint8_t value)
 				value = 0;
 			}
 		}
+		if (offset == GTA4L_EMMC_REG_TIMEOUT_CONTROL) {
+			/* Only the stage-7 rung write is faulted; the init
+			 * write must still program the real value. */
+			if ((stage == 7) && (cmd17_count >= 25u)) {
+				timeout_rung_writes++;
+				if ((timeout_arm_stuck != 0) &&
+				    (timeout_rung_writes == 1u)) {
+					value = 5u;
+				}
+			}
+			sim_store(sdhci, offset, 1u, value);
+			return;
+		}
 		if ((offset == GTA4L_EMMC_REG_HOST_CONTROL) &&
 		    (host_width_ignore != 0)) {
 			value &= (uint8_t)~(GTA4L_EMMC_HOST_CONTROL_4BIT |
@@ -1579,21 +1617,11 @@ gta4l_emmc_probe_test_write16(uint32_t space, uint32_t offset, uint16_t value)
 			return;
 		}
 		if (offset == GTA4L_EMMC_REG_CLOCK_CONTROL) {
-			clock_write_count++;
 			sim_store(sdhci, offset, 2u, value);
 			if (((value & GTA4L_EMMC_CLOCK_INT_EN) != 0) &&
 			    (clock_timeout == 0)) {
 				value |= GTA4L_EMMC_CLOCK_INT_STABLE;
 				sim_store(sdhci, offset, 2u, value);
-			}
-			if ((clock_drop_write != 0u) &&
-			    (clock_write_count == clock_drop_write)) {
-				/* The full write clears the RO INT_STABLE bit
-				 * until the clock settles again; the immediate
-				 * readback sees 0x0005, as on the B1C-2 run. */
-				sim_store(sdhci, offset, 2u,
-				    (uint16_t)(value &
-				    ~GTA4L_EMMC_CLOCK_INT_STABLE));
 			}
 			return;
 		}
@@ -3617,6 +3645,27 @@ main(int argc, char **argv)
 		} else if (strcmp(scenario, "probe-h14-write-crc") == 0) {
 			cmd19_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
 		}
+	} else if ((strcmp(scenario, "probe-h15-pass") == 0) ||
+	    (strcmp(scenario, "probe-h15-crc") == 0) ||
+	    (strcmp(scenario, "probe-h15-content-div") == 0)) {
+		/* Stage 15: verified 4-bit SDR switch, corrected CMD19/CMD14
+		 * test, content pass, verified revert and recovery read. */
+		stage = 15;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-h15-crc") == 0) {
+			cmd14_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario,
+		    "probe-h15-content-div") == 0) {
+			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
+			width_corrupt_code =
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		}
 	} else if ((strcmp(scenario, "probe-dto-fired") == 0) ||
 	    (strcmp(scenario, "probe-dto-silent") == 0) ||
 	    (strcmp(scenario, "probe-dto-q-fail") == 0) ||
@@ -3650,7 +3699,7 @@ main(int argc, char **argv)
 			cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
 		}
 		if (strcmp(scenario, "probe-dto-arm-ro") == 0) {
-			clock_drop_write = 4u;
+			timeout_arm_stuck = 1;
 		}
 		if (strcmp(scenario, "probe-dto-e2-pass") != 0) {
 			cmd19_1bit_timeout = 1;
@@ -4933,17 +4982,18 @@ main(int argc, char **argv)
 	    "probe-b1-host-width-stuck") == 0) {
 		check(panicked == 1, "a lost host width write did not report");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC B1 REPORT: rc=-12 stop=1") != NULL,
-		    "the host-width-stuck report does not name the failed "
-		    "read");
+		    "GTA4L-EMMC B1 REPORT: rc=-19 stop=1") != NULL,
+		    "the host-width-stuck report does not name the lost "
+		    "HOST_CONTROL width");
 		check(strstr(panic_message,
-		    "BW=4 att=1 req=4 sw=0 swrc=-12 tt=0 tw=00000000 "
-		    "te=00000000 trc=0 hc=00 hb=00 ha=00 c6=00000900 "
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=02 hb=00 ha=00 c6=00000900 "
 		    "es=00000000") != NULL,
 		    "the host-width-stuck report does not show the lost "
-		    "HOST_CONTROL width and the failed read");
-		check(cmd_count == 36u,
-		    "the host-width-stuck run did not stop at the read");
+		    "HOST_CONTROL width");
+		check(cmd_count == 35u,
+		    "the host-width-stuck run issued a read on a width the "
+		    "host did not apply");
 	} else if (strcmp(scenario, "probe-b1-bustest-fail") == 0) {
 		check(panicked == 1, "a 4-bit bus-test mismatch did not report");
 		check(strstr(panic_message,
@@ -5196,14 +5246,15 @@ main(int argc, char **argv)
 	} else if (strcmp(scenario, "probe-b1c-host-width-stuck") == 0) {
 		check(panicked == 1, "the B1C lost host width did not report");
 		check(strstr(panic_message,
-		    "BW=4 att=1 req=4 sw=0 swrc=-12 tt=0 tw=00000000 "
-		    "te=00000000 trc=0 hc=00 hb=00 ha=00 c6=00000900 "
+		    "BW=4 att=1 req=4 sw=0 swrc=-19 tt=0 tw=00000000 "
+		    "te=00000000 trc=0 hc=02 hb=00 ha=00 c6=00000900 "
 		    "es=00000000 b0=00000000 b1=00000000 same=0 div=0 "
 		    "bc=0 e183a=00000000 esa=00000000") != NULL,
 		    "the lost-host-width row is not the non-entering stage-B1 "
 		    "report plus zero B1C fields");
-		check(cmd_count == 36u,
-		    "the lost-host-width row did not stop at the read");
+		check(cmd_count == 35u,
+		    "the lost-host-width row issued a read on a width the "
+		    "host did not apply");
 	} else if (strcmp(scenario, "probe-b1-1bit-pass") == 0) {
 		char expected[512];
 
@@ -5213,7 +5264,7 @@ main(int argc, char **argv)
 		    "the 1-bit pass report does not carry the result");
 		snprintf(expected, sizeof(expected),
 		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=1 "
-		    "tw=000000a5 te=000000a5 trc=0 hc=00 es=%08x",
+		    "tw=00000040 te=00000040 trc=0 hc=00 es=%08x",
 		    sim_ext_csd_sum() - 2u);
 		check(strstr(panic_message, expected) != NULL,
 		    "the 1-bit discriminator did not record its passing words");
@@ -5242,7 +5293,7 @@ main(int argc, char **argv)
 		    "stop");
 		snprintf(expected, sizeof(expected),
 		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=1 "
-		    "tw=000000a5 te=000000a5 trc=0 hc=00 es=%08x",
+		    "tw=00000040 te=00000040 trc=0 hc=00 es=%08x",
 		    sim_ext_csd_sum());
 		check(strstr(panic_message, expected) != NULL,
 		    "the 1-bit continuation lost the discriminator pass");
@@ -5294,7 +5345,7 @@ main(int argc, char **argv)
 		    "discriminator stop");
 		check(strstr(panic_message,
 		    "BW=1 att=1 req=1 sw=0 swrc=0 tt=1 "
-		    "tw=0000005a te=000000a5 trc=-20 hc=00") != NULL,
+		    "tw=00000080 te=00000040 trc=-20 hc=00") != NULL,
 		    "the 1-bit mismatch did not bind the failing pattern word");
 		check(strstr(panic_message,
 		    "BW=4 att=0 req=0 sw=0 swrc=0 tt=0") != NULL,
@@ -6264,7 +6315,7 @@ main(int argc, char **argv)
 		    != NULL,
 		    "the H13 rung-1 pass lost the self-clearing data reset");
 		check(strstr(panic_message,
-		    "H13 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "H13 T trc=0 tw=00000040 te=00000040") != NULL,
 		    "the H13 rung-1 pass lost the matching CMD14 word");
 		check(strstr(panic_message,
 		    "H13 Q rc=0 qb0=5c510100") != NULL,
@@ -6331,7 +6382,7 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC H13 REPORT: rc=-20 stop=13") != NULL,
 		    "the H13 CMD14 mismatch does not keep stop 13");
 		check(strstr(panic_message,
-		    "H13 T trc=-20 tw=0000005a te=000000a5") != NULL,
+		    "H13 T trc=-20 tw=00000080 te=00000040") != NULL,
 		    "the H13 CMD14 mismatch did not bind the pattern words");
 		check(strstr(panic_message,
 		    "H13 Q rc=0 qb0=5c510100") != NULL,
@@ -6351,11 +6402,11 @@ main(int argc, char **argv)
 	} else if (strcmp(scenario, "probe-h13-read-crc") == 0) {
 		check(panicked == 1, "the H13 CMD14 CRC did not report");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC H13 REPORT: rc=-12 stop=14") != NULL,
-		    "the H13 CMD14 CRC does not keep stop 14");
+		    "GTA4L-EMMC H13 REPORT: rc=0 stop=0") != NULL,
+		    "the optional CMD14 pattern CRC was not ignored");
 		check(strstr(panic_message,
-		    "H13 T trc=-12 tw=00000000 te=00000000") != NULL,
-		    "the H13 CMD14 CRC lost its core code");
+		    "H13 T trc=0 tw=00000040 te=00000040") != NULL,
+		    "the ignored CMD14 CRC lost the pattern result");
 		check(cmd19_count == 1u && cmd14_count == 1u,
 		    "the H13 CMD14 CRC command counts mismatch");
 	} else if (strcmp(scenario, "probe-h13-read-status") == 0) {
@@ -6396,7 +6447,7 @@ main(int argc, char **argv)
 		    != NULL,
 		    "the H13 non-wedge write lost the clean reset");
 		check(strstr(panic_message,
-		    "H13 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "H13 T trc=0 tw=00000040 te=00000040") != NULL,
 		    "the H13 non-wedge write lost the matching CMD14 word");
 		check(strstr(panic_message,
 		    "H13 FAIL fail=0/0/0/00000000/0000/0000/00000000/0")
@@ -6414,7 +6465,7 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC H13 REPORT: rc=-12 stop=15") != NULL,
 		    "the failed H13 recovery read does not keep stop 15");
 		check(strstr(panic_message,
-		    "H13 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "H13 T trc=0 tw=00000040 te=00000040") != NULL,
 		    "the failed H13 recovery read lost the passing CMD14 "
 		    "word");
 		check(strstr(panic_message,
@@ -6451,7 +6502,7 @@ main(int argc, char **argv)
 		    "pst=03f801f4") != NULL,
 		    "the H14 rung-2 pass lost the completed CMD13 drain");
 		check(strstr(panic_message,
-		    "H14 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "H14 T trc=0 tw=00000040 te=00000040") != NULL,
 		    "the H14 rung-2 pass lost the matching CMD14 word");
 		check(strstr(panic_message,
 		    "H14 Q rc=0 qb0=5c510100") != NULL,
@@ -6539,7 +6590,7 @@ main(int argc, char **argv)
 		    "pst=00000000") != NULL,
 		    "the silent H14 CMD12 still issued CMD13");
 		check(strstr(panic_message,
-		    "H14 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "H14 T trc=0 tw=00000040 te=00000040") != NULL,
 		    "the silent H14 CMD12 lost the record-only CMD14 read");
 		check(cmd19_count == 1u && cmd14_count == 1u &&
 		    h14_cmd12_count == 1u && h14_cmd13_count == 0u,
@@ -6572,7 +6623,7 @@ main(int argc, char **argv)
 		    "pst=03f801f4") != NULL,
 		    "the H14 CMD13 failure lost its terminal tuple");
 		check(strstr(panic_message,
-		    "H14 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "H14 T trc=0 tw=00000040 te=00000040") != NULL,
 		    "the H14 CMD13 failure lost the record-only CMD14 read");
 		check(cmd19_count == 1u && cmd14_count == 1u &&
 		    h14_cmd12_count == 1u && h14_cmd13_count == 1u,
@@ -6586,7 +6637,7 @@ main(int argc, char **argv)
 		    "H14 C12 rc=0 r1=00000900 err=0000 nrm=0003") != NULL,
 		    "the H14 CMD14 mismatch lost the clean drain");
 		check(strstr(panic_message,
-		    "H14 T trc=-20 tw=0000005a te=000000a5") != NULL,
+		    "H14 T trc=-20 tw=00000080 te=00000040") != NULL,
 		    "the H14 CMD14 mismatch did not bind the pattern words");
 		check(strstr(panic_message,
 		    "H14 Q rc=0 qb0=5c510100") != NULL,
@@ -6596,11 +6647,11 @@ main(int argc, char **argv)
 	} else if (strcmp(scenario, "probe-h14-read-crc") == 0) {
 		check(panicked == 1, "the H14 CMD14 CRC did not report");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC H14 REPORT: rc=-12 stop=15") != NULL,
-		    "the H14 CMD14 CRC does not keep stop 15");
+		    "GTA4L-EMMC H14 REPORT: rc=0 stop=0") != NULL,
+		    "the optional CMD14 pattern CRC was not ignored");
 		check(strstr(panic_message,
-		    "H14 T trc=-12 tw=00000000 te=00000000") != NULL,
-		    "the H14 CMD14 CRC lost its core code");
+		    "H14 T trc=0 tw=00000040 te=00000040") != NULL,
+		    "the ignored CMD14 CRC lost the pattern result");
 		check(cmd19_count == 1u && cmd14_count == 1u &&
 		    h14_cmd12_count == 1u && h14_cmd13_count == 1u,
 		    "the H14 CMD14 CRC command counts mismatch");
@@ -6611,7 +6662,7 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC H14 REPORT: rc=-12 stop=15") != NULL,
 		    "the failed H14 recovery read does not keep stop 15");
 		check(strstr(panic_message,
-		    "H14 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "H14 T trc=0 tw=00000040 te=00000040") != NULL,
 		    "the failed H14 recovery read lost the passing CMD14 "
 		    "word");
 		check(strstr(panic_message,
@@ -6659,7 +6710,7 @@ main(int argc, char **argv)
 		    "pst=00000000") != NULL,
 		    "the H14 non-wedge write lost the clean CMD12");
 		check(strstr(panic_message,
-		    "H14 T trc=0 tw=000000a5 te=000000a5") != NULL,
+		    "H14 T trc=0 tw=00000040 te=00000040") != NULL,
 		    "the H14 non-wedge write lost the matching CMD14 word");
 		check(strstr(panic_message,
 		    "H14 FAIL fail=0/0/0/00000000/0000/0000/00000000/0")
@@ -6671,6 +6722,43 @@ main(int argc, char **argv)
 		check(cmd17_count == 26u,
 		    "the H14 non-wedge write did not run the stage-A reads "
 		    "and Q");
+	} else if ((strcmp(scenario, "probe-h15-pass") == 0) ||
+	    (strcmp(scenario, "probe-h15-crc") == 0)) {
+		check(panicked == 1, "the H15 verified switch did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H15 REPORT: rc=0 stop=0") != NULL,
+		    "the H15 verified switch did not pass");
+		check(strstr(panic_message,
+		    "H15 W rc=0 req=4 sw=") != NULL &&
+		    strstr(panic_message, " vf=1 ") != NULL,
+		    "the H15 W line does not show the read-only verification");
+		check(strstr(panic_message, "H15 B trc=0 tw=000000a5 "
+		    "te=000000a5") != NULL,
+		    "the H15 4-bit bus test lost its pattern");
+		check(strstr(panic_message,
+		    "H15 T att=1 same=1 div=0") != NULL,
+		    "the H15 4-bit content pass diverged");
+		check(strstr(panic_message,
+		    "H15 V rc=0 sw=") != NULL &&
+		    strstr(panic_message, "H15 Q rc=0 qb0=5c510100") != NULL,
+		    "the H15 verified revert or recovery read failed");
+		check(cmd6_count == 2u,
+		    "the H15 run did not issue the switch and its verified "
+		    "revert");
+		check(cmd17_count == 51u,
+		    "the H15 run did not run the baseline and 4-bit content "
+		    "passes plus Q");
+		check(strlen(panic_message) < 2048u,
+		    "the H15 report exceeds the panic buffer");
+	} else if (strcmp(scenario, "probe-h15-content-div") == 0) {
+		check(panicked == 1, "the H15 divergent content pass did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H15 REPORT: rc=-21 stop=14") != NULL,
+		    "the H15 content divergence did not keep stop 14");
+		check(strstr(panic_message,
+		    "H15 T att=1 same=0 div=34") != NULL,
+		    "the H15 content divergence did not name LBA 34");
 	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
 		check(panicked == 1, "the fired DTO audit did not report");
 		check(strstr(panic_message,
@@ -6678,7 +6766,7 @@ main(int argc, char **argv)
 		    "the fired row does not name the E1 timeout and stop 0");
 		check(strstr(panic_message,
 		    "DTO R1 clk=0007 ne=0033 ee=07ff ns=0000 se=0000 "
-		    "es=0000 arm=0007") != NULL,
+		    "es=0000 toc=0e arm=00 restored=0e") != NULL,
 		    "the R1 line lost the timeout or enable readback");
 		check(strstr(panic_message,
 		    "DTO E1 n=8 rc=-11 "
@@ -6756,20 +6844,22 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC DTO REPORT: rc=0 stop=13") != NULL,
 		    "the passed write phase does not name its stop");
 		check(strstr(panic_message,
-		    "DTO E2 att=1 win=8000000 rc=0 tt=1 tw=000000a5 "
-		    "te=000000a5 trc=0 hc=00") != NULL,
+		    "DTO E2 att=1 win=8000000 rc=0 tt=1 tw=00000040 "
+		    "te=00000040 trc=0 hc=00") != NULL,
 		    "the E2 line lost the passing 1-bit words");
 		check(cmd_count == 38u,
 		    "the passing E2 run did not complete CMD19/CMD14");
 	} else if (strcmp(scenario, "probe-dto-arm-ro") == 0) {
 		check(panicked == 1, "the arm-artifact audit did not report");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC DTO REPORT: rc=-11 stop=10") != NULL,
-		    "the arm readback artifact does not keep stop 10");
+		    "GTA4L-EMMC DTO REPORT: rc=0 stop=12") != NULL,
+		    "a TIMEOUT_CONTROL readback that did not arm is not "
+		    "stop 12");
 		check(strstr(panic_message,
 		    "DTO R1 clk=0007 ne=0033 ee=07ff ns=0000 se=0000 "
-		    "es=0000 arm=0005") != NULL,
-		    "the arm line did not record the dropped INT_STABLE bit");
+		    "es=0000 toc=0e arm=05 restored=0e") != NULL,
+		    "the arm line did not record the stuck timeout byte and "
+		    "its restore");
 		check(strstr(panic_message,
 		    "DTO E1 n=8 rc=0 "
 		    "fail=0/0/0/00000000/0000/0000/00000000/0") != NULL,
@@ -6778,13 +6868,9 @@ main(int argc, char **argv)
 		    "DTO Q rc=0") != NULL,
 		    "the arm artifact skipped the recovery read");
 		check(strstr(panic_message,
-		    "DTO E2 att=1 win=8000000 rc=-11 tt=1") != NULL,
-		    "the TOUTVAL-only gate did not run E2");
-		check(strstr(panic_message,
-		    "DTO FAIL fail=1/19/0/0000133a/0000/0011/03f801f6/22")
-		    != NULL,
-		    "the arm artifact lost the terminal CMD19 tuple");
-		check(cmd_count == 37u,
+		    "DTO E2 att=0 win=0 rc=0 tt=0") != NULL,
+		    "the failed arm gate still ran E2");
+		check(cmd_count == 36u,
 		    "the arm artifact did not run the full DTO sequence");
 	} else if (strcmp(scenario, "report-width-failure") == 0) {
 		check(panicked == 1, "the synthetic width failure did not panic");

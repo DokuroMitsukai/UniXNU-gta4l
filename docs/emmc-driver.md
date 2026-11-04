@@ -34,13 +34,11 @@ identification,
 single-block sector reads and
 a partial multi-block data phase are therefore observed; a complete
 multi-block read, a filesystem, block-device publication, DMA/CQE/ICE and F3
-remain `[U]`. The next rung is the H9 CMD3-completion retry discriminator
-(`gta4l-emmc-probe=9`): it runs the read-only identification sequence once
-with one designed duplicate CMD3 after a completion timeout, stops before
-EXT_CSD and the stage-A pass, and always reports (§5.3.21). It is implemented
-and host-tested; no device run exists yet. The
-core is
-opt-in. The runs were made under the owner's approval for each exact procedure,
+remain `[U]`. The 2026-11-04 protocol correction (§1a) withdraws the
+byte-183 refusal, H12 DDR, stage-7 timeout and H13 CMD14-CRC causal claims
+and fixes the underlying width, bus-test, timeout and CMD18-readiness logic.
+The corrected width rung is H15 (`gta4l-emmc-probe=15`), host-tested only;
+H14 is paused and no device run of H15 exists. The core is opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
 `sdhc-bus-power-activation` NO-GO still applies to any operation not separately
 approved.
@@ -58,12 +56,63 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 168 scenarios and 104 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 173 scenarios and 104 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 151 scenarios and 77 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 154 scenarios and 77 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
+
+## 1a. Protocol corrections (2026-11-04)
+
+These corrections supersede the causal claims of the historical rungs; the
+raw reports and images remain unchanged evidence.
+
+- **`BUS_WIDTH[183]` is `W/E_P` and not readable** (JESD84-B51 7.4, Table 93;
+  Linux `mmc_select_bus_width()` verifies with a bus test or
+  `mmc_compare_ext_csds()`). A zero byte-183 readback is not proof that the
+  card refused a width switch. `gta4l_emmc_set_bus_width_verified()` reads the
+  512-byte EXT_CSD before the CMD6, switches, reads again at the new width and
+  requires the read-only properties segment (bytes 192..511) to match. On
+  failure it restores the host and the card and verifies the restore; if that
+  cannot be proven it returns `GTA4L_EMMC_ERR_WIDTH_RESTORE` so the caller
+  stops with unknown framing. `switched` remains the raw, non-authoritative
+  byte-183 observation. The legacy `gta4l_emmc_set_bus_width()` path is kept
+  only to decode the already-flashed B1/H10/H11 stages and must not be used
+  for new work.
+- **CMD14 data CRC is not a read failure by itself.** JESD84-B51 6.6.4 allows
+  an optional pattern CRC16 that the host ignores, and Linux
+  `sdhci_data_irq()` exempts `MMC_BUS_TEST_R` from its data-CRC path. The
+  verified bus test tolerates exactly one `DATA_CRC` indication (no other
+  error bit) and still requires the returned pattern; command CRC, normal
+  sector-read CRC and every other error remain fatal. The H13 `trc=-12` row
+  therefore does not establish a card-side data-conversation failure.
+- **The 1-bit bus test uses the JEDEC pattern.** The transmit byte is `0x80`
+  and only the first two returned bits (`0b01`) are checked. The previous
+  `0x5A`/full-byte-complement check was not a valid 1-bit criterion. The
+  4-bit and 8-bit forms continue to follow Linux `mmc_send_bus_test()`.
+- **The data-timeout audit writes the right register.** SDHCI timeout count
+  is the byte at `TIMEOUT_CONTROL` `0x2E`, not bits of `CLOCK_CONTROL` `0x2C`.
+  The stage-7 report now carries `toc`/`arm`/`restored` and rung-reaching
+  writes are bounded to the audit; the earlier "minimum armed but no DTO"
+  conclusion is withdrawn. The legacy `0x2E = 0x0E` init write is unchanged.
+- **CMD18 uses live FIFO readiness and acknowledges BRR.** The read path
+  checks `PRESENT_STATE.BUFFER_READ_READY` before draining the port and
+  writes the BRR bit back after each sector, so a latched status bit cannot
+  be mistaken for a ready FIFO, and one sector is consumed once. The core
+  simulator models live readiness separately from BRR and flags a premature
+  FIFO read. The earlier `mb=N` values are software drain ordinals, not an
+  independently validated sector count.
+- **H12 used a reserved BUS_WIDTH value.** JESD84-B51 Table 145 defines 5/6
+  as 4/8-bit DDR and 3/4 as reserved. The historical stage issued value 4,
+  so it did not test DDR; the helper is now named
+  `gta4l_emmc_set_bus_width_reserved4()`, and DDR remains deferred.
+- **H15 is the corrected width rung.** `gta4l-emmc-probe=15` runs the
+  stage-A baseline, a verified 4-bit SDR switch, the corrected CMD19/CMD14
+  test, a 4-bit content pass, a verified return to 1-bit and the recovery
+  read. It is host-tested only; no device run exists. H14 is paused rather
+  than advanced: CMD12 is not appropriate for the single-block CMD19 write,
+  and its stop-code mapping conflated distinct failures.
 
 ## 2. Sequence
 
@@ -2690,7 +2739,15 @@ record lands. Evidence:
 `device-run-record.json`, `device-run-transcript.txt`,
 `postflash-hashes.txt`, `postboot-reread.txt`).
 
-### 5.3.30 Stage-H14 rung-2 forced post-write drain (gta4l-emmc-probe=14, host batch 2026-11-04)
+### 5.3.30 Stage-H14 rung-2 forced post-write drain (gta4l-emmc-probe=14, host batch 2026-11-04, paused)
+
+**Paused by the 2026-11-04 protocol correction (§1a).** The write-wedge audit
+itself says CMD12 is not appropriate for the single-block CMD19 write, and
+the stop-code mapping below conflated silent, CRC, inhibit and missing-busy
+cases. The already-flashed H14 image is historical evidence; it is not a
+prerequisite for H15. A new build of this stage uses the corrected CMD14 CRC
+and 1-bit pattern rules, so its report is not byte-compatible with the old
+image.
 
 The `gta4l-emmc-probe=14` stage is the second rung of the write-phase
 wedge ladder and implements the forced post-write CMD12/CMD13 drain

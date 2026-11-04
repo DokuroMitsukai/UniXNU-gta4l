@@ -231,15 +231,15 @@ payload hash. Replay inputs:
 
 | Script | SHA-256 |
 | --- | --- |
-| `scripts/build-gta4l-diagnostic-payload.py` | `1275eec966c87826cd7a15a916ff1af7ca6498e5b10cd656600ce2feed1f38a1` |
-| `scripts/package-gta4l-diagnostic.py` | `562915b735c4399e23111badc40dbb057669ce464844201ff406bee4fc62d899` |
+| `scripts/build-gta4l-diagnostic-payload.py` | `83d3a73a26fbf02e26a45d508f743320a1d65bc19b50fc3dfe97c7118870232a` |
+| `scripts/package-gta4l-diagnostic.py` | `f3c2019460a94942ae8d834b1b7b1b362732112bb4785d35889a585ac97b79d1` |
 | `scripts/check-gta4l-boot-image.py` | `879ee0ede5ddbebe4e24915c8720fa40a7b1e253642f6fd2a4d4dff937586bf4` |
-| `scripts/check-gta4l-payload.py` | `5636f477ddc28762563de46f5c7c17c33a0531025ee3b71bac587e76ca3bcea2` |
+| `scripts/check-gta4l-payload.py` | `adfad760fcc1eee73fc6df6478bc966d255371497a72a08abcede15ab3bf3a45` |
 
 The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2`,
 `emmc-probe-3`, `emmc-probe-4`, `emmc-probe-5`, `emmc-probe-6`,
 `emmc-probe-7`, `emmc-probe-8`, `emmc-probe-9`, `emmc-probe-10`,
-`emmc-probe-11`, `emmc-probe-12`, `emmc-probe-13` and `emmc-probe-14`, mapping to
+`emmc-probe-11`, `emmc-probe-12`, `emmc-probe-13`, `emmc-probe-14` and `emmc-probe-15`, mapping to
 `gta4l-emmc-probe=1/2/3/4/5/6/7/8/9/10/11/12/13/14` (the
 `emmc-probe-4` mapping was added for the 2026-11-02 Stage-B1 build,
 `emmc-probe-5` for the Stage-B1C continuation build, `emmc-probe-6` for the
@@ -250,7 +250,7 @@ audit build, `emmc-probe-8` for the Stage-B2 HS-timing build,
 `emmc-probe-11` for the Stage-H11 width-value continuation build,
 `emmc-probe-12` for the Stage-H12 record-only DDR attempt build and
 `emmc-probe-13` for the Stage-H13 rung-1 write-phase recovery build, and
-`emmc-probe-14` for the Stage-H14 rung-2 forced post-write drain build). The stage-2
+`emmc-probe-14` for the Stage-H14 rung-2 forced post-write drain build and `emmc-probe-15` for the corrected verified-width rung). The stage-2
 image built on
 2026-10-31 is
 `out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img`

@@ -29,6 +29,22 @@ three-boot hardware run of that image. The only boot that reached B1 stopped
 at the 4-bit byte-183 readback (`sw=0`, `swrc=-19`), and the other two stopped
 before B1, so F3 remains unproven.
 
+**Protocol correction (2026-11-04):** `BUS_WIDTH[183]` is `W/E_P` and not
+readable (JESD84-B51 7.4/Table 93; Linux `mmc_select_bus_width()` verifies via
+a bus test or read-only EXT_CSD comparison). The B1/H10/H11 byte-183 refusal,
+paradox and whole-field conclusions are withdrawn as causal claims; a zero
+readback only observes the non-readable field. H12 issued reserved value 4,
+not DDR (5/6). CMD14 bus-test reads may carry an optional pattern CRC16 that
+the host ignores (JEDEC 6.6.4; Linux `sdhci_data_irq()` exempts
+`MMC_BUS_TEST_R`), so the H13 `trc=-12` row does not prove a card-side
+failure. The stage-7 timeout audit wrote `CLOCK_CONTROL`, not the
+`TIMEOUT_CONTROL` byte, so its armed-minimum conclusion is withdrawn. The
+1-bit bus test now uses the JEDEC `0x80`/two-bit rule. CMD18 now uses live
+FIFO readiness and acknowledges BRR; older `mb=N` values are software drain
+ordinals. H14 is paused. H15 (`gta4l-emmc-probe=15`) is the corrected
+verified-width rung, host-tested only; no device run exists. Raw reports and
+images remain unchanged evidence.
+
 **Hardware-tested source (2026-10-31 image):** `Gta4lEmmc.c 722110a5…`,
 `Gta4lEmmc.h 7abc7d87…`, `Gta4lEmmcProbe.c d541514b…`, simulator
 `5262362d…`, probe simulator `18f2637a…`, probe test `52c94ccb…`.

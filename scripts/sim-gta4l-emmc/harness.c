@@ -318,6 +318,9 @@ struct sim {
 	int bus_test_pattern_error;
 	int bus_width_switch_error;
 	int bus_width_stuck;
+	int bus_width_verify_mismatch;
+	int bus_width_rollback_fail;
+	int bus_width_readback_zero;
 	int bus_width_busy;
 	int bus_width_busy_polls;
 	int hs_timing_stuck;
@@ -339,6 +342,10 @@ struct sim {
 	int bus_test_dat_inhibit;
 	int bus_test_reset_stuck;
 	int bus_test_reset_no_inhibit_clear;
+	/* Live PIO readiness is separate from the latched BRR bit. A block is
+	 * ready only while the FIFO holds it; BRR stays set until a W1C. */
+	int buffer_ready;
+	int premature_fifo_read;
 	int access_violation;
 	int command_error;
 };
@@ -692,9 +699,21 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			return sim->pwr_status;
 		}
 		if (offset == GTA4L_EMMC_REG_BUFFER_DATA_PORT) {
-			uint32_t value = sim->buffer_data[
+			uint32_t value;
+
+			/* A FIFO read while no block is ready is a protocol
+			 * violation; the modeled read still returns data so
+			 * the check reports the violation instead of hanging. */
+			if (sim->buffer_ready == 0) {
+				sim->premature_fifo_read = 1;
+			}
+			value = sim->buffer_data[
 			    sim->buffer_index % (GTA4L_EMMC_BLOCK_BYTES / 4u)];
 			sim->buffer_index++;
+			if ((sim->buffer_index %
+			    (GTA4L_EMMC_BLOCK_BYTES / 4u)) == 0u) {
+				sim->buffer_ready = 0;
+			}
 			if ((sim->data_late_error_words > 0) &&
 			    (sim->data_late_error_emitted == 0) &&
 			    (sim->buffer_index >=
@@ -798,6 +817,10 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			    (sim->mb_dat_inhibit != 0) ||
 			    (sim->bus_test_dat_inhibit != 0)) {
 				value |= GTA4L_EMMC_PRESENT_DAT_INHIBIT;
+			}
+			if (sim->buffer_ready != 0) {
+				value |=
+				    GTA4L_EMMC_PRESENT_BUFFER_READ_READY;
 			}
 			return value;
 		}
@@ -971,6 +994,7 @@ sim_fill_block(struct sim *sim, uint32_t lba)
 	for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
 		bytes[index] = sim_block_byte(lba, index);
 	}
+	sim->buffer_ready = 1;
 }
 
 static void
@@ -985,6 +1009,7 @@ sim_fill_words(struct sim *sim, const uint8_t *bytes)
 		    ((uint32_t)bytes[index + 2u] << 16) |
 		    ((uint32_t)bytes[index + 3u] << 24);
 	}
+	sim->buffer_ready = 1;
 }
 
 static void
@@ -1443,7 +1468,13 @@ sim_command(struct sim *sim, uint16_t command)
 				sim->ext_csd[SIM_HS_TIMING_OFF] =
 				    (uint8_t)((argument >> 8) & 0x01u);
 			}
-		} else if (sim->bus_width_stuck == 0) {
+		} else if ((sim->bus_width_rollback_fail != 0) &&
+		    (((argument >> 8) & 0x0Fu) == 0u)) {
+			/* The restore CMD6 is refused after a failed
+			 * verification, leaving the card framing unknown. */
+			response |= 0x00000080u;
+		} else if ((sim->bus_width_stuck == 0) &&
+		    (sim->bus_width_readback_zero == 0)) {
 			sim->ext_csd[SIM_BUS_WIDTH_OFF] =
 			    (uint8_t)((argument >> 8) & 0x0Fu);
 		}
@@ -1500,8 +1531,10 @@ sim_command(struct sim *sim, uint16_t command)
 		}
 		sim_set_response(sim, &response, 1);
 		if (sim->bus_test_read_crc != 0) {
+			/* The pattern CRC16 is optional and ignored; the data
+			 * is still delivered so the verified bus test can
+			 * tolerate the lone CRC indication and compare it. */
 			sim->error_int |= GTA4L_EMMC_INT_ERR_DATA_CRC;
-			break;
 		}
 		if (sim->bus_test_read_timeout != 0) {
 			break;
@@ -1521,6 +1554,7 @@ sim_command(struct sim *sim, uint16_t command)
 			}
 			sim->buffer_data[index] = value;
 		}
+		sim->buffer_ready = 1;
 		sim->normal_int |= GTA4L_EMMC_INT_BRR;
 		sim->normal_int |= GTA4L_EMMC_INT_TC;
 		break;
@@ -1595,6 +1629,18 @@ sim_command(struct sim *sim, uint16_t command)
 		if (sim->data_timeout == 0) {
 			if (sim->no_brr == 0) {
 				sim_fill_words(sim, sim->ext_csd);
+				if ((sim->bus_width_verify_mismatch != 0) &&
+				    ((sim->sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+				    (SIM_HOST_CONTROL_4BIT |
+				    SIM_HOST_CONTROL_8BIT)) != 0u)) {
+					/* A read-only properties byte differs:
+					 * the data path did not carry the same
+					 * card identity at this width. */
+					sim->buffer_data[
+					    GTA4L_EMMC_EXT_CSD_REV_OFF / 4u] ^=
+					    1u << (8u *
+					    (GTA4L_EMMC_EXT_CSD_REV_OFF % 4u));
+				}
 				sim->normal_int |= GTA4L_EMMC_INT_BRR;
 			}
 			if (sim->no_tc == 0) {
@@ -2620,6 +2666,18 @@ main(int argc, char **argv)
 		sim.bus_width_switch_error = 1;
 	} else if (scenario_is(scenario, "bus-width-stuck")) {
 		sim.bus_width_stuck = 1;
+	} else if (scenario_is(scenario, "bus-width-verified-4")) {
+		/* The card switch takes effect, but byte 183 remains
+		 * unreadable (reads 0), as JEDEC specifies. */
+		sim.bus_width_readback_zero = 1;
+	} else if (scenario_is(scenario, "bus-width-verified-mismatch")) {
+		sim.bus_width_verify_mismatch = 1;
+	} else if (scenario_is(scenario, "bus-width-verified-rollback-fail")) {
+		sim.bus_width_verify_mismatch = 1;
+		sim.bus_width_rollback_fail = 1;
+	} else if (scenario_is(scenario,
+	    "bus-width-verified-cmd6-error")) {
+		sim.bus_width_switch_error = 1;
 	} else if (scenario_is(scenario, "bus-width-busy")) {
 		/* wait_tran allows ten CMD13 attempts; the switch arms a poll
 		 * budget beyond that so the bounded wait must expire. */
@@ -2636,7 +2694,8 @@ main(int argc, char **argv)
 		sim.bus_test_status_error = 1;
 	} else if (scenario_is(scenario, "bus-test-read-timeout")) {
 		sim.bus_test_read_timeout = 1;
-	} else if (scenario_is(scenario, "bus-test-read-crc")) {
+	} else if (scenario_is(scenario, "bus-test-read-crc") ||
+	    scenario_is(scenario, "bus-test-verified-crc")) {
 		sim.bus_test_read_crc = 1;
 	} else if (scenario_is(scenario, "bus-test-read-status")) {
 		sim.bus_test_read_status = 1;
@@ -2650,7 +2709,8 @@ main(int argc, char **argv)
 		sim.bus_test_corrupt_xor = 0x00000100u;
 	} else if (scenario_is(scenario, "bus-test-mismatch-1")) {
 		sim.bus_test_corrupt_word = 0;
-		sim.bus_test_corrupt_xor = 0x00000001u;
+		/* Only the first two returned bits are defined for DAT0. */
+		sim.bus_test_corrupt_xor = 0x00000080u;
 	} else if (scenario_is(scenario, "bus-reset-pass") ||
 	    scenario_is(scenario, "bus-reset-mismatch") ||
 	    scenario_is(scenario, "bus-reset-read-timeout") ||
@@ -2662,7 +2722,7 @@ main(int argc, char **argv)
 		sim.bus_test_write_timeout = 1;
 		if (scenario_is(scenario, "bus-reset-mismatch")) {
 			sim.bus_test_corrupt_word = 0;
-			sim.bus_test_corrupt_xor = 0x00000001u;
+			sim.bus_test_corrupt_xor = 0x00000080u;
 		} else if (scenario_is(scenario,
 		    "bus-reset-read-timeout")) {
 			sim.bus_test_read_timeout = 1;
@@ -2731,6 +2791,10 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "bus-width-1-unwind") ||
 	    scenario_is(scenario, "bus-width-cmd6-error") ||
 	    scenario_is(scenario, "bus-width-stuck") ||
+	    scenario_is(scenario, "bus-width-verified-4") ||
+	    scenario_is(scenario, "bus-width-verified-mismatch") ||
+	    scenario_is(scenario, "bus-width-verified-rollback-fail") ||
+	    scenario_is(scenario, "bus-width-verified-cmd6-error") ||
 	    scenario_is(scenario, "bus-width-busy") ||
 	    scenario_is(scenario, "bus-width-invalid") ||
 	    scenario_is(scenario, "bus-width-without-init") ||
@@ -2741,6 +2805,7 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "bus-test-status") ||
 	    scenario_is(scenario, "bus-test-read-timeout") ||
 	    scenario_is(scenario, "bus-test-read-crc") ||
+	    scenario_is(scenario, "bus-test-verified-crc") ||
 	    scenario_is(scenario, "bus-test-read-status") ||
 	    scenario_is(scenario, "bus-test-mismatch-4") ||
 	    scenario_is(scenario, "bus-test-mismatch-8") ||
@@ -3692,6 +3757,56 @@ main(int argc, char **argv)
 		    "failed readback left HOST_CONTROL on the failed width");
 		check(host.bus_width == 0u,
 		    "failed readback changed the core width");
+	} else if (scenario_is(scenario, "bus-width-verified-4")) {
+		result = gta4l_emmc_set_bus_width_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK,
+		    "verified 4-bit switch failed");
+		check(bus.verified == 1u && bus.switched == 0u,
+		    "verified switch still depended on the unreadable "
+		    "byte-183 value");
+		check(bus.rollback_result == GTA4L_EMMC_OK,
+		    "verified switch recorded a failed rollback");
+		check(host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4,
+		    "verified switch did not record the width");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) == SIM_HOST_CONTROL_4BIT,
+		    "verified switch did not apply the host width");
+		check(sim.cmd6_count == 1u,
+		    "verified switch issued an unexpected CMD6 count");
+	} else if (scenario_is(scenario, "bus-width-verified-mismatch")) {
+		result = gta4l_emmc_set_bus_width_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_BUS_WIDTH,
+		    "a differing read-only EXT_CSD property was accepted");
+		check(bus.verified == 0u &&
+		    bus.rollback_result == GTA4L_EMMC_OK,
+		    "the failed verified switch did not roll back cleanly");
+		check(host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1 &&
+		    (sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT |
+		    SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "the failed verified switch left the host/card wide");
+		check(sim.cmd6_count == 2u,
+		    "the failed verified switch did not issue the restore "
+		    "CMD6");
+	} else if (scenario_is(scenario,
+	    "bus-width-verified-rollback-fail")) {
+		result = gta4l_emmc_set_bus_width_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+		    "a failed restore was not reported as unknown framing");
+		check(bus.rollback_result != GTA4L_EMMC_OK,
+		    "the failed restore still recorded a clean rollback");
+	} else if (scenario_is(scenario,
+	    "bus-width-verified-cmd6-error")) {
+		result = gta4l_emmc_set_bus_width_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+		    "a failed switch and ambiguous framing did not stop");
+		check(bus.switch_result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "the verified switch lost the CMD6 status error");
+		check(bus.rollback_result != GTA4L_EMMC_OK,
+		    "the failed restore recorded a clean rollback");
+		check(sim.cmd6_count == 3u,
+		    "the failed switch did not attempt both restore paths");
 	} else if (scenario_is(scenario, "bus-width-busy")) {
 		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
 		check(result == GTA4L_EMMC_ERR_CARD_NOT_READY,
@@ -3810,6 +3925,19 @@ main(int argc, char **argv)
 		    "CMD14 CRC result field mismatch");
 		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
 		    "CMD14 CRC command counts mismatch");
+	} else if (scenario_is(scenario, "bus-test-verified-crc")) {
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK,
+		    "the optional CMD14 pattern CRC was not ignored");
+		check(bus.test_result == GTA4L_EMMC_OK &&
+		    bus.test_word == 0x000000A5u,
+		    "the ignored CMD14 CRC lost the 4-bit pattern");
+		check(host.bus_test_ignored_crc == 1u,
+		    "the tolerated CMD14 CRC was not recorded");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "verified CMD14 CRC command counts mismatch");
 	} else if (scenario_is(scenario, "bus-test-read-status")) {
 		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
 		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
@@ -3848,8 +3976,8 @@ main(int argc, char **argv)
 		    "1-bit pattern mismatch was not reported");
 		check(bus.test_result == GTA4L_EMMC_ERR_BUS_TEST,
 		    "1-bit mismatch result field mismatch");
-		check(bus.test_word == 0x000000A4u &&
-		    bus.test_expected == 0x000000A5u,
+		check(bus.test_word == 0x000000C0u &&
+		    bus.test_expected == 0x00000040u,
 		    "1-bit failing word was not bound exactly");
 		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
 		    "1-bit mismatch command counts mismatch");
@@ -3880,8 +4008,8 @@ main(int argc, char **argv)
 		    bus_reset.dat_inhibit == 0u,
 		    "rung-1 reset pass kept DAT_INHIBIT after the reset");
 		check(bus_reset.test_result == GTA4L_EMMC_OK &&
-		    bus_reset.test_word == 0x000000A5u &&
-		    bus_reset.test_expected == 0x000000A5u,
+		    bus_reset.test_word == 0x00000040u &&
+		    bus_reset.test_expected == 0x00000040u,
 		    "rung-1 reset pass lost the matching CMD14 word");
 		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
 		    "rung-1 reset pass command counts mismatch");
@@ -3893,8 +4021,8 @@ main(int argc, char **argv)
 		check(result == GTA4L_EMMC_ERR_BUS_TEST,
 		    "rung-1 CMD14 mismatch was not reported");
 		check(bus_reset.test_result == GTA4L_EMMC_ERR_BUS_TEST &&
-		    bus_reset.test_word == 0x000000A4u &&
-		    bus_reset.test_expected == 0x000000A5u,
+		    bus_reset.test_word == 0x000000C0u &&
+		    bus_reset.test_expected == 0x00000040u,
 		    "rung-1 CMD14 mismatch word was not bound exactly");
 		check(bus_reset.write_result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
 		    "rung-1 CMD14 mismatch lost the write-phase timeout");
@@ -3920,10 +4048,13 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario, "bus-reset-read-crc")) {
 		memset(&bus_reset, 0, sizeof(bus_reset));
 		result = gta4l_emmc_bus_test_reset(&host, 1u, &bus_reset);
-		check(result == GTA4L_EMMC_ERR_DATA_CRC,
-		    "rung-1 CMD14 CRC was not reported");
-		check(bus_reset.test_result == GTA4L_EMMC_ERR_DATA_CRC,
-		    "rung-1 CMD14 CRC result field mismatch");
+		check(result == GTA4L_EMMC_OK,
+		    "the optional CMD14 pattern CRC was not ignored");
+		check(bus_reset.test_result == GTA4L_EMMC_OK &&
+		    bus_reset.test_word == 0x00000040u,
+		    "ignored CMD14 CRC lost the pattern result");
+		check(host.bus_test_ignored_crc == 1u,
+		    "the tolerated CMD14 CRC was not recorded");
 		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
 		    "rung-1 CMD14 CRC command counts mismatch");
 	} else if (scenario_is(scenario, "bus-reset-read-status")) {
@@ -4123,7 +4254,7 @@ main(int argc, char **argv)
 		    bus_reset.reset_result == GTA4L_EMMC_OK &&
 		    bus_reset.dat_inhibit == 0u &&
 		    bus_reset.test_result == GTA4L_EMMC_OK &&
-		    bus_reset.test_word == 0x000000A5u,
+		    bus_reset.test_word == 0x00000040u,
 		    "rung-2 reset sample mismatch");
 		check(drain.stop_result == GTA4L_EMMC_OK &&
 		    drain.stop_response == 0x00000900u &&
@@ -4186,9 +4317,9 @@ main(int argc, char **argv)
 		result = gta4l_emmc_bus_test(&host, 1u, &bus);
 		check(result == GTA4L_EMMC_OK,
 		    "one-bit bus test failed");
-		check(bus.test_word == 0x000000A5u &&
-		    bus.test_expected == 0x000000A5u,
-		    "1-bit bus-test pattern is not 0x5a");
+		check(bus.test_word == 0x00000040u &&
+		    bus.test_expected == 0x00000040u,
+		    "1-bit bus-test pattern is not 0x80");
 		check(bus.requested == 1u && bus.switched == 0u,
 		    "one-bit bus-test width was not recorded");
 		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,

@@ -31,6 +31,26 @@ partition layout, payload policy and packaging.
   [docs/ram-root-fixture-reproducibility.md](docs/ram-root-fixture-reproducibility.md).
 - Display, input, power, GPU and network drivers remain unimplemented or
   unvalidated.
+- **eMMC protocol correction (2026-11-04).** JEDEC defines `BUS_WIDTH`
+  (EXT_CSD byte 183) as `W/E_P`, explicitly not readable; Linux verifies a
+  width switch with a bus test or a read-only EXT_CSD comparison. The earlier
+  B1/H10/H11 "card refused the whole width field" conclusions are therefore
+  withdrawn: a zero byte-183 readback is not evidence of refusal. The H12
+  attempt used value 4, which is reserved (DDR is 5/6), so it did not test
+  DDR. CMD14 bus-test reads may carry an optional pattern CRC16 that the host
+  ignores; the H13 `trc=-12` row therefore does not prove the card's data
+  conversation failed. The stage-7 timeout audit modified `CLOCK_CONTROL`
+  instead of the `TIMEOUT_CONTROL` byte, so its "minimum timeout armed" claim
+  is withdrawn. The 1-bit bus test now uses the JEDEC `0x80` pattern and the
+  two-bit check. CMD18 now uses live FIFO readiness and acknowledges BRR, and
+  both simulators model that separately from the latched bit. New verified
+  switch primitives (`gta4l_emmc_set_bus_width_verified`,
+  `gta4l_emmc_bus_test_verified`) restore both the host and the card on
+  failure and report `GTA4L_EMMC_ERR_WIDTH_RESTORE` when framing is unknown.
+  Stage H15 (`gta4l-emmc-probe=15`) is the corrected 4-bit SDR rung and is
+  host-tested only; no device run has been performed, the already-flashed H14
+  image is not a prerequisite, and F3 remains open. Historical device reports
+  and raw evidence are preserved, not rewritten.
 - A native SDHCI v5/eMMC core is implemented and host-tested in
   `package/Gta4lEmmc.c`: controller reset, GCC 400 kHz, retained-rail power
   handshake, CMD3 RCA assignment, enumeration, capacity/partition validation
@@ -243,13 +263,16 @@ partition layout, payload policy and packaging.
   `rc=-19 stop=12`, with the W4 replay matching the H10 legacy tuple
   field-for-field and the W8 8-bit attempt ignored with the same tuple, so
   the byte-183 refusal is sticky and covers both nonzero SDR values (the
-  whole SDR field). The V/X reverts were clean and B/T/Q were not run. F3
+  whole SDR field). **Correction (2026-11-04): byte 183 is `W/E_P` and not
+  readable, so this is not evidence of a card refusal; the width conclusion
+  is withdrawn.** The V/X reverts were clean and B/T/Q were not run. F3
   remains unproven; the open owner questions are the DDR bit-plane and the
   CMD19 write-phase wedge. The flash and boot records are in
   `out/gta4l/ram-root-emmc-probe-h11-evidence/`.
   The next rung is H12 (`gta4l-emmc-probe=12`), the record-only DDR
   attempt, implemented and simulator-tested: after the stage-A pass it
-  enters HS and issues one CMD6 SET of byte 183 = 4 (the 4-bit DDR code),
+  enters HS and issues one CMD6 SET of byte 183 = 4 (**correction: value 4
+  is reserved, not the 4-bit DDR code; DDR is 5/6**),
   waits TRAN, applies only the 4-bit SDR host DAT width for the
   verification read, re-reads EXT_CSD, reverts byte 183 to 0 and the
   timing to legacy, and reads block 0. The controller DDR configuration is
@@ -303,9 +326,11 @@ partition layout, payload policy and packaging.
   B1C/B1C-1 rows), the bounded reset self-cleared (`rc=0 wr=04 rb=00 it=6
   dinh=0`), but CMD14 failed with `ERR_DATA_CRC` (`trc=-12`, no pattern
   words) and the block-0 recovery read was refused with `ERR_INHIBIT`
-  (`rc=-17`). The reset clears the controller latch but does not restore
-  the card's data conversation; the verdict is a single sample (the
-  two-matching rule is unmet) and F3 remains unproven. The flash and boot
+  (`rc=-17`). The reset clears the controller latch, but **correction
+  (2026-11-04): the CMD14 `ERR_DATA_CRC` may be the optional pattern CRC16
+  that the host ignores, so this row does not prove the card's data
+  conversation failed.** The verdict is a single sample (the two-matching
+  rule is unmet) and F3 remains unproven. The flash and boot
   records are in `out/gta4l/ram-root-emmc-probe-h13-evidence/`. The next
   rung is the forced post-write CMD12/CMD13 drain sample, to be drafted
   only after this record lands.
@@ -321,11 +346,23 @@ partition layout, payload policy and packaging.
   width or timing. The drain is local to
   `gta4l_emmc_post_write_drain()`; `TIMEOUT_CONTROL` is untouched. Core
   168/104 (was 160/98); probe 151/77 (was 139/69); the
-  `report-width-h14` fixture is the twelfth width materialization. No
-  build, flash or boot was performed. The device run needs a fresh
-  explicit BOOT-only approval naming the CMD19 write, the data reset, the
-  forced CMD12 and CMD13, the CMD14 read and the block-0 recovery read;
-  F3 remains unproven.
+  `report-width-h14` fixture is the twelfth width materialization. **H14 is
+  paused by the 2026-11-04 correction: the write-wedge audit itself says
+  CMD12 is not appropriate for the single-block CMD19 write, and the drain's
+  stop-code mapping conflated distinct failures. The BOOT-only image was
+  flashed, but no boot or report is required and it is not a prerequisite
+  for H15.** F3 remains unproven.
+  The corrected width rung is H15 (`gta4l-emmc-probe=15`), host-tested only:
+  after the stage-A baseline it performs a verified 4-bit SDR switch (CMD6,
+  CMD13 TRAN wait, host width apply/readback, and an EXT_CSD read whose
+  read-only properties must match the 1-bit baseline), the corrected
+  CMD19/CMD14 test (optional pattern CRC tolerated; JEDEC 1-bit
+  `0x80`/two-bit rule), the full 4-bit content pass, a verified return to
+  1-bit and the block-0 recovery read. It emits `GTA4L-EMMC H15 REPORT` and
+  stops with 0/11/12/13/14/15/16; 12 is unknown framing after a failed
+  restore. No HS, DDR, 8-bit, CMD18, CMD25 or user-data write; no build,
+  flash or boot has been performed. Core 173/104 and probe 154/77; F3
+  remains `[U]`.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

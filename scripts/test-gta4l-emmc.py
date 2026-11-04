@@ -154,6 +154,11 @@ SCENARIOS = [
     'bus-width-busy',
     'bus-width-invalid',
     'bus-width-without-init',
+    'bus-width-verified-4',
+    'bus-width-verified-mismatch',
+    'bus-width-verified-rollback-fail',
+    'bus-width-verified-cmd6-error',
+    'bus-test-verified-crc',
     'bus-test-4',
     'bus-test-8',
     'bus-test-data-timeout',
@@ -934,13 +939,19 @@ def main() -> int:
              '\t\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
              '\t\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
              '\t\t\tif ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {\n'
-             '\t\t\t\tpresent = gta4l_emmc_read32(host,\n'
-             '\t\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
-             '\t\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
-             '\t\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
-             '\t\t\t\t    command, error, normal, present);\n'
-             '\t\t\t\tgta4l_emmc_clear_interrupts(host);\n'
-             '\t\t\t\treturn gta4l_emmc_map_error(error, 1);\n'
+             '\t\t\t\tif (gta4l_emmc_tolerated_bus_test_crc(host,\n'
+             '\t\t\t\t    error) != 0) {\n'
+             '\t\t\t\t\thost->bus_test_ignored_crc = 1;\n'
+             '\t\t\t\t} else {\n'
+             '\t\t\t\t\tpresent = gta4l_emmc_read32(host,\n'
+             '\t\t\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\t\t\t\tgta4l_emmc_record_failure(host,\n'
+             '\t\t\t\t\t    index, argument, command, error,\n'
+             '\t\t\t\t\t    normal, present);\n'
+             '\t\t\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\t\t\treturn gta4l_emmc_map_error(error, 1);\n'
+             '\t\t\t\t}\n'
              '\t\t\t}\n'
              '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
              '\t\t\treturn GTA4L_EMMC_OK;\n',
@@ -1101,18 +1112,21 @@ def main() -> int:
              '\t/* HOST_CONTROL switch removed by mutation */\n',
              'Gta4lEmmc.c', (), 'bus-width-4'),
             ('bw-no-readback-compare',
-             '\tif (readback != code) {\n',
-             '\tif (0) {\n',
+             '\t} else if (readback != code) {\n',
+             '\t} else if (0) {\n',
              'Gta4lEmmc.c', (), 'bus-width-stuck'),
             ('bw-no-restore',
-             '\tif (readback != code) {\n'
+             '\t} else if (readback != code) {\n'
+             '\t\t/* Historical legacy check retained for old diagnostic stages. */\n'
              '\t\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
-             '\t\t    GTA4L_EMMC_REG_HOST_CONTROL, (uint8_t)previous_control);\n',
-             '\tif (readback != code) {\n',
+             '\t\t    GTA4L_EMMC_REG_HOST_CONTROL,\n'
+             '\t\t    (uint8_t)previous_control);\n',
+             '\t} else if (readback != code) {\n',
              'Gta4lEmmc.c', (), 'bus-width-stuck'),
             ('bw-no-test-compare',
-             '\t\tif ((uint8_t)(pattern[index] ^ actual[index]) != 0xFFu) {\n',
-             '\t\tif (0) {\n',
+             '\t\t\tif ((uint8_t)(pattern[index] ^ actual[index]) !=\n'
+             '\t\t\t    0xFFu) {\n',
+             '\t\t\tif (0) {\n',
              'Gta4lEmmc.c', (), 'bus-test-mismatch-4'),
             ('bw-1bit-guard',
              '\tcode = gta4l_emmc_bus_width_code(bits);\n'
@@ -1127,8 +1141,8 @@ def main() -> int:
              '\t/* The card field and the SDHCI HOST_CONTROL width must both already\n',
              'Gta4lEmmc.c', (), 'bus-test-1bit'),
             ('bw-pattern-1',
-             'GTA4L_EMMC_BUS_TEST_PATTERN_1      0x5Au',
-             'GTA4L_EMMC_BUS_TEST_PATTERN_1      0xA5u',
+             'GTA4L_EMMC_BUS_TEST_PATTERN_1      0x80u',
+             'GTA4L_EMMC_BUS_TEST_PATTERN_1      0x40u',
              'Gta4lEmmc.h', (), 'bus-test-1bit'),
             ('bw-test-len-1',
              'GTA4L_EMMC_BUS_TEST_1_BYTES        4u',
@@ -1158,8 +1172,11 @@ def main() -> int:
              '\t}\n',
              'Gta4lEmmc.c', (), 'bus-reset-reset-stuck'),
             ('br-no-pattern-compare',
-             '\t\tif (((uint32_t)pattern[index] ^\n'
-             '\t\t    (uint32_t)actual[index]) != 0xFFu) {\n',
+             '\t/* The reset path applies the same JEDEC 1-bit two-bit rule. */\n'
+             '\tif (bits == 1u) {\n'
+             '\t\tif (test_word != expected_word) {\n',
+             '\t/* The reset path applies the same JEDEC 1-bit two-bit rule. */\n'
+             '\tif (bits == 1u) {\n'
              '\t\tif (0) {\n',
              'Gta4lEmmc.c', (), 'bus-reset-mismatch'),
             ('br-wrong-fail-index',
@@ -1364,7 +1381,7 @@ def main() -> int:
             'bw-1bit-guard':
                 'one-bit bus test failed',
             'bw-pattern-1':
-                '1-bit bus-test pattern is not 0x5a',
+                '1-bit bus-test pattern is not 0x80',
             'bw-test-len-1':
                 'one-bit bus test failed',
             'br-no-reset':
