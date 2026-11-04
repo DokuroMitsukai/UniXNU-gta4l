@@ -390,7 +390,12 @@ partition layout, payload policy and packaging.
   (bus test) the additions. No HS, DDR, 8-bit, CMD18, CMD25 or
   user-data write. Core 179/104 and probe 163/77. **4-bit SDR sector reads
   are measured `[C]`**; F3 remains `[U]` until the CMD19/CMD14 round trip is
-  measured on hardware, which H17 is built to do.
+  measured on hardware. The H17 image (`13938e49…`, payload `72f6e2d4…` 7/7,
+  gate 18/18) is flashed to BOOT only (`3adb7401…` → `60d3d4bc…`, verified
+  prefix and unchanged tail, RECOVERY/EFS/sec_efs unchanged, battery 100%) and
+  awaits the owner boot and report. The payload contract checker now derives
+  its diagnostic list from the name map after the first build was refused for
+  missing stage 17.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

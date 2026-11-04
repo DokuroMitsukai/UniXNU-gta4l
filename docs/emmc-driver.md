@@ -3088,8 +3088,23 @@ before CMD14) and `bus-test-tolerate-write-crc` (a non-timeout write error is
 not tolerated). The probe suite is 163 scenarios and 77 mutation controls
 (was 158/77), adding `probe-h17-pass`, `probe-h17-content-div`,
 `probe-h17-pattern-mismatch`, `probe-h17-write-crc` and `probe-h17-inhibit`;
-the existing H15/H16 expectations are updated for the shared `B` line. No
-build, flash or boot was performed.
+the existing H15/H16 expectations are updated for the shared `B` line.
+
+Build and flash (2026-11-05): the kernel was rebuilt from the committed H17
+sources (`ca983f7d…`), the probe archive is `b99cdbd3…`, the payload
+`72f6e2d4…` passes 7/7 with `emmc-probe-17` selected and the boot image
+`13938e49…` passes the 18/18 gate against the `ce4d76e8…` v5 baseline. The
+first payload build was refused by the contract because the checker's
+`DIAGNOSTICS` tuple still ended at stage 16; the tuple is now derived from
+`DIAGNOSTIC_NAMES`, so the two lists cannot drift again, and the rebuilt
+payload passes. The image was compressed with `xz -6 -T0` (`b87f131b…`,
+8,056,988 bytes), transferred and written to BOOT only
+(`/dev/block/mmcblk0p69`) after a verified backup of the H16 image
+(`3adb7401…` → `70d2ed37…` xz, decompressing exactly). Post-flash p69 is
+`60d3d4bc…`; the image prefix matches, the unchanged tail is `a28b4ea2…`,
+RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` are unchanged
+and the battery read 100% after the write. No reboot was issued. Evidence:
+`out/gta4l/ram-root-emmc-probe-h17-evidence/`.
 
 The rung is the F3-at-4-bit candidate: a `stop=0` with
 `wrc=-11 rst=0 trc=0 tw=000000a5` and a matching 4-bit content pass satisfies
