@@ -51,7 +51,12 @@ partition layout, payload policy and packaging.
   first cold boot (2026-11-05) passed the verified switch and then reproduced
   the CMD19 write timeout at 4-bit; the old revert was blocked by the latched
   DAT inhibit. The report/recovery fixes and the content-only H16 rung are
-  documented in `docs/emmc-driver.md` §5.3.31; the already-flashed H14 image
+  documented in `docs/emmc-driver.md` §5.3.31. H16's first boot returned
+  `rc=0 stop=0` with the verified 4-bit switch, the full 4-bit content pass,
+  the verified revert and the block-0 recovery read (§5.3.32), so 4-bit SDR
+  reads are measured on hardware; the remaining barrier is the CMD19
+  completion rule, because the card sends no CRC status token for the tuning
+  pattern. The already-flashed H14 image
   is not a prerequisite, and F3 remains open. Historical device reports and
   raw evidence are preserved, not rewritten.
 - A native SDHCI v5/eMMC core is implemented and host-tested in
@@ -368,12 +373,18 @@ partition layout, payload policy and packaging.
   explicit attempted flags and a T result code, and the baseline-based
   recovery clears the data circuit before CMD6. The content-only isolation
   rung is H16 (`gta4l-emmc-probe=16`): the same verified switch and content
-  pass with no CMD19/CMD14 at all. H15/H16 stop codes are
+  pass with no CMD19/CMD14 at all. Its first boot (2026-11-05, warm reboot)
+  returned `rc=0 stop=0`: verified 4-bit switch on the first CMD6 attempt,
+  the full 4-bit content pass matching the 1-bit baseline
+  (`same=1 div=0`, `b0=62084b66`), a verified baseline-based revert
+  (`02→00`) and a matching block-0 recovery read. H15/H16 stop codes are
   0/10/11/12/13/14/15/16, with 10 (baseline read failed) and 13 (bus test,
   H15 only) being the additions. No HS, DDR, 8-bit, CMD18, CMD25 or
-  user-data write. Core 176/104 and probe 158/77; F3 remains `[U]` because
-  no 4-bit sector-read content pass has completed on hardware and no
-  CMD19 round trip has succeeded at 4-bit.
+  user-data write. Core 176/104 and probe 158/77. **4-bit SDR sector reads
+  are measured `[C]`**; F3 remains `[U]` because the CMD19/CMD14 round trip
+  has neither succeeded nor been re-run under the Linux/TI completion rule
+  (ignore the write-phase data timeout, reset the data circuit, let CMD14
+  decide).
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

@@ -25,6 +25,20 @@ effect; the old revert was blocked by the latched `DAT_INHIBIT` before CMD6.
 The report/recovery fix and the content-only H16 rung are recorded in
 `docs/emmc-driver.md` §5.3.31.
 
+**Resolution (2026-11-05):** the first H16 boot returned `rc=0 stop=0` with the
+verified 4-bit switch, the full 4-bit content pass, the baseline-based revert
+and the block-0 recovery read, so the 4-bit DAT path is sound for reads and
+the wedge is not width-caused. Candidate (e) is adopted as the working
+explanation: CMD19 produces no CRC status token, the controller's data timeout
+is therefore expected, TI erratum SPRZ436H i836 says to ignore it and continue
+to CMD14, and Linux `mmc_bus_test()` discards every `BUS_TEST_W` error and lets
+`BUS_TEST_R` decide. The port's defect is the completion rule in
+`gta4l_emmc_bus_test_common()`, which returns on the write timeout before the
+data reset and CMD14. The next rung keeps the §6 rung-1 sequence (data reset +
+CMD14) but runs it at verified 4-bit after the content pass, and adds the
+4-bit content and pattern evidence needed for the F3 bus-test clause. See
+`docs/emmc-driver.md` §5.3.32.
+
 ## 1. What is being explained
 
 The bus-test write phase fails identically at both measured widths:

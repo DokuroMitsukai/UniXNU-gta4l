@@ -1005,13 +1005,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `0862c4ac72b37967db2cbc92588f70374906f3842baf5ecaa36d85aa820c8c08` |
+| Repository README | `README.md` | `a6a8d84ed5dc5676f2c388d60fd0d46ef6bab27769c84be5dcf5a486ed8e6535` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `1f583b885c36653f754d91c10d7564372d753c176fcf0ed0ff83a42ba30f9624` |
+| Porting record | `porting.toml` | `1683db5bf956f4d31fa97aef463d284e417e6e601baf890c221557c111d300fa` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `963fd38e1663fe9bfb83da9e10fab4d7240fcae543b064559749e91de6939517` |
+| eMMC driver record | `docs/emmc-driver.md` | `bced549d268c5132c6567ee36dcddcba7e4a95d338997a72cefff3b4ca31d472` |
 | eMMC core header | `package/Gta4lEmmc.h` | `352e95316b2bf61dd989c27d5cebd876febb7057096d9fb30c85b654ebda7c04` |
 | eMMC core source | `package/Gta4lEmmc.c` | `8efa9699a55f6ba5a9fe6b5a480f062e3b59a5836895718b1fd67d637d6db3d7` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `41322fa74b21b39a8dc35c7ddcf88f9a4cb1149d1db9a5d8ad3296301b2bdce6` |

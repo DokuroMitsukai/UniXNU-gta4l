@@ -41,7 +41,11 @@ The corrected width rung is H15 (`gta4l-emmc-probe=15`). Its first cold boot
 (§5.3.31) verified the 4-bit SDR switch (`vf=1`, host `00→02`) and then hit
 the CMD19 write-phase timeout at 4-bit, after which the old revert was blocked
 by a latched DAT inhibit and no CMD6 was issued. The report and recovery are
-fixed and a content-only H16 rung is added; H14 remains paused. The core is
+fixed and a content-only H16 rung is added; its first boot (§5.3.32) returned
+`rc=0 stop=0` with the verified 4-bit switch, the full 4-bit content pass, the
+verified revert and the block-0 recovery read, so 4-bit SDR reads are measured
+`[C]` and the remaining barrier is the CMD19 completion rule. H14 remains
+paused. The core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
 `sdhc-bus-power-activation` NO-GO still applies to any operation not separately
@@ -123,9 +127,18 @@ raw reports and images remain unchanged evidence.
   and verifies against a baseline captured while the path was healthy.
   `gta4l-emmc-probe=16` is the content-only isolation rung: the same
   baseline and verified 4-bit switch, the 4-bit content pass and the
-  baseline-based recovery, with no CMD19 or CMD14 at all. H14 is paused
-  rather than advanced: CMD12 is not appropriate for the single-block CMD19
-  write, and its stop-code mapping conflated distinct failures.
+  baseline-based recovery, with no CMD19 or CMD14 at all. Its first boot
+  (§5.3.32) returned `rc=0 stop=0`: the verified 4-bit content pass, the
+  verified revert and the block-0 recovery read all completed. The 4-bit SDR
+  DAT path is therefore measured for reads. H14 is paused rather than
+  advanced: CMD12 is not appropriate for the single-block CMD19 write, and
+  its stop-code mapping conflated distinct failures. The recorded CMD19
+  timeout is now read as a completion-rule defect, not a data-path defect:
+  Linux `mmc_bus_test()` ignores every `BUS_TEST_W` error and lets
+  `BUS_TEST_R` decide, and TI erratum SPRZ436H i836 records that the card
+  generates no CRC status token for the tuning pattern, so the controller's
+  data timeout is expected and the next rung must reset the data circuit and
+  continue to CMD14 rather than stop at the write.
 
 ## 2. Sequence
 
@@ -2908,6 +2921,90 @@ case that stops before CMD6. No new image was built or flashed for this
 record. A rebuilt H15 is therefore not byte-identical to the flashed `9facb6b`
 image: the report prints the new `att`/`c6at` fields and the revert uses the
 baseline-based recovery.
+
+### 5.3.32 Stage-H16 device run: the 4-bit content pass succeeds (2026-11-05)
+
+The H16 image from commit `20c9f9a` (payload
+`7404870a35f794bb50b9e02faf5eb083ac9dbd96096d6a59068468a3d332a512`, 7/7;
+boot image
+`4f1bfb9094c2951ed3f02b08f828d9d905d4c3412c86d6dd43710a7f9ec9fcc0`,
+18/18) was written to BOOT only after a verified backup. The owner
+warm-rebooted from TWRP into the flashed image and the first attempt produced
+a verdict, so no retry was needed. The owner-supplied report is preserved at
+`out/gta4l/ram-root-emmc-probe-h16-evidence/device-run-transcript.txt`
+(line wraps rejoined) and decoded at `device-run-record.json`:
+
+```
+GTA4L-EMMC H16 REPORT: rc=0 stop=0 mci=10000072 rca=1 cap=61071360 rev=8 hci=00 step=18 log=57 bw=00
+GTA4L-EMMC H16 R clk=0007 hc=00 bw=00 es=000009cb
+GTA4L-EMMC H16 W rc=0 req=4 sw=0 vf=1 c6at=1 c6=00000900 hb=00 ha=02 es=000009cb rb=0
+GTA4L-EMMC H16 B att=0 trc=0 tw=00000000 te=00000000
+GTA4L-EMMC H16 T att=1 rc=0 same=1 div=0 b0=62084b66 b1=84d0543e data=f418cd33 last=a89b26d5
+GTA4L-EMMC H16 V att=1 rc=0 sw=0 vf=1 c6at=1 c6=00000900 hb=02 ha=00 es=000009cb rb=0
+GTA4L-EMMC H16 Q att=1 rc=0 qb0=62084b66
+GTA4L-EMMC H16 PAD pre=00009fe4/6000642c/00000000 post=00009fe4/6000642c/00000000
+GTA4L-EMMC H16 FAIL fail=0/0/0/00000000/0000/0000/00000000/0 @Gta41EmmcProbe.c:2764
+```
+
+Interpretation:
+
+- The verified 4-bit SDR switch completed on the first CMD6 attempt
+  (`c6at=1`, `c6=00000900`), the host width moved `00→02`, and the read-only
+  EXT_CSD properties comparison passed (`vf=1`, `es=000009cb`). This is the
+  second such switch and the first one on a warm boot.
+- The 4-bit content pass is the first **successful** per-LBA content read at
+  4-bit: `T att=1 rc=0 same=1 div=0` with `b0=62084b66`, `b1=84d0543e`,
+  `data=f418cd33` and `last=a89b26d5` equal to the 1-bit stage-A baseline.
+  Twenty-one primary-array blocks, the DATA LBA and the last LBA therefore
+  read correctly over four DAT lines at 400 kHz.
+- The baseline-based recovery worked on hardware instead of being blocked:
+  `V att=1 rc=0`, `c6at=1`, CMD6 `00000900`, host `02→00`, `vf=1`. The
+  latched-inhibit failure mode of §5.3.31 is closed.
+- The block-0 recovery read passed at 1-bit and returned `qb0=62084b66`,
+  identical to `T b0`, so the post-revert read path is intact.
+- `B att=0` is a not-attempted marker, not a pass. H16 issues no CMD19 and
+  no CMD14, so this run says nothing about the write phase.
+- `fail=0` and unchanged `PAD` samples: no failure was latched and no pad,
+  DLL or pad-status bit changed.
+- The `W` line reads back `BUS_WIDTH=0` while the verified 4-bit path was
+  live, where H15 read back `1`. Byte 183 is therefore not a usable switch
+  indicator on this part in either direction; the read-only properties
+  comparison and the 21-block content pass are the width evidence. The `V`
+  line's `0` is the genuinely correct post-revert value.
+- The report ends in an intentional panic: the probe has no exit path, so
+  the panic is the delivery mechanism, not an H16 failure.
+
+What this establishes, and what it does not:
+
+- **4-bit SDR sector reads are measured `[C]`** at 400 kHz for this part.
+  Together with §5.3.31 this also confirms the write wedge is not a
+  width-caused data-path failure.
+- **F3 stays `[U]`.** Its bus-test clause needs a CMD19/CMD14 round trip,
+  and H16 deliberately does not attempt one. The content clause is now met
+  at 4-bit, so only the round trip is outstanding.
+- The rung is a warm boot, so the cold-path caveat recorded for the H8/H9
+  identification class does not extend to the content pass.
+
+The recorded CMD19 timeout now has a reference-backed explanation, which
+`docs/emmc-write-wedge-audit.md` already ranked first: JEDEC B1.51 §6.6.4
+defines CMD19 as a host-to-device *pattern*, the device ignores all but the
+first two bits per line, and no CRC status token is defined for it. TI erratum
+SPRZ436H i836 records controllers that wait for that token and signal Data
+Timeout, with the guideline to ignore the timeout, clear it and continue to
+CMD14. Linux goes further: `mmc_bus_test()` (`mmc_ops.c`) discards every
+error from `BUS_TEST_W` and lets `BUS_TEST_R` decide, `sdhci_data_irq()`
+excludes `MMC_BUS_TEST_R` from the data-CRC error path, and `sdhci` resets the
+data circuit on the data error before the next command. The port instead
+treated the CMD19 timeout as a headline failure, so it never issued CMD14 and
+left `DAT_INHIBIT` latched. The next rung therefore changes the completion
+rule, not the width or the timing.
+
+Next rung (host batch, then a fresh owner approval): a stage that runs the
+same baseline, verified 4-bit switch and 4-bit content pass, then one CMD19
+write whose data timeout is recorded and tolerated, one bounded data-circuit
+reset, one CMD14 read with the existing pattern comparison (and the existing
+tolerated-CRC rule), the baseline-based revert and the block-0 recovery read.
+That rung is the F3-at-4-bit candidate.
 
 ## 6. Expected report
 
