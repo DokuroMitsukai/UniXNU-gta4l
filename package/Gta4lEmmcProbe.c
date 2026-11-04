@@ -434,7 +434,11 @@ gta4l_emmc_probe_parse(const char *name, int *value)
  * the recovery read; it stops with the H15 report. Stage 16 is the
  * content-only isolation rung: the same baseline and verified 4-bit switch,
  * the 4-bit content pass and recovery, with no CMD19 or CMD14 at all; it
- * stops with the H16 report. Both use the baseline-based recovery that
+ * stops with the H16 report. Stage 17 is the Linux-compatible bus-test rung:
+ * the same baseline, verified 4-bit switch and 4-bit content pass, then one
+ * CMD19 write whose data timeout is recorded and tolerated, one bounded data
+ * reset, one CMD14 read, the verified revert and the recovery read; it stops
+ * with the H17 report. All three use the baseline-based recovery that
  * issues CMD6 and a bounded local data reset even when DAT_INHIBIT is
  * latched. Stages 13 and 14 issue no CMD6, CMD18, CMD25 or user-data
  * write. */
@@ -446,7 +450,7 @@ gta4l_emmc_probe_stage(void)
 	if (!PE_parse_boot_argn("gta4l-emmc-probe", &value, sizeof(value))) {
 		return 0;
 	}
-	if ((value < 1) || (value > 16)) {
+	if ((value < 1) || (value > 17)) {
 		return 0;
 	}
 	return value;
@@ -2674,13 +2678,15 @@ gta4l_emmc_probe_h14_run(struct gta4l_emmc_host *host,
 	gta4l_emmc_probe_report_h14(host, probe, &h14, rc, stop);
 }
 
-/* H15/H16: verified 4-bit SDR width rung. This is the corrected replacement
+/* H15/H16/H17: verified 4-bit SDR width rung. This is the corrected replacement
  * for the byte-183 readback rungs: the switch is verified by an EXT_CSD read
  * whose read-only properties must match the 1-bit baseline, and a failed
  * switch or a wedged data path is restored with CMD6 and a bounded local data
- * reset. H15 additionally runs the CMD19/CMD14 bus test; H16 is the
- * content-only isolation rung with no CMD19/CMD14 at all. No HS, DDR or 8-bit
- * transition is part of either rung. */
+ * reset. `mode` selects the rung: 1 is H15 (the strict CMD19/CMD14 bus test
+ * before the content pass), 0 is H16 (content-only, no CMD19/CMD14 at all)
+ * and 2 is H17 (the content pass first, then the Linux-compatible bus test
+ * whose CMD19 data timeout is tolerated and followed by a data reset plus
+ * CMD14). No HS, DDR or 8-bit transition is part of any mode. */
 struct gta4l_emmc_probe_h15 {
 	struct gta4l_emmc_bus_result w4;
 	struct gta4l_emmc_bus_result revert;
@@ -2696,6 +2702,9 @@ struct gta4l_emmc_probe_h15 {
 	uint8_t  content_attempted;
 	uint8_t  revert_attempted;
 	uint8_t  q_attempted;
+	uint8_t  crc_ignored;
+	int      write_result;
+	int      reset_result;
 	int      content_rc;
 	int      q_result;
 	uint32_t q_block0_sum;
@@ -2720,7 +2729,7 @@ gta4l_emmc_probe_report_h15(const struct gta4l_emmc_host *host,
 	    "GTA4L-EMMC %s R clk=%04x hc=%02x bw=%02x es=%08x\n"
 	    "GTA4L-EMMC %s W rc=%d req=%u sw=%u vf=%u c6at=%u c6=%08x "
 	    "hb=%02x ha=%02x es=%08x rb=%d\n"
-	    "GTA4L-EMMC %s B att=%u trc=%d tw=%08x te=%08x\n"
+	    "GTA4L-EMMC %s B att=%u wrc=%d rst=%d ci=%u trc=%d tw=%08x te=%08x\n"
 	    "GTA4L-EMMC %s T att=%u rc=%d same=%u div=%u b0=%08x b1=%08x "
 	    "data=%08x last=%08x\n"
 	    "GTA4L-EMMC %s V att=%u rc=%d sw=%u vf=%u c6at=%u c6=%08x hb=%02x "
@@ -2741,6 +2750,8 @@ gta4l_emmc_probe_report_h15(const struct gta4l_emmc_host *host,
 	    (unsigned int)h15->w4.host_after, h15->w4.readback_sum,
 	    h15->w4.rollback_result,
 	    tag, (unsigned int)h15->bus_test_attempted,
+	    h15->write_result, h15->reset_result,
+	    (unsigned int)h15->crc_ignored,
 	    h15->w4.test_result, h15->w4.test_word,
 	    h15->w4.test_expected,
 	    tag, (unsigned int)h15->content_attempted, h15->content_rc,
@@ -2767,13 +2778,13 @@ gta4l_emmc_probe_report_h15(const struct gta4l_emmc_host *host,
 static void
 gta4l_emmc_probe_width_run(struct gta4l_emmc_host *host,
     struct gta4l_emmc_probe *probe, struct gta4l_emmc_probe_range *range,
-    const uint8_t *block0, const uint8_t *block1, int with_bus_test)
+    const uint8_t *block0, const uint8_t *block1, int mode)
 {
 	static uint8_t qblock[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t baseline[GTA4L_EMMC_EXT_CSD_BYTES];
 	struct gta4l_emmc_probe_h15 h15;
 	struct gta4l_emmc_probe_bus base;
-	const char *tag = (with_bus_test != 0) ? "H15" : "H16";
+	const char *tag = (mode == 1) ? "H15" : ((mode == 2) ? "H17" : "H16");
 	uint32_t index;
 	int rc;
 	int restore;
@@ -2820,9 +2831,12 @@ gta4l_emmc_probe_width_run(struct gta4l_emmc_host *host,
 		gta4l_emmc_probe_report_h15(host, probe, &h15, tag, rc, 11);
 	}
 
-	if (with_bus_test != 0) {
+	if (mode == 1) {
 		h15.bus_test_attempted = 1;
 		rc = gta4l_emmc_bus_test_verified(host, 4u, &h15.w4);
+		h15.write_result = h15.w4.write_result;
+		h15.reset_result = h15.w4.reset_result;
+		h15.crc_ignored = host->bus_test_ignored_crc;
 		if (rc != GTA4L_EMMC_OK) {
 			/* The write phase can leave DAT_INHIBIT latched. The
 			 * CMD6 revert must still be issued, so use the
@@ -2848,6 +2862,30 @@ gta4l_emmc_probe_width_run(struct gta4l_emmc_host *host,
 		gta4l_emmc_probe_b1_compare(range, &base, &h15.content);
 		if (h15.content.same == 0u) {
 			rc = GTA4L_EMMC_PROBE_ERR_CONTENT;
+		}
+	}
+	if ((rc == GTA4L_EMMC_OK) && (mode == 2)) {
+		/* Linux-compatible bus test: run it on the 4-bit path the
+		 * content pass just proved, tolerate the expected CMD19
+		 * write-phase data timeout, clear the data circuit and let
+		 * the CMD14 read-back decide. */
+		h15.bus_test_attempted = 1;
+		host->bus_test_tolerate_write_timeout = 1u;
+		rc = gta4l_emmc_bus_test_verified(host, 4u, &h15.w4);
+		host->bus_test_tolerate_write_timeout = 0u;
+		h15.write_result = h15.w4.write_result;
+		h15.reset_result = h15.w4.reset_result;
+		h15.crc_ignored = host->bus_test_ignored_crc;
+		if (rc != GTA4L_EMMC_OK) {
+			h15.revert_attempted = 1;
+			restore = gta4l_emmc_set_bus_width_recover(host, 1u,
+			    baseline, &h15.revert);
+			if (restore != GTA4L_EMMC_OK) {
+				gta4l_emmc_probe_report_h15(host, probe,
+				    &h15, tag, restore, 15);
+			}
+			gta4l_emmc_probe_report_h15(host, probe, &h15,
+			    tag, rc, 13);
 		}
 	}
 	h15.revert_attempted = 1;
@@ -3493,6 +3531,11 @@ gta4l_emmc_probe_run(void)
 	if (stage == 16) {
 		gta4l_emmc_probe_width_run(&host, &probe, &range, block0,
 		    block1, 0);
+	}
+
+	if (stage == 17) {
+		gta4l_emmc_probe_width_run(&host, &probe, &range, block0,
+		    block1, 2);
 	}
 
 	/* Stage B1: switch the card/host to 4-bit then 8-bit, run the

@@ -1518,7 +1518,7 @@ gta4l_emmc_probe_test_write8(uint32_t space, uint32_t offset, uint8_t value)
 		    (cmd17_count >= 25u)) {
 			h12_rung_write_count[offset]++;
 		}
-		if (((stage == 13) || (stage == 14)) &&
+		if (((stage == 13) || (stage == 14) || (stage == 17)) &&
 		    (offset == GTA4L_EMMC_REG_SOFTWARE_RESET) &&
 		    ((value & GTA4L_EMMC_RESET_DATA) != 0)) {
 			h13_reset_write_count++;
@@ -3696,6 +3696,42 @@ main(int argc, char **argv)
 			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
 			width_corrupt_code =
 			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		}
+	} else if ((strcmp(scenario, "probe-h17-pass") == 0) ||
+	    (strcmp(scenario, "probe-h17-content-div") == 0) ||
+	    (strcmp(scenario, "probe-h17-pattern-mismatch") == 0) ||
+	    (strcmp(scenario, "probe-h17-write-crc") == 0) ||
+	    (strcmp(scenario, "probe-h17-inhibit") == 0)) {
+		/* Stage 17: the content pass runs first, then the
+		 * Linux-compatible CMD19/CMD14 test. The expected write-phase
+		 * data timeout is tolerated, the data circuit is reset and the
+		 * CMD14 read-back decides. */
+		stage = 17;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		set_expected_lbas(lbas_full,
+		    (unsigned int)(sizeof(lbas_full) /
+		    sizeof(lbas_full[0])));
+		expected_lba_wrap = 1;
+		if (strcmp(scenario, "probe-h17-content-div") == 0) {
+			width_corrupt_lba = SIM_GPT_FIRST_USABLE;
+			width_corrupt_code =
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-h17-pattern-mismatch") == 0) {
+			cmd19_4bit_timeout = 1;
+			bus_test_bad = 1;
+			bus_test_bad_width =
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		} else if (strcmp(scenario,
+		    "probe-h17-write-crc") == 0) {
+			cmd19_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		} else if (strcmp(scenario, "probe-h17-inhibit") == 0) {
+			cmd19_4bit_timeout = 1;
+			h13_inhibit_survives = 1;
+		} else {
+			cmd19_4bit_timeout = 1;
 		}
 	} else if ((strcmp(scenario, "probe-dto-fired") == 0) ||
 	    (strcmp(scenario, "probe-dto-silent") == 0) ||
@@ -6763,9 +6799,13 @@ main(int argc, char **argv)
 		    "H15 W rc=0 req=4 sw=") != NULL &&
 		    strstr(panic_message, " vf=1 c6at=1 ") != NULL,
 		    "the H15 W line does not show the read-only verification");
-		check(strstr(panic_message, "H15 B att=1 trc=0 tw=000000a5 "
+		check(strstr(panic_message,
+		    (strcmp(scenario, "probe-h15-crc") == 0) ?
+		    "H15 B att=1 wrc=0 rst=0 ci=1 trc=0 tw=000000a5 "
+		    "te=000000a5" :
+		    "H15 B att=1 wrc=0 rst=0 ci=0 trc=0 tw=000000a5 "
 		    "te=000000a5") != NULL,
-		    "the H15 4-bit bus test lost its pattern");
+		    "the H15 4-bit bus test lost its pattern or CRC record");
 		check(strstr(panic_message,
 		    "H15 T att=1 rc=0 same=1 div=0") != NULL,
 		    "the H15 4-bit content pass diverged");
@@ -6798,7 +6838,8 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC H15 REPORT: rc=-11 stop=13") != NULL,
 		    "the H15 4-bit write wedge did not keep stop 13");
 		check(strstr(panic_message,
-		    "H15 B att=1 trc=-11 tw=00000000 te=00000000") != NULL,
+		    "H15 B att=1 wrc=-11 rst=0 ci=0 trc=-11 tw=00000000 "
+		    "te=00000000") != NULL,
 		    "the H15 4-bit write wedge lost the CMD19 timeout");
 		check(strstr(panic_message,
 		    "H15 T att=0 rc=0 same=0") != NULL,
@@ -6831,7 +6872,8 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC H16 REPORT: rc=0 stop=0") != NULL,
 		    "the H16 content-only rung did not pass");
 		check(strstr(panic_message,
-		    "H16 B att=0 trc=0 tw=00000000 te=00000000") != NULL,
+		    "H16 B att=0 wrc=0 rst=0 ci=0 trc=0 tw=00000000 "
+		    "te=00000000") != NULL,
 		    "the H16 rung issued a bus test");
 		check(strstr(panic_message,
 		    "H16 T att=1 rc=0 same=1 div=0") != NULL,
@@ -6860,6 +6902,93 @@ main(int argc, char **argv)
 		    "the H16 divergence did not restore 1-bit framing");
 		check(cmd19_count == 0u && cmd14_count == 0u,
 		    "the H16 divergence issued CMD19/CMD14");
+	} else if (strcmp(scenario, "probe-h17-pass") == 0) {
+		check(panicked == 1, "the H17 bus-test rung did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H17 REPORT: rc=0 stop=0") != NULL,
+		    "the H17 bus-test rung did not pass");
+		check(strstr(panic_message,
+		    "H17 T att=1 rc=0 same=1 div=0") != NULL,
+		    "the H17 4-bit content pass diverged");
+		check(strstr(panic_message,
+		    "H17 B att=1 wrc=-11 rst=0 ci=0 trc=0 tw=000000a5 "
+		    "te=000000a5") != NULL,
+		    "the H17 rung did not tolerate the CMD19 write timeout "
+		    "or lost the CMD14 pattern");
+		check(h13_reset_write_count == 1u,
+		    "the H17 rung did not issue exactly one data reset");
+		check(strstr(panic_message,
+		    "H17 V att=1 rc=0 sw=0 vf=1 c6at=1 ") != NULL &&
+		    strstr(panic_message, "H17 Q att=1 rc=0 qb0=5c510100")
+		    != NULL,
+		    "the H17 verified revert or recovery read failed");
+		check(cmd19_count == 1u && cmd14_count == 1u &&
+		    cmd6_count == 2u,
+		    "the H17 rung command counts mismatch");
+		check(cmd17_count == 51u,
+		    "the H17 rung did not run both content passes plus Q");
+		check(strlen(panic_message) < 2048u,
+		    "the H17 report exceeds the panic buffer");
+	} else if (strcmp(scenario, "probe-h17-content-div") == 0) {
+		check(panicked == 1, "the H17 divergent content pass did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H17 REPORT: rc=-21 stop=14") != NULL,
+		    "the H17 content divergence did not keep stop 14");
+		check(strstr(panic_message,
+		    "H17 B att=0 wrc=0 rst=0 ci=0 trc=0") != NULL,
+		    "the H17 divergent run issued a bus test");
+		check(strstr(panic_message,
+		    "H17 T att=1 rc=0 same=0 div=34") != NULL,
+		    "the H17 content divergence did not name LBA 34");
+		check(strstr(panic_message,
+		    "H17 V att=1 rc=0 sw=0 vf=1 c6at=1 ") != NULL,
+		    "the H17 divergence did not restore 1-bit framing");
+		check(cmd19_count == 0u && cmd14_count == 0u,
+		    "the H17 divergence issued CMD19/CMD14");
+	} else if (strcmp(scenario, "probe-h17-pattern-mismatch") == 0) {
+		check(panicked == 1, "the H17 pattern mismatch did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H17 REPORT: rc=-20 stop=13") != NULL,
+		    "the H17 pattern mismatch did not keep stop 13");
+		check(strstr(panic_message,
+		    "H17 B att=1 wrc=-11 rst=0 ci=0 trc=-20 tw=0000005a "
+		    "te=000000a5") != NULL,
+		    "the H17 mismatch did not keep the tolerated write and "
+		    "the observed word");
+		check(strstr(panic_message,
+		    "H17 V att=1 rc=0 sw=0 vf=1 c6at=1 ") != NULL,
+		    "the H17 mismatch did not restore 1-bit framing");
+		check(cmd19_count == 1u && cmd14_count == 1u,
+		    "the H17 mismatch command counts mismatch");
+	} else if (strcmp(scenario, "probe-h17-write-crc") == 0) {
+		check(panicked == 1, "the H17 non-timeout write error did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H17 REPORT: rc=-12 stop=13") != NULL,
+		    "a non-timeout CMD19 error was tolerated");
+		check(strstr(panic_message,
+		    "H17 B att=1 wrc=-12 rst=0 ci=0 trc=-12 ") != NULL,
+		    "the H17 non-timeout write lost its error");
+		check(h13_reset_write_count == 0u && cmd14_count == 0u,
+		    "a non-timeout CMD19 error still reset the data circuit "
+		    "or issued CMD14");
+	} else if (strcmp(scenario, "probe-h17-inhibit") == 0) {
+		check(panicked == 1, "the surviving-inhibit H17 run did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H17 REPORT: rc=-23 stop=15") != NULL,
+		    "a surviving DAT inhibit did not keep stop 15");
+		check(strstr(panic_message,
+		    "H17 B att=1 wrc=-11 rst=-17 ci=0 trc=-17") != NULL,
+		    "the H17 run did not name the failed data reset");
+		check(strstr(panic_message,
+		    "H17 V att=1 rc=-17 sw=0 vf=0 c6at=0 ") != NULL,
+		    "the unproven H17 recovery did not report the surviving "
+		    "inhibit before CMD6");
+		check(cmd14_count == 0u,
+		    "the H17 run issued CMD14 after a failed reset");
 	} else if (strcmp(scenario, "probe-dto-fired") == 0) {
 		check(panicked == 1, "the fired DTO audit did not report");
 		check(strstr(panic_message,

@@ -377,14 +377,20 @@ partition layout, payload policy and packaging.
   returned `rc=0 stop=0`: verified 4-bit switch on the first CMD6 attempt,
   the full 4-bit content pass matching the 1-bit baseline
   (`same=1 div=0`, `b0=62084b66`), a verified baseline-based revert
-  (`02→00`) and a matching block-0 recovery read. H15/H16 stop codes are
-  0/10/11/12/13/14/15/16, with 10 (baseline read failed) and 13 (bus test,
-  H15 only) being the additions. No HS, DDR, 8-bit, CMD18, CMD25 or
-  user-data write. Core 176/104 and probe 158/77. **4-bit SDR sector reads
-  are measured `[C]`**; F3 remains `[U]` because the CMD19/CMD14 round trip
-  has neither succeeded nor been re-run under the Linux/TI completion rule
-  (ignore the write-phase data timeout, reset the data circuit, let CMD14
-  decide).
+  (`02→00`) and a matching block-0 recovery read. Stage H17
+  (`gta4l-emmc-probe=17`) is the Linux-compatible completion rung: after the
+  same verified switch and 4-bit content pass it runs one CMD19 pattern write
+  whose expected data timeout is recorded and tolerated, one bounded data
+  circuit reset and one CMD14 read-back before the verified revert and the
+  recovery read. The rule matches `mmc_bus_test()` (which discards every
+  `BUS_TEST_W` error and lets `BUS_TEST_R` decide) and TI erratum SPRZ436H
+  i836 (no CRC status token is generated for the tuning pattern). Its `B`
+  line records `wrc`/`rst`/`ci` beside `trc`/`tw`/`te`. H15/H16/H17 stop
+  codes are 0/10/11/12/13/14/15/16, with 10 (baseline read failed) and 13
+  (bus test) the additions. No HS, DDR, 8-bit, CMD18, CMD25 or
+  user-data write. Core 179/104 and probe 163/77. **4-bit SDR sector reads
+  are measured `[C]`**; F3 remains `[U]` until the CMD19/CMD14 round trip is
+  measured on hardware, which H17 is built to do.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

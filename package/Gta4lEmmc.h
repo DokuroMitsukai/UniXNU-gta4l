@@ -609,6 +609,13 @@ struct gta4l_emmc_host {
 	 * condition is one DATA_CRC indication with no other error bit. */
 	uint8_t  bus_test_data_crc_ok;
 	uint8_t  bus_test_ignored_crc;
+	/* Set only by a rung that follows the Linux `mmc_bus_test()` rule:
+	 * CMD19 is a host-to-device pattern for which the card sends no CRC
+	 * status token, so the controller's data timeout is the expected
+	 * terminal state (TI SPRZ436H i836). A tolerated timeout clears the
+	 * data circuit and lets the CMD14 read decide. Zero keeps the strict
+	 * historical behaviour. */
+	uint8_t  bus_test_tolerate_write_timeout;
 };
 
 /* Controller reset, GCC 400 kHz setup, retained-rail power handshake, pads. */
@@ -649,6 +656,13 @@ struct gta4l_emmc_bus_result {
 	uint8_t  host_before;    /* HOST_CONTROL before the width write */
 	uint8_t  host_after;     /* HOST_CONTROL read back after the write */
 	uint32_t readback_sum;   /* byte sum of the EXT_CSD read at the width */
+	/* CMD19 write outcome and the bounded data reset that a tolerated
+	 * write-phase data timeout needs before CMD14. `write_result` is
+	 * GTA4L_EMMC_OK when the write completed normally and
+	 * GTA4L_EMMC_ERR_DATA_TIMEOUT for the expected no-CRC-status class;
+	 * `reset_result` is only meaningful when the timeout was tolerated. */
+	int      write_result;   /* CMD19 write result */
+	int      reset_result;   /* data-circuit reset result after a timeout */
 	/* The verified switch replaces the invalid byte-183 equality gate with
 	 * a read-only properties-segment comparison. `switched` remains the raw
 	 * byte-183 observation (diagnostic only, normally 0). */

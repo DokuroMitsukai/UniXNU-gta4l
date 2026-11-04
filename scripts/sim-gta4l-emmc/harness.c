@@ -2729,6 +2729,22 @@ main(int argc, char **argv)
 		sim.bus_test_corrupt_word = 0;
 		/* Only the first two returned bits are defined for DAT0. */
 		sim.bus_test_corrupt_xor = 0x00000080u;
+	} else if (scenario_is(scenario, "bus-test-tolerate-timeout") ||
+	    scenario_is(scenario, "bus-test-tolerate-inhibit") ||
+	    scenario_is(scenario, "bus-test-tolerate-write-crc")) {
+		/* The Linux mmc_bus_test() rule: a CMD19 write-phase data
+		 * timeout is the expected no-CRC-status class and is tolerated
+		 * only when the caller opts in. The reset must clear the data
+		 * circuit before CMD14. */
+		if (scenario_is(scenario, "bus-test-tolerate-write-crc")) {
+			sim.bus_test_data_crc = 1;
+		} else {
+			sim.bus_test_write_timeout = 1;
+			if (scenario_is(scenario,
+			    "bus-test-tolerate-inhibit")) {
+				sim.bus_test_reset_no_inhibit_clear = 1;
+			}
+		}
 	} else if (scenario_is(scenario, "bus-reset-pass") ||
 	    scenario_is(scenario, "bus-reset-mismatch") ||
 	    scenario_is(scenario, "bus-reset-read-timeout") ||
@@ -4016,6 +4032,52 @@ main(int argc, char **argv)
 		    "the tolerated CMD14 CRC was not recorded");
 		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
 		    "verified CMD14 CRC command counts mismatch");
+	} else if (scenario_is(scenario, "bus-test-tolerate-timeout")) {
+		memset(&bus, 0, sizeof(bus));
+		host.bus_test_tolerate_write_timeout = 1u;
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK,
+		    "the expected CMD19 write timeout was not tolerated");
+		check(bus.write_result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "the tolerated CMD19 timeout was not recorded");
+		check(bus.reset_result == GTA4L_EMMC_OK,
+		    "the tolerated timeout did not clear the data circuit");
+		check(bus.test_result == GTA4L_EMMC_OK &&
+		    bus.test_word == 0x000000A5u &&
+		    bus.test_expected == 0x000000A5u,
+		    "the tolerated CMD19 timeout lost the CMD14 pattern");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u,
+		    "the tolerated CMD19 timeout did not reach CMD14");
+	} else if (scenario_is(scenario, "bus-test-tolerate-inhibit")) {
+		memset(&bus, 0, sizeof(bus));
+		host.bus_test_tolerate_write_timeout = 1u;
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_INHIBIT,
+		    "a surviving DAT inhibit was not reported");
+		check(bus.write_result == GTA4L_EMMC_ERR_DATA_TIMEOUT &&
+		    bus.reset_result == GTA4L_EMMC_ERR_INHIBIT,
+		    "the failed reset was not recorded");
+		check(bus.test_result == GTA4L_EMMC_ERR_INHIBIT,
+		    "the failed reset result field mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 0u,
+		    "the failed reset still issued CMD14");
+	} else if (scenario_is(scenario, "bus-test-tolerate-write-crc")) {
+		memset(&bus, 0, sizeof(bus));
+		host.bus_test_tolerate_write_timeout = 1u;
+		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");
+		result = gta4l_emmc_bus_test_verified(&host, 4u, &bus);
+		check(result == GTA4L_EMMC_ERR_DATA_CRC,
+		    "a non-timeout CMD19 error was tolerated");
+		check(bus.write_result == GTA4L_EMMC_ERR_DATA_CRC &&
+		    bus.reset_result == GTA4L_EMMC_OK,
+		    "the refused write error was mishandled");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 0u,
+		    "a non-timeout CMD19 error still issued CMD14");
 	} else if (scenario_is(scenario, "bus-test-read-status")) {
 		result = gta4l_emmc_set_bus_width(&host, 4u, &bus);
 		check(result == GTA4L_EMMC_OK, "4-bit setup switch failed");

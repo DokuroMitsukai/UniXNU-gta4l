@@ -44,7 +44,11 @@ by a latched DAT inhibit and no CMD6 was issued. The report and recovery are
 fixed and a content-only H16 rung is added; its first boot (§5.3.32) returned
 `rc=0 stop=0` with the verified 4-bit switch, the full 4-bit content pass, the
 verified revert and the block-0 recovery read, so 4-bit SDR reads are measured
-`[C]` and the remaining barrier is the CMD19 completion rule. H14 remains
+`[C]` and the remaining barrier is the CMD19 completion rule. Stage H17
+(`gta4l-emmc-probe=17`, §5.3.33) applies the reference rule — tolerate the
+expected CMD19 data timeout, reset the data circuit, let CMD14 decide — after
+the 4-bit content pass; it is host-tested and not yet run on hardware. H14
+remains
 paused. The core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
@@ -64,9 +68,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 176 scenarios and 104 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 179 scenarios and 104 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 158 scenarios and 77 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 163 scenarios and 77 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -130,9 +134,13 @@ raw reports and images remain unchanged evidence.
   baseline-based recovery, with no CMD19 or CMD14 at all. Its first boot
   (§5.3.32) returned `rc=0 stop=0`: the verified 4-bit content pass, the
   verified revert and the block-0 recovery read all completed. The 4-bit SDR
-  DAT path is therefore measured for reads. H14 is paused rather than
-  advanced: CMD12 is not appropriate for the single-block CMD19 write, and
-  its stop-code mapping conflated distinct failures. The recorded CMD19
+  DAT path is therefore measured for reads. `gta4l-emmc-probe=17` is the
+  Linux-compatible completion rung (§5.3.33): the same baseline, verified
+  switch and 4-bit content pass, then one CMD19 write whose expected
+  data timeout is recorded and tolerated, one bounded data reset, one CMD14
+  read-back, the verified revert and the recovery read. H14 is paused rather
+  than advanced: CMD12 is not appropriate for the single-block CMD19 write,
+  and its stop-code mapping conflated distinct failures. The recorded CMD19
   timeout is now read as a completion-rule defect, not a data-path defect:
   Linux `mmc_bus_test()` ignores every `BUS_TEST_W` error and lets
   `BUS_TEST_R` decide, and TI erratum SPRZ436H i836 records that the card
@@ -2914,7 +2922,7 @@ Corrective host batch:
   width recovery could not prove the framing; 16 the recovery read failed.
   H16 omits 13 because it never issues CMD19/CMD14.
 
-Host checks after the batch: core 176 scenarios and 104 mutation controls,
+Host checks after the batch: core 179 scenarios and 104 mutation controls,
 probe 158 scenarios and 77 mutation controls, including the reproduced 4-bit
 write wedge with a clean baseline-based recovery and the surviving-inhibit
 case that stops before CMD6. No new image was built or flashed for this
@@ -3005,6 +3013,90 @@ write whose data timeout is recorded and tolerated, one bounded data-circuit
 reset, one CMD14 read with the existing pattern comparison (and the existing
 tolerated-CRC rule), the baseline-based revert and the block-0 recovery read.
 That rung is the F3-at-4-bit candidate.
+
+### 5.3.33 Stage-H17: the Linux-compatible bus-test completion rule (host batch, 2026-11-05)
+
+The H16 run leaves exactly one F3 clause open, and the pinned references say
+the previous rungs were asking the wrong question. Linux `mmc_bus_test()`
+(`drivers/mmc/core/mmc_ops.c`) calls `mmc_send_bus_test(MMC_BUS_TEST_W)` and
+**discards its return value**, then lets `MMC_BUS_TEST_R` decide:
+
+```c
+	/*
+	 * Ignore errors from BUS_TEST_W.  BUS_TEST_R will fail if there
+	 * is a problem.  This improves chances that the test will work.
+	 */
+	mmc_send_bus_test(card, card->host, MMC_BUS_TEST_W, width);
+	return mmc_send_bus_test(card, card->host, MMC_BUS_TEST_R, width);
+```
+
+The same function returns success immediately for a 1-bit bus
+(`if (bus_width == MMC_BUS_WIDTH_1) return 0; /* no need for test */`), which
+is another reason the historical 1-bit discriminator was never a valid
+comparison. `sdhci_data_irq()` excludes `MMC_BUS_TEST_R` from the data-CRC
+error path, and `sdhci` resets the data circuit on the data error before the
+next command. JEDEC 6.6.4 defines CMD19 as a pattern with no CRC status token,
+and TI erratum SPRZ436H i836 records the resulting controller data timeout with
+the guideline to ignore it, clear it and continue to CMD14.
+
+The port instead returned on the CMD19 write result, so no rung ever reached
+CMD14 under the 4-bit switch. The host batch changes the completion rule:
+
+- `struct gta4l_emmc_host` gains
+  `bus_test_tolerate_write_timeout`. Only a stage that opts in gets the new
+  rule, so H15 keeps its recorded strict behaviour.
+- `struct gta4l_emmc_bus_result` gains `write_result` and `reset_result`;
+  every initializer sets both to `GTA4L_EMMC_OK`.
+- `gta4l_emmc_bus_test_common()` records the CMD19 result. When it is
+  `GTA4L_EMMC_ERR_DATA_TIMEOUT` and the caller opted in, it issues
+  `gta4l_emmc_clear_dat_inhibit()` (one bounded local data-circuit reset,
+  self-clear polled, post-reset `DAT_INHIBIT` checked) and continues to the
+  CMD14 read. Any other write error, and a reset that cannot prove the
+  circuit idle, still stops as before.
+- The CMD14 read keeps the existing single-tolerated-CRC rule, and the
+  returned pattern still decides.
+
+Stage 17 (`gta4l-emmc-probe=17`) is the resulting rung: the standard read-only
+identification once (no CMD3 retry), the stage-A content pass at 400 kHz/1-bit
+as the baseline, the verified 4-bit SDR switch, **the full 4-bit content
+pass**, one CMD19 4-byte pattern write with the tolerated timeout, the bounded
+data reset, one CMD14 read, the verified return to 1-bit and the block-0
+recovery read. It always emits `GTA4L-EMMC H17 REPORT` and stops with
+0 (all clean), 10 (baseline read failed), 11 (switch/verification failed with
+framing restored), 12 (unknown framing after a failed restore), 13 (bus test
+failed: a non-timeout write error, a reset that could not prove the circuit,
+a CMD14 transport error or a pattern mismatch), 14 (content read failed or
+diverged), 15 (width recovery unproven) or 16 (recovery read failed). It
+issues no CMD18, CMD25 or user-data write, and the only card writes are the
+CMD6 width values and the non-persistent CMD19 pattern.
+
+The `B` line gains the write-phase record and is now shared by H15/H16/H17:
+
+```
+GTA4L-EMMC H17 B att=1 wrc=-11 rst=0 ci=0 trc=0 tw=000000a5 te=000000a5
+```
+
+`wrc` is the CMD19 write result, `rst` the data-reset result, `ci` the
+tolerated CMD14 CRC flag, and `trc`/`tw`/`te` keep their existing meaning.
+H15 therefore reports `wrc=-11 trc=-11` on its recorded wedge (a strict
+refusal), while H17 reports `wrc=-11 trc=0` when the CMD14 read-back passes.
+
+Host checks: the core suite is 179 scenarios and 104 mutation controls (was
+176/104), adding `bus-test-tolerate-timeout` (tolerated timeout, clean reset,
+pattern accepted), `bus-test-tolerate-inhibit` (surviving `DAT_INHIBIT` stops
+before CMD14) and `bus-test-tolerate-write-crc` (a non-timeout write error is
+not tolerated). The probe suite is 163 scenarios and 77 mutation controls
+(was 158/77), adding `probe-h17-pass`, `probe-h17-content-div`,
+`probe-h17-pattern-mismatch`, `probe-h17-write-crc` and `probe-h17-inhibit`;
+the existing H15/H16 expectations are updated for the shared `B` line. No
+build, flash or boot was performed.
+
+The rung is the F3-at-4-bit candidate: a `stop=0` with
+`wrc=-11 rst=0 trc=0 tw=000000a5` and a matching 4-bit content pass satisfies
+F3's bus-test clause under the reference completion rule, with the tolerated
+timeout recorded rather than hidden. A pattern mismatch would keep F3 `[U]`
+and bind the failure to the returned word, and a failed reset would stop with
+unknown framing instead of pretending the bus is idle.
 
 ## 6. Expected report
 

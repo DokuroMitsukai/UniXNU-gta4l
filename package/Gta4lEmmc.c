@@ -1908,6 +1908,8 @@ gta4l_emmc_bus_result_init(struct gta4l_emmc_bus_result *result,
 	result->verified = 0;
 	result->rollback_result = GTA4L_EMMC_OK;
 	result->cmd6_attempts = 0;
+	result->write_result = GTA4L_EMMC_OK;
+	result->reset_result = GTA4L_EMMC_OK;
 }
 
 /* Clear a latched DAT inhibit with one bounded local data-circuit reset.
@@ -2284,7 +2286,7 @@ gta4l_emmc_bus_test_common(struct gta4l_emmc_host *host, uint32_t bits,
 {
 	uint8_t pattern[GTA4L_EMMC_BUS_TEST_8_BYTES];
 	uint8_t actual[GTA4L_EMMC_BUS_TEST_8_BYTES];
-	uint32_t response[4];
+	uint32_t response[4] = { 0 };
 	uint32_t length;
 	uint32_t code;
 	uint32_t control;
@@ -2352,11 +2354,38 @@ gta4l_emmc_bus_test_common(struct gta4l_emmc_host *host, uint32_t bits,
 	rc = gta4l_emmc_write_data(host, GTA4L_EMMC_CMD19, 0,
 	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
 	    GTA4L_EMMC_CMD_INDEX, pattern, length, response);
+	if (result != 0) {
+		result->write_result = rc;
+	}
 	if (rc != GTA4L_EMMC_OK) {
-		if (result != 0) {
-			result->test_result = rc;
+		if ((rc != GTA4L_EMMC_ERR_DATA_TIMEOUT) ||
+		    (host->bus_test_tolerate_write_timeout == 0u) ||
+		    (host->fail_valid == 0u) ||
+		    (host->fail_index != GTA4L_EMMC_CMD19) ||
+		    ((host->fail_normal & GTA4L_EMMC_INT_CC) == 0u)) {
+			if (result != 0) {
+				result->test_result = rc;
+			}
+			return rc;
 		}
-		return rc;
+		/* JEDEC 6.6.4 defines CMD19 as a host-to-device pattern, not a
+		 * data write: the device ignores all but the first two bits per
+		 * line and returns no CRC status token, so the controller waits
+		 * for a completion that never arrives (TI SPRZ436H i836). Linux
+		 * `mmc_bus_test()` discards every BUS_TEST_W error and lets
+		 * BUS_TEST_R decide. Only a command that completed (CC latched)
+		 * is eligible: clear the data circuit and continue to CMD14, and
+		 * let the read-back decide. */
+		rc = gta4l_emmc_clear_dat_inhibit(host);
+		if (result != 0) {
+			result->reset_result = rc;
+		}
+		if (rc != GTA4L_EMMC_OK) {
+			if (result != 0) {
+				result->test_result = rc;
+			}
+			return rc;
+		}
 	}
 	if ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0) {
 		host->card_status = response[0];

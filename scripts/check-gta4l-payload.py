@@ -62,6 +62,7 @@ DIAGNOSTIC_NAMES = {
     'emmc-probe-14': 'gta4l-emmc-probe=14',
     'emmc-probe-15': 'gta4l-emmc-probe=15',
     'emmc-probe-16': 'gta4l-emmc-probe=16',
+    'emmc-probe-17': 'gta4l-emmc-probe=17',
 }
 
 
@@ -235,7 +236,7 @@ def main():
                                  'emmc-probe-10', 'emmc-probe-11',
                                  'emmc-probe-12', 'emmc-probe-13',
                                  'emmc-probe-14', 'emmc-probe-15',
-                                 'emmc-probe-16'),
+                                 'emmc-probe-16', 'emmc-probe-17'),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')
