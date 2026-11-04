@@ -409,8 +409,13 @@ partition layout, payload policy and packaging.
   `NativeRamBlock`/`NativeVirtioBlock` pin the `IOBlockStorageDevice` shape,
   and that the smallest gta4l path is a read-only `IOResources`-matched
   block driver over the existing CMD17 core, with the personality behind a
-  new guarded kernel-config entry. It is a host-only design: no publication,
-  code, build or device run yet.
+  new guarded kernel-config entry. It also records that the existing
+  storage-ABI audit/bindings artifacts are absent in this checkout, so
+  qualification is the first gate; the corrected design advertises transfer
+  limits to the family, sends the media-state notification on a read error,
+  and treats whole-device publication plus a media-path read as F5 while
+  reporting GPT partition discovery separately. It is a host-only design:
+  no publication, code, build or device run yet.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

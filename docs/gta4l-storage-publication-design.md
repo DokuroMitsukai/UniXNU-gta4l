@@ -24,15 +24,18 @@ Concretely, the first rung should produce a report that shows:
 
 1. an `IOMedia` object for the whole eMMC with the right block size and block
    count, `Whole = true` and the media marked non-writable;
-2. the GPT partition media created by the prelinked `IOGUIDPartitionScheme`,
-   with their base/size/content and, where present, BSD names;
-3. one known-block read performed through the published `IOMedia` path whose
-   content matches the stage-A baseline;
-4. no write, no mount and no root switch.
+2. one known-block read performed through the published `IOMedia` path whose
+   content matches a same-boot baseline;
+3. no write, no mount and no root switch;
+4. as an additional observation, the GPT partition media created by the
+   prelinked `IOGUIDPartitionScheme`, with a bounded summary of their
+   base/size/content.
 
-The whole-device object is the hard requirement. Per-partition objects are
-the "ideally" part; if the GUID scheme does not attach, publication is
-partial, not absent, and the report must say which condition failed.
+The whole-device object and the media-path read are the hard requirement.
+Per-partition objects are the "ideally" part; if the GUID scheme does not
+attach, F5 is still met by the whole-device publication, and the report
+records partition discovery as a separate result rather than calling F5
+partial.
 
 ## 2. What the snapshot already provides
 
@@ -57,8 +60,10 @@ personalities the publication path needs:
 default does) and must not overwrite that property.
 
 The prelinked `com.apple.filesystems.apfs` is also present. It may probe the
-published media for APFS containers. On this GPT it will not find any, so the
-expected result is read-only probing and log noise, not a mount.
+published media for APFS containers. Whether a container is present is not
+established by the Android GPT type; the first run must report what APFS
+actually did. The expectation is a read-only probe with no mount, but that
+is an observation, not a guarantee.
 
 ### 2.2 Public headers and the ABI audit tooling
 
@@ -76,6 +81,56 @@ The audit artifact is not present in this checkout, so the first
 implementation must run it before linking (fail closed if it cannot run).
 The compile-only gate can still use the prepared headers on Linux, but it is
 not a substitute for the audit.
+
+### 2.2.1 Qualification feasibility (2026-11-05)
+
+The existing audit pipeline is **not runnable as-is in this checkout**. The
+gaps are concrete:
+
+| Requirement | State here |
+| --- | --- |
+| `refer/IOStorageFamily` public source at `e45fbe30…` | Missing at the UniXNU root. The gta4l build tree has a symlink to `out/feeds/IOStorageFamily-67f9003c`, which is the expected revision. |
+| macOS SDK `TargetConditionals.h` | `xcrun --show-sdk-path` returns the literal `macosx` through the Linux shim, so `macosx/usr/include/TargetConditionals.h` does not exist. The Linux build uses `scripts/linux/TargetConditionals.h`. |
+| Audit candidate path | Hardcoded to `build/xnu-prelink/native-apfs-load-positive.macho`; the gta4l candidate is `out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho`. The audit needs `--candidate`/`--plan` (or an equivalent) to audit the gta4l candidate. |
+| `build/xnu-prelink/native-apfs-load-positive.macho` and its plan | Missing. |
+| `build/darwinboot-storage-native-metadata/gdb-stop.json` | Missing. The live observation is candidate-specific: the audit requires `kernel_sha256 == plan['candidate_sha256']`. The two `gdb-stop.json` files under `out/gta4l/ram-root-*-evidence/` belong to the RAM-root fixture (`kernel_sha256 dc8184da…`), not the storage qualification, and cannot be reused for the gta4l candidate (`ca983f7d…`). |
+| `build/image4-ignition/aes-interface-audit.json` | Missing. Its `compiled_metaclass_offsets` are a compile-time property of the OS profile and may be reusable if the original kernel hash and layout match; the live storage observation is not reusable across candidates without checking the addresses. |
+| `build/storage-abi/interface-audit.json` | Missing. |
+| `build/ram-block/bindings.json` | Missing. |
+| gta4l prelinked candidate | Present: `out/gta4l/ipados-17.7.11-21H461/gta4l/kernel/kernel.macho` (`ca983f7d…`) with `kernel.json`. |
+| gta4l plan storage metadata | Present: storage `__TEXT/__TEXT_EXEC/__DATA_CONST/__DATA` extents and `original_executable_sha256 = 852b7846…`. |
+| Original kernelcache | Present: `out/ipsw/21H461/kernelcache.decompressed` (`f18b4df8…`). |
+
+The audit's live metadata and AES audit are evidence from the original
+kernel, not generated data. The live metadata must match the candidate being
+audited; the gta4l candidate has no live observation in this checkout. The
+audit also produces the candidate-specific vtable/metaclass targets that
+`build-virtio-mmio-bindings.py` turns into the constructor, destructor,
+metaclass and method bindings; compiling the subclass against the headers
+does not produce those bindings. A compile-only gate is therefore not a
+substitute.
+
+Three qualification paths are possible:
+
+1. **Rebuild the original storage-audit harness on a macOS host** (original
+   candidate, original live observation, AES audit, public source), then run
+   the same harness against the gta4l candidate to produce a gta4l
+   `gdb-stop.json`. Parameterize the audit for `--candidate`/`--plan`; the
+   AES metaclass offsets may be reused if the OS profile and original kernel
+   hash match, but the live storage observation must be produced for the
+   gta4l candidate.
+2. **Port the audit and the observation harness to the Linux/QEMU setup**
+   (parameterize the SDK header to `scripts/linux/TargetConditionals.h`,
+   use `llvm-dwarfdump`/`llvm-cxxfilt`, accept `--candidate`/`--plan`) and
+   produce the gta4l candidate's live observation there. This changes the
+   qualification harness, not the acceptance criteria, and needs owner
+   review.
+3. **Defer the driver** until path 1 or 2 succeeds. Do not link a
+   `IOBlockStorageDevice` subclass without the audit/bindings.
+
+Recommendation: path 2 if the QEMU/GDB observation harness can run the gta4l
+candidate; otherwise path 1. The first implementation task is the
+qualification harness, not the block driver.
 
 ### 2.3 Existing `IOBlockStorageDevice` implementations are the template
 
@@ -224,9 +279,14 @@ lifetime, as in the probe.
   - `gta4l_emmc_read_block(&host, block + i, bounce)`;
   - `buffer->writeBytes(i * 512, bounce, 512)`;
   - on a card error or a short copy, stop and complete short with
-    `kIOReturnIOError`/`kIOReturnNoMemory`; mark `online = false` so the
-    media is decommissioned rather than left half-working. The failure
-    record and counters are preserved.
+    `kIOReturnIOError`/`kIOReturnNoMemory`; mark `online = false` and
+    preserve the failure record and counters. After the failing completion
+    returns, send `kIOMessageMediaStateHasChanged` with
+    `(void *)(uintptr_t)kIOMediaStateOffline` through `messageClients()`
+    **outside** the controller lock. `IOBlockStorageDriver::message()` handles
+    that message by decommissioning the media. A subsequent request fails
+    with `kIOReturnNoMedia`; outstanding requests are serialized by the lock
+    and the failing request completes before the notification.
 - Counters: requests, blocks, failures, maximum request, last error, first
   failure record.
 - Unlock, then call `completion->action(target, parameter, status, actual)`.
@@ -240,16 +300,29 @@ failure is a different class; adding a recovery policy without evidence would
 be a new hypothesis. Failing closed and reporting is the conservative choice.
 
 The first rung uses one block per command. It does not use
-`gta4l_emmc_read_multi()`: F2 (CMD18/CMD12) is still unproven, and the
-storage stack's request sizes are unknown. A per-block loop is slower but is
-the exact path the stage-A/F1 content evidence covers.
+`gta4l_emmc_read_multi()`: F2 (CMD18/CMD12) is still unproven, and the first
+run must measure the storage stack's actual request sizes. A per-block loop
+is slower but is the exact path the stage-A/F1 content evidence covers.
 
-Request size: the BSD/storage layer may issue large reads. The first rung
-accepts up to `GTA4L_EMMC_BLOCK_MAX_BLOCKS` (proposed 64 blocks = 32 KiB) per
-call and returns `kIOReturnMessageTooLarge` above it, with a counter. The
-partition scheme and APFS probing read small amounts, so this bound should
-not block publication. The value is measured in the first run and revisited
-before any performance claim. A large request is not silently truncated.
+Request size: the BSD/storage layer may issue large reads. The driver must
+**advertise** the limit, not only enforce it. Before `registerService()`, set
+the provider properties that `IOBlockStorageDriver::handleStart()` reads
+through `copyProperty(..., gIOServicePlane)`:
+
+- `kIOMaximumBlockCountReadKey` = 64;
+- `kIOMaximumByteCountReadKey` = 32768;
+- `kIOMaximumSegmentCountReadKey` = 1 (one physically contiguous segment per
+  request; the driver copies through a bounce buffer, so no scatter/gather
+  contract is implied).
+
+The family then splits larger requests instead of failing them. The driver
+still keeps defensive bounds checks and returns `kIOReturnBadArgument` for an
+out-of-range or overflowed request, and `kIOReturnMessageTooLarge` if a
+request somehow exceeds the advertised limit. The first run measures the
+actual request sizes and the split behavior; the value is not a performance
+claim. The write-limit properties are left at their default because the
+media is non-writable and `doAsyncReadWrite` rejects writes; the read limits
+are the ones that matter.
 
 ### 3.5 Reported device properties
 
@@ -272,9 +345,10 @@ before any performance claim. A large request is not silently truncated.
 | `setWriteCacheState` | `kIOReturnUnsupported` |
 | `doDiscard`, `doUnmap`, `doGetProvisionStatus` | `kIOReturnUnsupported` |
 
-`doAsyncReadWrite` is the only data path. `reportMediaState` returning false
-after a read error lets the block driver decommission the media instead of
-retrying reads forever.
+`doAsyncReadWrite` is the only data path. On a read error the driver marks
+the media offline and sends the explicit `kIOMessageMediaStateHasChanged`
+notification; `reportMediaState` then returns false, and later requests fail
+with `kIOReturnNoMedia`. The driver does not retry reads forever.
 
 ### 3.6 Report and observation
 
@@ -284,40 +358,51 @@ F5 needs an observable object, not a mount. The first rung uses report mode
 - After `registerService()`, start one kernel thread
   (`kernel_thread_start`, as in `drivers/ArmCpu/ArmCpu.cpp`).
 - The thread polls every 100 ms for up to 20 s for an `IOMedia` with
-  `Whole = true` whose provider chain contains the driver. It then gives the
-  partition scheme a short settle window (about 500 ms) and snapshots:
+  `Whole = true` whose provider chain contains the driver. It snapshots:
   - driver/card state: capacity, block size, width, timing, clock, online,
     write protection;
   - the whole media: `Base`, `Size`, `Content`, `BSD Name` if present,
     `Writable`;
-  - each partition media: base, size, content, BSD name;
+  - a bounded partition summary: count, the first few entries
+    (index/base/size/content/BSD name), and whether the count matches the
+    GPT entry count. Do not dump every partition and do not include volume
+    UUIDs, disk UUIDs or any other unique identifier;
   - counters;
   - one known-block read through `IOMedia::read()` (not the raw core) with a
-    completion waiter, compared to the stage-A baseline sum for LBA 1 or
-    the 21-block array.
+    completion waiter, compared to a **same-boot** stage-A baseline sum for
+    LBA 1 or the 21-block array.
 - It then panics with a bounded `GTA4L-EMMC P5 REPORT` block (the panic is
-  the delivery mechanism, as in the earlier rungs). If no media or no
-  partitions appear, it panics with the failure/partial state instead of
-  returning silently.
+  the delivery mechanism, as in the earlier rungs). If no whole media
+  appears, it panics with the failure state instead of returning silently.
+
+The report does **not** treat a fixed settle delay as proof that partition
+discovery finished. Partition media are an additional observation with a
+bounded wait; the report states how long it waited and how many partitions
+it saw, and does not claim completeness from the delay.
 
 Proposed report shape (the implementation pins the exact fields and keeps
 the whole block under 2048 bytes, like the existing reports):
 
 ```
-GTA4L-EMMC P5 REPORT: rc=0 stop=0 cap=61071360 bs=512 wid=1 tim=0 clk=400000
+GTA4L-EMMC P5 REPORT: rc=0 stop=0 blocks=61071360 bs=512 bytes=31268536320 wid=1 tim=0 clk=400000
 GTA4L-EMMC P5 DRV: online=1 wp=1 reads=... blocks=... fails=... max=...
-GTA4L-EMMC P5 MEDIA: whole=1 base=0 size=61071360 content=GUID_partition_scheme bsd=disk0
-GTA4L-EMMC P5 PART: n=... entries...
+GTA4L-EMMC P5 MEDIA: whole=1 base=0 size=31268536320 content=GUID_partition_scheme writable=0
+GTA4L-EMMC P5 PART: count=... expected=... waited_ms=... first=...
 GTA4L-EMMC P5 READ: lba=1 sum=... base=... same=1
 GTA4L-EMMC P5 FAIL: fail=.../...
 ```
 
-Stop codes: 0 clean publication and read-back; 10 the block argument is
-absent or contradictory; 11 controller/card initialization failed; 12 no
-whole media within the timeout; 13 whole-media geometry/property mismatch;
-14 the media read-back diverged; 15 whole media exists but no GPT partition
-media (partial F5); 16 the report thread timed out or the panic budget was
-exceeded.
+`Size` is in bytes (`61071360 * 512 = 31268536320`); the block count is
+reported separately. `BSD Name` may be omitted from the report; it is not
+needed for F5 and is not a unique device identifier.
+
+Stop codes: 0 clean whole-media publication and read-back; 10 the block
+argument is absent or contradictory; 11 controller/card initialization
+failed; 12 no whole media within the timeout; 13 whole-media
+geometry/property mismatch; 14 the media read-back diverged; 15 whole media
+exists but the partition summary could not be obtained (this is **not** an
+F5 failure; it is reported as a separate partition-discovery result); 16 the
+report thread timed out or the panic budget was exceeded.
 
 `gta4l-emmc-block=2` can mean "publish without the report panic" for later
 interactive work. The first rung uses `=1` only; `=0`/absent is fully inert.
@@ -386,9 +471,14 @@ block in the shared `native-aes-personality.patch`:
 ```
 
 `IOResources` + `IOResourceMatch = IOBSD` is the same start ordering as
-`NativeRamBlock`: the driver starts after BSD init resources exist, which is
-also after the `bsd_init` probe hook, so the two never overlap when the boot
-arguments are mutually exclusive.
+`NativeRamBlock`: the driver starts after BSD init resources exist. The
+ordering is pinned in source: the board probe hook runs in `bsd_init.c`
+around the host-init/audit calls, while `IOKitBSDInit()` is called later in
+the same function, and `IOKitBSDInit.cpp` publishes the `IOBSD` resource.
+The block driver's personality waits for that resource, so it cannot overlap
+the `bsd_init` probe when the boot arguments are mutually exclusive. The
+exact match order still needs a trace in the first report; do not infer it
+from the boot argument alone.
 
 `scripts/build-xnu-4k-baseline.sh` must translate a new
 `CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=y` into
@@ -472,17 +562,18 @@ Host-facing scope: the standard controller reset, GCC 400 kHz setup,
 retained-rail power handshake, pads and polling PIO. No new register class
 beyond what the probe already touches.
 
-Pass/partial/fail:
+Pass/fail and the separate partition result:
 
 - **F5 pass** — whole-device `IOMedia` with the expected geometry and
-  write-protection, GPT partition media present, and the media read-back
-  matching the stage-A baseline.
-- **F5 partial** — whole media present but no partition media, or a
-  partition set that does not match the GPT. Publication works; the scheme
-  needs a follow-up.
+  write-protection, and the media-path read-back matching the same-boot
+  baseline.
 - **F5 fail** — no whole media, initialization failure, or a read-back
   mismatch. The report must name the stop code and the first failure
   record.
+- **Partition discovery (separate result)** — whether GPT partition media
+  appeared, how many, and the bounded summary. A whole media with no
+  partition media is still an F5 pass; the partition result is recorded for
+  the next investigation.
 
 The known pre-identification CMD3 flake still applies to any boot; a
 pre-publication stop is a boot fact, not an F5 verdict. No in-boot retry.
@@ -494,10 +585,17 @@ automatic behavior is:
 
 - `IOGUIDPartitionScheme` reads the GPT and creates partition media;
 - `IOMediaBSDClient` can create BSD disk nodes;
-- APFS is prelinked and may probe the media; it will not find an APFS
-  container on the Android GPT and must not mount anything;
+- APFS is prelinked and may probe the media. Whether an APFS container is
+  present is not established by the Android GPT type; the first run must
+  report what APFS actually did. The expectation is a read-only probe with
+  no mount, but that is an observation, not a guarantee;
 - there is no ext4/f2fs driver in the prelinked set, and no FAT driver is
   guaranteed; no partition content is changed by a read-only probe.
+
+Read-only publication prevents writes through this driver. It does **not**
+by itself prevent a read-only mount by a filesystem client, so “no mount” is
+a run-scope decision and a report observation, not a property the block
+driver can guarantee.
 
 A later mount test, if the owner wants one, needs a known filesystem on a
 scratch region, an explicit read/write policy and a separate approval. It is
@@ -507,35 +605,59 @@ not part of F5 and must not be smuggled into the publication rung.
 
 | Risk | Effect | Mitigation |
 | --- | --- | --- |
-| Storage ABI mismatch (`IOBlockStorageDevice` size/vtable) | Link failure or runtime crash | Run the existing audit; compile against the prepared public headers; mirror the proven `NativeRamBlock` overrides; fail closed if the audit cannot run. |
+| Storage ABI mismatch (`IOBlockStorageDevice` size/vtable) | Link failure or runtime crash | The audit/bindings artifacts are missing (section 2.2.1). Produce the audit and concrete bindings before linking; compile-only is not sufficient. Fail closed. |
 | Duplicate core symbols from probe and block archives | Link failure | Split the core into `libGta4lEmmcCore.a`; `nm` duplicate check. |
 | `IOBlockStorageDriver` does not match | No `IOMedia`, no F5 | Keep the base `device-type = Generic`; use the `IOResources`/`IOBSD` personality; report the IOService tree. |
-| GPT scheme does not attach | Whole media only (partial F5) | Report the whole-media properties and the scheme absence; debug with the report, not a new device hypothesis. |
+| GPT scheme does not attach | Partition discovery result absent; F5 can still pass | Report the whole-media properties and the partition count/absence; debug with the report, not a new device hypothesis. |
 | CMD3 identification flake at IOBSD time | No publication on that boot | Four-boot rule; failure report; no in-boot retry. |
-| Long synchronous reads / watchdog | Boot stall or timeout | Per-call cap of 64 blocks (32 KiB) and a documented refusal above it; per-block progress counters; revisit after measurement. |
-| Read error wedges the controller | Media goes offline | Fail closed, mark offline, preserve the first failure record; no unproven reset/retry in the first rung. |
-| APFS/filesystem probe reads a lot | Slow boot or noisy logs | Read-only, capped requests, report the observed media; no mount. |
+| Long synchronous reads / watchdog | Boot stall or timeout | Advertise `kIOMaximumBlockCountReadKey`/`kIOMaximumByteCountReadKey` so the family splits; keep defensive bounds checks; measure request sizes. |
+| Read error wedges the controller | Media goes offline | Fail closed, mark offline, send `kIOMessageMediaStateHasChanged` outside the lock, preserve the first failure record; no unproven reset/retry in the first rung. |
+| APFS/filesystem probe reads a lot | Slow boot or noisy logs | Read-only, advertised limits, report the observed media; no mount. |
 | Both boot arguments set | Probe panics before publication, wasted boot | Contract check rejects the combination at build time; driver also refuses at start. |
 | Power rails differ at IOBSD time | Initialization failure | Full controller reset and retained-rail handshake; report the failing step. |
-| Report thread races media creation | No media in the report | Poll for the whole media, settle window for partitions, bounded timeout with a partial report. |
+| Report thread races media creation | No media in the report | Poll for the whole media; report partition discovery separately with a bounded wait and no completeness claim. |
 | Panic report exceeds the buffer | Truncated or missing report | Field-wise width fixture and a 2048-byte budget, as with the existing reports. |
+| Report leaks a unique identifier | Privacy violation | No volume/disk UUIDs, serials or other identifiers; bounded partition summary only. |
 
 ## 9. Open owner decisions and recommendation
 
-1. **Publication scope** — recommend whole-device plus GPT partitions,
-   read-only, no mount. The whole-device object is the F5 requirement; the
-   partitions are the "ideally" part.
-2. **First-rung width/timing** — recommend 1-bit SDR at 400 kHz. It is the
+1. **Publication scope** — recommend whole-device read-only publication,
+   no mount. The whole-device object and the media-path read are F5; the GPT
+   partition media are a separate additional observation.
+2. **ABI qualification path** — decide between running the existing audit
+   on a macOS host (path 1) and porting it to the Linux toolchain with a
+   pinned live-evidence record (path 2). Do not link the driver before one
+   path succeeds.
+3. **First-rung width/timing** — recommend 1-bit SDR at 400 kHz. It is the
    path with the most content evidence and the widest margin; the verified
    4-bit read path can be a later publication rung after the first success.
-3. **Read scope** — the storage stack will choose LBAs, so the approval must
+4. **Read scope** — the storage stack will choose LBAs, so the approval must
    cover arbitrary read-only LBAs, not the probe's pinned list. This is the
    main scope difference from the earlier rungs and should be explicit in
    the approval.
-4. **Mount** — recommend no mount in F5; a mount test is a separate,
-   owner-gated stage with a known filesystem and a scratch region.
-5. **Report mode** — recommend `gta4l-emmc-block=1` (report + panic) for the
+5. **Mount** — recommend no mount in F5; a mount test is a separate,
+   owner-gated stage with a known filesystem and a scratch region. Read-only
+   publication does not itself prevent a read-only mount.
+6. **Report mode** — recommend `gta4l-emmc-block=1` (report + panic) for the
    first rung and `=2` (publish only) later, if interactive work needs it.
+
+### 9.1 Implementation sequence
+
+1. **Qualification harness first.** Resolve the ABI path in section 2.2.1,
+   produce the `interface-audit.json` and the concrete bindings for the
+   gta4l candidate, and record their hashes. Stop if this cannot be done.
+2. **Host implementation.** Split the core archive, extract the platform
+   layer, add the C request-loop helper and the C++ adapter, add the guarded
+   personality and the `gta4l-emmc-block` payload mapping. Run the full host
+   battery, the ABI/bindings gate, the duplicate-symbol check, the
+   request-path tests, the source-policy test and the probe-refactor
+   regression.
+3. **Device candidate.** Build the `emmc-block-1` payload and boot image,
+   flash BOOT only after a verified backup, boot up to four times, and
+   collect the `GTA4L-EMMC P5 REPORT`.
+4. **Follow-ups.** 4-bit/HS publication, CMD18, a mount test and F6 are
+   separate rungs with separate approvals. None is a prerequisite for the
+   first whole-device F5 result.
 
 ## 10. What this design does not do
 
@@ -556,12 +678,23 @@ not part of F5 and must not be smuggled into the publication rung.
 - `out/feeds/IOStorageFamily-67f9003c/` — public IOStorageFamily sources and
   personalities (`IOBlockStorageDriver`, `IOGUIDPartitionScheme`,
   `IOMediaBSDClient`), revision `e45fbe30…`.
-- `scripts/audit-storage-interface.py`, `scripts/prepare-storage-headers.py`
-  and `build/storage-abi/headers.json` — ABI qualification and headers.
+- `scripts/audit-storage-interface.py`, `scripts/build-virtio-mmio-bindings.py`,
+  `scripts/prepare-storage-headers.py` and `build/storage-abi/headers.json` —
+  ABI qualification, concrete bindings and headers. The audit depends on the
+  original candidate, `build/xnu-prelink/native-apfs-load-positive.macho` and
+  its plan, `build/darwinboot-storage-native-metadata/gdb-stop.json`,
+  `build/image4-ignition/aes-interface-audit.json` and the public source.
 - `drivers/RamBlock/NativeRamBlock.cpp`, `drivers/VirtioMmioBlock/
   NativeVirtioBlock.cpp` — `IOBlockStorageDevice` implementation templates.
 - `patches/xnu/native-aes-personality.patch` — guarded personality pattern.
 - `patches/xnu/gta4l-emmc-probe.patch` — the existing `bsd_init` probe hook.
+- `iokit/bsddev/IOKitBSDInit.cpp` — publishes the `IOBSD` resource;
+  `bsd_init.c` calls `IOKitBSDInit()` after the probe hook.
+- `IOBlockStorageDriver.cpp` — `handleStart` reads the advertised transfer
+  limits; `message()` handles `kIOMessageMediaStateHasChanged` by
+  decommissioning the media.
+- `IOService.h` — `messageClients()`; `IOBlockStorageDevice.h` — the
+  `kIOMessageMediaStateHasChanged` contract.
 - `package/Gta4lEmmc.h`, `package/Gta4lEmmc.c`,
   `package/Gta4lEmmcProbe.c` — the core, the ops and the register windows.
 - `docs/emmc-reference.md`, `docs/native-emmc-reference-audit.md` — the
