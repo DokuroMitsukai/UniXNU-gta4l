@@ -414,8 +414,14 @@ partition layout, payload policy and packaging.
   qualification is the first gate; the corrected design advertises transfer
   limits to the family, sends the media-state notification on a read error,
   and treats whole-device publication plus a media-path read as F5 while
-  reporting GPT partition discovery separately. It is a host-only design:
-  no publication, code, build or device run yet.
+  reporting GPT partition discovery separately. The Linux/QEMU qualification
+  path then passed: `scripts/audit-gta4l-storage-interface.py` stopped the
+  actual `ca983f7d…` candidate at `_bsd_init`, recorded the live
+  `IOBlockStorageDevice`/`IOService` metaclasses and ran the full 190-slot
+  audit (176 kernel bindings, native 4K, original storage code unchanged).
+  The audit artifacts are pinned in `docs/evidence-baseline.md`. This clears
+  the ABI gate only: no driver is linked, and publication, block I/O and the
+  device run are still ahead.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

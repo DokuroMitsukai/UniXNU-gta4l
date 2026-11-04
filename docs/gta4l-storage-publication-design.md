@@ -85,7 +85,8 @@ not a substitute for the audit.
 ### 2.2.1 Qualification feasibility (2026-11-05)
 
 The existing audit pipeline is **not runnable as-is in this checkout**. The
-gaps are concrete:
+gaps are concrete. The table records the state before the result below; the
+qualification now exists under `out/gta4l/storage-abi/`.
 
 | Requirement | State here |
 | --- | --- |
@@ -131,6 +132,49 @@ Three qualification paths are possible:
 Recommendation: path 2 if the QEMU/GDB observation harness can run the gta4l
 candidate; otherwise path 1. The first implementation task is the
 qualification harness, not the block driver.
+
+**Result (2026-11-05): path 2 succeeded on Linux/QEMU.** The harness is
+`scripts/audit-gta4l-storage-interface.py` in this repository. Run it from
+the repository root as `python3.11 -B
+scripts/audit-gta4l-storage-interface.py`; it writes the artifacts under
+`out/gta4l/storage-abi/`, and `--skip-qemu` reuses an existing snapshot for
+an audit-only rerun. It drives the shared
+`scripts/audit-storage-interface.py` and
+`scripts/qemu-entry/gdb-stop.py` from the workspace UniXNU checkout (commit
+`2208649`), stages the existing QEMU ESP with the PMGR-linked kernel
+arguments, stops the actual candidate at `_bsd_init`, reads the live
+`IOBlockStorageDevice`/`IOService` metaclass memory and the system registers,
+and then runs the full audit. The default macOS-host invocation of the audit
+is unchanged.
+
+Inputs: candidate `ca983f7d…` and its plan, public source `e45fbe30…`,
+`OSMetaClass.cpo` `76526ced…`, the compile record,
+`scripts/linux/TargetConditionals.h`, QEMU 8.2.0 TCG and the 64 MiB AArch64
+pflash firmware (`f4cd2f77…`).
+
+Outputs under `out/gta4l/storage-abi/`:
+
+- `gdb-stop.json` `0592bd87…` — `pc=_bsd_init`, not interrupted, live
+  metaclass `0xfffffff006add1d0`, `IOService` metaclass
+  `0xfffffff007adb5b8`, `SCTLR_EL1=0x3454593d`, native 4K;
+- `interface-audit.json` `3582af13…` — 190 slots, 176 kernel bindings
+  (162 inherited + 14 pure virtual), vtable `0xfffffff005cb44c0`, live
+  instance sizes `0x90`/`0x88`, `disk_read_tested=false`;
+- `provenance.json` — input/output hashes.
+
+Portability changes in the shared harness: the audit accepts
+`--candidate/--plan/--snapshot/--metaclass-object/--output/--work-dir` and
+the Linux tool paths, uses `llvm-dwarfdump`, preserves the build's `-Wno-*`
+flags and downgrades clang 24's new
+`-Wmissing-designated-field-initializers` from `-Werror`; `gdb-stop` maps
+QEMU's current-EL `SCTLR` to `SCTLR_EL1` at the EL1 stop. The acceptance
+criteria are unchanged: the live superclass/size checks, the 190/176
+dispatch shape, the native-4K registers and the original executable hash all
+run.
+
+The gate is host-only: no block driver is linked, and block I/O, GPT
+publication and hardware remain unqualified. The next step is the host
+implementation in section 9.1.
 
 ### 2.3 Existing `IOBlockStorageDevice` implementations are the template
 
@@ -643,13 +687,16 @@ not part of F5 and must not be smuggled into the publication rung.
 
 ### 9.1 Implementation sequence
 
-1. **Qualification harness first.** Resolve the ABI path in section 2.2.1,
-   produce the `interface-audit.json` and the concrete bindings for the
-   gta4l candidate, and record their hashes. Stop if this cannot be done.
-2. **Host implementation.** Split the core archive, extract the platform
-   layer, add the C request-loop helper and the C++ adapter, add the guarded
-   personality and the `gta4l-emmc-block` payload mapping. Run the full host
-   battery, the ABI/bindings gate, the duplicate-symbol check, the
+1. **Qualification harness — DONE (2026-11-05).** Path 2 in section 2.2.1
+   succeeded on Linux/QEMU: `scripts/audit-gta4l-storage-interface.py`
+   produced the live `gdb-stop.json`, `derive.json`, `interface-audit.json`
+   and `provenance.json` for candidate `ca983f7d…`, and the audit passes the
+   190-slot/176-binding/live-metaclass/native-4K checks. The concrete
+   bindings are generated from the compiled driver object in step 2.
+2. **Host implementation — next.** Split the core archive, extract the
+   platform layer, add the C request-loop helper and the C++ adapter, add the
+   guarded personality and the `gta4l-emmc-block` payload mapping. Run the
+   full host battery, the ABI/bindings gate, the duplicate-symbol check, the
    request-path tests, the source-policy test and the probe-refactor
    regression.
 3. **Device candidate.** Build the `emmc-block-1` payload and boot image,

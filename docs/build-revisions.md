@@ -18,6 +18,12 @@ These are development integration pins, not hardware-qualified releases.
 The UniXNU and Mu-Silicium integration commits are pinned by SHA and are not on
 the shared `main` branches.
 
+The 2026-11-05 Linux/QEMU storage-ABI qualification uses the shared UniXNU
+checkout at commit `2208649` for `scripts/audit-storage-interface.py` and
+`scripts/qemu-entry/gdb-stop.py`. The board entry point is
+`scripts/audit-gta4l-storage-interface.py`; it writes
+`out/gta4l/storage-abi/` and does not change the integration pin above.
+
 ## Board policy
 
 The primary `board.toml` is Format 2:
