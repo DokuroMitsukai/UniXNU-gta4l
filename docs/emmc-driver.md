@@ -58,9 +58,9 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 160 scenarios and 98 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 168 scenarios and 104 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 139 scenarios and 69 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 151 scenarios and 77 mutation controls |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
@@ -2689,6 +2689,79 @@ record lands. Evidence:
 `out/gta4l/ram-root-emmc-probe-h13-evidence/` (`flash-record.json`,
 `device-run-record.json`, `device-run-transcript.txt`,
 `postflash-hashes.txt`, `postboot-reread.txt`).
+
+### 5.3.30 Stage-H14 rung-2 forced post-write drain (gta4l-emmc-probe=14, host batch 2026-11-04)
+
+The `gta4l-emmc-probe=14` stage is the second rung of the write-phase
+wedge ladder and implements the forced post-write CMD12/CMD13 drain
+sample named by the H13 record. It keeps the H13 form: the standard
+read-only identification once (no CMD3 retry), the unchanged stage-A
+content pass at 400 kHz/1-bit as the baseline, one record-only 1-bit
+CMD19 bus-test write (the 4-byte pattern block, first byte `0x5A`,
+compared as `0xA5`), one bounded SDHCI data-circuit reset
+(`SOFTWARE_RESET` ← `0x04` with the 100,000 us self-clear bound and the
+10 us poll step) and the post-reset `PRESENT_STATE`/`DAT_INHIBIT`
+sample. It then inserts the drain between the reset and the CMD14 read:
+one forced CMD12 `STOP_TRANSMISSION` (R1b: `RESP_SHORT_BUSY | CRC |
+INDEX`, argument 0) through the normal command engine with no ACMD12
+transfer-mode bit, followed, when the stop completed, by one CMD13
+`SEND_STATUS` (R1: `RESP_SHORT | CRC | INDEX`, RCA argument). One CMD14
+read with the existing pattern comparison and the block-0 recovery read
+follow, both record-only. The stage always emits `GTA4L-EMMC H14 REPORT`
+and stops; there is no on-device retry and no fall-through. The only
+card-facing write is the non-persistent CMD19 pattern; no CMD6, CMD18,
+CMD25 or user-data write is issued, and no card width or timing is
+changed. The stage parser accepts 1..14.
+
+The drain is local to `gta4l_emmc_post_write_drain()`; no other timeout
+path changes and `TIMEOUT_CONTROL` is untouched. The CMD12 entry wait
+checks only `COMMAND_INHIBIT`, the explicit SDHCI stop-command
+exemption, because an aborted data transfer may still hold
+`DAT_INHIBIT` while the command line is free; CMD13 keeps the normal
+both-inhibit wait. Each command has its own bounded window and captures
+its terminal tuple before the status clear, and a card-status bit in
+the R1 reply is recorded rather than promoted to a transport error. The
+rung-2 form is reached through
+`gta4l_emmc_bus_test_reset_drain()`, which shares the rung-1 body
+`gta4l_emmc_bus_test_reset()` keeps drain-free. The drain result lives in
+`struct gta4l_emmc_post_write_drain_result`; `status_result` is
+`GTA4L_EMMC_ERR_UNSUPPORTED` when CMD12 failed and CMD13 was not issued.
+The probe presets both drain results to that code when a reset or inhibit
+stop returns before the drain, so the report never prints a zeroed
+"success" for a command that did not run.
+
+Stop codes: 0 the recorded wedge, a clean reset and drain, and CMD14/Q
+passing; 10 the reset did not self-clear; 11 `DAT_INHIBIT` survived the
+reset; 12 the width/argument precondition refused the helper; 13 CMD12
+was silent (no R1 within the window); 14 CMD12 answered but CMD13
+failed; 15 the drain completed but CMD14 or the recovery read failed;
+16 the write completed normally and the rest passed; 17 the write failed
+with a non-timeout error. Reset and inhibit verdicts precede the drain;
+a non-timeout write verdict precedes the drain and CMD14 verdicts,
+matching the rung-1 precedence.
+
+The report carries the header (`rc`, `stop`, `mci`, `rca`, `cap`, `rev`,
+`hci`, `step`, `log`, `bw`), an `R` pre-rung line (`clk`, `hc`, `bw`,
+`es`), a `W` write line (`wrc`, `err`, `nrm`, `pst`), a `RST` reset line
+(`rc`, `wr`, `rb`, `it`, `pst`, `dinh`), a `C12` stop line (`rc`, `r1`,
+`err`, `nrm`, `pst`), a `C13` status line (`at`, `rc`, `r1`, `err`,
+`nrm`, `pst`), a `T` CMD14 line (`trc`, `tw`, `te`), a `Q` recovery line
+(`rc`, `qb0`), the shared `PAD` line and the terminal `FAIL` record.
+
+Host checks: the probe suite is 151 scenarios and 77 mutation controls
+(was 139/69), adding `probe-h14-pass`, `probe-h14-reset-stuck`,
+`probe-h14-inhibit`, `probe-h14-cmd12-silent`, `probe-h14-cmd12-crc`,
+`probe-h14-cmd13-fail`, `probe-h14-mismatch`, `probe-h14-read-crc`,
+`probe-h14-q-fail`, `probe-h14-write-crc` and `probe-h14-normal` plus the
+twelfth width materialization `report-width-h14`. The core suite is 168
+scenarios and 104 mutation controls (was 160/98), adding the clean,
+silent, CMD13-CRC, data-inhibit-exempt and uninitialized post-write
+drain cases plus the rung-2 reset-plus-drain pass, record-only silent
+drain and surviving-inhibit cases, with mutation controls for a skipped
+helper drain, a removed CMD12 DAT_INHIBIT exemption, a wrong stop-code
+mapping, a skipped CMD13, a lost R1 record and a wrong stop response
+type. The diagnostic wrapper and payload gate accept `emmc-probe-14`.
+No build, flash or boot was performed when the host batch landed.
 
 ## 6. Expected report
 

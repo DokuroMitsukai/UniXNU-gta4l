@@ -105,7 +105,7 @@ def main():
                                  'emmc-probe-7', 'emmc-probe-8',
                                  'emmc-probe-9', 'emmc-probe-10',
                                  'emmc-probe-11', 'emmc-probe-12',
-                                 'emmc-probe-13'),
+                                 'emmc-probe-13', 'emmc-probe-14'),
                         default='any',
                         help='require this board diagnostic argument in the payload')
     parser.add_argument('--force', action='store_true')

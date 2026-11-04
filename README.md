@@ -309,6 +309,23 @@ partition layout, payload policy and packaging.
   records are in `out/gta4l/ram-root-emmc-probe-h13-evidence/`. The next
   rung is the forced post-write CMD12/CMD13 drain sample, to be drafted
   only after this record lands.
+  The second wedge-ladder rung is H14 (`gta4l-emmc-probe=14`), implemented
+  and simulator-tested: it keeps the H13 form and inserts one forced CMD12
+  `STOP_TRANSMISSION` (R1b, argument 0, no ACMD12 transfer-mode bit) plus
+  one CMD13 `SEND_STATUS` (R1) between the post-reset sample and the
+  record-only CMD14/Q reads, while the post-reset inhibit is clear. The
+  CMD12 entry wait applies the SDHCI stop-command `DAT_INHIBIT` exemption;
+  CMD13 keeps the normal both-inhibit wait. It reports
+  (`GTA4L-EMMC H14 REPORT`) and stops with 0/10/11/12/13/14/15/16/17, and
+  it issues no CMD6, CMD18, CMD25 or user-data write and changes no card
+  width or timing. The drain is local to
+  `gta4l_emmc_post_write_drain()`; `TIMEOUT_CONTROL` is untouched. Core
+  168/104 (was 160/98); probe 151/77 (was 139/69); the
+  `report-width-h14` fixture is the twelfth width materialization. No
+  build, flash or boot was performed. The device run needs a fresh
+  explicit BOOT-only approval naming the CMD19 write, the data reset, the
+  forced CMD12 and CMD13, the CMD14 read and the block-0 recovery read;
+  F3 remains unproven.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

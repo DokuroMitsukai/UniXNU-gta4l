@@ -210,6 +210,17 @@ SCENARIOS = [
     'probe-h13-write-crc',
     'probe-h13-normal',
     'probe-h13-q-fail',
+    'probe-h14-pass',
+    'probe-h14-reset-stuck',
+    'probe-h14-inhibit',
+    'probe-h14-cmd12-silent',
+    'probe-h14-cmd12-crc',
+    'probe-h14-cmd13-fail',
+    'probe-h14-mismatch',
+    'probe-h14-read-crc',
+    'probe-h14-q-fail',
+    'probe-h14-write-crc',
+    'probe-h14-normal',
     'probe-b1c-success',
     'probe-b1c-pass',
     'probe-b1c-late-commit',
@@ -229,6 +240,7 @@ SCENARIOS = [
     'report-width-h9',
     'report-width-h12',
     'report-width-h13',
+    'report-width-h14',
     'report-width-budget-control',
 ]
 
@@ -244,6 +256,7 @@ WIDTH_SCENARIOS = (
     'report-width-h11',
     'report-width-h12',
     'report-width-h13',
+    'report-width-h14',
 )
 
 GUARD = '\tif (host.clocks_enabled != 0) {\n'
@@ -958,6 +971,77 @@ MUTATIONS = [
      'probe-h12-refused-pass',
      'the H12 pass did not issue exactly one byte-183 value-4 attempt',
      'core'),
+    ('h14-drain-skipped',
+     '\tif (drain != 0) {\n'
+     '\t\t/* Record-only here: the rung-2 caller owns the drain verdict,\n'
+     '\t\t * and CMD14 still runs so the report carries both samples. */\n'
+     '\t\t(void)gta4l_emmc_post_write_drain(host, drain);\n'
+     '\t}\n',
+     '\tif (drain != 0) {\n'
+     '\t\t/* drain removed by mutation */\n'
+     '\t\tdrain->status_result = GTA4L_EMMC_OK;\n'
+     '\t}\n',
+     'probe-h14-pass',
+     'the H14 rung-2 pass does not keep stop 0',
+     'core'),
+    ('h14-stop-result-silent',
+     '\t\tresult->stop_result = stop.result;\n',
+     '\t\tresult->stop_result = GTA4L_EMMC_OK;\n',
+     'probe-h14-cmd12-silent',
+     'the silent H14 CMD12 does not keep stop 13',
+     'core'),
+    ('h14-status-response-lost',
+     '\t\tresult->status_response = status.response;\n',
+     '\t\tresult->status_response = 0u;\n',
+     'probe-h14-pass',
+     'the H14 rung-2 pass lost the completed CMD13 drain',
+     'core'),
+    ('h14-stop-verdict-skipped',
+     '\t} else if (h14.drain.stop_result != GTA4L_EMMC_OK) {\n'
+     '\t\trc = h14.drain.stop_result;\n'
+     '\t\tstop = 13;\n'
+     '\t} else if (h14.drain.status_result != GTA4L_EMMC_OK) {\n',
+     '\t} else if (0) {\n'
+     '\t\trc = h14.drain.stop_result;\n'
+     '\t\tstop = 13;\n'
+     '\t} else if (h14.drain.status_result != GTA4L_EMMC_OK) {\n',
+     'probe-h14-cmd12-silent',
+     'the silent H14 CMD12 does not keep stop 13'),
+    ('h14-status-verdict-skipped',
+     '\t} else if (h14.drain.status_result != GTA4L_EMMC_OK) {\n'
+     '\t\trc = h14.drain.status_result;\n'
+     '\t\tstop = 14;\n'
+     '\t} else if ((h14.bus.test_result != GTA4L_EMMC_OK) ||\n',
+     '\t} else if (0) {\n'
+     '\t\trc = h14.drain.status_result;\n'
+     '\t\tstop = 14;\n'
+     '\t} else if ((h14.bus.test_result != GTA4L_EMMC_OK) ||\n',
+     'probe-h14-cmd13-fail',
+     'the H14 CMD13 failure does not keep stop 14'),
+    ('h14-q-verdict-skipped',
+     '\t} else if ((h14.bus.test_result != GTA4L_EMMC_OK) ||\n'
+     '\t    (h14.q_result != GTA4L_EMMC_OK) ||\n'
+     '\t    (h14.q_block0_sum != block0_sum)) {\n',
+     '\t} else if ((h14.bus.test_result != GTA4L_EMMC_OK) ||\n'
+     '\t    (block0_sum == 0u)) {\n',
+     'probe-h14-q-fail',
+     'the failed H14 recovery read does not keep stop 15'),
+    ('h14-normal-stop',
+     '\t} else if (h14.bus.write_result == GTA4L_EMMC_OK) {\n'
+     '\t\trc = GTA4L_EMMC_OK;\n'
+     '\t\tstop = 16;\n'
+     '\t} else {\n',
+     '\t} else if (h14.bus.write_result == GTA4L_EMMC_OK) {\n'
+     '\t\trc = GTA4L_EMMC_OK;\n'
+     '\t\tstop = 0;\n'
+     '\t} else {\n',
+     'probe-h14-normal',
+     'the H14 non-wedge write does not keep stop 16'),
+    ('h14-report-stop-code',
+     '\t    h14->drain.stop_result, h14->drain.stop_response,\n',
+     '\t    GTA4L_EMMC_OK, h14->drain.stop_response,\n',
+     'probe-h14-cmd12-silent',
+     'the silent H14 CMD12 lost its terminal tuple'),
 ]
 
 

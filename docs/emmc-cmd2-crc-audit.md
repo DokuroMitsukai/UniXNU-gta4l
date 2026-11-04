@@ -2593,6 +2593,46 @@ be drafted only after this record lands. Evidence:
 `device-run-record.json`, `device-run-transcript.txt`,
 `postflash-hashes.txt`, `postboot-reread.txt`).
 
+### 2.32 Stage-H14 host batch: forced post-write CMD12/CMD13 drain (2026-11-04)
+
+The stage-14 rung (`gta4l-emmc-probe=14`, driver §5.3.30) is the second
+write-phase recovery step and the forced drain sample named by the §2.31
+record. It keeps the H13 form — standard read-only identification once,
+the unchanged stage-A content pass at 400 kHz/1-bit, one record-only
+1-bit CMD19 write, one bounded SDHCI data-circuit reset
+(`SOFTWARE_RESET` ← `0x04`, self-clear poll), the post-reset
+`PRESENT_STATE`/`DAT_INHIBIT` sample — and inserts one forced CMD12
+`STOP_TRANSMISSION` (R1b) plus one CMD13 `SEND_STATUS` (R1) between the
+reset and the CMD14 read. The drain must precede CMD14 because a failed
+CMD14 re-latches the data inhibit. One CMD14 read and the block-0
+recovery read follow, both record-only. The stage always emits a
+`GTA4L-EMMC H14 REPORT` (R, W, RST, C12, C13, T, Q lines plus the shared
+PAD and terminal FAIL record) and stops with 0/10/11/12/13/14/15/16/17;
+it issues no CMD6, CMD18, CMD25 or user-data write and changes no card
+width or timing.
+
+The stop is issued through the normal command engine with no ACMD12
+transfer-mode bit, and its entry wait checks only `COMMAND_INHIBIT`: the
+SDHCI spec exempts CMD12 from `DAT_INHIBIT` because an aborted transfer
+can retain the data inhibit while the command line is free. CMD13 keeps
+the normal both-inhibit wait. The drain is local to
+`gta4l_emmc_post_write_drain()`; `gta4l_emmc_bus_test_reset_drain()`
+runs it after the reset and before CMD14, while `gta4l_emmc_bus_test_reset()`
+stays drain-free. No other timeout path changes and `TIMEOUT_CONTROL` is
+untouched, so the queued forced-`TOUTVAL=0` rung remains independent. A
+drain failure is recorded but does not suppress the record-only CMD14/Q
+reads; the probe owns the verdict.
+
+Host checks: the probe suite is 151 scenarios and 77 mutation controls
+(was 139/69), adding the eleven `probe-h14-*` rows plus the twelfth width
+materialization `report-width-h14`; the core suite is 168 scenarios and
+104 mutation controls (was 160/98). The diagnostic wrapper and payload
+gate accept `emmc-probe-14`. No build, flash or boot was performed when
+the host batch landed. The device run needs a fresh explicit BOOT-only
+approval naming the CMD19 write, the data reset, the forced CMD12 and
+CMD13, the CMD14 read and the block-0 recovery read; the stage-13
+approval does not carry over. F3 remains `[U]`.
+
 ## 3. Failure attribution: the CMD2 record and the CMD3 timeout
 
 ### 3.1 Command sequence

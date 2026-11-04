@@ -33,6 +33,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	struct gta4l_emmc_probe_h11 h11;
 	struct gta4l_emmc_probe_h12 h12;
 	struct gta4l_emmc_probe_h13 h13;
+	struct gta4l_emmc_probe_h14 h14;
 	struct gta4l_emmc_host host;
 	uint32_t index;
 
@@ -47,6 +48,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	memset(&h11, 0, sizeof(h11));
 	memset(&h12, 0, sizeof(h12));
 	memset(&h13, 0, sizeof(h13));
+	memset(&h14, 0, sizeof(h14));
 	memset(&host, 0, sizeof(host));
 	memset(block0, 0xFF, sizeof(block0));
 	memset(block1, 0xFF, sizeof(block1));
@@ -666,6 +668,57 @@ gta4l_emmc_probe_width_fixture(int form)
 		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		gta4l_emmc_probe_report_h13(&host, &probe, &h13,
+		    GTA4L_EMMC_ERR_UNSUPPORTED, 13);
+	} else if (form == 11) {
+		/* H14 form: the rung-2 write-phase wedge, the bounded data
+		 * reset, the post-reset present state, both forced drain
+		 * commands and the CMD14 read at their field bounds, and a
+		 * failed recovery read. */
+		h14.pre_clock = 0xFFFFu;
+		h14.pre_hc = 0xFFu;
+		h14.pre_bw = 0xFFu;
+		h14.pre_sum = 0xFFFFFFFFu;
+		h14.pre_qdsd = 0xFFFFFFFFu;
+		h14.pre_dll = 0xFFFFFFFFu;
+		h14.pre_dst = 0xFFFFFFFFu;
+		h14.bus.requested = 1u;
+		h14.bus.host_control = 0xFFu;
+		h14.bus.write_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+		h14.bus.write_error = 0xFFFFu;
+		h14.bus.write_normal = 0xFFFFu;
+		h14.bus.write_present = 0xFFFFFFFFu;
+		h14.bus.reset_result = GTA4L_EMMC_ERR_RESET;
+		h14.bus.reset_written = 0xFFu;
+		h14.bus.reset_readback = 0xFFu;
+		h14.bus.reset_iterations = 0xFFFFFFFFu;
+		h14.bus.post_present = 0xFFFFFFFFu;
+		h14.bus.dat_inhibit = 0xFFFFFFFFu;
+		h14.bus.test_result = GTA4L_EMMC_ERR_BUS_TEST;
+		h14.bus.test_word = 0xFFFFFFFFu;
+		h14.bus.test_expected = 0xFFFFFFFFu;
+		h14.drain.stop_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+		h14.drain.stop_response = 0xFFFFFFFFu;
+		h14.drain.stop_error = 0xFFFFu;
+		h14.drain.stop_normal = 0xFFFFu;
+		h14.drain.stop_present = 0xFFFFFFFFu;
+		h14.drain.status_attempted = 1u;
+		h14.drain.status_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+		h14.drain.status_response = 0xFFFFFFFFu;
+		h14.drain.status_error = 0xFFFFu;
+		h14.drain.status_normal = 0xFFFFu;
+		h14.drain.status_present = 0xFFFFFFFFu;
+		h14.q_result = GTA4L_EMMC_ERR_DATA_CRC;
+		h14.q_block0_sum = 0xFFFFFFFFu;
+		host.fail_valid = 1u;
+		host.fail_index = 0xFFFFFFFFu;
+		host.fail_argument = 0xFFFFFFFFu;
+		host.fail_command = 0xFFFFFFFFu;
+		host.fail_error = 0xFFFFu;
+		host.fail_normal = 0xFFFFu;
+		host.fail_present = 0xFFFFFFFFu;
+		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
+		gta4l_emmc_probe_report_h14(&host, &probe, &h14,
 		    GTA4L_EMMC_ERR_UNSUPPORTED, 13);
 	}
 }

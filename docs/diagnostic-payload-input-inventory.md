@@ -231,16 +231,16 @@ payload hash. Replay inputs:
 
 | Script | SHA-256 |
 | --- | --- |
-| `scripts/build-gta4l-diagnostic-payload.py` | `f6646e9a08f04cb56b9f2e1cce8f408bf2fef668b6e06485f03c941eb44060bb` |
-| `scripts/package-gta4l-diagnostic.py` | `761c4b858a6e06bf2cb3f23196b31fd484644e04cac3bb8a6057b8eb6ab70f95` |
+| `scripts/build-gta4l-diagnostic-payload.py` | `1275eec966c87826cd7a15a916ff1af7ca6498e5b10cd656600ce2feed1f38a1` |
+| `scripts/package-gta4l-diagnostic.py` | `562915b735c4399e23111badc40dbb057669ce464844201ff406bee4fc62d899` |
 | `scripts/check-gta4l-boot-image.py` | `879ee0ede5ddbebe4e24915c8720fa40a7b1e253642f6fd2a4d4dff937586bf4` |
-| `scripts/check-gta4l-payload.py` | `839e56324d0b7c494e6cef37104647655fe53f36cc5757672fecb017f45a0577` |
+| `scripts/check-gta4l-payload.py` | `ff85e81794adbd1e29dc08aeae813c798f95846c5fd015288d1c5e633be90481` |
 
 The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2`,
 `emmc-probe-3`, `emmc-probe-4`, `emmc-probe-5`, `emmc-probe-6`,
 `emmc-probe-7`, `emmc-probe-8`, `emmc-probe-9`, `emmc-probe-10`,
-`emmc-probe-11`, `emmc-probe-12` and `emmc-probe-13`, mapping to
-`gta4l-emmc-probe=1/2/3/4/5/6/7/8/9/10/11/12/13` (the
+`emmc-probe-11`, `emmc-probe-12`, `emmc-probe-13` and `emmc-probe-14`, mapping to
+`gta4l-emmc-probe=1/2/3/4/5/6/7/8/9/10/11/12/13/14` (the
 `emmc-probe-4` mapping was added for the 2026-11-02 Stage-B1 build,
 `emmc-probe-5` for the Stage-B1C continuation build, `emmc-probe-6` for the
 1-bit CMD19/CMD14 discriminator build, `emmc-probe-7` for the data-timeout
@@ -249,7 +249,8 @@ audit build, `emmc-probe-8` for the Stage-B2 HS-timing build,
 `emmc-probe-10` for the Stage-H10 width-at-HS continuation build,
 `emmc-probe-11` for the Stage-H11 width-value continuation build,
 `emmc-probe-12` for the Stage-H12 record-only DDR attempt build and
-`emmc-probe-13` for the Stage-H13 rung-1 write-phase recovery build). The stage-2
+`emmc-probe-13` for the Stage-H13 rung-1 write-phase recovery build, and
+`emmc-probe-14` for the Stage-H14 rung-2 forced post-write drain build). The stage-2
 image built on
 2026-10-31 is
 `out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img`

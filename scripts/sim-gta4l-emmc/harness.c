@@ -1248,11 +1248,16 @@ sim_command(struct sim *sim, uint16_t command)
 	}
 	if (index == GTA4L_EMMC_CMD12) {
 		/* Count the stop attempt even when the encoding or an injected
-		 * error rejects it, and end the modeled data phase. */
+		 * error rejects it, and end the modeled data phase. A completed
+		 * stop command also releases the wedged-write data inhibit:
+		 * SDHCI exempts CMD12 from the DAT_INHIBIT entry check because
+		 * the command line is free, and the aborted transfer ends with
+		 * the stop completion. */
 		sim->mb_stop_count++;
 		sim->mb_stop_normal_reads = 0;
 		sim->mb_active = 0;
 		sim->mb_dat_inhibit = 0;
+		sim->bus_test_dat_inhibit = 0;
 	}
 
 	if (!sim_command_ok(sim, index, argument, (uint16_t)flags)) {
@@ -2186,6 +2191,7 @@ main(int argc, char **argv)
 	uint8_t ext[GTA4L_EMMC_EXT_CSD_BYTES];
 	struct gta4l_emmc_bus_result bus;
 	struct gta4l_emmc_bus_reset_result bus_reset;
+	struct gta4l_emmc_post_write_drain_result drain;
 	struct gta4l_emmc_hs_result hs;
 	static uint8_t mb_blocks[SIM_MB_TEST_BLOCKS * GTA4L_EMMC_BLOCK_BYTES];
 	int result;
@@ -2674,6 +2680,17 @@ main(int argc, char **argv)
 		sim.bus_test_reset_no_inhibit_clear = 1;
 	} else if (scenario_is(scenario, "bus-reset-write-crc")) {
 		sim.bus_test_data_crc = 1;
+	} else if (scenario_is(scenario, "post-drain-cmd12-silent")) {
+		sim.mb_no_cc = 1;
+	} else if (scenario_is(scenario, "bus-reset-drain-pass") ||
+	    scenario_is(scenario, "bus-reset-drain-cmd12-silent")) {
+		sim.bus_test_write_timeout = 1;
+		if (scenario_is(scenario, "bus-reset-drain-cmd12-silent")) {
+			sim.mb_no_cc = 1;
+		}
+	} else if (scenario_is(scenario, "bus-reset-drain-inhibit")) {
+		sim.bus_test_write_timeout = 1;
+		sim.bus_test_reset_no_inhibit_clear = 1;
 	}
 
 	sim.trace_armed = 1;
@@ -2740,6 +2757,14 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "bus-reset-width") ||
 	    scenario_is(scenario, "bus-reset-arg") ||
 	    scenario_is(scenario, "bus-reset-without-init") ||
+	    scenario_is(scenario, "post-drain-clean") ||
+	    scenario_is(scenario, "post-drain-cmd12-silent") ||
+	    scenario_is(scenario, "post-drain-cmd13-crc") ||
+	    scenario_is(scenario, "post-drain-inhibit-exempt") ||
+	    scenario_is(scenario, "post-drain-without-init") ||
+	    scenario_is(scenario, "bus-reset-drain-pass") ||
+	    scenario_is(scenario, "bus-reset-drain-cmd12-silent") ||
+	    scenario_is(scenario, "bus-reset-drain-inhibit") ||
 	    scenario_is(scenario, "bus-test-width") ||
 	    scenario_is(scenario, "bus-test-1bit") ||
 	    scenario_is(scenario, "bus-test-1bit-width") ||
@@ -3989,6 +4014,159 @@ main(int argc, char **argv)
 		    "uninitialized host accepted a rung-1 reset");
 		check(sim.cmd19_count == 0u && sim.cmd14_count == 0u,
 		    "uninitialized host issued a rung-1 command");
+	} else if (scenario_is(scenario, "post-drain-clean")) {
+		memset(&drain, 0, sizeof(drain));
+		result = gta4l_emmc_post_write_drain(&host, &drain);
+		check(result == GTA4L_EMMC_OK,
+		    "post-write drain did not complete");
+		check(drain.stop_result == GTA4L_EMMC_OK &&
+		    drain.stop_response == 0x00000900u &&
+		    drain.stop_error == 0u &&
+		    drain.stop_normal ==
+		    (GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_TC),
+		    "clean CMD12 sample mismatch");
+		check((drain.stop_present &
+		    (GTA4L_EMMC_PRESENT_CMD_INHIBIT |
+		    GTA4L_EMMC_PRESENT_DAT_INHIBIT)) == 0u,
+		    "clean CMD12 sample kept an inhibit bit");
+		check(drain.status_attempted == 1 &&
+		    drain.status_result == GTA4L_EMMC_OK &&
+		    drain.status_response == 0x00000900u &&
+		    drain.status_error == 0u &&
+		    drain.status_normal == GTA4L_EMMC_INT_CC,
+		    "clean CMD13 sample mismatch");
+		check((drain.status_present &
+		    (GTA4L_EMMC_PRESENT_CMD_INHIBIT |
+		    GTA4L_EMMC_PRESENT_DAT_INHIBIT)) == 0u,
+		    "clean CMD13 sample kept an inhibit bit");
+		check(host.card_status == 0x00000900u,
+		    "clean drain did not update the card status");
+		check(sim.mb_stop_count == 1,
+		    "clean drain did not issue exactly one CMD12");
+		check(sim.command_error == 0,
+		    "clean drain used a wrong command encoding");
+	} else if (scenario_is(scenario, "post-drain-cmd12-silent")) {
+		memset(&drain, 0, sizeof(drain));
+		result = gta4l_emmc_post_write_drain(&host, &drain);
+		check(result == GTA4L_EMMC_ERR_CMD_TIMEOUT,
+		    "silent CMD12 was not reported as a timeout");
+		check(drain.stop_result == GTA4L_EMMC_ERR_CMD_TIMEOUT &&
+		    drain.stop_response == 0u &&
+		    drain.stop_error == 0u &&
+		    drain.stop_normal == GTA4L_EMMC_INT_TC,
+		    "silent CMD12 terminal tuple mismatch");
+		check(drain.status_attempted == 0 &&
+		    drain.status_result == GTA4L_EMMC_ERR_UNSUPPORTED,
+		    "silent CMD12 still issued CMD13");
+		check(sim.mb_stop_count == 1,
+		    "silent CMD12 did not issue exactly one stop");
+		check(sim.command_error == 0,
+		    "silent CMD12 used a wrong command encoding");
+	} else if (scenario_is(scenario, "post-drain-cmd13-crc")) {
+		sim.cmd_crc_index = GTA4L_EMMC_CMD13;
+		memset(&drain, 0, sizeof(drain));
+		result = gta4l_emmc_post_write_drain(&host, &drain);
+		check(result == GTA4L_EMMC_ERR_CMD_CRC,
+		    "CMD13 CRC was not reported");
+		check(drain.stop_result == GTA4L_EMMC_OK &&
+		    drain.stop_response == 0x00000900u,
+		    "CMD13 CRC lost the completed stop");
+		check(drain.status_attempted == 1 &&
+		    drain.status_result == GTA4L_EMMC_ERR_CMD_CRC &&
+		    (drain.status_error &
+		    GTA4L_EMMC_INT_ERR_CMD_CRC) != 0u &&
+		    drain.status_response == 0u,
+		    "CMD13 CRC terminal tuple mismatch");
+		check(host.card_status == 0x00000900u,
+		    "CMD13 CRC overwrote the card status");
+		check(sim.mb_stop_count == 1,
+		    "CMD13 CRC did not issue exactly one stop");
+	} else if (scenario_is(scenario, "post-drain-inhibit-exempt")) {
+		/* The command line is free while DAT_INHIBIT is held: the
+		 * forced stop must still be issued, exactly as SDHCI allows. */
+		sim.bus_test_dat_inhibit = 1;
+		memset(&drain, 0, sizeof(drain));
+		result = gta4l_emmc_post_write_drain(&host, &drain);
+		check(result == GTA4L_EMMC_OK,
+		    "CMD12 was refused on a data inhibit");
+		check(drain.stop_result == GTA4L_EMMC_OK &&
+		    drain.stop_response == 0x00000900u,
+		    "data-inhibit stop did not complete");
+		check(drain.status_result == GTA4L_EMMC_OK &&
+		    drain.status_response == 0x00000900u,
+		    "data-inhibit status did not complete");
+		check(sim.bus_test_dat_inhibit == 0,
+		    "the stop completion did not release the data inhibit");
+		check(sim.mb_stop_count == 1,
+		    "the data-inhibit case issued no stop");
+	} else if (scenario_is(scenario, "post-drain-without-init")) {
+		struct gta4l_emmc_host blank;
+		struct gta4l_emmc_post_write_drain_result blank_drain;
+
+		memset(&blank, 0, sizeof(blank));
+		memset(&blank_drain, 0, sizeof(blank_drain));
+		blank.ops = &sim_ops;
+		blank.context = &sim;
+		result = gta4l_emmc_post_write_drain(&blank, &blank_drain);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "uninitialized host accepted a post-write drain");
+		check(sim.mb_stop_count == 0,
+		    "uninitialized host issued a drain command");
+	} else if (scenario_is(scenario, "bus-reset-drain-pass")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		memset(&drain, 0, sizeof(drain));
+		result = gta4l_emmc_bus_test_reset_drain(&host, 1u,
+		    &bus_reset, &drain);
+		check(result == GTA4L_EMMC_OK,
+		    "rung-2 reset plus drain did not pass");
+		check(bus_reset.write_result == GTA4L_EMMC_ERR_DATA_TIMEOUT &&
+		    bus_reset.reset_result == GTA4L_EMMC_OK &&
+		    bus_reset.dat_inhibit == 0u &&
+		    bus_reset.test_result == GTA4L_EMMC_OK &&
+		    bus_reset.test_word == 0x000000A5u,
+		    "rung-2 reset sample mismatch");
+		check(drain.stop_result == GTA4L_EMMC_OK &&
+		    drain.stop_response == 0x00000900u &&
+		    drain.status_attempted == 1 &&
+		    drain.status_result == GTA4L_EMMC_OK &&
+		    drain.status_response == 0x00000900u,
+		    "rung-2 drain sample mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u &&
+		    sim.mb_stop_count == 1,
+		    "rung-2 reset plus drain command counts mismatch");
+	} else if (scenario_is(scenario, "bus-reset-drain-cmd12-silent")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		memset(&drain, 0, sizeof(drain));
+		result = gta4l_emmc_bus_test_reset_drain(&host, 1u,
+		    &bus_reset, &drain);
+		check(result == GTA4L_EMMC_OK,
+		    "a record-only silent drain changed the rung-1 verdict");
+		check(bus_reset.reset_result == GTA4L_EMMC_OK &&
+		    bus_reset.test_result == GTA4L_EMMC_OK,
+		    "silent drain lost the reset or CMD14 result");
+		check(drain.stop_result == GTA4L_EMMC_ERR_CMD_TIMEOUT &&
+		    drain.status_attempted == 0 &&
+		    drain.status_result == GTA4L_EMMC_ERR_UNSUPPORTED,
+		    "silent drain sample mismatch");
+		check(sim.cmd19_count == 1u && sim.cmd14_count == 1u &&
+		    sim.mb_stop_count == 1,
+		    "silent drain command counts mismatch");
+	} else if (scenario_is(scenario, "bus-reset-drain-inhibit")) {
+		memset(&bus_reset, 0, sizeof(bus_reset));
+		memset(&drain, 0, sizeof(drain));
+		result = gta4l_emmc_bus_test_reset_drain(&host, 1u,
+		    &bus_reset, &drain);
+		check(result == GTA4L_EMMC_ERR_INHIBIT,
+		    "surviving data inhibit did not stop the rung-2 helper");
+		check(bus_reset.reset_result == GTA4L_EMMC_OK &&
+		    bus_reset.dat_inhibit ==
+		    GTA4L_EMMC_PRESENT_DAT_INHIBIT,
+		    "surviving data inhibit lost its post-reset evidence");
+		check(drain.stop_result == 0 &&
+		    drain.status_attempted == 0,
+		    "surviving data inhibit still ran the drain");
+		check(sim.mb_stop_count == 0 && sim.cmd14_count == 0u,
+		    "surviving data inhibit issued a drain or CMD14");
 	} else if (scenario_is(scenario, "bus-test-1bit-width")) {
 		host.bus_width = 1u;
 		result = gta4l_emmc_bus_test(&host, 1u, &bus);

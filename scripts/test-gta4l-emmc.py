@@ -180,6 +180,14 @@ SCENARIOS = [
     'bus-reset-width',
     'bus-reset-arg',
     'bus-reset-without-init',
+    'post-drain-clean',
+    'post-drain-cmd12-silent',
+    'post-drain-cmd13-crc',
+    'post-drain-inhibit-exempt',
+    'post-drain-without-init',
+    'bus-reset-drain-pass',
+    'bus-reset-drain-cmd12-silent',
+    'bus-reset-drain-inhibit',
     'hs-timing-enter',
     'hs-timing-stuck',
     'hs-timing-cmd6-error',
@@ -787,8 +795,10 @@ def main() -> int:
              '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n',
              'Gta4lEmmc.c', (), 'cmd7-terminal-change'),
             ('cmd7-cc-only-success',
+             '\trecord_cmd7 = (index == GTA4L_EMMC_CMD7);\n'
              '\tbusy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==\n'
              '\t    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);\n',
+             '\trecord_cmd7 = (index == GTA4L_EMMC_CMD7);\n'
              '\tbusy = 0;\n',
              'Gta4lEmmc.c', (), 'cmd7-cc-only'),
             ('cmd7-accept-tc-only',
@@ -893,13 +903,17 @@ def main() -> int:
              '\t\t}\n',
              'Gta4lEmmc.c', (), 'cmd7-late-tc'),
             ('cmd7-loose-response-type',
+             '\trecord_cmd7 = (index == GTA4L_EMMC_CMD7);\n'
              '\tbusy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==\n'
              '\t    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);\n',
+             '\trecord_cmd7 = (index == GTA4L_EMMC_CMD7);\n'
              '\tbusy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) != 0);\n',
              'Gta4lEmmc.c', (), 'success'),
             ('cmd7-early-command',
+             '\trecord_cmd7 = (index == GTA4L_EMMC_CMD7);\n'
              '\tbusy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==\n'
              '\t    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);\n',
+             '\trecord_cmd7 = (index == GTA4L_EMMC_CMD7);\n'
              '\tbusy = 0;\n',
              'Gta4lEmmc.c', (), 'cmd7-delayed-release'),
             ('data-sector-reserved-accepted',
@@ -1167,6 +1181,48 @@ def main() -> int:
              'GTA4L_EMMC_RESET_DATA              0x04u',
              'GTA4L_EMMC_RESET_DATA              0x01u',
              'Gta4lEmmc.h', (), 'bus-reset-inhibit'),
+            ('post-drain-helper-skipped',
+             '\tif (drain != 0) {\n'
+             '\t\t/* Record-only here: the rung-2 caller owns the drain verdict,\n'
+             '\t\t * and CMD14 still runs so the report carries both samples. */\n'
+             '\t\t(void)gta4l_emmc_post_write_drain(host, drain);\n'
+             '\t}\n',
+             '\tif (drain != 0) {\n'
+             '\t\t/* drain removed by mutation */\n'
+             '\t\tdrain->status_result = GTA4L_EMMC_OK;\n'
+             '\t}\n',
+             'Gta4lEmmc.c', (), 'bus-reset-drain-pass'),
+            ('post-drain-dat-exempt',
+             '\t    GTA4L_EMMC_CMD_INDEX, 1, &stop);\n',
+             '\t    GTA4L_EMMC_CMD_INDEX, 0, &stop);\n',
+             'Gta4lEmmc.c', (), 'post-drain-inhibit-exempt'),
+            ('post-drain-stop-result',
+             '\t\tresult->stop_result = stop.result;\n',
+             '\t\tresult->stop_result = GTA4L_EMMC_OK;\n',
+             'Gta4lEmmc.c', (), 'post-drain-cmd12-silent'),
+            ('post-drain-status-skipped',
+             '\trc = gta4l_emmc_drain_command(host, GTA4L_EMMC_CMD13,\n'
+             '\t    host->rca << 16, GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |\n'
+             '\t    GTA4L_EMMC_CMD_INDEX, 0, &status);\n',
+             '\trc = GTA4L_EMMC_OK;\n'
+             '\tstatus.result = GTA4L_EMMC_OK;\n'
+             '\tstatus.response = 0u;\n'
+             '\tstatus.error = 0u;\n'
+             '\tstatus.normal = 0u;\n'
+             '\tstatus.present = 0u;\n',
+             'Gta4lEmmc.c', (), 'post-drain-clean'),
+            ('post-drain-status-response',
+             '\t\tresult->status_response = status.response;\n',
+             '\t\tresult->status_response = 0u;\n',
+             'Gta4lEmmc.c', (), 'post-drain-clean'),
+            ('post-drain-stop-type',
+             '\trc = gta4l_emmc_drain_command(host, GTA4L_EMMC_CMD12, 0,\n'
+             '\t    GTA4L_EMMC_CMD_RESP_SHORT_BUSY | GTA4L_EMMC_CMD_CRC |\n'
+             '\t    GTA4L_EMMC_CMD_INDEX, 1, &stop);\n',
+             '\trc = gta4l_emmc_drain_command(host, GTA4L_EMMC_CMD12, 0,\n'
+             '\t    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |\n'
+             '\t    GTA4L_EMMC_CMD_INDEX, 1, &stop);\n',
+             'Gta4lEmmc.c', (), 'post-drain-clean'),
             ('hs-no-readback',
              '\tif (readback != timing) {\n',
              '\tif (0) {\n',

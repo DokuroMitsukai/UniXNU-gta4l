@@ -689,6 +689,45 @@ struct gta4l_emmc_bus_reset_result {
 int gta4l_emmc_bus_test_reset(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_reset_result *result);
 
+/* Evidence for the forced post-write drain: one CMD12 STOP_TRANSMISSION
+ * (R1b) followed, when the stop completed, by one CMD13 SEND_STATUS (R1).
+ * The CMD12 entry wait checks only COMMAND_INHIBIT; SDHCI exempts the stop
+ * command from DAT_INHIBIT because an aborted data transfer can retain it
+ * while the command line is free. The terminal tuple for each command is
+ * captured before the status clear. `status_result` is
+ * GTA4L_EMMC_ERR_UNSUPPORTED when CMD12 failed and CMD13 was not issued. */
+struct gta4l_emmc_post_write_drain_result {
+	int      stop_result;      /* CMD12 result */
+	uint32_t stop_response;    /* CMD12 R1 response */
+	uint16_t stop_error;       /* terminal ERROR_INT_STATUS */
+	uint16_t stop_normal;      /* terminal NORMAL_INT_STATUS */
+	uint32_t stop_present;     /* terminal PRESENT_STATE */
+	int      status_attempted; /* CMD13 was issued */
+	int      status_result;    /* CMD13 result */
+	uint32_t status_response;  /* CMD13 R1 response */
+	uint16_t status_error;     /* terminal ERROR_INT_STATUS */
+	uint16_t status_normal;    /* terminal NORMAL_INT_STATUS */
+	uint32_t status_present;   /* terminal PRESENT_STATE */
+};
+
+/* Force the post-write drain: one CMD12 and, when it completed, one CMD13.
+ * The drain is local to this diagnostic helper, changes no timeout path and
+ * records card-status bits instead of promoting them to a transport error.
+ * Returns OK only when both commands completed. */
+int gta4l_emmc_post_write_drain(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_post_write_drain_result *result);
+
+/* The rung-2 form of the write-phase recovery: the rung-1 CMD19 write and
+ * bounded data-circuit reset, the post-reset present-state sample, the
+ * forced CMD12/CMD13 drain, then the rung-1 CMD14 read. The drain runs
+ * after the reset while the post-reset inhibit is clear and before CMD14,
+ * because a failed CMD14 can re-latch DAT_INHIBIT. A reset or inhibit
+ * failure returns before the drain; a drain failure is recorded in
+ * `drain` but does not suppress the record-only CMD14 read. */
+int gta4l_emmc_bus_test_reset_drain(struct gta4l_emmc_host *host,
+    uint32_t bits, struct gta4l_emmc_bus_reset_result *result,
+    struct gta4l_emmc_post_write_drain_result *drain);
+
 /* Evidence for one HS_TIMING rung step. `hs_before`/`hs_after` are EXT_CSD
  * byte 185 read before and after the CMD6 switch; the RCG fields are the GCC
  * SDCC1 APPS source configuration, because CLOCK_CONTROL carries only the

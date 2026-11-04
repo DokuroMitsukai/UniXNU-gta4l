@@ -2011,14 +2011,234 @@ gta4l_emmc_bus_test(struct gta4l_emmc_host *host, uint32_t bits,
 	return GTA4L_EMMC_OK;
 }
 
+struct gta4l_emmc_drain_sample {
+	int      result;
+	uint32_t response;
+	uint16_t error;
+	uint16_t normal;
+	uint32_t present;
+};
+
+/* One bounded drain command. `skip_dat_inhibit` is the SDHCI stop-command
+ * exemption: CMD12 may be issued while a data transfer still holds
+ * DAT_INHIBIT, because the command line itself is free. CMD13 keeps the
+ * normal both-inhibit entry wait. The terminal tuple is captured before the
+ * status clear; a card-status bit is left in the response and is not
+ * promoted to a transport error. */
+static int
+gta4l_emmc_drain_command(struct gta4l_emmc_host *host, uint32_t index,
+    uint32_t argument, uint16_t flags, int skip_dat_inhibit,
+    struct gta4l_emmc_drain_sample *sample)
+{
+	uint16_t command;
+	uint16_t normal = 0;
+	uint16_t error = 0;
+	uint32_t present = 0;
+	uint32_t response = 0;
+	uint32_t iterations;
+	uint32_t step;
+	int busy;
+	int cc_seen;
+	int tc_seen;
+	int rc;
+
+	command = (uint16_t)((index << 8) | flags);
+	busy = ((flags & GTA4L_EMMC_CMD_RESP_TYPE_MASK) ==
+	    GTA4L_EMMC_CMD_RESP_SHORT_BUSY);
+	cc_seen = 0;
+	tc_seen = 0;
+	if (sample != 0) {
+		sample->result = GTA4L_EMMC_OK;
+		sample->response = 0;
+		sample->error = 0;
+		sample->normal = 0;
+		sample->present = 0;
+	}
+
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_CMD_TIMEOUT_US);
+	for (step = 0; step < iterations; step++) {
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		if ((present & GTA4L_EMMC_PRESENT_CMD_INHIBIT) == 0) {
+			if ((skip_dat_inhibit != 0) ||
+			    ((present & GTA4L_EMMC_PRESENT_DAT_INHIBIT) == 0)) {
+				break;
+			}
+		}
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+	}
+	if (step == iterations) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		gta4l_emmc_record_failure(host, index, argument, command, error,
+		    normal, present);
+		if (sample != 0) {
+			sample->result = GTA4L_EMMC_ERR_INHIBIT;
+			sample->error = error;
+			sample->normal = normal;
+			sample->present = present;
+		}
+		return GTA4L_EMMC_ERR_INHIBIT;
+	}
+
+	/* A stale data error may still be latched. It belongs to the write
+	 * phase and is already in the first-failure record, so clear before
+	 * the drain command and observe only this command below. */
+	gta4l_emmc_clear_interrupts(host);
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ARGUMENT, argument);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_COMMAND, command);
+	gta4l_emmc_barrier(host);
+
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_CMD_TIMEOUT_US);
+	for (step = 0; step < iterations; step++) {
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			normal = gta4l_emmc_read16(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			gta4l_emmc_record_failure(host, index, argument,
+			    command, error, normal, present);
+			gta4l_emmc_clear_interrupts(host);
+			rc = gta4l_emmc_map_error(error, 0);
+			if (sample != 0) {
+				sample->result = rc;
+				sample->response = response;
+				sample->error = error;
+				sample->normal = normal;
+				sample->present = present;
+			}
+			return rc;
+		}
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		if ((cc_seen == 0) && ((normal & GTA4L_EMMC_INT_CC) != 0)) {
+			response = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE);
+			cc_seen = 1;
+		}
+		if ((normal & GTA4L_EMMC_INT_TC) != 0) {
+			tc_seen = 1;
+		}
+		if ((cc_seen != 0) && ((busy == 0) || (tc_seen != 0))) {
+			break;
+		}
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+	}
+
+	error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+	normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+	present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_PRESENT_STATE);
+	if ((cc_seen == 0) || ((busy != 0) && (tc_seen == 0))) {
+		gta4l_emmc_record_failure(host, index, argument, command, error,
+		    normal, present);
+		gta4l_emmc_clear_interrupts(host);
+		if (sample != 0) {
+			sample->result = GTA4L_EMMC_ERR_CMD_TIMEOUT;
+			sample->response = response;
+			sample->error = error;
+			sample->normal = normal;
+			sample->present = present;
+		}
+		return GTA4L_EMMC_ERR_CMD_TIMEOUT;
+	}
+	if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+		gta4l_emmc_record_failure(host, index, argument, command, error,
+		    normal, present);
+		gta4l_emmc_clear_interrupts(host);
+		rc = gta4l_emmc_map_error(error, 0);
+		if (sample != 0) {
+			sample->result = rc;
+			sample->response = response;
+			sample->error = error;
+			sample->normal = normal;
+			sample->present = present;
+		}
+		return rc;
+	}
+	gta4l_emmc_clear_interrupts(host);
+	if (sample != 0) {
+		sample->result = GTA4L_EMMC_OK;
+		sample->response = response;
+		sample->error = error;
+		sample->normal = normal;
+		sample->present = present;
+	}
+	return GTA4L_EMMC_OK;
+}
+
+int
+gta4l_emmc_post_write_drain(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_post_write_drain_result *result)
+{
+	struct gta4l_emmc_drain_sample stop;
+	struct gta4l_emmc_drain_sample status;
+	const struct gta4l_emmc_post_write_drain_result zero = { 0 };
+	int rc;
+
+	if ((host == 0) || (host->initialized == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if (result != 0) {
+		*result = zero;
+		result->status_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+	}
+
+	rc = gta4l_emmc_drain_command(host, GTA4L_EMMC_CMD12, 0,
+	    GTA4L_EMMC_CMD_RESP_SHORT_BUSY | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX, 1, &stop);
+	if (result != 0) {
+		result->stop_result = stop.result;
+		result->stop_response = stop.response;
+		result->stop_error = stop.error;
+		result->stop_normal = stop.normal;
+		result->stop_present = stop.present;
+	}
+	if (rc != GTA4L_EMMC_OK) {
+		return rc;
+	}
+
+	if (result != 0) {
+		result->status_attempted = 1;
+	}
+	rc = gta4l_emmc_drain_command(host, GTA4L_EMMC_CMD13,
+	    host->rca << 16, GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX, 0, &status);
+	if (result != 0) {
+		result->status_result = status.result;
+		result->status_response = status.response;
+		result->status_error = status.error;
+		result->status_normal = status.normal;
+		result->status_present = status.present;
+	}
+	if (status.result == GTA4L_EMMC_OK) {
+		host->card_status = status.response;
+	}
+	return rc;
+}
+
 /* CMD19 write, bounded data-circuit reset and CMD14 read. This is the
  * rung-1 recovery form of the bus test: the write phase may end in the
  * recorded CC + BufferWriteReady timeout with no TC and no error bit, so
  * the data circuit is reset before the read half is attempted. The reset
- * is local to this diagnostic helper; no other timeout path changes. */
-int
-gta4l_emmc_bus_test_reset(struct gta4l_emmc_host *host, uint32_t bits,
-    struct gta4l_emmc_bus_reset_result *result)
+ * is local to this diagnostic helper; no other timeout path changes. When
+ * `drain` is supplied, the rung-2 CMD12/CMD13 drain runs after the
+ * post-reset sample and before CMD14; its verdict is the caller's. */
+static int
+gta4l_emmc_bus_test_reset_common(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_reset_result *result,
+    struct gta4l_emmc_post_write_drain_result *drain)
 {
 	uint8_t pattern[GTA4L_EMMC_BUS_TEST_8_BYTES];
 	uint8_t actual[GTA4L_EMMC_BUS_TEST_8_BYTES];
@@ -2140,6 +2360,12 @@ gta4l_emmc_bus_test_reset(struct gta4l_emmc_host *host, uint32_t bits,
 		return GTA4L_EMMC_ERR_INHIBIT;
 	}
 
+	if (drain != 0) {
+		/* Record-only here: the rung-2 caller owns the drain verdict,
+		 * and CMD14 still runs so the report carries both samples. */
+		(void)gta4l_emmc_post_write_drain(host, drain);
+	}
+
 	rc = gta4l_emmc_read_data(host, GTA4L_EMMC_CMD14, 0,
 	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
 	    GTA4L_EMMC_CMD_INDEX, actual, length, response);
@@ -2180,6 +2406,21 @@ gta4l_emmc_bus_test_reset(struct gta4l_emmc_host *host, uint32_t bits,
 	}
 	gta4l_emmc_log(host, GTA4L_EMMC_LOG_BUS, bits, test_word);
 	return GTA4L_EMMC_OK;
+}
+
+int
+gta4l_emmc_bus_test_reset(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_reset_result *result)
+{
+	return gta4l_emmc_bus_test_reset_common(host, bits, result, 0);
+}
+
+int
+gta4l_emmc_bus_test_reset_drain(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_reset_result *result,
+    struct gta4l_emmc_post_write_drain_result *drain)
+{
+	return gta4l_emmc_bus_test_reset_common(host, bits, result, drain);
 }
 
 int
