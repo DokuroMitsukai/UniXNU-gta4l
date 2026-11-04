@@ -402,6 +402,15 @@ partition layout, payload policy and packaging.
   unchanged tail, RECOVERY/EFS/sec_efs unchanged, battery 100%). The payload
   contract checker now derives its diagnostic list from the name map after
   the first build was refused for missing stage 17.
+  The Stage-C/F5 publication survey is in
+  [docs/gta4l-storage-publication-design.md](docs/gta4l-storage-publication-design.md):
+  it finds that `IOStorageFamily` (including `IOBlockStorageDriver`,
+  `IOGUIDPartitionScheme` and `IOMediaBSDClient`) is already prelinked, that
+  `NativeRamBlock`/`NativeVirtioBlock` pin the `IOBlockStorageDevice` shape,
+  and that the smallest gta4l path is a read-only `IOResources`-matched
+  block driver over the existing CMD17 core, with the personality behind a
+  new guarded kernel-config entry. It is a host-only design: no publication,
+  code, build or device run yet.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

@@ -3218,6 +3218,12 @@ Raw H17 evidence stays outside the tracked tree at
 `out/gta4l/ram-root-emmc-probe-h17-evidence/` (`device-run-transcript.txt`,
 `device-run-record.json`, `flash-record.json`, build provenance and hashes).
 
+The Stage-C/F5 publication design is a separate host-only document:
+`docs/gta4l-storage-publication-design.md`. It surveys the prelinked
+IOStorageFamily personalities, the in-tree `IOBlockStorageDevice` templates
+and the existing CMD17 core, and proposes a read-only publication rung with
+no code or device action yet.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
