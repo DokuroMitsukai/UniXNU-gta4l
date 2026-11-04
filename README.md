@@ -389,13 +389,19 @@ partition layout, payload policy and packaging.
   codes are 0/10/11/12/13/14/15/16, with 10 (baseline read failed) and 13
   (bus test) the additions. No HS, DDR, 8-bit, CMD18, CMD25 or
   user-data write. Core 179/104 and probe 163/77. **4-bit SDR sector reads
-  are measured `[C]`**; F3 remains `[U]` until the CMD19/CMD14 round trip is
-  measured on hardware. The H17 image (`13938e49…`, payload `72f6e2d4…` 7/7,
-  gate 18/18) is flashed to BOOT only (`3adb7401…` → `60d3d4bc…`, verified
-  prefix and unchanged tail, RECOVERY/EFS/sec_efs unchanged, battery 100%) and
-  awaits the owner boot and report. The payload contract checker now derives
-  its diagnostic list from the name map after the first build was refused for
-  missing stage 17.
+  are measured `[C]`**, and **F3 is measured PASS at 4-bit SDR, 400 kHz
+  `[C]`**: the fourth boot of the H17 image (cold, then three warm; the first
+  three stopped at the known pre-identification CMD3 class) returned
+  `rc=0 stop=0` with the CMD19 timeout recorded (`wrc=-11`), a clean bounded
+  data reset (`rst=0`), the CMD14 pattern match (`trc=0`,
+  `tw=te=000000a5`), the matching 4-bit content pass, the verified revert
+  (`02→00`) and `qb0=62084b66`. The tolerated timeout keeps `fail=1` in the
+  report by design. The 8-bit width is untried and stays open separately.
+  The H17 image (`13938e49…`, payload `72f6e2d4…` 7/7, gate 18/18) was
+  flashed to BOOT only (`3adb7401…` → `60d3d4bc…`, verified prefix and
+  unchanged tail, RECOVERY/EFS/sec_efs unchanged, battery 100%). The payload
+  contract checker now derives its diagnostic list from the name map after
+  the first build was refused for missing stage 17.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and
