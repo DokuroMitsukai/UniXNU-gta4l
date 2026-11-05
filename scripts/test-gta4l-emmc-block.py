@@ -42,6 +42,7 @@ REQUIRED = [
     'first_fail_valid',
     'capacity_blocks',
     'online',
+    'completed_bytes',
     'GTA4L_EMMC_BLOCK_MAX_BLOCKS',
     'GTA4L_EMMC_BLOCK_BYTES',
 ]
@@ -70,10 +71,21 @@ MUTATIONS = [
      '\tif (0) {\n',
      'short-buffer'),
     ('write-rejected',
-     '\tif (write) {\n',
-     '\t(void)write;\n'
+     '\tif (direction == GTA4L_EMMC_BLOCK_WRITE) {\n',
      '\tif (0) {\n',
      'write'),
+    ('invalid-direction',
+     '\t\tif (direction == GTA4L_EMMC_BLOCK_WRITE) {\n'
+     '\t\t\treturn GTA4L_EMMC_BLOCK_NOT_WRITABLE;\n'
+     '\t\t}\n'
+     '\t\treturn GTA4L_EMMC_BLOCK_BAD_ARGUMENT;\n'
+     '\t}\n',
+     '\t\tif (direction == GTA4L_EMMC_BLOCK_WRITE) {\n'
+     '\t\t\treturn GTA4L_EMMC_BLOCK_NOT_WRITABLE;\n'
+     '\t\t}\n'
+     '\t\t/* invalid accepted by mutation */\n'
+     '\t}\n',
+     'invalid-direction'),
     ('offline-rejected',
      '\tif (block->online == 0) {\n',
      '\tif (0) {\n',
@@ -84,16 +96,23 @@ MUTATIONS = [
      '\t\tif (result != 0) {\n',
      '\t\tresult = block->io->read_block(block->io->context,\n'
      '\t\t    block_number + index, block->bounce);\n'
+     '\t\t(void)result;\n'
      '\t\tif (0) {\n',
      'read-fail-first'),
     ('copy-failure',
-     '\t\tresult = block->io->copy_out(block->io->context,\n'
+     '\t\tcopied = block->io->copy_out(block->io->context,\n'
      '\t\t    index * GTA4L_EMMC_BLOCK_BYTES, block->bounce,\n'
      '\t\t    GTA4L_EMMC_BLOCK_BYTES);\n'
-     '\t\tif (result != 0) {\n',
-     '\t\tresult = block->io->copy_out(block->io->context,\n'
+     '\t\tif (completed_bytes != 0) {\n'
+     '\t\t\t*completed_bytes += copied;\n'
+     '\t\t}\n'
+     '\t\tif (copied != GTA4L_EMMC_BLOCK_BYTES) {\n',
+     '\t\tcopied = block->io->copy_out(block->io->context,\n'
      '\t\t    index * GTA4L_EMMC_BLOCK_BYTES, block->bounce,\n'
      '\t\t    GTA4L_EMMC_BLOCK_BYTES);\n'
+     '\t\tif (completed_bytes != 0) {\n'
+     '\t\t\t*completed_bytes += copied;\n'
+     '\t\t}\n'
      '\t\tif (0) {\n',
      'copy-fail'),
     ('online-clear',
@@ -120,6 +139,14 @@ MUTATIONS = [
      '\t\t\t}\n'
      '\t\t\treturn GTA4L_EMMC_BLOCK_IO_ERROR;\n',
      'first-failure-preserved'),
+    ('completed-reset',
+     '\t\t*completed_bytes = 0;\n',
+     '\t\t/* completed kept by mutation */\n',
+     'write'),
+    ('completed-add',
+     '\t\t\t*completed_bytes += copied;\n',
+     '\t\t\t/* completed kept by mutation */\n',
+     'single'),
     ('requests-counter',
      '\tblock->counters.requests++;\n',
      '\t/* requests kept by mutation */\n',
@@ -186,7 +213,7 @@ def main():
             'baseline scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block core' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 17, f'expected 17 PASS lines, got {passes}'
+        assert passes == 19, f'expected 19 PASS lines, got {passes}'
         for name, old, new, scenario in MUTATIONS:
             text = CORE.read_text()
             assert text.count(old) == 1, \
@@ -200,7 +227,7 @@ def main():
             assert run.returncode != 0, \
                 f'mutation {name} was accepted ({scenario})'
             print(f'PASS mutation {name} rejected ({scenario})')
-    print(f'PASS gta4l eMMC block core: 16 scenarios, '
+    print(f'PASS gta4l eMMC block core: 18 scenarios, '
           f'{len(MUTATIONS)} mutation controls')
     return 0
 

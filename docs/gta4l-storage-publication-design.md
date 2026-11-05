@@ -141,7 +141,7 @@ scripts/audit-gta4l-storage-interface.py`; it writes the artifacts under
 an audit-only rerun. It drives the shared
 `scripts/audit-storage-interface.py` and
 `scripts/qemu-entry/gdb-stop.py` from the workspace UniXNU checkout (commit
-`31cadd0`), stages the existing QEMU ESP with the PMGR-linked kernel
+`0a1cc71`), stages the existing QEMU ESP with the PMGR-linked kernel
 arguments, stops the actual candidate at `_bsd_init`, reads the live
 `IOBlockStorageDevice`/`IOService` metaclass memory and the system registers,
 and then runs the full audit. The default macOS-host invocation of the audit
@@ -290,13 +290,14 @@ C++ adapter stays thin:
 
 The request helper is implemented in `package/Gta4lEmmcBlockCore.c/.h`.
 `scripts/test-gta4l-emmc-block.py` compiles it against
-`scripts/sim-gta4l-emmc-block/harness.c` and passes 16 scenarios plus 14
-mutation controls. The helper rejects writes without touching the callbacks,
-caps a request at 64 blocks/32 KiB, loops one 512-byte read per block through
-the caller's `read_block`, copies each block through the caller's
-`copy_out`, marks the media offline on the first read or copy failure and
-preserves the first failure record. It has no IOKit, transport or hardware
-dependency.
+`scripts/sim-gta4l-emmc-block/harness.c` and passes 18 scenarios plus 17
+mutation controls. The helper uses explicit READ/WRITE/INVALID directions,
+rejects writes without touching the callbacks, returns per-request completed
+bytes (including a partial final copy), caps a request at 64 blocks/32 KiB,
+loops one 512-byte read per block through the caller's `read_block`, copies
+each block through the caller's `copy_out`, marks the media offline on the
+first read or copy failure and preserves the first failure record. It has no
+IOKit, transport or hardware dependency.
 
 The probe is refactored to use `Gta4lEmmcPlatform.c` instead of carrying its
 own mapping and `gta4l_emmc_probe_*` callbacks. That is a host-only
@@ -715,7 +716,7 @@ not part of F5 and must not be smuggled into the publication rung.
    bindings are generated from the compiled driver object in step 2.
 2. **Host implementation — in progress (2026-11-05).** The portable request
    helper `package/Gta4lEmmcBlockCore.c/.h` is implemented and host-tested
-   (16 scenarios, 14 mutation controls). Next: split the core archive,
+   (18 scenarios, 17 mutation controls). Next: split the core archive,
    extract the platform layer, add the C++ adapter, the guarded personality
    and the `gta4l-emmc-block` payload mapping. Run the full host battery, the
    ABI/bindings gate, the duplicate-symbol check, the request-path tests, the

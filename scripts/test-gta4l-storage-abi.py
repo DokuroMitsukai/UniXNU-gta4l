@@ -52,7 +52,9 @@ def run_audit(snapshot: Path, candidate: Path, plan: Path, derive: Path,
         "--candidate", str(candidate), "--plan", str(plan),
         "--snapshot", str(snapshot), "--expect-pc", expect_pc,
         "--metaclass-object", str(METACLASS), "--output", str(output),
-        "--work-dir", str(work), "--source", str(FEED),
+        # The cached-derive path re-reads the reference object from the
+        # qualification work directory; keep that directory real.
+        "--work-dir", str(ARTIFACTS / "audit"), "--source", str(FEED),
         "--dwarfdump", "llvm-dwarfdump",
     ]
     return subprocess.run(command, text=True, capture_output=True)
@@ -127,14 +129,36 @@ def main() -> int:
         mutate("tcr",
                lambda data: data["system_registers"].__setitem__(
                    "TCR_EL1", "0x22a51a651a"))
+        mutate("missing-register",
+               lambda data: data["system_registers"].pop("TCR_EL1"))
+        mutate("missing-system-registers",
+               lambda data: data.pop("system_registers"))
+
+        def el0_alias(data):
+            sctlr = data["system_registers"].pop("SCTLR_EL1")
+            data["system_registers"]["SCTLR"] = sctlr
+            data["pstate"] = "0x60000200"
+
+        mutate("el0-alias", el0_alias)
+
+        def missing_pstate(data):
+            sctlr = data["system_registers"].pop("SCTLR_EL1")
+            data["system_registers"]["SCTLR"] = sctlr
+            data.pop("pstate", None)
+
+        mutate("missing-pstate", missing_pstate)
 
         expected = {
-            "interrupted": "Wrong or incomplete live storage metadata observation",
+            "interrupted": "Snapshot was interrupted by the bounded timeout",
             "wrong-pc": "Snapshot did not stop at the expected PC",
             "missing-meta": "Live storage metadata missing",
             "class-size": "Live block-storage class/parent ABI mismatch",
             "missing-sctlr": "Live translation is not enabled",
             "tcr": "Live translation is not native 4K",
+            "missing-register": "Live register missing: TCR_EL1",
+            "missing-system-registers": "Snapshot has no system registers",
+            "el0-alias": "QEMU SCTLR alias requires an EL1 stop",
+            "missing-pstate": "QEMU SCTLR alias requires the current PSTATE",
         }
         for name, path in cases.items():
             output = work / f"{name}-audit.json"
@@ -196,6 +220,24 @@ def main() -> int:
                 "vtable", "0xfffffff000000000"))
         require("Derived vtable is outside the storage __DATA_CONST extent" in text,
                 "tampered vtable did not report the extent mismatch")
+
+        def method_name(data):
+            data["methods"][0]["reference_name"] = "__ZN20IOBlockStorageDeviceD2Ev"
+
+        text = tampered_derive("method-name", method_name)
+        require("Derived method names do not match the reference object" in text,
+                "tampered method name did not report the reference mismatch")
+
+        def kernel_names(data):
+            data["methods"][0]["kernel_names"] = ["__ZN9IOServiceD2Ev"]
+
+        text = tampered_derive("kernel-names", kernel_names)
+        require("Derived kernel names at slot 0 do not match the candidate" in text,
+                "tampered kernel names did not report the candidate mismatch")
+
+        text = tampered_derive("missing-key", lambda data: data.pop("metaclass"))
+        require("derive.json is missing metaclass" in text,
+                "missing derive key did not report the incomplete record")
 
         # The harness --skip-qemu path must preserve the original run record
         # and refuse a snapshot or argument set that does not match it.

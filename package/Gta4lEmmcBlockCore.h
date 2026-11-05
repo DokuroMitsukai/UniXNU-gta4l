@@ -7,7 +7,7 @@
 // XNU adapter maps those to gta4l_emmc_read_block() and
 // IOMemoryDescriptor::writeBytes(); the host simulator maps them to a byte
 // array. The helper owns validation, the per-block loop, the bounce buffer,
-// counters and the fail-closed state.
+// counters, completed-byte accounting and the fail-closed state.
 
 #ifndef GTA4L_EMMC_BLOCK_CORE_H
 #define GTA4L_EMMC_BLOCK_CORE_H
@@ -29,6 +29,12 @@ enum gta4l_emmc_block_result {
 	GTA4L_EMMC_BLOCK_SHORT_COPY = 6
 };
 
+enum gta4l_emmc_block_direction {
+	GTA4L_EMMC_BLOCK_READ = 0,
+	GTA4L_EMMC_BLOCK_WRITE = 1,
+	GTA4L_EMMC_BLOCK_INVALID = 2
+};
+
 struct gta4l_emmc_block_counters {
 	uint64_t requests;
 	uint64_t blocks;
@@ -44,9 +50,10 @@ struct gta4l_emmc_block_io {
 	void *context;
 	/* Read one 512-byte block into buffer. Returns zero on success. */
 	int (*read_block)(void *context, uint64_t block, void *buffer);
-	/* Copy length bytes from source to the request at offset. Returns zero
-	 * on success. A non-zero return is a short or failed copy. */
-	int (*copy_out)(void *context, uint32_t offset, const void *source,
+	/* Copy length bytes from source to the request at offset. Returns the
+	 * number of bytes copied. A value below length is a short or failed
+	 * copy; the helper counts the returned bytes as completed. */
+	uint32_t (*copy_out)(void *context, uint32_t offset, const void *source,
 	    uint32_t length);
 };
 
@@ -69,11 +76,14 @@ void gta4l_emmc_block_init(struct gta4l_emmc_block *block,
 void gta4l_emmc_block_set_online(struct gta4l_emmc_block *block,
     uint8_t online);
 
-/* Validate and execute one read request. write must be zero; writes are
- * rejected without touching the callbacks. Returns one of the result codes
- * above. On a callback failure the helper clears online, preserves the first
- * failure record and returns IO_ERROR or SHORT_COPY. */
+/* Validate and execute one request. Only READ is accepted; WRITE returns
+ * NOT_WRITABLE and INVALID returns BAD_ARGUMENT without touching the
+ * callbacks. On return, completed_bytes (when non-null) is the number of
+ * bytes copied for this request, including a partial final copy. On a
+ * callback failure the helper clears online, preserves the first failure
+ * record and returns IO_ERROR or SHORT_COPY. */
 int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
-    uint64_t block_number, uint32_t nblks, uint64_t buffer_bytes, int write);
+    uint64_t block_number, uint32_t nblks, uint64_t buffer_bytes,
+    enum gta4l_emmc_block_direction direction, uint64_t *completed_bytes);
 
 #endif

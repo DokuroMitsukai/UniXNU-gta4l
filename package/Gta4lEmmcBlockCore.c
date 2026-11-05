@@ -47,17 +47,24 @@ void gta4l_emmc_block_set_online(struct gta4l_emmc_block *block,
 	block->online = (online != 0) ? 1 : 0;
 }
 
-int gta4l_emmc_block_read(struct gta4l_emmc_block *block, uint64_t block_number,
-    uint32_t nblks, uint64_t buffer_bytes, int write)
+int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
+    uint64_t block_number, uint32_t nblks, uint64_t buffer_bytes,
+    enum gta4l_emmc_block_direction direction, uint64_t *completed_bytes)
 {
 	uint32_t index;
 
+	if (completed_bytes != 0) {
+		*completed_bytes = 0;
+	}
 	if ((block == 0) || (block->io == 0) ||
 	    (block->io->read_block == 0) || (block->io->copy_out == 0)) {
 		return GTA4L_EMMC_BLOCK_BAD_ARGUMENT;
 	}
-	if (write) {
-		return GTA4L_EMMC_BLOCK_NOT_WRITABLE;
+	if (direction != GTA4L_EMMC_BLOCK_READ) {
+		if (direction == GTA4L_EMMC_BLOCK_WRITE) {
+			return GTA4L_EMMC_BLOCK_NOT_WRITABLE;
+		}
+		return GTA4L_EMMC_BLOCK_BAD_ARGUMENT;
 	}
 	if (nblks == 0) {
 		return GTA4L_EMMC_BLOCK_BAD_ARGUMENT;
@@ -84,6 +91,7 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block, uint64_t block_number,
 		block->counters.max_request_blocks = nblks;
 	}
 	for (index = 0; index < nblks; index++) {
+		uint32_t copied;
 		int result;
 
 		result = block->io->read_block(block->io->context,
@@ -100,10 +108,13 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block, uint64_t block_number,
 			}
 			return GTA4L_EMMC_BLOCK_IO_ERROR;
 		}
-		result = block->io->copy_out(block->io->context,
+		copied = block->io->copy_out(block->io->context,
 		    index * GTA4L_EMMC_BLOCK_BYTES, block->bounce,
 		    GTA4L_EMMC_BLOCK_BYTES);
-		if (result != 0) {
+		if (completed_bytes != 0) {
+			*completed_bytes += copied;
+		}
+		if (copied != GTA4L_EMMC_BLOCK_BYTES) {
 			block->online = 0;
 			block->counters.failures++;
 			block->counters.last_error = GTA4L_EMMC_BLOCK_SHORT_COPY;
@@ -111,7 +122,7 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block, uint64_t block_number,
 				block->counters.first_fail_valid = 1;
 				block->counters.first_fail_block =
 				    block_number + index;
-				block->counters.first_fail_error = result;
+				block->counters.first_fail_error = (int32_t)copied;
 			}
 			return GTA4L_EMMC_BLOCK_SHORT_COPY;
 		}
