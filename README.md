@@ -421,9 +421,12 @@ partition layout, payload policy and packaging.
   audit (176 kernel bindings, native 4K, original storage code unchanged).
   The audit artifacts are pinned in `docs/evidence-baseline.md`, and
   `scripts/test-gta4l-storage-abi.py` covers the positive audit, mutated
-  snapshots, a wrong candidate and the preserved run record. This clears the
-  ABI gate only: no driver is linked, and publication, block I/O and the
-  device run are still ahead.
+  snapshots, a wrong candidate and the preserved run record. The portable
+  request helper (`package/Gta4lEmmcBlockCore.c/.h`) is now implemented and
+  host-tested (16 scenarios, 14 mutation controls); it is read-only, capped
+  at 64 blocks/32 KiB and fails closed. This clears the ABI and request-helper
+  gates only: no driver is linked, and the C++ adapter, personality,
+  concrete bindings and device run are still ahead.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and

@@ -155,6 +155,48 @@ def main() -> int:
                 result.stdout + result.stderr,
                 "wrong candidate did not report provenance")
 
+        def tampered_derive(name, function):
+            data = json.loads(json.dumps(derive))
+            function(data)
+            path = work / f"derive-{name}.json"
+            path.write_text(json.dumps(data, indent=2) + "\n")
+            result = run_audit(SNAPSHOT, KERNEL, PLAN, path, expect_pc,
+                               work / f"derive-{name}-audit.json", work)
+            require(result.returncode != 0,
+                    f"tampered derive {name} unexpectedly passed")
+            return result.stdout + result.stderr
+
+        text = tampered_derive(
+            "metaclass", lambda data: data.__setitem__(
+                "metaclass", "0xfffffff000000000"))
+        require("Derived metaclass does not match the candidate getter" in text,
+                "tampered metaclass did not report the getter mismatch")
+
+        def method_slot(data):
+            data["methods"][0]["candidate_target"] = "0xfffffff000000000"
+
+        text = tampered_derive("method-slot", method_slot)
+        require("Derived method slot 0 does not match the candidate" in text,
+                "tampered method slot did not report the candidate mismatch")
+
+        text = tampered_derive(
+            "destructor", lambda data: data.__setitem__(
+                "original_base_destructor", "0xfffffff000000000"))
+        require("Derived base destructor does not match the candidate dispatch" in text,
+                "tampered destructor did not report the dispatch mismatch")
+
+        text = tampered_derive(
+            "service", lambda data: data.__setitem__(
+                "service_metaclass", "0xfffffff000000000"))
+        require("Derived IOService metaclass does not match the candidate" in text,
+                "tampered IOService metaclass did not report the candidate mismatch")
+
+        text = tampered_derive(
+            "vtable", lambda data: data.__setitem__(
+                "vtable", "0xfffffff000000000"))
+        require("Derived vtable is outside the storage __DATA_CONST extent" in text,
+                "tampered vtable did not report the extent mismatch")
+
         # The harness --skip-qemu path must preserve the original run record
         # and refuse a snapshot or argument set that does not match it.
         copied = work / "artifacts"
