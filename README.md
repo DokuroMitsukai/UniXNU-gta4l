@@ -419,8 +419,10 @@ partition layout, payload policy and packaging.
   actual `ca983f7d…` candidate at `_bsd_init`, recorded the live
   `IOBlockStorageDevice`/`IOService` metaclasses and ran the full 190-slot
   audit (176 kernel bindings, native 4K, original storage code unchanged).
-  The audit artifacts are pinned in `docs/evidence-baseline.md`. This clears
-  the ABI gate only: no driver is linked, and publication, block I/O and the
+  The audit artifacts are pinned in `docs/evidence-baseline.md`, and
+  `scripts/test-gta4l-storage-abi.py` covers the positive audit, mutated
+  snapshots, a wrong candidate and the preserved run record. This clears the
+  ABI gate only: no driver is linked, and publication, block I/O and the
   device run are still ahead.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),

@@ -141,7 +141,7 @@ scripts/audit-gta4l-storage-interface.py`; it writes the artifacts under
 an audit-only rerun. It drives the shared
 `scripts/audit-storage-interface.py` and
 `scripts/qemu-entry/gdb-stop.py` from the workspace UniXNU checkout (commit
-`2208649`), stages the existing QEMU ESP with the PMGR-linked kernel
+`d54c03a`), stages the existing QEMU ESP with the PMGR-linked kernel
 arguments, stops the actual candidate at `_bsd_init`, reads the live
 `IOBlockStorageDevice`/`IOService` metaclass memory and the system registers,
 and then runs the full audit. The default macOS-host invocation of the audit
@@ -154,13 +154,23 @@ pflash firmware (`f4cd2f77…`).
 
 Outputs under `out/gta4l/storage-abi/`:
 
-- `gdb-stop.json` `0592bd87…` — `pc=_bsd_init`, not interrupted, live
+- `gdb-stop.json` `218e935e…` — `pc=_bsd_init`, not interrupted, live
   metaclass `0xfffffff006add1d0`, `IOService` metaclass
   `0xfffffff007adb5b8`, `SCTLR_EL1=0x3454593d`, native 4K;
-- `interface-audit.json` `3582af13…` — 190 slots, 176 kernel bindings
+- `interface-audit.json` `695c7bbe…` — 190 slots, 176 kernel bindings
   (162 inherited + 14 pure virtual), vtable `0xfffffff005cb44c0`, live
   instance sizes `0x90`/`0x88`, `disk_read_tested=false`;
+- `derive.json` — the candidate vtable/metaclass addresses reused by the
+  audit;
+- `run.json` — the original QEMU version, firmware hash, kernel arguments and
+  stop address, preserved by `--skip-qemu`;
 - `provenance.json` — input/output hashes.
+
+`scripts/test-gta4l-storage-abi.py` covers the positive audit and the
+negative cases (interrupted snapshot, wrong stop PC, missing memory, wrong
+class size, missing SCTLR, wrong TCR, wrong candidate) plus the
+`--skip-qemu` run-record checks. It does not run QEMU and skips cleanly when
+the qualification artifacts are absent.
 
 Portability changes in the shared harness: the audit accepts
 `--candidate/--plan/--snapshot/--metaclass-object/--output/--work-dir` and

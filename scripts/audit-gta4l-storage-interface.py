@@ -131,6 +131,10 @@ def main() -> int:
             "unexpected original kernel provenance")
 
     audit_work = out / "audit"
+    qemu_version = ""
+    qemu = args.qemu or shutil.which("qemu-system-aarch64")
+    if qemu:
+        qemu_version = subprocess.check_output([qemu, "--version"], text=True).splitlines()[0]
     derive_path = audit_work / "derive.json"
     if not args.skip_qemu or not derive_path.exists():
         command = [
@@ -151,6 +155,7 @@ def main() -> int:
     require(derive["candidate_sha256"] == kernel_sha, "derive candidate mismatch")
 
     snapshot_path = out / "gdb-stop.json"
+    run_path = out / "run.json"
     if not args.skip_qemu:
         firmware = find_firmware(args.firmware)
         esp_root = out / "esp"
@@ -190,6 +195,29 @@ def main() -> int:
         produced = gdb_run / "gdb-stop.json"
         require(produced.exists(), "QEMU did not produce gdb-stop.json")
         shutil.copyfile(produced, snapshot_path)
+        run_record = dict(
+            candidate_sha256=kernel_sha,
+            snapshot_sha256=sha256(snapshot_path),
+            bsd_init=hex(bsd_init),
+            kernel_args=args.kernel_args,
+            qemu_version=qemu_version,
+            firmware_sha256=sha256(firmware),
+            firmware_name=firmware.name,
+        )
+        run_path.write_text(json.dumps(run_record, indent=2) + "\n")
+    else:
+        require(run_path.exists(),
+                "missing run.json; cannot preserve the original run provenance")
+        run_record = json.loads(run_path.read_text())
+        require(run_record.get("candidate_sha256") == kernel_sha,
+                "run.json candidate mismatch")
+        require(run_record.get("snapshot_sha256") == sha256(snapshot_path),
+                "run.json snapshot mismatch")
+        bsd_init = find_bsd_init(kernel)
+        require(run_record.get("bsd_init") == hex(bsd_init),
+                "run.json stop address mismatch")
+        require(args.kernel_args == run_record.get("kernel_args"),
+                "kernel arguments differ from the recorded run")
 
     require(snapshot_path.exists(), "missing live storage metadata snapshot")
     snapshot = json.loads(snapshot_path.read_text())
@@ -197,7 +225,7 @@ def main() -> int:
             "snapshot kernel hash mismatch")
     require(not snapshot.get("bounded_timeout_interrupted"),
             "snapshot was interrupted by the bounded timeout")
-    require(snapshot.get("pc") == hex(find_bsd_init(kernel)),
+    require(snapshot.get("pc") == hex(bsd_init),
             "snapshot did not stop at _bsd_init")
     for address in (meta, service_meta):
         require(f"{address:x}:50" in snapshot.get("memory", {}),
@@ -208,6 +236,8 @@ def main() -> int:
         sys.executable, str(AUDIT),
         "--candidate", str(kernel), "--plan", str(plan),
         "--snapshot", str(snapshot_path),
+        "--derive", str(derive_path),
+        "--expect-pc", hex(bsd_init),
         "--metaclass-object", str(METACLASS_OBJECT),
         "--output", str(interface_audit),
         "--work-dir", str(audit_work), "--source", str(FEED),
@@ -233,10 +263,6 @@ def main() -> int:
             audit["hardware_tested"] is False,
             "audit must remain host-only")
 
-    qemu_version = ""
-    qemu = args.qemu or shutil.which("qemu-system-aarch64")
-    if qemu:
-        qemu_version = subprocess.check_output([qemu, "--version"], text=True).splitlines()[0]
     provenance = dict(
         kind="gta4l-storage-abi-linux-qemu",
         date="2026-11-05",
@@ -254,10 +280,12 @@ def main() -> int:
         vtable=derive["vtable"],
         metaclass=derive["metaclass"],
         service_metaclass=derive["service_metaclass"],
-        bsd_init=hex(find_bsd_init(kernel)),
-        kernel_args=args.kernel_args,
-        qemu_version=qemu_version,
-        firmware_sha256=sha256(find_firmware(args.firmware)) if not args.skip_qemu else "",
+        bsd_init=hex(bsd_init),
+        kernel_args=run_record["kernel_args"],
+        qemu_version=run_record["qemu_version"],
+        firmware_sha256=run_record["firmware_sha256"],
+        firmware_name=run_record.get("firmware_name", ""),
+        run_json_sha256=sha256(run_path),
         harness_sha256=sha256(Path(__file__).resolve()),
         audit_script_sha256=sha256(AUDIT),
         gdb_stop_sha256=sha256(GDB_STOP),
