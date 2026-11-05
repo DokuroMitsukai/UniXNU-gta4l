@@ -43,6 +43,7 @@ REQUIRED = [
     'capacity_blocks',
     'online',
     'completed_bytes',
+    'counted',
     'GTA4L_EMMC_BLOCK_MAX_BLOCKS',
     'GTA4L_EMMC_BLOCK_BYTES',
 ]
@@ -103,18 +104,35 @@ MUTATIONS = [
      '\t\tcopied = block->io->copy_out(block->io->context,\n'
      '\t\t    index * GTA4L_EMMC_BLOCK_BYTES, block->bounce,\n'
      '\t\t    GTA4L_EMMC_BLOCK_BYTES);\n'
+     '\t\t/* A callback that claims more than the block length cannot have\n'
+     '\t\t * copied more than one block through this interface. Count at\n'
+     '\t\t * most one block so completed_bytes never overstates the data\n'
+     '\t\t * actually transferred. */\n'
+     '\t\tcounted = (copied > GTA4L_EMMC_BLOCK_BYTES) ?\n'
+     '\t\t    GTA4L_EMMC_BLOCK_BYTES : copied;\n'
      '\t\tif (completed_bytes != 0) {\n'
-     '\t\t\t*completed_bytes += copied;\n'
+     '\t\t\t*completed_bytes += counted;\n'
      '\t\t}\n'
      '\t\tif (copied != GTA4L_EMMC_BLOCK_BYTES) {\n',
      '\t\tcopied = block->io->copy_out(block->io->context,\n'
      '\t\t    index * GTA4L_EMMC_BLOCK_BYTES, block->bounce,\n'
      '\t\t    GTA4L_EMMC_BLOCK_BYTES);\n'
+     '\t\t/* A callback that claims more than the block length cannot have\n'
+     '\t\t * copied more than one block through this interface. Count at\n'
+     '\t\t * most one block so completed_bytes never overstates the data\n'
+     '\t\t * actually transferred. */\n'
+     '\t\tcounted = (copied > GTA4L_EMMC_BLOCK_BYTES) ?\n'
+     '\t\t    GTA4L_EMMC_BLOCK_BYTES : copied;\n'
      '\t\tif (completed_bytes != 0) {\n'
-     '\t\t\t*completed_bytes += copied;\n'
+     '\t\t\t*completed_bytes += counted;\n'
      '\t\t}\n'
      '\t\tif (0) {\n',
      'copy-fail'),
+    ('overlong-clamp',
+     '\t\tcounted = (copied > GTA4L_EMMC_BLOCK_BYTES) ?\n'
+     '\t\t    GTA4L_EMMC_BLOCK_BYTES : copied;\n',
+     '\t\tcounted = copied;\n',
+     'copy-overlong'),
     ('online-clear',
      '\t\t\tblock->online = 0;\n'
      '\t\t\tblock->counters.failures++;\n'
@@ -144,8 +162,8 @@ MUTATIONS = [
      '\t\t/* completed kept by mutation */\n',
      'write'),
     ('completed-add',
-     '\t\t\t*completed_bytes += copied;\n',
-     '\t\t\t/* completed kept by mutation */\n',
+     '\t\t\t*completed_bytes += counted;\n',
+     '\t\t\t(void)counted;\n',
      'single'),
     ('requests-counter',
      '\tblock->counters.requests++;\n',
@@ -184,7 +202,7 @@ def check_source():
     assert 'first_fail_valid' in core, 'first-failure preservation missing'
 
 
-def compile_and_run(compiler, core_path, binary):
+def compile_and_run(compiler, core_path, binary, scenario=None):
     command = [
         compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
         '-I', str(ROOT / 'package'), str(core_path), str(HARNESS),
@@ -193,7 +211,10 @@ def compile_and_run(compiler, core_path, binary):
     built = subprocess.run(command, text=True, capture_output=True)
     if built.returncode != 0:
         return None, built
-    run = subprocess.run([str(binary)], text=True, capture_output=True)
+    invocation = [str(binary)]
+    if scenario is not None:
+        invocation.append(scenario)
+    run = subprocess.run(invocation, text=True, capture_output=True)
     return run, built
 
 
@@ -213,7 +234,7 @@ def main():
             'baseline scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block core' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 19, f'expected 19 PASS lines, got {passes}'
+        assert passes == 24, f'expected 24 PASS lines, got {passes}'
         for name, old, new, scenario in MUTATIONS:
             text = CORE.read_text()
             assert text.count(old) == 1, \
@@ -221,13 +242,16 @@ def main():
             mutated = temp / f'{name}.c'
             mutated.write_text(text.replace(old, new))
             run, built = compile_and_run(compiler, mutated,
-                                         temp / f'{name}-test')
+                                         temp / f'{name}-test', scenario)
             assert run is not None, \
                 f'mutation {name}: compile failed:\n' + (built.stdout + built.stderr)
             assert run.returncode != 0, \
                 f'mutation {name} was accepted ({scenario})'
+            assert f'FAIL {scenario}' in run.stdout, \
+                f'mutation {name} did not fail its scenario {scenario}:\n' + \
+                (run.stdout + run.stderr)
             print(f'PASS mutation {name} rejected ({scenario})')
-    print(f'PASS gta4l eMMC block core: 18 scenarios, '
+    print(f'PASS gta4l eMMC block core: 23 scenarios, '
           f'{len(MUTATIONS)} mutation controls')
     return 0
 

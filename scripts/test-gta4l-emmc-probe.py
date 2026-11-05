@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: BSD-2-Clause-Patent
 """Host-only checks for the gta4l eMMC probe failure report.
 
-The test copies package/Gta4lEmmcProbe.c, replaces the generic-counter and
-barrier instructions and the six MMIO helpers with the hooks in
-scripts/sim-gta4l-emmc-probe/harness.c, and compiles the result against
-minimal kernel-header stubs. The stage selection, conflict check, failure-report
-clock guard, register offsets and panic strings remain the production code.
+The test copies package/Gta4lEmmcProbe.c and package/Gta4lEmmcPlatform.c,
+replaces the generic-counter and barrier instructions and the six MMIO helpers
+with the hooks in scripts/sim-gta4l-emmc-probe/harness.c, and compiles the
+result against minimal kernel-header stubs. The stage selection, conflict check,
+failure-report clock guard, register offsets and panic strings remain the
+production code.
 
 The scenarios require that a failed AHB/APPS branch enable reports the GCC state
 without any SDHCI access, that an MMIO-map failure or conflicting argument
@@ -85,6 +86,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / 'package' / 'Gta4lEmmcProbe.c'
+PLATFORM = ROOT / 'package' / 'Gta4lEmmcPlatform.c'
 CORE = ROOT / 'package' / 'Gta4lEmmc.c'
 HARNESS = ROOT / 'scripts' / 'sim-gta4l-emmc-probe' / 'harness.c'
 FIXTURE = ROOT / 'scripts' / 'sim-gta4l-emmc-probe' / 'report-width-fixture.c'
@@ -289,32 +291,32 @@ void gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset,
     uint32_t value);
 '''
 
-REWRITES = (
-    ('#include "Gta4lEmmc.h"\n',
-     '#include "Gta4lEmmc.h"\n' + HOOK_DECLS),
+PLATFORM_REWRITES = (
+    ('#include "Gta4lEmmcPlatform.h"\n',
+     '#include "Gta4lEmmcPlatform.h"\n' + HOOK_DECLS),
     ('\t__asm__ volatile("mrs %0, cntvct_el0" : "=r" (value));\n',
      '\tvalue = gta4l_emmc_probe_test_counter();\n'),
     ('\t__asm__ volatile("mrs %0, cntfrq_el0" : "=r" (value));\n',
      '\tvalue = gta4l_emmc_probe_test_counter_hz();\n'),
     ('\t__asm__ volatile("dsb sy" ::: "memory");\n',
      '\t/* barrier supplied by the host harness */\n'),
-    ('''static void
-gta4l_emmc_probe_delay_us(void *context, uint32_t microseconds)
+    ('''void
+gta4l_emmc_platform_delay_us(struct gta4l_emmc_platform *platform,
+    uint32_t microseconds)
 {
-\tstruct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
 \tuint64_t start;
 \tuint64_t ticks;
 \tuint64_t spins = 0;
 \tuint64_t limit;
-\tuint64_t hz = probe->counter_hz;
+\tuint64_t hz = platform->counter_hz;
 
 \tif (hz == 0u) {
 \t\thz = 19200000u;
 \t}
 \tticks = (((uint64_t)microseconds * hz) + 999999u) / 1000000u;
 \tlimit = ticks + 1000000u;
-\tstart = gta4l_emmc_probe_counter();
-\twhile ((gta4l_emmc_probe_counter() - start) < ticks) {
+\tstart = gta4l_emmc_platform_counter();
+\twhile ((gta4l_emmc_platform_counter() - start) < ticks) {
 \t\tif (++spins > limit) {
 \t\t\t/* A stalled counter would silently skip the settle
 \t\t\t * interval. Stop the diagnostic instead. */
@@ -326,136 +328,131 @@ gta4l_emmc_probe_delay_us(void *context, uint32_t microseconds)
 \t\t__asm__ volatile("yield");
 \t}
 }
-''', '''static void
-gta4l_emmc_probe_delay_us(void *context, uint32_t microseconds)
+''', '''void
+gta4l_emmc_platform_delay_us(struct gta4l_emmc_platform *platform,
+    uint32_t microseconds)
 {
-\t(void)context;
+\t(void)platform;
 \tgta4l_emmc_probe_test_delay_us(microseconds);
 }
 '''),
-    ('''static uint8_t
-gta4l_emmc_probe_read8(void *context, uint32_t space, uint32_t offset)
+    ('''uint8_t
+gta4l_emmc_platform_read8(const struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset)
 {
-\tstruct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
-
 \tif (space == GTA4L_EMMC_SPACE_SDHCI) {
-\t\treturn *(volatile uint8_t *)(probe->sdhci + offset);
+\t\treturn *(volatile uint8_t *)(platform->sdhci + offset);
 \t}
 \tif (space == GTA4L_EMMC_SPACE_GCC) {
-\t\treturn *(volatile uint8_t *)(probe->gcc + offset);
+\t\treturn *(volatile uint8_t *)(platform->gcc + offset);
 \t}
-\treturn *(volatile uint8_t *)(probe->tlmm + offset);
+\treturn *(volatile uint8_t *)(platform->tlmm + offset);
 }
-''', '''static uint8_t
-gta4l_emmc_probe_read8(void *context, uint32_t space, uint32_t offset)
+''', '''uint8_t
+gta4l_emmc_platform_read8(const struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset)
 {
-\t(void)context;
+\t(void)platform;
 \treturn gta4l_emmc_probe_test_read8(space, offset);
 }
 '''),
-    ('''static uint16_t
-gta4l_emmc_probe_read16(void *context, uint32_t space, uint32_t offset)
+    ('''uint16_t
+gta4l_emmc_platform_read16(const struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset)
 {
-\tstruct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
-
 \tif (space == GTA4L_EMMC_SPACE_SDHCI) {
-\t\treturn *(volatile uint16_t *)(probe->sdhci + offset);
+\t\treturn *(volatile uint16_t *)(platform->sdhci + offset);
 \t}
 \tif (space == GTA4L_EMMC_SPACE_GCC) {
-\t\treturn *(volatile uint16_t *)(probe->gcc + offset);
+\t\treturn *(volatile uint16_t *)(platform->gcc + offset);
 \t}
-\treturn *(volatile uint16_t *)(probe->tlmm + offset);
+\treturn *(volatile uint16_t *)(platform->tlmm + offset);
 }
-''', '''static uint16_t
-gta4l_emmc_probe_read16(void *context, uint32_t space, uint32_t offset)
+''', '''uint16_t
+gta4l_emmc_platform_read16(const struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset)
 {
-\t(void)context;
+\t(void)platform;
 \treturn gta4l_emmc_probe_test_read16(space, offset);
 }
 '''),
-    ('''static uint32_t
-gta4l_emmc_probe_read32(void *context, uint32_t space, uint32_t offset)
+    ('''uint32_t
+gta4l_emmc_platform_read32(const struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset)
 {
-\tstruct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
-
 \tif (space == GTA4L_EMMC_SPACE_SDHCI) {
-\t\treturn *(volatile uint32_t *)(probe->sdhci + offset);
+\t\treturn *(volatile uint32_t *)(platform->sdhci + offset);
 \t}
 \tif (space == GTA4L_EMMC_SPACE_GCC) {
-\t\treturn *(volatile uint32_t *)(probe->gcc + offset);
+\t\treturn *(volatile uint32_t *)(platform->gcc + offset);
 \t}
-\treturn *(volatile uint32_t *)(probe->tlmm + offset);
+\treturn *(volatile uint32_t *)(platform->tlmm + offset);
 }
-''', '''static uint32_t
-gta4l_emmc_probe_read32(void *context, uint32_t space, uint32_t offset)
+''', '''uint32_t
+gta4l_emmc_platform_read32(const struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset)
 {
-\t(void)context;
+\t(void)platform;
 \treturn gta4l_emmc_probe_test_read32(space, offset);
 }
 '''),
-    ('''static void
-gta4l_emmc_probe_write8(void *context, uint32_t space, uint32_t offset,
-    uint8_t value)
+    ('''void
+gta4l_emmc_platform_write8(struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset, uint8_t value)
 {
-\tstruct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
-
 \tif (space == GTA4L_EMMC_SPACE_SDHCI) {
-\t\t*(volatile uint8_t *)(probe->sdhci + offset) = value;
+\t\t*(volatile uint8_t *)(platform->sdhci + offset) = value;
 \t} else if (space == GTA4L_EMMC_SPACE_GCC) {
-\t\t*(volatile uint8_t *)(probe->gcc + offset) = value;
+\t\t*(volatile uint8_t *)(platform->gcc + offset) = value;
 \t} else {
-\t\t*(volatile uint8_t *)(probe->tlmm + offset) = value;
+\t\t*(volatile uint8_t *)(platform->tlmm + offset) = value;
 \t}
 }
-''', '''static void
-gta4l_emmc_probe_write8(void *context, uint32_t space, uint32_t offset,
-    uint8_t value)
+''', '''void
+gta4l_emmc_platform_write8(struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset, uint8_t value)
 {
-\t(void)context;
+\t(void)platform;
 \tgta4l_emmc_probe_test_write8(space, offset, value);
 }
 '''),
-    ('''static void
-gta4l_emmc_probe_write16(void *context, uint32_t space, uint32_t offset,
-    uint16_t value)
+    ('''void
+gta4l_emmc_platform_write16(struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset, uint16_t value)
 {
-\tstruct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
-
 \tif (space == GTA4L_EMMC_SPACE_SDHCI) {
-\t\t*(volatile uint16_t *)(probe->sdhci + offset) = value;
+\t\t*(volatile uint16_t *)(platform->sdhci + offset) = value;
 \t} else if (space == GTA4L_EMMC_SPACE_GCC) {
-\t\t*(volatile uint16_t *)(probe->gcc + offset) = value;
+\t\t*(volatile uint16_t *)(platform->gcc + offset) = value;
 \t} else {
-\t\t*(volatile uint16_t *)(probe->tlmm + offset) = value;
+\t\t*(volatile uint16_t *)(platform->tlmm + offset) = value;
 \t}
 }
-''', '''static void
-gta4l_emmc_probe_write16(void *context, uint32_t space, uint32_t offset,
-    uint16_t value)
+''', '''void
+gta4l_emmc_platform_write16(struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset, uint16_t value)
 {
-\t(void)context;
+\t(void)platform;
 \tgta4l_emmc_probe_test_write16(space, offset, value);
 }
 '''),
-    ('''static void
-gta4l_emmc_probe_write32(void *context, uint32_t space, uint32_t offset,
-    uint32_t value)
+    ('''void
+gta4l_emmc_platform_write32(struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset, uint32_t value)
 {
-\tstruct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
-
 \tif (space == GTA4L_EMMC_SPACE_SDHCI) {
-\t\t*(volatile uint32_t *)(probe->sdhci + offset) = value;
+\t\t*(volatile uint32_t *)(platform->sdhci + offset) = value;
 \t} else if (space == GTA4L_EMMC_SPACE_GCC) {
-\t\t*(volatile uint32_t *)(probe->gcc + offset) = value;
+\t\t*(volatile uint32_t *)(platform->gcc + offset) = value;
 \t} else {
-\t\t*(volatile uint32_t *)(probe->tlmm + offset) = value;
+\t\t*(volatile uint32_t *)(platform->tlmm + offset) = value;
 \t}
 }
-''', '''static void
-gta4l_emmc_probe_write32(void *context, uint32_t space, uint32_t offset,
-    uint32_t value)
+''', '''void
+gta4l_emmc_platform_write32(struct gta4l_emmc_platform *platform,
+    uint32_t space, uint32_t offset, uint32_t value)
 {
-\t(void)context;
+\t(void)platform;
 \tgta4l_emmc_probe_test_write32(space, offset, value);
 }
 '''),
@@ -1056,31 +1053,32 @@ MUTATIONS = [
 ]
 
 
-def check_probe_source(text: str) -> None:
+def check_probe_source(text: str, platform_text: str) -> None:
     assert text.count(GUARD) == 1, 'failure-report clock guard is missing'
     guard = text.index(GUARD)
     first = text.index('GTA4L_EMMC_REG_MCI_VERSION', guard)
     assert first > guard, 'SDHCI diagnostics are not behind the clock guard'
     assert 'clocks=%u' in text, 'failure report does not show the clock state'
-    assert '__asm__' in text, 'probe no longer contains the expected asm'
+    assert '__asm__' not in text, 'probe still contains architectural asm'
+    assert '__asm__' in platform_text, \
+        'platform no longer contains the expected asm'
 
 
-def rewrite(text: str) -> str:
-    for old, new in REWRITES:
-        assert text.count(old) == 1, f'probe rewrite not unique: {old[:48]!r}'
+def rewrite_platform(text: str) -> str:
+    for old, new in PLATFORM_REWRITES:
+        assert text.count(old) == 1, f'platform rewrite not unique: {old[:48]!r}'
         text = text.replace(old, new)
     assert '__asm__' not in text, 'architectural instructions were not replaced'
-    text += '\n#include "report-width-fixture.c"\n'
     return text
 
 
 def build(compiler: str, directory: Path, source: Path,
-          core: Path = CORE) -> Path:
+          platform: Path, core: Path = CORE) -> Path:
     output = directory / 'emmc-probe-sim'
     command = [
         compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-O1',
         f'-I{INCLUDE}', f'-I{ROOT / "package"}', f'-I{HARNESS.parent}',
-        str(source), str(core), str(HARNESS), '-o', str(output),
+        str(source), str(platform), str(core), str(HARNESS), '-o', str(output),
     ]
     result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
@@ -1166,7 +1164,7 @@ def main() -> int:
     parser.add_argument('--compiler')
     args = parser.parse_args()
 
-    check_probe_source(PROBE.read_text())
+    check_probe_source(PROBE.read_text(), PLATFORM.read_text())
 
     compiler = args.compiler or shutil.which('gcc') or shutil.which('clang')
     if compiler is None:
@@ -1175,12 +1173,15 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix='gta4l-emmc-probe-') as tmp:
         directory = Path(tmp)
-        source = rewrite(PROBE.read_text())
+        source = PROBE.read_text() + '\n#include "report-width-fixture.c"\n'
+        platform_source = rewrite_platform(PLATFORM.read_text())
         fixture = FIXTURE.read_text()
         probe = directory / 'Gta4lEmmcProbe.c'
         probe.write_text(source)
+        platform = directory / 'Gta4lEmmcPlatform.c'
+        platform.write_text(platform_source)
         (directory / 'report-width-fixture.c').write_text(fixture)
-        binary = build(compiler, directory, probe)
+        binary = build(compiler, directory, probe, platform)
 
         for scenario in SCENARIOS:
             if scenario in WIDTH_SCENARIOS:
@@ -1222,8 +1223,10 @@ def main() -> int:
                     f'{name} mutation has an unknown target')
             probe = mutated / 'Gta4lEmmcProbe.c'
             probe.write_text(mutated_source)
+            platform = mutated / 'Gta4lEmmcPlatform.c'
+            platform.write_text(platform_source)
             (mutated / 'report-width-fixture.c').write_text(mutated_fixture)
-            binary = build(compiler, mutated, probe, mutated_core)
+            binary = build(compiler, mutated, probe, platform, mutated_core)
             if not run(binary, scenario, expect_success=False,
                        expect_failure_text=expected):
                 print(f'mutation {name} was accepted')

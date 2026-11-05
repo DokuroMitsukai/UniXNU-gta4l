@@ -71,14 +71,18 @@ interrupts and higher-speed modes.
 | --- | --- |
 | `package/Gta4lEmmc.h` | Register map, command/error/result constants, host struct and ops interface |
 | `package/Gta4lEmmc.c` | Portable controller, clock, power, enumeration and PIO-read core |
-| `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO, runs the core and reports |
+| `package/Gta4lEmmcPlatform.c/.h` | Board MMIO mapping, width-specific register access, barrier and generic-counter timing behind the ops interface |
+| `package/Gta4lEmmcBlockCore.c/.h` | Portable read-only block request helper: validation, per-block loop, bounce copy, counters |
+| `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO through the platform object, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
 | `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 179 scenarios and 104 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 163 scenarios and 77 mutation controls |
-| `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record |
+| `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 23 scenarios plus 18 mutation controls |
+| `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
-| `board.toml` | Links `build-gta4l-emmc-probe.py` into the kernel archive list |
+| `configs/gta4l_defconfig` | Force-loads the SDHCI snapshot and both eMMC archives into the kernel |
 
 ## 1a. Protocol corrections (2026-11-04)
 

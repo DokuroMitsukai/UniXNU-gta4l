@@ -14,6 +14,7 @@ struct mock {
 	uint32_t copies;
 	int fail_read_at;
 	int fail_copy_at;
+	int overlong_copy_at;
 	uint64_t last_block;
 };
 
@@ -24,6 +25,7 @@ static void reset_mock(struct mock *mock)
 	memset(mock, 0, sizeof(*mock));
 	mock->fail_read_at = -1;
 	mock->fail_copy_at = -1;
+	mock->overlong_copy_at = -1;
 }
 
 static int mock_read(void *context, uint64_t block, void *buffer)
@@ -51,6 +53,10 @@ static uint32_t mock_copy(void *context, uint32_t offset, const void *source,
 	if ((mock->fail_copy_at >= 0) &&
 	    (mock->copies == (uint32_t)mock->fail_copy_at)) {
 		return 100;
+	}
+	if ((mock->overlong_copy_at >= 0) &&
+	    (mock->copies == (uint32_t)mock->overlong_copy_at)) {
+		return GTA4L_EMMC_BLOCK_BYTES + 1u;
 	}
 	if ((uint64_t)offset + length > sizeof(mock->out)) {
 		return 0;
@@ -472,6 +478,113 @@ static int scenario_max_counter_preserved(void)
 	return 0;
 }
 
+static int scenario_copy_overlong(void)
+{
+	struct mock mock;
+	struct gta4l_emmc_block block;
+	uint64_t completed = 0xdead;
+
+	reset_mock(&mock);
+	init_block(&block, &mock, 10);
+	mock.overlong_copy_at = 0;
+	CHECK(gta4l_emmc_block_read(&block, 0, 1, 512,
+	    GTA4L_EMMC_BLOCK_READ, &completed) ==
+	    GTA4L_EMMC_BLOCK_SHORT_COPY);
+	CHECK(completed == 512);
+	CHECK(mock.reads == 1);
+	CHECK(mock.copies == 0);
+	CHECK(block.counters.blocks == 0);
+	CHECK(block.counters.first_fail_valid == 1);
+	CHECK(block.counters.first_fail_block == 0);
+	CHECK(block.counters.first_fail_error == 513);
+	CHECK(block.online == 0);
+	return 0;
+}
+
+static int scenario_null_read_callback(void)
+{
+	struct mock mock;
+	struct gta4l_emmc_block block;
+	struct gta4l_emmc_block_io io;
+	uint64_t completed = 0xdead;
+
+	reset_mock(&mock);
+	io.context = &mock;
+	io.read_block = 0;
+	io.copy_out = mock_copy;
+	gta4l_emmc_block_init(&block, &io, 10);
+	CHECK(gta4l_emmc_block_read(&block, 0, 1, 512,
+	    GTA4L_EMMC_BLOCK_READ, &completed) ==
+	    GTA4L_EMMC_BLOCK_BAD_ARGUMENT);
+	CHECK(completed == 0);
+	CHECK(mock.reads == 0);
+	CHECK(mock.copies == 0);
+	CHECK(block.counters.requests == 0);
+	return 0;
+}
+
+static int scenario_null_copy_callback(void)
+{
+	struct mock mock;
+	struct gta4l_emmc_block block;
+	struct gta4l_emmc_block_io io;
+	uint64_t completed = 0xdead;
+
+	reset_mock(&mock);
+	io.context = &mock;
+	io.read_block = mock_read;
+	io.copy_out = 0;
+	gta4l_emmc_block_init(&block, &io, 10);
+	CHECK(gta4l_emmc_block_read(&block, 0, 1, 512,
+	    GTA4L_EMMC_BLOCK_READ, &completed) ==
+	    GTA4L_EMMC_BLOCK_BAD_ARGUMENT);
+	CHECK(completed == 0);
+	CHECK(mock.reads == 0);
+	CHECK(mock.copies == 0);
+	CHECK(block.counters.requests == 0);
+	return 0;
+}
+
+static int scenario_extreme_lba(void)
+{
+	struct mock mock;
+	struct gta4l_emmc_block block;
+	uint64_t completed = 0xdead;
+
+	reset_mock(&mock);
+	init_block(&block, &mock, 10);
+	CHECK(gta4l_emmc_block_read(&block, UINT64_MAX, 1, 512,
+	    GTA4L_EMMC_BLOCK_READ, &completed) ==
+	    GTA4L_EMMC_BLOCK_BAD_ARGUMENT);
+	CHECK(completed == 0);
+	CHECK(mock.reads == 0);
+	completed = 0xdead;
+	CHECK(gta4l_emmc_block_read(&block, UINT64_MAX - 1u, UINT32_MAX,
+	    UINT64_MAX, GTA4L_EMMC_BLOCK_READ, &completed) ==
+	    GTA4L_EMMC_BLOCK_BAD_ARGUMENT);
+	CHECK(completed == 0);
+	CHECK(mock.reads == 0);
+	init_block(&block, &mock, 0);
+	completed = 0xdead;
+	CHECK(gta4l_emmc_block_read(&block, 0, 1, 512,
+	    GTA4L_EMMC_BLOCK_READ, &completed) ==
+	    GTA4L_EMMC_BLOCK_BAD_ARGUMENT);
+	CHECK(completed == 0);
+	CHECK(mock.reads == 0);
+	return 0;
+}
+
+static int scenario_null_block(void)
+{
+	uint64_t completed = 0xdead;
+
+	CHECK(gta4l_emmc_block_read(0, 0, 1, 512,
+	    GTA4L_EMMC_BLOCK_READ, &completed) ==
+	    GTA4L_EMMC_BLOCK_BAD_ARGUMENT);
+	CHECK(completed == 0);
+	return 0;
+}
+
 static int run(const char *name, int (*scenario)(void))
 {
 	if (scenario() == 0) {
@@ -482,28 +595,57 @@ static int run(const char *name, int (*scenario)(void))
 	return 1;
 }
 
-int main(void)
+struct scenario_entry {
+	const char *name;
+	int (*run)(void);
+};
+
+static const struct scenario_entry scenarios[] = {
+	{ "single", scenario_single },
+	{ "max", scenario_max },
+	{ "last", scenario_last },
+	{ "write", scenario_write },
+	{ "zero", scenario_zero },
+	{ "oversized", scenario_oversized },
+	{ "out-of-range", scenario_out_of_range },
+	{ "overflow", scenario_overflow },
+	{ "short-buffer", scenario_short_buffer },
+	{ "invalid-direction", scenario_invalid_direction },
+	{ "read-fail-first", scenario_read_fail_first },
+	{ "read-fail-later", scenario_read_fail_later },
+	{ "copy-fail", scenario_copy_fail },
+	{ "copy-overlong", scenario_copy_overlong },
+	{ "offline-init", scenario_offline_init },
+	{ "bad-io", scenario_bad_io },
+	{ "null-read", scenario_null_read_callback },
+	{ "null-copy", scenario_null_copy_callback },
+	{ "null-block", scenario_null_block },
+	{ "null-completed", scenario_null_completed },
+	{ "extreme-lba", scenario_extreme_lba },
+	{ "first-failure-preserved", scenario_first_failure_preserved },
+	{ "max-counter-preserved", scenario_max_counter_preserved },
+};
+
+int main(int argc, char **argv)
 {
+	unsigned int index;
 	int failures = 0;
 
-	failures += run("single", scenario_single);
-	failures += run("max", scenario_max);
-	failures += run("last", scenario_last);
-	failures += run("write", scenario_write);
-	failures += run("zero", scenario_zero);
-	failures += run("oversized", scenario_oversized);
-	failures += run("out-of-range", scenario_out_of_range);
-	failures += run("overflow", scenario_overflow);
-	failures += run("short-buffer", scenario_short_buffer);
-	failures += run("invalid-direction", scenario_invalid_direction);
-	failures += run("read-fail-first", scenario_read_fail_first);
-	failures += run("read-fail-later", scenario_read_fail_later);
-	failures += run("copy-fail", scenario_copy_fail);
-	failures += run("offline-init", scenario_offline_init);
-	failures += run("bad-io", scenario_bad_io);
-	failures += run("null-completed", scenario_null_completed);
-	failures += run("first-failure-preserved", scenario_first_failure_preserved);
-	failures += run("max-counter-preserved", scenario_max_counter_preserved);
+	if (argc > 1) {
+		for (index = 0;
+		    index < sizeof(scenarios) / sizeof(scenarios[0]); index++) {
+			if (strcmp(argv[1], scenarios[index].name) == 0) {
+				return run(scenarios[index].name,
+				    scenarios[index].run) == 0 ? 0 : 1;
+			}
+		}
+		fprintf(stderr, "unknown scenario: %s\n", argv[1]);
+		return 2;
+	}
+	for (index = 0;
+	    index < sizeof(scenarios) / sizeof(scenarios[0]); index++) {
+		failures += run(scenarios[index].name, scenarios[index].run);
+	}
 	if (failures != 0) {
 		printf("FAIL %d scenarios\n", failures);
 		return 1;

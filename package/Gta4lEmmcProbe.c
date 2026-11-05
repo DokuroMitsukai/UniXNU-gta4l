@@ -12,19 +12,13 @@
 
 #include <sys/types.h>
 #include <pexpert/pexpert.h>
-#include <machine/machine_routines.h>
 #include <kern/debug.h>
 
 #include "Gta4lEmmc.h"
+#include "Gta4lEmmcPlatform.h"
 
 void gta4l_emmc_probe_preflight(void);
 void gta4l_emmc_probe_run(void);
-extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
-
-#define GTA4L_EMMC_PROBE_SDHCI_BASE 0x04744000u
-#define GTA4L_EMMC_PROBE_GCC_BASE   0x01438000u
-#define GTA4L_EMMC_PROBE_TLMM_BASE  0x00575000u
-#define GTA4L_EMMC_PROBE_WINDOW     0x00001000u
 
 /* Extended content phase (stage A). The LBA list is derived from the pinned
  * recovery GPT header: the primary partition-entry array starts at LBA 2 and
@@ -57,10 +51,7 @@ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 #define GTA4L_EMMC_PROBE_GPT_ENTRY_SIZE   0x54u
 
 struct gta4l_emmc_probe {
-	uintptr_t sdhci;
-	uintptr_t gcc;
-	uintptr_t tlmm;
-	uint64_t counter_hz;
+	struct gta4l_emmc_platform platform;
 	uint32_t log_count;
 	uint32_t last_event;
 	uint32_t last_a;
@@ -210,41 +201,12 @@ struct gta4l_emmc_probe_bus {
 
 static int gta4l_emmc_probe_ran;
 
-static inline uint64_t
-gta4l_emmc_probe_counter(void)
-{
-	uint64_t value;
-
-	__asm__ volatile("mrs %0, cntvct_el0" : "=r" (value));
-	return value;
-}
-
-static inline uint64_t
-gta4l_emmc_probe_counter_hz(void)
-{
-	uint64_t value;
-
-	__asm__ volatile("mrs %0, cntfrq_el0" : "=r" (value));
-	/* The architectural counter frequency is the primary source. Keep a
-	 * documented 19.2 MHz fallback if firmware left it unprogrammed. */
-	if ((value < 1000000u) || (value > 1000000000u)) {
-		value = 19200000u;
-	}
-	return value;
-}
-
 static uint8_t
 gta4l_emmc_probe_read8(void *context, uint32_t space, uint32_t offset)
 {
 	struct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
 
-	if (space == GTA4L_EMMC_SPACE_SDHCI) {
-		return *(volatile uint8_t *)(probe->sdhci + offset);
-	}
-	if (space == GTA4L_EMMC_SPACE_GCC) {
-		return *(volatile uint8_t *)(probe->gcc + offset);
-	}
-	return *(volatile uint8_t *)(probe->tlmm + offset);
+	return gta4l_emmc_platform_read8(&probe->platform, space, offset);
 }
 
 static uint16_t
@@ -252,13 +214,7 @@ gta4l_emmc_probe_read16(void *context, uint32_t space, uint32_t offset)
 {
 	struct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
 
-	if (space == GTA4L_EMMC_SPACE_SDHCI) {
-		return *(volatile uint16_t *)(probe->sdhci + offset);
-	}
-	if (space == GTA4L_EMMC_SPACE_GCC) {
-		return *(volatile uint16_t *)(probe->gcc + offset);
-	}
-	return *(volatile uint16_t *)(probe->tlmm + offset);
+	return gta4l_emmc_platform_read16(&probe->platform, space, offset);
 }
 
 static uint32_t
@@ -266,13 +222,7 @@ gta4l_emmc_probe_read32(void *context, uint32_t space, uint32_t offset)
 {
 	struct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
 
-	if (space == GTA4L_EMMC_SPACE_SDHCI) {
-		return *(volatile uint32_t *)(probe->sdhci + offset);
-	}
-	if (space == GTA4L_EMMC_SPACE_GCC) {
-		return *(volatile uint32_t *)(probe->gcc + offset);
-	}
-	return *(volatile uint32_t *)(probe->tlmm + offset);
+	return gta4l_emmc_platform_read32(&probe->platform, space, offset);
 }
 
 static void
@@ -281,13 +231,7 @@ gta4l_emmc_probe_write8(void *context, uint32_t space, uint32_t offset,
 {
 	struct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
 
-	if (space == GTA4L_EMMC_SPACE_SDHCI) {
-		*(volatile uint8_t *)(probe->sdhci + offset) = value;
-	} else if (space == GTA4L_EMMC_SPACE_GCC) {
-		*(volatile uint8_t *)(probe->gcc + offset) = value;
-	} else {
-		*(volatile uint8_t *)(probe->tlmm + offset) = value;
-	}
+	gta4l_emmc_platform_write8(&probe->platform, space, offset, value);
 }
 
 static void
@@ -296,13 +240,7 @@ gta4l_emmc_probe_write16(void *context, uint32_t space, uint32_t offset,
 {
 	struct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
 
-	if (space == GTA4L_EMMC_SPACE_SDHCI) {
-		*(volatile uint16_t *)(probe->sdhci + offset) = value;
-	} else if (space == GTA4L_EMMC_SPACE_GCC) {
-		*(volatile uint16_t *)(probe->gcc + offset) = value;
-	} else {
-		*(volatile uint16_t *)(probe->tlmm + offset) = value;
-	}
+	gta4l_emmc_platform_write16(&probe->platform, space, offset, value);
 }
 
 static void
@@ -311,49 +249,22 @@ gta4l_emmc_probe_write32(void *context, uint32_t space, uint32_t offset,
 {
 	struct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
 
-	if (space == GTA4L_EMMC_SPACE_SDHCI) {
-		*(volatile uint32_t *)(probe->sdhci + offset) = value;
-	} else if (space == GTA4L_EMMC_SPACE_GCC) {
-		*(volatile uint32_t *)(probe->gcc + offset) = value;
-	} else {
-		*(volatile uint32_t *)(probe->tlmm + offset) = value;
-	}
+	gta4l_emmc_platform_write32(&probe->platform, space, offset, value);
 }
 
 static void
 gta4l_emmc_probe_barrier(void *context)
 {
 	(void)context;
-	__asm__ volatile("dsb sy" ::: "memory");
+	gta4l_emmc_platform_barrier();
 }
 
 static void
 gta4l_emmc_probe_delay_us(void *context, uint32_t microseconds)
 {
 	struct gta4l_emmc_probe *probe = (struct gta4l_emmc_probe *)context;
-	uint64_t start;
-	uint64_t ticks;
-	uint64_t spins = 0;
-	uint64_t limit;
-	uint64_t hz = probe->counter_hz;
 
-	if (hz == 0u) {
-		hz = 19200000u;
-	}
-	ticks = (((uint64_t)microseconds * hz) + 999999u) / 1000000u;
-	limit = ticks + 1000000u;
-	start = gta4l_emmc_probe_counter();
-	while ((gta4l_emmc_probe_counter() - start) < ticks) {
-		if (++spins > limit) {
-			/* A stalled counter would silently skip the settle
-			 * interval. Stop the diagnostic instead. */
-			panic("GTA4L-EMMC PROBE FAILED: generic counter "
-			    "stalled (hz=%u us=%u)",
-			    (unsigned int)hz,
-			    (unsigned int)microseconds);
-		}
-		__asm__ volatile("yield");
-	}
+	gta4l_emmc_platform_delay_us(&probe->platform, microseconds);
 }
 
 static void
@@ -371,7 +282,7 @@ static uint64_t
 gta4l_emmc_probe_counter_op(void *context)
 {
 	(void)context;
-	return gta4l_emmc_probe_counter();
+	return gta4l_emmc_platform_counter();
 }
 
 static const struct gta4l_emmc_ops gta4l_emmc_probe_ops = {
@@ -871,7 +782,7 @@ gta4l_emmc_probe_report_failure(const struct gta4l_emmc_host *host,
 	    host->poll_iterations,
 	    (unsigned int)(host->poll_ticks >> 32),
 	    (unsigned int)host->poll_ticks,
-	    (unsigned int)probe->counter_hz,
+	    (unsigned int)probe->platform.counter_hz,
 	    host->cid[0], host->cid[1], host->cid[2], host->cid[3],
 	    (unsigned int)regs->host_version,
 	    host->cmd1_attempts,
@@ -936,7 +847,7 @@ gta4l_emmc_probe_report_ident(const struct gta4l_emmc_host *ident_host,
 	    ident_host->poll_iterations,
 	    (unsigned int)(ident_host->poll_ticks >> 32),
 	    (unsigned int)ident_host->poll_ticks,
-	    (unsigned int)probe->counter_hz,
+	    (unsigned int)probe->platform.counter_hz,
 	    ident_host->cid[0], ident_host->cid[1],
 	    ident_host->cid[2], ident_host->cid[3],
 	    GTA4L_EMMC_PROBE_CMD7_ARGS(*ident_host));
@@ -1411,7 +1322,7 @@ gta4l_emmc_probe_report_h9(const struct gta4l_emmc_host *host,
 	    a1->poll_iterations,
 	    (unsigned int)(a1->poll_ticks >> 32),
 	    (unsigned int)a1->poll_ticks,
-	    (unsigned int)probe->counter_hz,
+	    (unsigned int)probe->platform.counter_hz,
 	    a2->number, a2->result, a2->r1_error,
 	    a2->fail_valid, a2->fail_index, a2->fail_argument,
 	    a2->fail_command, (unsigned int)a2->fail_error,
@@ -1433,7 +1344,7 @@ gta4l_emmc_probe_report_h9(const struct gta4l_emmc_host *host,
 	    a2->poll_iterations,
 	    (unsigned int)(a2->poll_ticks >> 32),
 	    (unsigned int)a2->poll_ticks,
-	    (unsigned int)probe->counter_hz,
+	    (unsigned int)probe->platform.counter_hz,
 	    host->cid[0], host->cid[1], host->cid[2], host->cid[3],
 	    host->cmd1_attempts, host->cmd1_timeouts,
 	    (unsigned int)host->fail_valid, host->fail_index,
@@ -3157,7 +3068,7 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 	    host->poll_iterations,
 	    (unsigned int)(host->poll_ticks >> 32),
 	    (unsigned int)host->poll_ticks,
-	    (unsigned int)probe->counter_hz,
+	    (unsigned int)probe->platform.counter_hz,
 	    host->cid[0], host->cid[1], host->cid[2], host->cid[3],
 	    GTA4L_EMMC_PROBE_CMD7_ARGS(*host));
 }
@@ -3177,9 +3088,6 @@ gta4l_emmc_probe_run(void)
 	struct gta4l_emmc_probe_bus w4;
 	struct gta4l_emmc_probe_bus w8;
 	struct gta4l_emmc_host host;
-	vm_offset_t sdhci_mapping;
-	vm_offset_t gcc_mapping;
-	vm_offset_t tlmm_mapping;
 	uint32_t version;
 	uint8_t power;
 	uint8_t host_control;
@@ -3224,26 +3132,14 @@ gta4l_emmc_probe_run(void)
 	mb_mode = gta4l_emmc_probe_mb();
 	gta4l_emmc_probe_ran = 1;
 
-	sdhci_mapping = ml_io_map(GTA4L_EMMC_PROBE_SDHCI_BASE,
-	    GTA4L_EMMC_PROBE_WINDOW);
-	gcc_mapping = ml_io_map(GTA4L_EMMC_PROBE_GCC_BASE,
-	    GTA4L_EMMC_PROBE_WINDOW);
-	tlmm_mapping = ml_io_map(GTA4L_EMMC_PROBE_TLMM_BASE,
-	    GTA4L_EMMC_PROBE_WINDOW);
-	if ((sdhci_mapping == 0) || (gcc_mapping == 0) ||
-	    (tlmm_mapping == 0)) {
+	bzero(&probe, sizeof(probe));
+	if (gta4l_emmc_platform_map(&probe.platform) != 0) {
 		panic("GTA4L-EMMC PROBE REFUSED: MMIO map failed "
 		    "(sdhci=%u gcc=%u tlmm=%u)",
-		    (unsigned int)(sdhci_mapping != 0),
-		    (unsigned int)(gcc_mapping != 0),
-		    (unsigned int)(tlmm_mapping != 0));
+		    (unsigned int)(probe.platform.sdhci != 0),
+		    (unsigned int)(probe.platform.gcc != 0),
+		    (unsigned int)(probe.platform.tlmm != 0));
 	}
-
-	bzero(&probe, sizeof(probe));
-	probe.sdhci = (uintptr_t)sdhci_mapping;
-	probe.gcc = (uintptr_t)gcc_mapping;
-	probe.tlmm = (uintptr_t)tlmm_mapping;
-	probe.counter_hz = gta4l_emmc_probe_counter_hz();
 
 	bzero(&regs, sizeof(regs));
 	bzero(&host, sizeof(host));

@@ -423,7 +423,7 @@ partition layout, payload policy and packaging.
   `scripts/test-gta4l-storage-abi.py` covers the positive audit, mutated
   snapshots, a wrong candidate and the preserved run record. The portable
   request helper (`package/Gta4lEmmcBlockCore.c/.h`) is now implemented and
-  host-tested (18 scenarios, 17 mutation controls); it uses explicit
+  host-tested (23 scenarios, 18 mutation controls); it uses explicit
   READ/WRITE/INVALID directions, returns per-request completed bytes, is
   read-only, capped at 64 blocks/32 KiB and fails closed. This clears the ABI and request-helper
   gates only: no driver is linked, and the C++ adapter, personality,

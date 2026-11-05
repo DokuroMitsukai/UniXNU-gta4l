@@ -290,7 +290,7 @@ C++ adapter stays thin:
 
 The request helper is implemented in `package/Gta4lEmmcBlockCore.c/.h`.
 `scripts/test-gta4l-emmc-block.py` compiles it against
-`scripts/sim-gta4l-emmc-block/harness.c` and passes 18 scenarios plus 17
+`scripts/sim-gta4l-emmc-block/harness.c` and passes 23 scenarios plus 18
 mutation controls. The helper uses explicit READ/WRITE/INVALID directions,
 rejects writes without touching the callbacks, returns per-request completed
 bytes (including a partial final copy), caps a request at 64 blocks/32 KiB,
@@ -493,17 +493,17 @@ Two viable layouts:
    `libGta4lEmmcProbe.a` entry in `CONFIG_XNU_EXTRA_LD_ARCHIVES`. Simple,
    but every image carries the C++ block object and the probe build script
    now needs the C++ compile record.
-2. **Split archives** (recommended): `libGta4lEmmcCore.a` (core C object,
-   linked once), `libGta4lEmmcProbe.a` (probe consumer) and
-   `libGta4lEmmcBlock.a` (C helper + C++ adapter). Link all three with
-   `-force_load`; the core symbols exist once. This keeps the probe and
-   block builds independent and avoids duplicate `gta4l_emmc_init`/read
-   symbols.
+2. **Split archives** (implemented 2026-11-05): `libGta4lEmmcCore.a`
+   (portable core, board platform and read-only request helper, linked once),
+   `libGta4lEmmcProbe.a` (probe consumer) and, when the C++ adapter lands,
+   `libGta4lEmmcBlock.a` (adapter). Link them with `-force_load`; the core
+   symbols exist once. This keeps the probe and block builds independent and
+   avoids duplicate `gta4l_emmc_init`/read symbols.
 
 The split layout is preferred for the future mount/verification work. The
-build script must prove there are no duplicate global symbols across the
-three archives (`nm` check) and record the archive hashes in the existing
-build-report style.
+build script already proves there are no duplicate global symbols across the
+core and probe archives (`nm` check) and records both archive hashes in the
+existing build-report style.
 
 ### 4.2 Compile records
 
@@ -716,8 +716,8 @@ not part of F5 and must not be smuggled into the publication rung.
    bindings are generated from the compiled driver object in step 2.
 2. **Host implementation — in progress (2026-11-05).** The portable request
    helper `package/Gta4lEmmcBlockCore.c/.h` is implemented and host-tested
-   (18 scenarios, 17 mutation controls). Next: split the core archive,
-   extract the platform layer, add the C++ adapter, the guarded personality
+   (23 scenarios, 18 mutation controls). The platform extraction and archive
+   split are done; next: add the C++ adapter, the guarded personality
    and the `gta4l-emmc-block` payload mapping. Run the full host battery, the
    ABI/bindings gate, the duplicate-symbol check, the request-path tests, the
    source-policy test and the probe-refactor regression.

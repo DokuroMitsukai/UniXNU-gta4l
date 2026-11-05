@@ -59,7 +59,7 @@ gta4l_emmc_probe_width_fixture(int form)
 	 * log_count stays within five digits; 99999 makes that width explicit.
 	 * last_event is 8. last_a and last_b carry arbitrary 32-bit register
 	 * values. */
-	probe.counter_hz = 1000000000u;
+	probe.platform.counter_hz = 1000000000u;
 	probe.log_count = 99999u;
 	probe.last_event = GTA4L_EMMC_LOG_ERROR;
 	probe.last_a = 0xFFFFFFFFu;

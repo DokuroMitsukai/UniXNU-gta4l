@@ -79,8 +79,9 @@ void gta4l_emmc_block_set_online(struct gta4l_emmc_block *block,
 /* Validate and execute one request. Only READ is accepted; WRITE returns
  * NOT_WRITABLE and INVALID returns BAD_ARGUMENT without touching the
  * callbacks. On return, completed_bytes (when non-null) is the number of
- * bytes copied for this request, including a partial final copy. On a
- * callback failure the helper clears online, preserves the first failure
+ * bytes copied for this request, including a partial final copy. A callback
+ * that reports more than one block's length is counted as at most one block.
+ * On a callback failure the helper clears online, preserves the first failure
  * record and returns IO_ERROR or SHORT_COPY. */
 int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
     uint64_t block_number, uint32_t nblks, uint64_t buffer_bytes,

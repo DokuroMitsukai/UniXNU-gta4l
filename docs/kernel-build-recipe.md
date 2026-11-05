@@ -99,7 +99,7 @@ transcript of the historical invocation. `build kernel` runs three stages `[S]`:
    `board.toml [kernel] archives` plan, including
    `build-gta4l-sdhci-snapshot.py`.
 3. The final `make` links the kernel with the external archives, including
-   `CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/gta4l-sdhci-snapshot/libGta4lSdhciSnapshot.a"`.
+   `CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/gta4l-sdhci-snapshot/libGta4lSdhciSnapshot.a -Wl,-force_load,{tree}/build/gta4l-emmc-probe/libGta4lEmmcCore.a -Wl,-force_load,{tree}/build/gta4l-emmc-probe/libGta4lEmmcProbe.a"`.
 
 `build prelink` reads the OS profile's `[kernel.prelink]` and runs
 `emit_prelink.py` against the linked kernel and the pinned kernelcache `[S]`.

@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE = ROOT / 'package' / 'Gta4lEmmc.c'
 HEADER = ROOT / 'package' / 'Gta4lEmmc.h'
 PROBE = ROOT / 'package' / 'Gta4lEmmcProbe.c'
+PLATFORM = ROOT / 'package' / 'Gta4lEmmcPlatform.c'
 HARNESS = ROOT / 'scripts' / 'sim-gta4l-emmc' / 'harness.c'
 
 SCENARIOS = [
@@ -324,11 +325,12 @@ def check_source() -> None:
         'gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);') >= 5, \
         'poll loops must use the documented 10 us step'
 
-    # The probe must use width-correct MMIO, stop on a stalled counter and
-    # state the fixed-1.8 V pad policy explicitly.
+    # The probe and platform must use width-correct MMIO, stop on a stalled
+    # counter and state the fixed-1.8 V pad policy explicitly.
     probe = PROBE.read_text()
-    assert 'generic counter ' in probe and 'stalled (hz=' in probe, \
-        'probe must abort on a stalled timing source'
+    platform = PLATFORM.read_text()
+    assert 'generic counter ' in platform and 'stalled (hz=' in platform, \
+        'platform must abort on a stalled timing source'
     assert 'host.pad_pwr_switch = 1;' in probe, \
         'probe fixed-1.8 V pad policy missing'
     assert 'host->clocks_enabled = 1;' in core, \
@@ -337,13 +339,13 @@ def check_source() -> None:
         'failure diagnostics must be gated on the active branch clocks'
     assert 'clocks=%u' in probe, 'probe must report the clock-gate state'
     for name, width in (
-            ('gta4l_emmc_probe_read8', 'uint8_t'),
-            ('gta4l_emmc_probe_read16', 'uint16_t'),
-            ('gta4l_emmc_probe_write8', 'uint8_t'),
-            ('gta4l_emmc_probe_write16', 'uint16_t')):
-        start = probe.index(name)
-        end = probe.index('\n}\n', start)
-        body = probe[start:end]
+            ('gta4l_emmc_platform_read8', 'uint8_t'),
+            ('gta4l_emmc_platform_read16', 'uint16_t'),
+            ('gta4l_emmc_platform_write8', 'uint8_t'),
+            ('gta4l_emmc_platform_write16', 'uint16_t')):
+        start = platform.index(name)
+        end = platform.index('\n}\n', start)
+        body = platform[start:end]
         assert f'*(volatile {width} *)' in body, \
             f'{name} does not use a {width} MMIO access'
         assert 'volatile uint32_t' not in body, \

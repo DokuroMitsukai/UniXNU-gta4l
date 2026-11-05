@@ -56,8 +56,16 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
 	if (completed_bytes != 0) {
 		*completed_bytes = 0;
 	}
-	if ((block == 0) || (block->io == 0) ||
-	    (block->io->read_block == 0) || (block->io->copy_out == 0)) {
+	if (block == 0) {
+		return GTA4L_EMMC_BLOCK_BAD_ARGUMENT;
+	}
+	if (block->io == 0) {
+		return GTA4L_EMMC_BLOCK_BAD_ARGUMENT;
+	}
+	if (block->io->read_block == 0) {
+		return GTA4L_EMMC_BLOCK_BAD_ARGUMENT;
+	}
+	if (block->io->copy_out == 0) {
 		return GTA4L_EMMC_BLOCK_BAD_ARGUMENT;
 	}
 	if (direction != GTA4L_EMMC_BLOCK_READ) {
@@ -92,6 +100,7 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
 	}
 	for (index = 0; index < nblks; index++) {
 		uint32_t copied;
+		uint32_t counted;
 		int result;
 
 		result = block->io->read_block(block->io->context,
@@ -111,8 +120,14 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
 		copied = block->io->copy_out(block->io->context,
 		    index * GTA4L_EMMC_BLOCK_BYTES, block->bounce,
 		    GTA4L_EMMC_BLOCK_BYTES);
+		/* A callback that claims more than the block length cannot have
+		 * copied more than one block through this interface. Count at
+		 * most one block so completed_bytes never overstates the data
+		 * actually transferred. */
+		counted = (copied > GTA4L_EMMC_BLOCK_BYTES) ?
+		    GTA4L_EMMC_BLOCK_BYTES : copied;
 		if (completed_bytes != 0) {
-			*completed_bytes += copied;
+			*completed_bytes += counted;
 		}
 		if (copied != GTA4L_EMMC_BLOCK_BYTES) {
 			block->online = 0;
