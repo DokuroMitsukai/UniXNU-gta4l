@@ -13,3 +13,7 @@ gta4l-sdhci-handoff-audit.patch
 
 # Board-only eMMC diagnostic hook; returns unless gta4l-emmc-probe=1 is present.
 gta4l-emmc-probe.patch
+
+# Board-only read-only block publication personality. The guard is inert until
+# the shared build script translates CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK.
+gta4l-emmc-block.patch

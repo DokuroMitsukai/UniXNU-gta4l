@@ -29,6 +29,10 @@ void gta4l_emmc_probe_run(void);
  * regions. */
 #define GTA4L_EMMC_PROBE_ARRAY_LBA       2u
 #define GTA4L_EMMC_PROBE_ARRAY_BLOCKS    21u
+/* D10 short request: two sectors at the GPT array start. The long request
+ * covers the complete array. Both are qualified against the same-boot CMD17
+ * reference bytes. */
+#define GTA4L_EMMC_PROBE_SHORT_BLOCKS    2u
 #define GTA4L_EMMC_PROBE_ENTRY_COUNT     84u
 #define GTA4L_EMMC_PROBE_ENTRY_SIZE      128u
 #define GTA4L_EMMC_PROBE_FIRST_USABLE    34u
@@ -85,6 +89,33 @@ struct gta4l_emmc_probe_regs {
 	uint32_t ahb_cbcr;
 };
 
+/* One CMD18 request's diagnostic snapshot. `completed` is the number of
+ * 512-byte sectors the core software-drained; `validated` is the number whose
+ * bytes matched the same boot's CMD17 reference. The two stay separate so a
+ * drained-but-wrong sector can never be reported as a validated one. */
+struct gta4l_emmc_probe_mb {
+	int      result;
+	int      verdict;
+	uint32_t attempted;
+	uint32_t requested;
+	uint32_t completed;
+	uint32_t validated;
+	uint32_t div;
+	uint32_t drain_used;
+	uint32_t drain_resolved;
+	uint32_t drain_blocks;
+	uint32_t drain_iterations;
+	int32_t  stop_result;
+	uint32_t stop_valid;
+	uint32_t stop_capture_valid;
+	uint32_t stop_normal;
+	uint32_t stop_error;
+	uint32_t stop_present;
+	uint32_t stop_command;
+	uint32_t stop_argument;
+	uint32_t stop_response[4];
+};
+
 /* Extended content phase values. The sums are per-LBA accumulator values over
  * the whole 512-byte block; the GPT fields are the gated header values that
  * selected the LBA list. */
@@ -104,6 +135,25 @@ struct gta4l_emmc_probe_range {
 	uint32_t mb[GTA4L_EMMC_PROBE_ARRAY_BLOCKS];
 	uint32_t mb_same;
 	uint32_t mb_div;
+	/* D10 F2: the short (two-sector) request, the long (21-sector)
+	 * request and the post-transfer CMD17 recovery reads are separate
+	 * observations. `verdict` is the diagnostic acceptance result, kept
+	 * apart from the transport `result`; `attempted` distinguishes a
+	 * not-run request from a zero-valued one. */
+	struct gta4l_emmc_probe_mb short_mb;
+	struct gta4l_emmc_probe_mb long_mb;
+	/* Recovery bit 0 is block 0 and bit 1 is the first array sector.
+	 * `compared` records which references were actually compared;
+	 * `div_valid` disambiguates a block-0 divergence from "no
+	 * divergence" because LBA 0 is a valid first divergence. */
+	int      recovery_result;
+	int      recovery0_result;
+	int      recovery2_result;
+	uint32_t recovery_attempted;
+	uint32_t recovery_compared;
+	uint32_t recovery_same;
+	uint32_t recovery_div;
+	uint32_t recovery_div_valid;
 };
 
 /* Stage-B1 bus-width rung evidence. One instance is kept per attempted width
@@ -139,6 +189,10 @@ struct gta4l_emmc_probe_bus {
 /* The bus-width rung stops with a content disagreement that the per-width
  * CMD17 sums exposed; it is not a controller or card-status code. */
 #define GTA4L_EMMC_PROBE_ERR_CONTENT     -21
+/* The CMD18 transport returned success but the requested/completed sector
+ * accounting did not match. This is a diagnostic length verdict, not a
+ * controller or card-status code; it is outside the controller code range. */
+#define GTA4L_EMMC_PROBE_ERR_LENGTH      -24
 
 /* CMD7 R1b capture block shared by the failure and success reports. The field
  * order is part of GTA4L_EMMC_CAPTURE_FMT. Every value is an observed sample,
@@ -913,27 +967,189 @@ gta4l_emmc_probe_append_hex8(char *buffer, uint32_t offset, uint32_t value)
 	return offset + 8u;
 }
 
+/* Fixed four-digit lower-case hex writer for the 16-bit terminal status
+ * fields. */
+static uint32_t
+gta4l_emmc_probe_append_hex4(char *buffer, uint32_t offset, uint32_t value)
+{
+	static const char digits[] = "0123456789abcdef";
+	uint32_t index;
+
+	for (index = 0; index < 4u; index++) {
+		buffer[offset + index] =
+		    digits[(value >> (12u - (index * 4u))) & 0x0Fu];
+	}
+	return offset + 4u;
+}
+
+/* Signed decimal writer for the diagnostic result codes. */
+static uint32_t
+gta4l_emmc_probe_append_int(char *buffer, uint32_t offset, int value)
+{
+	uint32_t magnitude;
+
+	if (value < 0) {
+		buffer[offset] = '-';
+		offset++;
+		magnitude = (uint32_t)(-(value + 1)) + 1u;
+	} else {
+		magnitude = (uint32_t)value;
+	}
+	return gta4l_emmc_probe_append_decimal(buffer, offset, magnitude);
+}
+
+/* result/requested/completed/validated/first-divergence/stop
+ * result/stop status/stop response. */
+static uint32_t
+gta4l_emmc_probe_append_mb_group(char *buffer, uint32_t offset,
+    const char *label, const struct gta4l_emmc_probe_mb *mb)
+{
+	offset = gta4l_emmc_probe_append_text(buffer, offset, label);
+	offset = gta4l_emmc_probe_append_int(buffer, offset, mb->result);
+	offset = gta4l_emmc_probe_append_text(buffer, offset, "/");
+	offset = gta4l_emmc_probe_append_decimal(buffer, offset,
+	    mb->requested);
+	offset = gta4l_emmc_probe_append_text(buffer, offset, "/");
+	offset = gta4l_emmc_probe_append_decimal(buffer, offset,
+	    mb->completed);
+	offset = gta4l_emmc_probe_append_text(buffer, offset, "/");
+	offset = gta4l_emmc_probe_append_decimal(buffer, offset,
+	    mb->validated);
+	offset = gta4l_emmc_probe_append_text(buffer, offset, "/");
+	offset = gta4l_emmc_probe_append_decimal(buffer, offset, mb->div);
+	offset = gta4l_emmc_probe_append_text(buffer, offset, "/");
+	offset = gta4l_emmc_probe_append_int(buffer, offset,
+	    mb->stop_result);
+	offset = gta4l_emmc_probe_append_text(buffer, offset, "/");
+	offset = gta4l_emmc_probe_append_hex4(buffer, offset,
+	    mb->stop_normal);
+	offset = gta4l_emmc_probe_append_text(buffer, offset, "/");
+	offset = gta4l_emmc_probe_append_hex4(buffer, offset,
+	    mb->stop_error);
+	offset = gta4l_emmc_probe_append_text(buffer, offset, "/");
+	offset = gta4l_emmc_probe_append_hex8(buffer, offset,
+	    mb->stop_response[0]);
+	return offset;
+}
+
+static void
+gta4l_emmc_probe_mb_snapshot(const struct gta4l_emmc_host *host,
+    struct gta4l_emmc_probe_mb *mb, uint32_t requested, int result)
+{
+	uint32_t index;
+
+	bzero(mb, sizeof(*mb));
+	mb->result = result;
+	mb->attempted = 1u;
+	mb->requested = requested;
+	mb->completed = host->multi_completed;
+	mb->drain_used = host->multi_drain_used;
+	mb->drain_resolved = host->multi_drain_resolved;
+	mb->drain_blocks = host->multi_drain_blocks;
+	mb->drain_iterations = host->multi_drain_iterations;
+	mb->stop_result = host->multi_stop_result;
+	mb->stop_valid = host->multi_stop_valid;
+	mb->stop_capture_valid = host->multi_stop_capture_valid;
+	mb->stop_normal = host->multi_stop_normal;
+	mb->stop_error = host->multi_stop_error;
+	mb->stop_present = host->multi_stop_present;
+	mb->stop_command = host->multi_stop_command;
+	mb->stop_argument = host->multi_stop_argument;
+	for (index = 0; index < 4u; index++) {
+		mb->stop_response[index] = host->multi_stop_response[index];
+	}
+}
+
+/* Count the fully drained sectors whose bytes equal the CMD17 reference and
+ * record the first differing LBA. A partial sector is never validated. */
+static uint32_t
+gta4l_emmc_probe_mb_validate(const uint8_t *blocks, uint32_t completed,
+    uint32_t requested, const uint8_t *reference, uint32_t first_lba,
+    uint32_t *div)
+{
+	uint32_t index;
+	uint32_t byte;
+	uint32_t valid = 0;
+
+	*div = 0;
+	for (index = 0; (index < completed) && (index < requested); index++) {
+		int same = 1;
+
+		for (byte = 0; byte < GTA4L_EMMC_BLOCK_BYTES; byte++) {
+			if (blocks[(index * GTA4L_EMMC_BLOCK_BYTES) + byte] !=
+			    reference[(index * GTA4L_EMMC_BLOCK_BYTES) +
+			    byte]) {
+				same = 0;
+				break;
+			}
+		}
+		if (same != 0) {
+			valid++;
+		} else if (*div == 0u) {
+			*div = first_lba + index;
+		}
+	}
+	return valid;
+}
+
+/* A CMD18 request qualifies only when the transport returned success, the
+ * explicit stop completed cleanly, the requested length is the intended one,
+ * every requested sector was drained, and every drained sector matched its
+ * same-boot CMD17 reference byte for byte. The transport result stays in
+ * `mb->result`; this helper returns a diagnostic verdict so a content-only
+ * failure cannot masquerade as a hardware error. */
+static int
+gta4l_emmc_probe_mb_accept(const struct gta4l_emmc_probe_mb *mb,
+    uint32_t requested)
+{
+	if (mb->result != GTA4L_EMMC_OK) {
+		return mb->result;
+	}
+	if (mb->stop_result != GTA4L_EMMC_OK) {
+		return (int)mb->stop_result;
+	}
+	if (mb->requested != requested) {
+		return GTA4L_EMMC_PROBE_ERR_LENGTH;
+	}
+	if (mb->completed != requested) {
+		return GTA4L_EMMC_PROBE_ERR_LENGTH;
+	}
+	if (mb->validated != requested) {
+		return GTA4L_EMMC_PROBE_ERR_CONTENT;
+	}
+	return GTA4L_EMMC_OK;
+}
+
 static void
 gta4l_emmc_probe_report_multi_failure(const struct gta4l_emmc_host *host,
-    const struct gta4l_emmc_probe_range *range, int result)
+    const struct gta4l_emmc_probe_range *range, int result, uint32_t stage)
 {
-	panic("GTA4L-EMMC PROBE FAILED: mb read lba=%u n=%u rc=%d step=%u "
-	    "mb=%u drain=%u/%u/%u/%u "
-	    "stop=%d/%u/%u/%04x/%04x/%08x/%08x/%08x "
+	panic("GTA4L-EMMC PROBE FAILED: mb rc=%d stage=%u step=%u mb=%u mbc=%u "
+	    "att=%u%u "
+	    "s=%d/%u/%u/%u/%u/%d/%04x/%04x/%08x "
+	    "l=%d/%u/%u/%u/%u/%d/%04x/%04x/%08x "
+	    "rec=%d/%d/%d/%u/%u/%u/%u/%u "
 	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
-	    range->entries_lba, GTA4L_EMMC_PROBE_ARRAY_BLOCKS, result,
-	    host->last_step, host->multi_block,
-	    (unsigned int)host->multi_drain_used,
-	    (unsigned int)host->multi_drain_resolved,
-	    host->multi_drain_blocks, host->multi_drain_iterations,
-	    (int)host->multi_stop_result,
-	    (unsigned int)host->multi_stop_valid,
-	    (unsigned int)host->multi_stop_capture_valid,
-	    (unsigned int)host->multi_stop_normal,
-	    (unsigned int)host->multi_stop_error,
-	    host->multi_stop_present,
-	    (unsigned int)host->multi_stop_command,
-	    host->multi_stop_argument,
+	    result, stage, host->last_step, host->multi_block,
+	    host->multi_completed,
+	    (unsigned int)range->short_mb.attempted,
+	    (unsigned int)range->long_mb.attempted,
+	    range->short_mb.result, range->short_mb.requested,
+	    range->short_mb.completed, range->short_mb.validated,
+	    range->short_mb.div, (int)range->short_mb.stop_result,
+	    (unsigned int)range->short_mb.stop_normal,
+	    (unsigned int)range->short_mb.stop_error,
+	    range->short_mb.stop_response[0],
+	    range->long_mb.result, range->long_mb.requested,
+	    range->long_mb.completed, range->long_mb.validated,
+	    range->long_mb.div, (int)range->long_mb.stop_result,
+	    (unsigned int)range->long_mb.stop_normal,
+	    (unsigned int)range->long_mb.stop_error,
+	    range->long_mb.stop_response[0],
+	    range->recovery_result, range->recovery0_result,
+	    range->recovery2_result, range->recovery_attempted,
+	    range->recovery_compared, range->recovery_same,
+	    range->recovery_div, range->recovery_div_valid,
 	    (unsigned int)host->fail_valid, host->fail_index,
 	    host->fail_argument, host->fail_command,
 	    (unsigned int)host->fail_error,
@@ -1233,36 +1449,60 @@ gta4l_emmc_probe_report_b2(const struct gta4l_emmc_host *host,
 	    host->fail_step);
 }
 
-/* H9 stop codes: 0 clean identification with no retry, 10 retry engaged and
- * the duplicate CMD3 clean before a clean identification, 11 duplicate CMD3
- * transport failure, 12 duplicate CMD3 clean but identification failed later,
- * 13 duplicate CMD3 R1 status error, 14 no retry engaged and identification
- * did not complete cleanly (the first CMD3 either failed at a non-timeout
- * code or never ran), 15 attempt-1 CMD3 clean but identification failed
- * later. */
+/* Stage-9 stop codes for the versioned no-retry timeline diagnostic: 0 clean
+ * identification, 14 CMD3 did not complete cleanly or was never submitted, 15
+ * CMD3 was clean but identification failed later. The historical retry stops
+ * 10-13 remain documented for old H9 images but are unreachable here. */
 static int
 gta4l_emmc_probe_h9_stop(const struct gta4l_emmc_host *host, int result)
 {
 	if (host->cmd3_attempt_count == 0u) {
 		return (result == GTA4L_EMMC_OK) ? 0 : 14;
 	}
-	if (host->cmd3_attempt_count == 1u) {
-		if (host->cmd3_attempt[0].result != GTA4L_EMMC_OK) {
-			return 14;
-		}
-		return (result == GTA4L_EMMC_OK) ? 0 : 15;
+	if (host->cmd3_attempt[0].result != GTA4L_EMMC_OK) {
+		return 14;
 	}
-	if (host->cmd3_attempt[1].result != GTA4L_EMMC_OK) {
-		return (host->cmd3_attempt[1].result ==
-		    GTA4L_EMMC_ERR_CARD_STATUS) ? 13 : 11;
-	}
-	return (result == GTA4L_EMMC_OK) ? 10 : 12;
+	return (result == GTA4L_EMMC_OK) ? 0 : 15;
 }
 
-/* Report both CMD3 attempt records and the identification fields. The report
- * never samples a new MMIO register; `regs` was captured by the caller behind
- * the existing clock guard. A slot that did not run is printed with `n=0`
- * and zero fields. */
+static char
+gta4l_emmc_probe_cmd3_kind_char(uint32_t kind)
+{
+	switch (kind) {
+	case GTA4L_EMMC_CMD3_TRACE_SCHEDULED:
+		return 'S';
+	case GTA4L_EMMC_CMD3_TRACE_TERM_SUCCESS:
+		return 'C';
+	case GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT:
+		return 'T';
+	case GTA4L_EMMC_CMD3_TRACE_TERM_ERROR:
+		return 'E';
+	default:
+		return '?';
+	}
+}
+
+/* One fixed trace line for every bounded slot. Unused scheduled slots and an
+ * absent terminal slot are printed with kind '?' and valid=0, so the report
+ * length stays bounded and no observation is invented. */
+#define GTA4L_EMMC_H9T_LINE \
+	"GTA4L-EMMC H9T T%02u %c %u %04x %04x %08x %u %08x%08x\n"
+#define GTA4L_EMMC_H9T_ENTRY(h, i) \
+	(uint32_t)(i), \
+	gta4l_emmc_probe_cmd3_kind_char((h)->cmd3_timeline[i].kind), \
+	(h)->cmd3_timeline[i].iteration, \
+	(unsigned int)(h)->cmd3_timeline[i].normal, \
+	(unsigned int)(h)->cmd3_timeline[i].error, \
+	(h)->cmd3_timeline[i].response0, \
+	(h)->cmd3_timeline[i].valid, \
+	(unsigned int)((h)->cmd3_timeline[i].ticks >> 32), \
+	(unsigned int)(h)->cmd3_timeline[i].ticks
+
+/* Versioned no-retry stage-9 report. The formatter performs no MMIO; `regs`
+ * was captured by the caller behind the existing clock guard. The whole report
+ * is a single panic: a second panic would never run. The trace is a fixed
+ * 20-slot block (19 scheduled + one terminal) so the total length is bounded
+ * and the report fits the 2048-byte panic buffer with margin. */
 static void
 gta4l_emmc_probe_report_h9(const struct gta4l_emmc_host *host,
     struct gta4l_emmc_probe *probe,
@@ -1270,89 +1510,76 @@ gta4l_emmc_probe_report_h9(const struct gta4l_emmc_host *host,
 {
 	struct gta4l_emmc_cmd3_capture none;
 	const struct gta4l_emmc_cmd3_capture *a1;
-	const struct gta4l_emmc_cmd3_capture *a2;
+	uint32_t count;
 
+	(void)regs;
 	bzero(&none, sizeof(none));
 	a1 = (host->cmd3_attempt_count >= 1u) ?
 	    &host->cmd3_attempt[0] : &none;
-	a2 = (host->cmd3_attempt_count >= 2u) ?
-	    &host->cmd3_attempt[1] : &none;
-	panic("GTA4L-EMMC H9 REPORT: rc=%d stop=%u mci=%08x rca=%u cap=%u "
-	    "rev=%u bw=%u ocr=%08x ext=%08x hci=%02x retry=%u/%u att=%u "
-	    "step=%u log=%u\n"
-	    "GTA4L-EMMC H9 A1 n=%u rc=%d r1=%u "
-	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u "
+	count = host->cmd3_timeline_count;
+	if (count > GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES) {
+		count = GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES;
+	}
+	panic("GTA4L-EMMC H9T REPORT ver=%u rc=%d stop=%u sub=%u att=%u "
+	    "tr=%d r1=%u retry=%u/%u step=%u log=%u hz=%u\n"
+	    "GTA4L-EMMC H9T C3P v=%u/%04x/%04x/%08x/%04x/%04x rv=%u "
 	    "rsp=%08x,%08x,%08x,%08x\n"
-	    "GTA4L-EMMC H9 A1P c3p=%u/%04x/%04x/%08x/%04x/%04x "
-	    "c3t=%u/%u/%04x/%08x/%u/%08x,%08x,%08x,%08x\n"
-	    "GTA4L-EMMC H9 A1L c3l=%u/%u/%04x/%04x/%u/%08x%08x/%u\n"
-	    "GTA4L-EMMC H9 A2 n=%u rc=%d r1=%u "
-	    "fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u "
-	    "rsp=%08x,%08x,%08x,%08x\n"
-	    "GTA4L-EMMC H9 A2P c3p=%u/%04x/%04x/%08x/%04x/%04x "
-	    "c3t=%u/%u/%04x/%08x/%u/%08x,%08x,%08x,%08x\n"
-	    "GTA4L-EMMC H9 A2L c3l=%u/%u/%04x/%04x/%u/%08x%08x/%u\n"
-	    "GTA4L-EMMC H9 C cid=%08x,%08x,%08x,%08x cmd1=%u/%u\n"
-	    "GTA4L-EMMC H9 FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
-	    rc, stop, host->mci_version, host->rca, host->capacity_blocks,
-	    (unsigned int)host->ext_csd_rev, (unsigned int)host->bus_width,
-	    host->ocr, host->ext_csd_sum, (unsigned int)regs->host_control,
-	    (unsigned int)host->cmd3_retry_engaged,
-	    (unsigned int)host->cmd3_retry_ok,
+	    "GTA4L-EMMC H9T C3L v=%u/%u/%04x/%04x/%u/%08x%08x\n"
+	    "GTA4L-EMMC H9T C3T v=%u/%u/%04x/%08x/%u/"
+	    "%08x,%08x,%08x,%08x\n"
+	    "GTA4L-EMMC H9T TRC n=%u ov=%u order=k,i,n,e,r0,v,ticks\n"
+	    GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE
+	    GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE
+	    GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE
+	    GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE
+	    GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE
+	    GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE
+	    GTA4L_EMMC_H9T_LINE GTA4L_EMMC_H9T_LINE
+	    "GTA4L-EMMC H9T FAIL fail=%u/%u/%u/%08x/%04x/%04x/%08x/%u",
+	    GTA4L_EMMC_CMD3_TIMELINE_VERSION, rc, stop,
+	    (unsigned int)host->cmd3_submitted,
 	    (unsigned int)host->cmd3_attempt_count,
-	    host->last_step, probe->log_count,
-	    a1->number, a1->result, a1->r1_error,
-	    a1->fail_valid, a1->fail_index, a1->fail_argument,
-	    a1->fail_command, (unsigned int)a1->fail_error,
-	    (unsigned int)a1->fail_normal, a1->fail_present,
-	    a1->fail_step, a1->fail_response[0], a1->fail_response[1],
-	    a1->fail_response[2], a1->fail_response[3],
+	    host->cmd3_transport_result, host->cmd3_r1_error,
+	    (unsigned int)host->cmd3_retry_enabled,
+	    (unsigned int)host->cmd3_retry_engaged, host->last_step,
+	    probe->log_count, (unsigned int)probe->platform.counter_hz,
 	    a1->pre_valid, (unsigned int)a1->pre_normal,
 	    (unsigned int)a1->pre_error, a1->pre_present,
 	    (unsigned int)a1->pre_normal_enable,
 	    (unsigned int)a1->pre_error_enable,
-	    a1->timeout_valid, a1->timeout_index,
-	    (unsigned int)a1->timeout_command, a1->timeout_argument,
-	    a1->timeout_response_stable, a1->timeout_response[0],
-	    a1->timeout_response[1], a1->timeout_response[2],
-	    a1->timeout_response[3],
+	    a1->pre_response_valid,
+	    a1->pre_response[0], a1->pre_response[1],
+	    a1->pre_response[2], a1->pre_response[3],
 	    a1->poll_valid, a1->poll_index,
 	    (unsigned int)a1->poll_first_normal,
 	    (unsigned int)a1->poll_last_normal,
 	    a1->poll_iterations,
 	    (unsigned int)(a1->poll_ticks >> 32),
 	    (unsigned int)a1->poll_ticks,
-	    (unsigned int)probe->platform.counter_hz,
-	    a2->number, a2->result, a2->r1_error,
-	    a2->fail_valid, a2->fail_index, a2->fail_argument,
-	    a2->fail_command, (unsigned int)a2->fail_error,
-	    (unsigned int)a2->fail_normal, a2->fail_present,
-	    a2->fail_step, a2->fail_response[0], a2->fail_response[1],
-	    a2->fail_response[2], a2->fail_response[3],
-	    a2->pre_valid, (unsigned int)a2->pre_normal,
-	    (unsigned int)a2->pre_error, a2->pre_present,
-	    (unsigned int)a2->pre_normal_enable,
-	    (unsigned int)a2->pre_error_enable,
-	    a2->timeout_valid, a2->timeout_index,
-	    (unsigned int)a2->timeout_command, a2->timeout_argument,
-	    a2->timeout_response_stable, a2->timeout_response[0],
-	    a2->timeout_response[1], a2->timeout_response[2],
-	    a2->timeout_response[3],
-	    a2->poll_valid, a2->poll_index,
-	    (unsigned int)a2->poll_first_normal,
-	    (unsigned int)a2->poll_last_normal,
-	    a2->poll_iterations,
-	    (unsigned int)(a2->poll_ticks >> 32),
-	    (unsigned int)a2->poll_ticks,
-	    (unsigned int)probe->platform.counter_hz,
-	    host->cid[0], host->cid[1], host->cid[2], host->cid[3],
-	    host->cmd1_attempts, host->cmd1_timeouts,
+	    a1->timeout_valid, a1->timeout_index,
+	    (unsigned int)a1->timeout_command, a1->timeout_argument,
+	    a1->timeout_response_stable,
+	    a1->timeout_response[0], a1->timeout_response[1],
+	    a1->timeout_response[2], a1->timeout_response[3],
+	    count, host->cmd3_timeline_overflow,
+	    GTA4L_EMMC_H9T_ENTRY(host, 0), GTA4L_EMMC_H9T_ENTRY(host, 1),
+	    GTA4L_EMMC_H9T_ENTRY(host, 2), GTA4L_EMMC_H9T_ENTRY(host, 3),
+	    GTA4L_EMMC_H9T_ENTRY(host, 4), GTA4L_EMMC_H9T_ENTRY(host, 5),
+	    GTA4L_EMMC_H9T_ENTRY(host, 6), GTA4L_EMMC_H9T_ENTRY(host, 7),
+	    GTA4L_EMMC_H9T_ENTRY(host, 8), GTA4L_EMMC_H9T_ENTRY(host, 9),
+	    GTA4L_EMMC_H9T_ENTRY(host, 10), GTA4L_EMMC_H9T_ENTRY(host, 11),
+	    GTA4L_EMMC_H9T_ENTRY(host, 12), GTA4L_EMMC_H9T_ENTRY(host, 13),
+	    GTA4L_EMMC_H9T_ENTRY(host, 14), GTA4L_EMMC_H9T_ENTRY(host, 15),
+	    GTA4L_EMMC_H9T_ENTRY(host, 16), GTA4L_EMMC_H9T_ENTRY(host, 17),
+	    GTA4L_EMMC_H9T_ENTRY(host, 18), GTA4L_EMMC_H9T_ENTRY(host, 19),
 	    (unsigned int)host->fail_valid, host->fail_index,
 	    host->fail_argument, host->fail_command,
 	    (unsigned int)host->fail_error,
 	    (unsigned int)host->fail_normal, host->fail_present,
 	    host->fail_step);
 }
+#undef GTA4L_EMMC_H9T_ENTRY
+#undef GTA4L_EMMC_H9T_LINE
 
 /* Run the stage-8 HS-timing rung: sample the 400 kHz state (R), switch
  * byte 185 to high speed and ramp to the 50 MHz HS row (S), repeat the full
@@ -2959,9 +3186,12 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 {
 	const uint32_t *content = (mb_mode != 0) ? range->mb : range->array;
 	char mb_suffix[64];
+	char mb_line[384];
 	uint32_t mb_suffix_length = 0;
+	uint32_t mb_line_length = 0;
 
 	mb_suffix[0] = '\0';
+	mb_line[0] = '\0';
 	if (mb_mode != 0) {
 		if (range->mb_same != 0) {
 			mb_suffix_length = gta4l_emmc_probe_append_text(mb_suffix,
@@ -2991,6 +3221,36 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 	}
 	mb_suffix[mb_suffix_length] = '\0';
 
+	if (mb_mode != 0) {
+		mb_line_length = gta4l_emmc_probe_append_text(mb_line,
+		    mb_line_length, "GTA4L-EMMC PROBE MB clk=");
+		mb_line_length = gta4l_emmc_probe_append_hex4(mb_line,
+		    mb_line_length, regs->clock);
+		mb_line_length = gta4l_emmc_probe_append_text(mb_line,
+		    mb_line_length, " ");
+		mb_line_length = gta4l_emmc_probe_append_mb_group(mb_line,
+		    mb_line_length, "s=", &range->short_mb);
+		mb_line_length = gta4l_emmc_probe_append_text(mb_line,
+		    mb_line_length, " ");
+		mb_line_length = gta4l_emmc_probe_append_mb_group(mb_line,
+		    mb_line_length, "l=", &range->long_mb);
+		mb_line_length = gta4l_emmc_probe_append_text(mb_line,
+		    mb_line_length, " rec=");
+		mb_line_length = gta4l_emmc_probe_append_int(mb_line,
+		    mb_line_length, range->recovery_result);
+		mb_line_length = gta4l_emmc_probe_append_text(mb_line,
+		    mb_line_length, "/");
+		mb_line_length = gta4l_emmc_probe_append_decimal(mb_line,
+		    mb_line_length, range->recovery_same);
+		mb_line_length = gta4l_emmc_probe_append_text(mb_line,
+		    mb_line_length, "/");
+		mb_line_length = gta4l_emmc_probe_append_decimal(mb_line,
+		    mb_line_length, range->recovery_div);
+		mb_line_length = gta4l_emmc_probe_append_text(mb_line,
+		    mb_line_length, "\n");
+	}
+	mb_line[mb_line_length] = '\0';
+
 	panic("GTA4L-EMMC PROBE REPORT: rc=0 mci=%08x rca=%u cap=%u rev=%u "
 	    "bw=%u ocr=%08x ext=%08x hc2=%04x ven=%08x dll=%08x "
 	    "dst=%08x pst=%08x step=%u log=%u%s\n"
@@ -3006,6 +3266,7 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 	    " 17=%08x 18=%08x 19=%08x 20=%08x 21=%08x 22=%08x\n"
 	    "GTA4L-EMMC PROBE DATA %u=%08x\n"
 	    "GTA4L-EMMC PROBE LSTLBA=%u sum=%08x%s\n"
+	    "%s"
 	    "GTA4L-EMMC PROBE CAPTURE fmt=4 hv=%04x "
 	    "c2=%u/%04x/%04x/%08x,%08x,%08x,%08x "
 	    "c3p=%u/%04x/%04x/%08x/%04x/%04x "
@@ -3042,6 +3303,7 @@ gta4l_emmc_probe_report_probe(const struct gta4l_emmc_host *host,
 	    content[18], content[19], content[20],
 	    range->first_usable, range->data_sum,
 	    range->backup_lba, range->last_sum, mb_suffix,
+	    mb_line,
 	    (unsigned int)regs->host_version,
 	    (unsigned int)host->cmd2_capture_valid,
 	    (unsigned int)host->cmd2_normal,
@@ -3081,6 +3343,8 @@ gta4l_emmc_probe_run(void)
 	static uint8_t range_block[GTA4L_EMMC_BLOCK_BYTES];
 	static uint8_t mb_blocks[GTA4L_EMMC_PROBE_ARRAY_BLOCKS *
 	    GTA4L_EMMC_BLOCK_BYTES];
+	static uint8_t mb_reference[GTA4L_EMMC_PROBE_ARRAY_BLOCKS *
+	    GTA4L_EMMC_BLOCK_BYTES];
 	struct gta4l_emmc_probe probe;
 	struct gta4l_emmc_probe_regs regs;
 	struct gta4l_emmc_probe_range range;
@@ -3109,6 +3373,8 @@ gta4l_emmc_probe_run(void)
 	uint32_t gcc_n;
 	uint32_t gcc_d;
 	uint32_t index;
+	uint32_t byte;
+	uint32_t div;
 	uint32_t gate_mask;
 	int stage;
 	int mb_mode;
@@ -3153,8 +3419,11 @@ gta4l_emmc_probe_run(void)
 	 * of that DT-derived state. See docs/emmc-driver.md. */
 	host.fixed_1v8 = 1;
 	host.pad_pwr_switch = 1;
-	/* H9 is the only stage that enables the duplicate CMD3 hook. */
-	host.cmd3_retry_enabled = (stage == 9) ? 1u : 0u;
+	/* Stage 9 is now the versioned no-retry CMD3 timeline capture. The
+	 * historical duplicate-CMD3 retry seam stays in the portable core for
+	 * its direct regression tests but is never enabled by a probe stage. */
+	host.cmd3_retry_enabled = 0u;
+	host.cmd3_timeline_enabled = (stage == 9) ? 1u : 0u;
 	/* H9 also stops after the identification sequence, before EXT_CSD. */
 	host.identify_only = (stage == 9) ? 1u : 0u;
 
@@ -3359,6 +3628,14 @@ gta4l_emmc_probe_run(void)
 		}
 		range.array[index] = gta4l_emmc_probe_sum(range_block,
 		    GTA4L_EMMC_BLOCK_BYTES);
+		if (mb_mode != 0) {
+			/* Keep the exact same-boot CMD17 bytes for the CMD18
+			 * comparison; the sums alone cannot prove a sector. */
+			for (byte = 0; byte < GTA4L_EMMC_BLOCK_BYTES; byte++) {
+				mb_reference[(index * GTA4L_EMMC_BLOCK_BYTES) +
+				    byte] = range_block[byte];
+			}
+		}
 	}
 
 	host.last_step = GTA4L_EMMC_STEP_PROBE_DATA;
@@ -3588,33 +3865,174 @@ gta4l_emmc_probe_run(void)
 		    &w4, &w8, GTA4L_EMMC_OK, 0);
 	}
 
-	/* Optional MD pass: re-read the same 21 sectors as one open-ended
-	 * CMD18 transfer and stop it explicitly. A read failure stops here
-	 * with the terminal failure record, the failing block ordinal and
-	 * the CMD12 attempt result. A content mismatch is not a hardware
-	 * failure: it is reported as mbsame=0 and the offline comparison
-	 * decides. There is no on-device retry. */
+	/* Optional D10 F2 pass: a short CMD18 request, then one long request
+	 * over the complete GPT array, each stopped explicitly and compared
+	 * byte-for-byte with the same boot's CMD17 reference. Each request is
+	 * an explicit acceptance barrier: a transport/stop error, a length
+	 * mismatch, or a byte mismatch records the failure and skips the next
+	 * request. Only qualified requests reach the bounded CMD17 recovery
+	 * reads (block 0, then LBA 2), and each recovery read is itself a
+	 * barrier. The success report below is reachable only through the
+	 * single overall gate at the end; there is no retry. */
 	if (mb_mode != 0) {
+		int mb_failure = GTA4L_EMMC_OK;
+		uint32_t mb_stage = 0;
+
 		host.last_step = GTA4L_EMMC_STEP_PROBE_MB;
+
+		/* Initialize the recovery state before any transfer so a
+		 * not-run recovery is never mistaken for a successful one:
+		 * `attempted` and `compared` stay clear and `same` stays 0. */
+		range.recovery_result = GTA4L_EMMC_OK;
+		range.recovery0_result = GTA4L_EMMC_OK;
+		range.recovery2_result = GTA4L_EMMC_OK;
+		range.recovery_attempted = 0;
+		range.recovery_compared = 0;
+		range.recovery_same = 0;
+		range.recovery_div = 0;
+		range.recovery_div_valid = 0;
+
+		/* Short request barrier. Clear the buffer so a partial failure
+		 * cannot present residual bytes as completed data. */
+		bzero(mb_blocks, sizeof(mb_blocks));
 		result = gta4l_emmc_read_multi(&host, range.entries_lba,
-		    GTA4L_EMMC_PROBE_ARRAY_BLOCKS, mb_blocks);
-		if (result != GTA4L_EMMC_OK) {
-			gta4l_emmc_probe_report_multi_failure(&host, &range,
-			    result);
+		    GTA4L_EMMC_PROBE_SHORT_BLOCKS, mb_blocks);
+		gta4l_emmc_probe_mb_snapshot(&host, &range.short_mb,
+		    GTA4L_EMMC_PROBE_SHORT_BLOCKS, result);
+		range.short_mb.validated = gta4l_emmc_probe_mb_validate(
+		    mb_blocks, range.short_mb.completed,
+		    GTA4L_EMMC_PROBE_SHORT_BLOCKS, mb_reference,
+		    range.entries_lba, &range.short_mb.div);
+		range.short_mb.verdict = gta4l_emmc_probe_mb_accept(
+		    &range.short_mb, GTA4L_EMMC_PROBE_SHORT_BLOCKS);
+		if (range.short_mb.verdict != GTA4L_EMMC_OK) {
+			mb_failure = range.short_mb.verdict;
+			mb_stage = 1u;
 		}
-		range.mb_same = 1;
-		range.mb_div = 0;
-		for (index = 0;
-		    index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
-			range.mb[index] = gta4l_emmc_probe_sum(
-			    mb_blocks +
-			    (index * GTA4L_EMMC_BLOCK_BYTES),
-			    GTA4L_EMMC_BLOCK_BYTES);
-			if ((range.mb[index] != range.array[index]) &&
-			    (range.mb_same != 0)) {
-				range.mb_same = 0;
-				range.mb_div = range.entries_lba + index;
+
+		if (mb_failure == GTA4L_EMMC_OK) {
+			/* Long request barrier. The short-request bytes must
+			 * not leak into an uncompleted long sector. */
+			bzero(mb_blocks, sizeof(mb_blocks));
+			result = gta4l_emmc_read_multi(&host, range.entries_lba,
+			    GTA4L_EMMC_PROBE_ARRAY_BLOCKS, mb_blocks);
+			gta4l_emmc_probe_mb_snapshot(&host, &range.long_mb,
+			    GTA4L_EMMC_PROBE_ARRAY_BLOCKS, result);
+			range.long_mb.validated =
+			    gta4l_emmc_probe_mb_validate(mb_blocks,
+			    range.long_mb.completed,
+			    GTA4L_EMMC_PROBE_ARRAY_BLOCKS, mb_reference,
+			    range.entries_lba, &range.long_mb.div);
+			range.long_mb.verdict = gta4l_emmc_probe_mb_accept(
+			    &range.long_mb, GTA4L_EMMC_PROBE_ARRAY_BLOCKS);
+			if (range.long_mb.verdict != GTA4L_EMMC_OK) {
+				mb_failure = range.long_mb.verdict;
+				mb_stage = 2u;
 			}
+		}
+
+		if (mb_failure == GTA4L_EMMC_OK) {
+			/* Secondary checksum evidence. Exact validation above
+			 * is the gate; a checksum match can never turn a byte
+			 * mismatch into an accepted request. Uncompleted
+			 * sectors stay zeroed and are never reported as
+			 * observed data. */
+			range.mb_same = 1;
+			range.mb_div = 0;
+			for (index = 0;
+			    index < GTA4L_EMMC_PROBE_ARRAY_BLOCKS; index++) {
+				if (index < range.long_mb.completed) {
+					range.mb[index] =
+					    gta4l_emmc_probe_sum(
+					    mb_blocks +
+					    (index * GTA4L_EMMC_BLOCK_BYTES),
+					    GTA4L_EMMC_BLOCK_BYTES);
+				}
+				if ((range.mb[index] != range.array[index]) &&
+				    (range.mb_same != 0)) {
+					range.mb_same = 0;
+					range.mb_div =
+					    range.entries_lba + index;
+				}
+			}
+		}
+
+		if (mb_failure == GTA4L_EMMC_OK) {
+			/* Both transfers qualified; the recovery comparisons
+			 * now decide the final comparison state. */
+			range.recovery_same = 1;
+			/* Recovery block 0. A transport failure or a byte
+			 * divergence prevents the LBA-2 read. */
+			range.recovery_attempted |= 1u;
+			result = gta4l_emmc_read_block(&host, 0, range_block);
+			range.recovery0_result = result;
+			if (result != GTA4L_EMMC_OK) {
+				range.recovery_result = result;
+				range.recovery_same = 0;
+				mb_failure = result;
+				mb_stage = 3u;
+			} else {
+				range.recovery_compared |= 1u;
+				if (gta4l_emmc_probe_mb_validate(range_block,
+				    1u, 1u, block0, 0u, &div) != 1u) {
+					range.recovery_same = 0;
+					range.recovery_div = div;
+					range.recovery_div_valid = 1;
+					range.recovery_result =
+					    GTA4L_EMMC_PROBE_ERR_CONTENT;
+					mb_failure =
+					    GTA4L_EMMC_PROBE_ERR_CONTENT;
+					mb_stage = 3u;
+				}
+			}
+		}
+
+		if (mb_failure == GTA4L_EMMC_OK) {
+			/* Recovery read of the first array sector. */
+			range.recovery_attempted |= 2u;
+			result = gta4l_emmc_read_block(&host,
+			    range.entries_lba, range_block);
+			range.recovery2_result = result;
+			if (result != GTA4L_EMMC_OK) {
+				range.recovery_result = result;
+				range.recovery_same = 0;
+				mb_failure = result;
+				mb_stage = 4u;
+			} else {
+				range.recovery_compared |= 2u;
+				if (gta4l_emmc_probe_mb_validate(range_block,
+				    1u, 1u, mb_reference, range.entries_lba,
+				    &div) != 1u) {
+					range.recovery_same = 0;
+					range.recovery_div = div;
+					range.recovery_div_valid = 1;
+					range.recovery_result =
+					    GTA4L_EMMC_PROBE_ERR_CONTENT;
+					mb_failure =
+					    GTA4L_EMMC_PROBE_ERR_CONTENT;
+					mb_stage = 4u;
+				}
+			}
+		}
+
+		/* Overall success gate. The hardcoded rc=0 success report is
+		 * reachable only from this qualified state. */
+		if ((mb_failure != GTA4L_EMMC_OK) ||
+		    (range.short_mb.verdict != GTA4L_EMMC_OK) ||
+		    (range.long_mb.verdict != GTA4L_EMMC_OK) ||
+		    (range.short_mb.attempted != 1u) ||
+		    (range.long_mb.attempted != 1u) ||
+		    (range.recovery_same == 0u) ||
+		    (range.recovery_result != GTA4L_EMMC_OK) ||
+		    (range.recovery_attempted != 3u) ||
+		    (range.recovery_compared != 3u)) {
+			int verdict = (mb_failure != GTA4L_EMMC_OK) ?
+			    mb_failure : GTA4L_EMMC_PROBE_ERR_CONTENT;
+			uint32_t stage = (mb_failure != GTA4L_EMMC_OK) ?
+			    mb_stage : 5u;
+
+			gta4l_emmc_probe_report_multi_failure(&host, &range,
+			    verdict, stage);
 		}
 	}
 

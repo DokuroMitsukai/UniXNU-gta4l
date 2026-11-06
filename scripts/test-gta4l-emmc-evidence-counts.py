@@ -49,6 +49,8 @@ def source_counts():
     probe_tree = ast.parse(PROBE_TEST.read_text(), filename=str(PROBE_TEST))
     core_scenarios = list_length(
         core_tree, 'SCENARIOS', True, CORE_TEST)
+    core_scenarios += list_length(
+        core_tree, 'VARIANTS', True, CORE_TEST)
     core_mutations = list_length(
         core_tree, 'mutations', False, CORE_TEST)
     probe_scenarios = list_length(

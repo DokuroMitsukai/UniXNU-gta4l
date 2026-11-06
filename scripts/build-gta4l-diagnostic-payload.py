@@ -43,6 +43,8 @@ DIAGNOSTICS = {
     'emmc-probe-15': 'gta4l-emmc-probe=15',
     'emmc-probe-16': 'gta4l-emmc-probe=16',
     'emmc-probe-17': 'gta4l-emmc-probe=17',
+    'emmc-block-1': 'gta4l-emmc-block=1',
+    'emmc-block-3': 'gta4l-emmc-block=3',
 }
 
 
@@ -153,8 +155,8 @@ def main():
         temp_device = workdir / device.name
         shutil.copytree(
             device, temp_device,
-            ignore=shutil.ignore_patterns('.git', 'out', '__pycache__',
-                                          '*.pyc'))
+            ignore=shutil.ignore_patterns('.git', 'out', 'build',
+                                          '__pycache__', '*.pyc'))
         (temp_device / 'board.toml').write_text(
             set_diagnostic_board(board, args.payload_size_mib))
         temp_hash = sha(temp_device / 'board.toml')

@@ -11,6 +11,10 @@
 
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define GTA4L_EMMC_PLATFORM_SDHCI_BASE 0x04744000u
 #define GTA4L_EMMC_PLATFORM_GCC_BASE   0x01438000u
 #define GTA4L_EMMC_PLATFORM_TLMM_BASE  0x00575000u
@@ -47,5 +51,9 @@ void gta4l_emmc_platform_write32(struct gta4l_emmc_platform *platform,
 void gta4l_emmc_platform_barrier(void);
 void gta4l_emmc_platform_delay_us(struct gta4l_emmc_platform *platform,
     uint32_t microseconds);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* GTA4L_EMMC_PLATFORM_H */

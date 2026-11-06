@@ -14,6 +14,10 @@
 // tuning, high-speed mode or block-data writes.
 
 #ifndef GTA4L_EMMC_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #define GTA4L_EMMC_H
 
 /* MMIO spaces. The caller maps each base and implements the offset. */
@@ -250,6 +254,20 @@
 /* The H9 diagnostic allows exactly one duplicate CMD3 after a completion
  * timeout. Two attempt slots keep the first record intact for the report. */
 #define GTA4L_EMMC_CMD3_ATTEMPTS           2u
+/* Versioned no-retry CMD3 timeline diagnostic (stage 9). The scheduled
+ * RESPONSE0 samples are stored at the zero-based poll iterations below. The
+ * extra reserved slot keeps the terminal observation separate even when every
+ * scheduled point was reached. */
+#define GTA4L_EMMC_CMD3_TIMELINE_VERSION   1u
+#define GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES 19u
+#define GTA4L_EMMC_CMD3_TIMELINE_ENTRIES   20u
+/* Entry kinds. A scheduled entry is an in-poll sample; the terminal entry is
+ * the distinct observation point that ended the command. */
+#define GTA4L_EMMC_CMD3_TRACE_NONE         0u
+#define GTA4L_EMMC_CMD3_TRACE_SCHEDULED    1u
+#define GTA4L_EMMC_CMD3_TRACE_TERM_SUCCESS 2u
+#define GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT 3u
+#define GTA4L_EMMC_CMD3_TRACE_TERM_ERROR   4u
 
 /* MMC command indexes. */
 #define GTA4L_EMMC_CMD0                    0u
@@ -445,6 +463,8 @@ struct gta4l_emmc_cmd3_capture {
 	uint32_t pre_present;
 	uint32_t pre_normal_enable;
 	uint32_t pre_error_enable;
+	uint32_t pre_response[4]; /* raw RESPONSE0..3 before submission */
+	uint32_t pre_response_valid;
 	uint32_t timeout_valid;
 	uint32_t timeout_index;
 	uint32_t timeout_command;
@@ -458,6 +478,19 @@ struct gta4l_emmc_cmd3_capture {
 	uint32_t poll_last_normal;
 	uint64_t poll_ticks;
 	uint32_t response[4];  /* R1 after success; terminal words otherwise */
+};
+
+/* One bounded CMD3 timeline sample. Every field is a sequential register
+ * observation, not an atomic snapshot. `ticks` is the counter delta from the
+ * poll start sampled after RESPONSE0, so it bounds that read on one side. */
+struct gta4l_emmc_cmd3_timeline_entry {
+	uint32_t kind;      /* GTA4L_EMMC_CMD3_TRACE_* */
+	uint32_t iteration; /* zero-based poll iteration */
+	uint32_t normal;    /* normal interrupt status at the sample */
+	uint32_t error;     /* error interrupt status at the sample */
+	uint32_t response0; /* raw RESPONSE0 at the sample */
+	uint32_t valid;
+	uint64_t ticks;     /* counter delta from the poll start */
 };
 
 struct gta4l_emmc_host {
@@ -518,6 +551,22 @@ struct gta4l_emmc_host {
 	uint8_t  cmd3_retry_ok;
 	uint8_t  cmd3_attempt_count;
 	struct gta4l_emmc_cmd3_capture cmd3_attempt[GTA4L_EMMC_CMD3_ATTEMPTS];
+	/* Caller opt-in no-retry CMD3 timeline diagnostic. The portable core
+	 * never sets it; stage 9 does. It is independent of the retry seam and
+	 * the two cannot be enabled together. Every timeline field is cleared
+	 * at init start, not by gta4l_emmc_clear_failure(), so a later CMD9 or
+	 * CMD7 failure cannot erase the CMD3 evidence. */
+	uint8_t  cmd3_timeline_enabled;
+	uint32_t pre_cmd3_response[4]; /* raw RESPONSE0..3 before submission */
+	uint8_t  pre_cmd3_response_valid;
+	uint8_t  cmd3_submitted;       /* COMMAND was written for CMD3 */
+	int      cmd3_transport_result; /* CMD3 send result before R1 mapping */
+	uint32_t cmd3_r1_error;        /* R1 error bits present after transport OK */
+	uint32_t cmd3_timeline_count;  /* stored scheduled entries */
+	uint32_t cmd3_timeline_overflow; /* scheduled points not stored */
+	uint32_t cmd3_timeline_cursor; /* next scheduled point to match */
+	struct gta4l_emmc_cmd3_timeline_entry
+	    cmd3_timeline[GTA4L_EMMC_CMD3_TIMELINE_ENTRIES];
 	/* Caller opt-in: stop the identification sequence after the TRAN
 	 * wait and before the EXT_CSD read. The H9 rung uses it so the rung
 	 * touches no EXT_CSD data; the portable core never sets it. */
@@ -581,6 +630,8 @@ struct gta4l_emmc_host {
 	 * stop samples use the same sequential-read caveat as the CMD7
 	 * capture. */
 	uint32_t multi_block;       /* failing/completed block ordinal */
+	uint32_t multi_completed;   /* fully drained 512-byte sectors */
+	int32_t  multi_data_result; /* data-phase result before CMD12 */
 	int32_t  multi_stop_result; /* CMD12 result; 0 after a clean stop */
 	uint32_t multi_stop_normal;
 	uint32_t multi_stop_error;
@@ -633,8 +684,33 @@ int gta4l_emmc_read_block(struct gta4l_emmc_host *host, uint64_t block,
 int gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
     uint32_t count, void *buffer);
 
+/* Explicit CMD18 outcome for a production caller. The data-phase result is
+ * preserved separately from the mandatory CMD12 result so a caller can
+ * require both exact completion and a clean stop without interpreting the
+ * collapsed return value. The diagnostic gta4l_emmc_read_multi() semantics
+ * are unchanged. */
+struct gta4l_emmc_multi_result {
+	int32_t transport_result;
+	uint32_t requested_blocks;
+	uint32_t completed_blocks;
+	uint8_t stop_attempted;
+	int32_t stop_result;
+};
+
+int gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host,
+    uint64_t start_lba, uint32_t count, void *buffer,
+    struct gta4l_emmc_multi_result *result);
+
 /* Read the 512-byte EXT_CSD into `buffer`. */
 int gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer);
+
+#ifdef GTA4L_EMMC_HOST_TEST
+/* Test-only seam for the host capacity-boundary fixture. It calls the real
+ * bounded store and is not compiled into production or probe builds. */
+void gta4l_emmc_cmd3_timeline_store_test(struct gta4l_emmc_host *host,
+    uint32_t kind, uint32_t iteration, uint32_t normal, uint32_t error,
+    uint32_t response0, uint64_t ticks);
+#endif
 
 /* Evidence for one bus-width rung step. Every field is an observed value;
  * `switched` is the EXT_CSD BUS_WIDTH code read back after the CMD6 switch,
@@ -826,5 +902,9 @@ struct gta4l_emmc_hs_result {
  * set. */
 int gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
     struct gta4l_emmc_hs_result *result);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* GTA4L_EMMC_H */

@@ -21,6 +21,24 @@
 #define SIM_MAX_RESPONSE_READS 64u
 #define SIM_MB_TEST_BLOCKS 21u
 
+/* Timeline boundary variants: the default is the production 19-point
+ * schedule with the full 100000-iteration poll. The host test builds two
+ * copies with a shortened command timeout and with a reduced store capacity,
+ * passing the expected values here so the same scenario body can assert the
+ * real saturation and short-budget behaviour. */
+#ifndef SIM_TIMELINE_EXPECT_COUNT
+#define SIM_TIMELINE_EXPECT_COUNT GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES
+#endif
+#ifndef SIM_TIMELINE_EXPECT_OVERFLOW
+#define SIM_TIMELINE_EXPECT_OVERFLOW 0u
+#endif
+#ifndef SIM_TIMELINE_EXPECT_TERMINAL
+#define SIM_TIMELINE_EXPECT_TERMINAL GTA4L_EMMC_MAX_POLL_ITERATIONS
+#endif
+#ifndef SIM_TIMELINE_EXPECT_LAST
+#define SIM_TIMELINE_EXPECT_LAST 99999u
+#endif
+
 /* Independent copies of the SDHCI semantics the simulator enforces. These
  * are deliberately not taken from the production header, so a mutated header
  * cannot change what the simulator accepts. */
@@ -2237,6 +2255,67 @@ static const uint32_t cmd7_terminal_change_script[] = {
 	0u, 1u
 };
 
+/* Host-only capacity-boundary fixture: call the real bounded store directly.
+ * Fill the scheduled area, make one extra scheduled call (must saturate), then
+ * store a terminal entry and make a second extra scheduled call. No host or
+ * simulator state is involved. */
+static void
+timeline_store_boundary(void)
+{
+	struct gta4l_emmc_host host;
+	uint32_t index;
+
+	memset(&host, 0, sizeof(host));
+	for (index = 0; index < GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES; index++) {
+		gta4l_emmc_cmd3_timeline_store_test(&host,
+		    GTA4L_EMMC_CMD3_TRACE_SCHEDULED, index, index, 0u,
+		    0x1000u + index, (uint64_t)index);
+	}
+	check(host.cmd3_timeline_count ==
+	    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES,
+	    "the boundary fixture did not fill the scheduled capacity");
+	check(host.cmd3_timeline_overflow == 0u,
+	    "the boundary fixture overflowed at exact capacity");
+	gta4l_emmc_cmd3_timeline_store_test(&host,
+	    GTA4L_EMMC_CMD3_TRACE_SCHEDULED,
+	    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES, 0xFFFFu, 0xFFFFu,
+	    0xFFFFFFFFu, 0xFFFFFFFFFFFFFFFFull);
+	check(host.cmd3_timeline_count ==
+	    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES,
+	    "the store advanced past its scheduled capacity");
+	check(host.cmd3_timeline_overflow == 1u,
+	    "the store did not count the first capacity overflow");
+	check(host.cmd3_timeline[
+	    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES - 1u].iteration ==
+	    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES - 1u,
+	    "the store overwrote the last scheduled entry");
+	check(host.cmd3_timeline[
+	    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].kind ==
+	    GTA4L_EMMC_CMD3_TRACE_NONE,
+	    "a scheduled overflow wrote the reserved terminal slot");
+	gta4l_emmc_cmd3_timeline_store_test(&host,
+	    GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT, 100000u, 1u, 0u, 0x900u,
+	    100000u);
+	check(host.cmd3_timeline_count ==
+	    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES,
+	    "the terminal store changed the scheduled count");
+	check(host.cmd3_timeline[
+	    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].kind ==
+	    GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT,
+	    "the terminal store did not use the reserved slot");
+	check(host.cmd3_timeline[
+	    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].valid == 1u,
+	    "the terminal store did not mark its slot valid");
+	gta4l_emmc_cmd3_timeline_store_test(&host,
+	    GTA4L_EMMC_CMD3_TRACE_SCHEDULED, 100001u, 0u, 0u, 0u, 100001u);
+	check(host.cmd3_timeline_overflow == 2u,
+	    "the store did not count the second capacity overflow");
+	check(host.cmd3_timeline[
+	    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].kind ==
+	    GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT,
+	    "a later scheduled store overwrote the terminal slot");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2262,6 +2341,15 @@ main(int argc, char **argv)
 	host.context = &sim;
 	host.fixed_1v8 = 1;
 	host.pad_pwr_switch = 1;
+
+	if (strcmp(scenario, "cmd3-timeline-store-boundary") == 0) {
+		timeline_store_boundary();
+		if (failures != 0) {
+			return 1;
+		}
+		printf("PASS %s\n", scenario);
+		return 0;
+	}
 
 	if (scenario_is(scenario, "reset-timeout")) {
 		sim.reset_timeout = 1;
@@ -2785,6 +2873,22 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario, "bus-reset-drain-inhibit")) {
 		sim.bus_test_write_timeout = 1;
 		sim.bus_test_reset_no_inhibit_clear = 1;
+	} else if (scenario_is(scenario, "cmd3-timeline-clean") ||
+	    scenario_is(scenario, "cmd3-timeline-reinit")) {
+		host.cmd3_timeline_enabled = 1;
+	} else if (scenario_is(scenario, "cmd3-timeline-stale-cc")) {
+		host.cmd3_timeline_enabled = 1;
+		sim.cmd3_stale_cc = 1;
+	} else if (scenario_is(scenario, "cmd3-timeline-timeout") ||
+	    scenario_is(scenario, "cmd3-timeline-short-budget") ||
+	    scenario_is(scenario, "cmd3-timeline-saturation")) {
+		host.cmd3_timeline_enabled = 1;
+		sim.cmd3_no_cc = 1;
+	} else if (scenario_is(scenario, "cmd3-timeline-mixed")) {
+		/* The no-retry timeline capture must refuse a configuration
+		 * that also enables the historical CMD3 replay seam. */
+		host.cmd3_timeline_enabled = 1;
+		host.cmd3_retry_enabled = 1;
 	}
 
 	sim.trace_armed = 1;
@@ -2887,6 +2991,8 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "cmd1-crc-retire-not-ready") ||
 	    scenario_is(scenario, "cmd1-clear-invalidates-window") ||
 	    scenario_is(scenario, "reinit-clears-windows") ||
+	    scenario_is(scenario, "cmd3-timeline-clean") ||
+	    scenario_is(scenario, "cmd3-timeline-reinit") ||
 	    scenario_is(scenario, "cmd2-normalized") ||
 	    scenario_is(scenario, "cmd3-identify") ||
 	    scenario_is(scenario, "cmd3-stale-cc") ||
@@ -4717,6 +4823,11 @@ main(int argc, char **argv)
 			    "identify-status poll is not for CMD3");
 			check(host.timeout_capture_valid == 0u,
 			    "identify-status run recorded a timeout capture");
+			check(host.cmd3_timeline_count == 0u,
+			    "capture-disabled run stored timeline entries");
+			check(host.pre_cmd3_response_valid == 0u,
+			    "capture-disabled run recorded a pre-CMD3 "
+			    "response");
 		}
 		if (scenario_is(scenario, "cmd3-stale-cc")) {
 			check(host.pre_cmd3_capture_valid == 1u,
@@ -4950,6 +5061,127 @@ main(int argc, char **argv)
 			check(host.timeout_capture_valid == 0u,
 			    "an irrelevant TC caused a command timeout");
 		}
+	} else if (scenario_is(scenario, "cmd3-timeline-clean")) {
+		check(result == GTA4L_EMMC_OK,
+		    "the timeline-clean init failed");
+		check(host.cmd3_timeline_enabled == 1u,
+		    "the timeline-clean scenario did not enable capture");
+		check(host.cmd3_timeline_count == 1u,
+		    "the timeline-clean run did not store one scheduled "
+		    "sample");
+		check(host.cmd3_timeline_overflow == 0u,
+		    "the timeline-clean run overflowed");
+		check(host.cmd3_timeline[0].kind ==
+		    GTA4L_EMMC_CMD3_TRACE_SCHEDULED,
+		    "the first timeline slot is not a scheduled sample");
+		check(host.cmd3_timeline[0].iteration == 0u &&
+		    host.cmd3_timeline[0].response0 == 0x00000900u &&
+		    host.cmd3_timeline[0].valid == 1u,
+		    "the scheduled timeline sample changed");
+		check(host.cmd3_timeline[
+		    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].kind ==
+		    GTA4L_EMMC_CMD3_TRACE_TERM_SUCCESS,
+		    "the reserved terminal slot does not hold the "
+		    "completion");
+		check(host.cmd3_attempt_count == 1u,
+		    "the timeline-clean run did not record one CMD3 attempt");
+		check(sim.cmd3_count == 1u,
+		    "the timeline-clean run issued more than one CMD3");
+	} else if (scenario_is(scenario, "cmd3-timeline-stale-cc")) {
+		check(result == GTA4L_EMMC_OK,
+		    "the timeline stale-CC init failed");
+		check(host.cmd3_timeline_count == 1u,
+		    "the timeline stale-CC run stored the wrong sample "
+		    "count");
+		check(host.pre_cmd3_response_valid == 1u,
+		    "the timeline stale-CC run did not read the pre-CMD3 "
+		    "response");
+		check((host.pre_cmd3_normal & GTA4L_EMMC_INT_CC) != 0,
+		    "the timeline stale-CC run lost the post-clear "
+		    "completion");
+		check(host.cmd3_timeline[0].kind ==
+		    GTA4L_EMMC_CMD3_TRACE_SCHEDULED,
+		    "the timeline stale-CC run lost the scheduled sample");
+		check(sim.cmd3_count == 1u,
+		    "the timeline stale-CC run replayed CMD3");
+	} else if (scenario_is(scenario, "cmd3-timeline-timeout") ||
+	    scenario_is(scenario, "cmd3-timeline-short-budget") ||
+	    scenario_is(scenario, "cmd3-timeline-saturation")) {
+		check(result == GTA4L_EMMC_ERR_CMD_TIMEOUT,
+		    "the timeline boundary run did not time out");
+		check(host.cmd3_timeline_enabled == 1u,
+		    "the timeline boundary scenario did not enable capture");
+		check(host.cmd3_timeline_count == SIM_TIMELINE_EXPECT_COUNT,
+		    "the timeline boundary run stored the wrong number of "
+		    "scheduled samples");
+		check(host.cmd3_timeline_overflow ==
+		    SIM_TIMELINE_EXPECT_OVERFLOW,
+		    "the bounded timeline overflowed by the wrong amount");
+		check(host.cmd3_timeline[
+		    SIM_TIMELINE_EXPECT_COUNT - 1u].kind ==
+		    GTA4L_EMMC_CMD3_TRACE_SCHEDULED,
+		    "the last expected timeline slot is not scheduled");
+		check(host.cmd3_timeline[
+		    SIM_TIMELINE_EXPECT_COUNT - 1u].iteration ==
+		    SIM_TIMELINE_EXPECT_LAST,
+		    "the last expected timeline sample has the wrong "
+		    "iteration");
+		check(host.cmd3_timeline[
+		    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].kind ==
+		    GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT,
+		    "the reserved terminal slot does not hold the timeout");
+		check(host.cmd3_timeline[
+		    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].iteration ==
+		    SIM_TIMELINE_EXPECT_TERMINAL,
+		    "the terminal timeout has the wrong iteration");
+		if (SIM_TIMELINE_EXPECT_COUNT <
+		    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES) {
+			check(host.cmd3_timeline[
+			    SIM_TIMELINE_EXPECT_COUNT].kind ==
+			    GTA4L_EMMC_CMD3_TRACE_NONE,
+			    "the bounded timeline stored beyond its expected "
+			    "count");
+			check(host.cmd3_timeline[
+			    SIM_TIMELINE_EXPECT_COUNT].valid == 0u,
+			    "the bounded timeline invented a valid entry "
+			    "beyond its expected count");
+		}
+		check(host.cmd3_attempt_count == 1u,
+		    "the timeline boundary run did not record one CMD3 "
+		    "attempt");
+		check(sim.cmd3_count == 1u,
+		    "the no-retry timeline run replayed CMD3");
+	} else if (scenario_is(scenario, "cmd3-timeline-mixed")) {
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "mixed capture/retry configuration was not refused");
+		check(sim.cmd_count == 0u,
+		    "the refused mixed configuration issued a command");
+		check(host.cmd3_timeline_enabled == 1u &&
+		    host.cmd3_retry_enabled == 1u,
+		    "the mixed configuration flags changed before refusal");
+	} else if (scenario_is(scenario, "cmd3-timeline-reinit")) {
+		check(result == GTA4L_EMMC_OK,
+		    "the timeline-reinit first run failed");
+		check(host.cmd3_timeline_count == 1u &&
+		    host.cmd3_timeline[
+		    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].valid == 1u,
+		    "the timeline-reinit first run stored no trace");
+		sim.card_never_ready = 1;
+		result = gta4l_emmc_init(&host);
+		check(result == GTA4L_EMMC_ERR_CARD_NOT_READY,
+		    "the timeline-reinit second run did not fail as "
+		    "scripted");
+		check(host.cmd3_timeline_enabled == 1u,
+		    "reinitialization discarded the caller enable");
+		check(host.cmd3_timeline_count == 0u &&
+		    host.cmd3_timeline_overflow == 0u,
+		    "reinitialization left the stale timeline counter");
+		check(host.cmd3_timeline[0].valid == 0u &&
+		    host.cmd3_timeline[
+		    GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u].valid == 0u,
+		    "reinitialization left stale timeline entries");
+		check(host.cmd3_attempt_count == 0u,
+		    "reinitialization left a stale CMD3 attempt");
 	} else {
 		switch (result) {
 		case GTA4L_EMMC_ERR_VERSION:

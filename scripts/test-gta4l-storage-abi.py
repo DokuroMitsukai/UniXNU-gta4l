@@ -10,6 +10,7 @@ It checks the audit itself against mutated snapshots and the harness's
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -61,6 +62,15 @@ def run_audit(snapshot: Path, candidate: Path, plan: Path, derive: Path,
 
 
 def main() -> int:
+    global ARTIFACTS, DERIVE, SNAPSHOT, PROVENANCE
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--artifacts", type=Path, default=ARTIFACTS,
+                        help="storage-ABI artifact directory")
+    args = parser.parse_args()
+    ARTIFACTS = args.artifacts.resolve()
+    DERIVE = ARTIFACTS / "audit" / "derive.json"
+    SNAPSHOT = ARTIFACTS / "gdb-stop.json"
+    PROVENANCE = ARTIFACTS / "provenance.json"
     inputs = (KERNEL, PLAN, FEED, AUDIT, HARNESS, METACLASS, DERIVE,
               SNAPSHOT, PROVENANCE)
     missing = [path for path in inputs if not path.exists()]
@@ -91,7 +101,9 @@ def main() -> int:
         audit = json.loads(positive.read_text())
         require(audit["candidate_sha256"] == sha256(KERNEL),
                 "positive audit candidate mismatch")
-        require(audit["method_slots"] == 190 and audit["kernel_bindings"] == 176,
+        # The D8 personality exports additional inherited base methods;
+        # 176 is the original candidate's binding floor.
+        require(audit["method_slots"] == 190 and audit["kernel_bindings"] >= 176,
                 "positive audit dispatch shape changed")
         require(audit["live_native_4k"] is True, "positive audit lost native 4K")
         require(audit["live_instance_sizes"] ==

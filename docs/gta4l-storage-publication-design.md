@@ -1,9 +1,23 @@
 # gta4l storage publication design (F5)
 
-Status: host-only design and survey `[S]`. No code, build, flash or boot was
-performed for this document, and it does not authorize a device run. The
-device-run section is a proposal that needs the same explicit BOOT-only
-approval as the earlier rungs.
+Status: design, survey and implementation record, with a measured device
+result for the corrected P5-2 candidate `[S]`/`[C]`. The P5-1 adapter and its
+host gates are implemented; the D9.4 correction fixed the report-client
+lifecycle, and the p5b BOOT-only device run published the whole `IOMedia` and
+matched the same-boot media-path read, so F5 is measured PASS for that boot at
+1-bit SDR, 400 kHz `[C]`. The boot ordinal and cold/warm class were not
+supplied; the owner confirmed on 2026-11-05 that the tablet returned to
+TWRP. A host-only audit matched the reported partition count to the
+validated 80-entry GPT (section 5), so partition completeness is not
+claimed from the report alone; other widths/timings, mount/root switch and
+F6 remain unqualified. The separate F2 CMD18/CMD12 diagnostic is measured
+PASS for one reported cold boot (`docs/emmc-driver.md` §5.3.41), but this
+publication rung still uses CMD17 and does not combine the two results. The
+host-only D13 readiness record (`docs/emmc-d13-readiness-2026-11-06.md`,
+section 9.2 below) grounds the next contract and does not change these
+verdicts. The follow-up N3 host batch implements a mode-3 CMD18 chunk path
+behind `gta4l-emmc-block=3`; it is host-only and does not change the measured
+p5b/F5 result or the F2 verdict.
 
 This note answers the Stage-C/F5 questions in the ladder plan: what the XNU
 snapshot already provides for block-device stacks, what the port's shared
@@ -166,6 +180,14 @@ Outputs under `out/gta4l/storage-abi/`:
   stop address, preserved by `--skip-qemu`;
 - `provenance.json` — input/output hashes.
 
+The D8 re-audit against the final relinked candidate `b509c511…` supersedes
+these first-run values: `interface-audit.json` is `6908349252b920c…` (190
+slots, 181 kernel bindings, 167 inherited + 14 pure virtual, live native 4K,
+0 binding-target diffs against the `66977822…` audit), `provenance.json` is
+`eace94306cd4…` and the live `gdb-stop.json` snapshot is `d328190b…`. The
+audit's `gdb_stop_sha256` field names the `gdb-stop.py` harness script
+(`3ba447bc…`); the builder's field of the same name names the snapshot.
+
 `scripts/test-gta4l-storage-abi.py` covers the positive audit and the
 negative cases (interrupted snapshot, wrong stop PC, missing memory, wrong
 class size, missing SCTLR, wrong TCR, wrong candidate) plus the
@@ -182,9 +204,9 @@ criteria are unchanged: the live superclass/size checks, the 190/176
 dispatch shape, the native-4K registers and the original executable hash all
 run.
 
-The gate is host-only: no block driver is linked, and block I/O, GPT
-publication and hardware remain unqualified. The next step is the host
-implementation in section 9.1.
+The gate is host-only: no device run exists, and block I/O, GPT publication
+and hardware remain unqualified. The host implementation that consumes this
+qualification is recorded in section 9.1.
 
 ### 2.3 Existing `IOBlockStorageDevice` implementations are the template
 
@@ -365,9 +387,11 @@ failure is a different class; adding a recovery policy without evidence would
 be a new hypothesis. Failing closed and reporting is the conservative choice.
 
 The first rung uses one block per command. It does not use
-`gta4l_emmc_read_multi()`: F2 (CMD18/CMD12) is still unproven, and the first
-run must measure the storage stack's actual request sizes. A per-block loop
-is slower but is the exact path the stage-A/F1 content evidence covers.
+`gta4l_emmc_read_multi()`: F2 (CMD18/CMD12) is measured PASS for one
+owner-reported cold boot (`docs/emmc-driver.md` §5.3.41) but is not
+repeatable evidence or a publication path, and the first run must measure the
+storage stack's actual request sizes. A per-block loop is slower but is the
+exact path the stage-A/F1 content evidence covers.
 
 Request size: the BSD/storage layer may issue large reads. The driver must
 **advertise** the limit, not only enforce it. Before `registerService()`, set
@@ -495,14 +519,17 @@ Two viable layouts:
    now needs the C++ compile record.
 2. **Split archives** (implemented 2026-11-05): `libGta4lEmmcCore.a`
    (portable core, board platform and read-only request helper, linked once),
-   `libGta4lEmmcProbe.a` (probe consumer) and, when the C++ adapter lands,
-   `libGta4lEmmcBlock.a` (adapter). Link them with `-force_load`; the core
-   symbols exist once. This keeps the probe and block builds independent and
-   avoids duplicate `gta4l_emmc_init`/read symbols.
+   `libGta4lEmmcProbe.a` (probe consumer) and `libGta4lEmmcBlock.a` (adapter).
+   Link them with `-force_load`; the core symbols exist once. This keeps the
+   probe and block builds independent and avoids duplicate
+   `gta4l_emmc_init`/read symbols. `scripts/build-gta4l-emmc-block.py` builds
+   the adapter archive from the policy object, the C++ object and the
+   generated original bindings; `configs/gta4l_defconfig` already force-loads
+   all three archives.
 
 The split layout is preferred for the future mount/verification work. The
-build script already proves there are no duplicate global symbols across the
-core and probe archives (`nm` check) and records both archive hashes in the
+build scripts prove there are no duplicate global symbols across the core,
+probe and block archives (`nm` check) and record the archive hashes in the
 existing build-report style.
 
 ### 4.2 Compile records
@@ -512,16 +539,20 @@ existing build-report style.
 - C++ adapter: use the `IOPlatformExpert.cpo.json` record and the storage
   ABI include, as `scripts/build-arm-driver.py` does for `NativeRamBlock`
   and `NativeVirtioBlock` (`-I build/storage-abi/include`, `-Werror` and
-  the kernel C++ flags).
+  the kernel C++ flags). `scripts/build-gta4l-emmc-block.py` implements this
+  path: it refuses a missing, stale or wrong-candidate storage-ABI audit,
+  binds the original storage base-class symbols from the recorded interface
+  audit, records every source hash and never marks the archive
+  `runtime_qualified`.
 
 ### 4.3 Personality and kernel configuration
 
-The board patch series currently applies `sheng-platform-power.patch`,
-`gta4l-sdhci-snapshot.patch`, `gta4l-sdhci-handoff-audit.patch` and
-`gta4l-emmc-probe.patch` in `bsd_init.c`. Add a board patch
-`gta4l-emmc-block.patch` that appends a guarded personality to
-`iokit/KernelConfigTables.cpp`, modelled on the `XNU_NATIVE_RAM_BLOCK`
-block in the shared `native-aes-personality.patch`:
+The board patch series applies `sheng-platform-power.patch`,
+`gta4l-sdhci-snapshot.patch`, `gta4l-sdhci-handoff-audit.patch`,
+`gta4l-emmc-probe.patch` and `gta4l-emmc-block.patch`. The last one appends
+the guarded personality to `iokit/KernelConfigTables.cpp`, modelled on the
+`XNU_NATIVE_RAM_BLOCK` block in the shared
+`native-aes-personality.patch`:
 
 ```
 #if defined(XNU_NATIVE_GTA4L_EMMC_BLOCK) && XNU_NATIVE_GTA4L_EMMC_BLOCK
@@ -545,29 +576,41 @@ the `bsd_init` probe when the boot arguments are mutually exclusive. The
 exact match order still needs a trace in the first report; do not infer it
 from the boot argument alone.
 
-`scripts/build-xnu-4k-baseline.sh` must translate a new
+`scripts/build-xnu-4k-baseline.sh` translates
 `CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=y` into
 `-DXNU_NATIVE_GTA4L_EMMC_BLOCK=1` in `PERSONALITY_CFLAGS`, in the same style
-as `XNU_NATIVE_RAM_BLOCK`. That is a small shared-repo change; the board
-defconfig cannot inject the compiler flag directly. If the shared change is
-not acceptable, the alternative is to define the personality in a board-only
+as `XNU_NATIVE_RAM_BLOCK`. The D8 batch adds the minimal shared helper
+`scripts/xnu-native-personality.sh`, sourced by the kernel build script: it
+maps `0` (or absent) to no flag, `1` to `-DXNU_NATIVE_GTA4L_EMMC_BLOCK=1` and
+any other value to a hard error, so an enabled configuration cannot silently
+become a half-translated one. The board defconfig cannot inject the compiler
+flag directly. `configs/gta4l_defconfig` now sets
+`CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=y` and force-loads
+`libGta4lEmmcBlock.a`; the driver still requires report mode
+`gta4l-emmc-block=1` before any MMIO, so the personality being compiled in is
+not by itself a device action. If the shared change is not acceptable, the
+alternative is to define the personality in a board-only
 `KernelConfigTables.cpp` patch that is only applied for this board and is
 unconditional, but that advertises a class that might not be linked in other
 configurations and is not recommended.
 
 ### 4.4 Boot arguments and payload
 
-- New driver argument: `gta4l-emmc-block=0|1|2` (absent/0 off, 1 report
-  mode, 2 publish-only).
+- New driver argument: `gta4l-emmc-block=0|1|2|3` (absent/0 off, 1 CMD17
+  report mode, 2 publish-only, 3 chunked report mode with two-sector CMD18
+  chunks). The adapter implements report modes 1 and 3; mode 2 is deferred
+  and is refused rather than silently treated as another mode.
 - Existing probe argument: `gta4l-emmc-probe=1..17`.
-- The payload contract must require exactly one of the two families, not
-  just one `gta4l-emmc-probe` token. A build that sets both is refused
-  before flashing.
-- Add `emmc-block-1` to `scripts/build-gta4l-diagnostic-payload.py`,
-  `scripts/check-gta4l-payload.py` (the names map is already the single
-  source) and `scripts/package-gta4l-diagnostic.py`, mapping to
-  `gta4l-emmc-block=1`.
-- Add the archive paths to `configs/gta4l_defconfig`
+- The payload contract requires exactly one of the two families, not just
+  one `gta4l-emmc-probe` token. A build that sets both, repeats the block
+  token or carries a malformed probe token in block mode is refused before
+  flashing.
+- `emmc-block-1` and `emmc-block-3` are implemented in
+  `scripts/build-gta4l-diagnostic-payload.py`, `scripts/check-gta4l-payload.py`
+  (the names map is the single source) and
+  `scripts/package-gta4l-diagnostic.py`, mapping to
+  `gta4l-emmc-block=1` and `gta4l-emmc-block=3`.
+- The three archive paths are in `configs/gta4l_defconfig`
   `CONFIG_XNU_EXTRA_LD_ARCHIVES`.
 - No new kernel prelink root is needed; IOStorageFamily is already there.
 
@@ -599,12 +642,90 @@ All of this is host-only and can run before any owner approval.
    personality string, no `gta4l-emmc-probe=` token, and exactly one
    `gta4l-emmc-block=1` token.
 
+**Host result (2026-11-05).** The P5-1 implementation and the available host
+gates pass. The P5-1 builder produced `libGta4lEmmcBlock.a` (`fedd4bc3…`)
+against the earlier `ca983f7d…` candidate (interface audit `695c7bbe…`,
+provenance `cbf3a80b…`). The D8 host kernel build then produced the prelinked
+candidate `b509c511…` with the personality compiled in, and the re-run
+builder produced a byte-identical `libGta4lEmmcBlock.a` (`ff447a48…`) from
+the policy object, the C++ object and the generated original bindings,
+against the re-audited `b509c511…` candidate (interface audit
+`6908349252b920c…`, provenance `eace94306cd4…`, 190 virtual methods, 26
+concrete overrides, 0 unresolved original imports). The builder reports
+`qualified=true`, `candidate_matches_audit=true`, `personality_enabled=true`
+and `runtime_qualified=false`. `scripts/test-gta4l-emmc-block.py` passes 23
+core scenarios with 18 mutation controls and 28 adapter scenarios at the P5-1
+snapshot (32 after the D9.4 correction) against the host IOKit seam; the
+core/probe suites pass 179/104 and 163/77; the storage-ABI positive/negative
+suite and the payload/inventory suites pass.
+The adapter scenarios cover disabled/conflicting/duplicate/deferred
+arguments, init/lock/thread failures, read-only properties and limits, write
+and invalid-request refusal, one/multiple/maximum reads, copy and media-path
+failures, absent/wrong-geometry media, same-boot divergence and match, GPT
+absence, watchdog, and the policy mapping. This is host evidence only: no
+payload image was built, nothing was flashed or booted, no `IOMedia` object
+was observed, and F5 remains `[U]` for the P5-1/D8 batch.
+
+**P5-2 device result (2026-11-05).** The first approved P5-2 BOOT-only flash
+used the D8 candidate `b509c511…` (block archive `ff447a48…`, payload
+`7b2ac8c0…`, boot image `4a635cae…`). That boot published the whole
+`IOMedia`, but the report client did not hold a valid open and the media-path
+read failed; the failure is preserved in
+`out/gta4l/ram-root-emmc-block-p5-evidence/` and is not relabeled. The D9.4
+correction opens the media before the report read
+(`media->open(this, 0, kIOStorageAccessReader)`), closes exactly once on every
+exit and records the access mode; the host IOKit seam now starts closed and
+covers the unopened-read regression and balanced-open accounting in 32
+adapter scenarios (was 28). The
+corrected p5b candidate was rebuilt from the same working tree: kernel
+`2f8238b9…` (51,187,712 bytes), re-audited candidate (interface audit
+`1f456fec…`, provenance `cdfe6950…`, 190 virtual methods, 26 concrete
+overrides, 0 unresolved original imports), block archive `6d36826a…`
+(350,248 bytes), payload `47b9593d…` (9/9 contract, exactly one
+`gta4l-emmc-block=1`, no probe token) and boot image `e256b27d…` (18/18 gate,
+only the ramdisk differs from the `ce4d76e8…` baseline). The packaged payload
+kernel is `26af8293…`; `kernel-string-verification.txt` records the class,
+personality and report strings and the payload token counts.
+
+The owner approved a fresh BOOT-only flash of p69 only (pre-flash
+`21f3b5f2…`, post-flash `f1954fd4…`, unchanged tail `a28b4ea2…`; RECOVERY,
+EFS and sec_efs unchanged; no host-issued reboot). The owner-supplied report
+is `rc=0 stop=0 blocks=61071360 bs=512 bytes=31268536320 wid=0 tim=0
+clk=400000`; the whole media is `whole=1 base=0 size=31268536320
+content=GUID_partition_scheme writable=0`; the driver reports `online=1 wp=1
+reads=10 blocks=30 fails=0 max=8`; the media-path read is `lba=1 attempted=1
+ok=1 bytes=512 sum=2228245566 base=2228245566 same=1`; the failure record is
+all zero and the terminal panic is the intentional report-mode panic at
+`Gta4lEmmcBlock.cpp:914`. **F5 is measured PASS for this reported boot at
+1-bit SDR, 400 kHz `[C]`.** The boot ordinal and cold/warm class were not
+supplied and are not inferred; the owner confirmed on 2026-11-05 that the
+tablet returned to TWRP. Partition discovery is a separate observation:
+`count=80 expected=84 waited_ms=0 error=0 reported=3`; `expected` is the GPT
+header entry-array slot count and the reporter stops waiting on any nonzero
+count. A host-only audit (`docs/emmc-driver.md` §5.3.38) matched `count=80`
+to the validated 80 populated entries and matched the first three children
+to GPT entries 1-3, so there is no missing-partition or counting defect;
+partition completeness is not claimed from the report alone. F2 is now
+measured PASS for one reported cold boot (`docs/emmc-driver.md` §5.3.41), but
+multi-block publication is still unimplemented and unqualified; 8-bit,
+4-bit/HS publication, mount/root switch and F6 remain separate gates. Evidence:
+`out/gta4l/ram-root-emmc-block-p5b-evidence/` (`flash-record.json`,
+`owner-report.txt`, `device-run-record.json`, `build-provenance.json`,
+`kernel-string-verification.txt`).
+
 The full existing battery (`test-gta4l-emmc.py`, `test-gta4l-emmc-probe.py`,
 the counts test, the fixture/board/payload/package/boot-image tests, the
 hash sweep, `git diff --check` and the privacy checks) still runs before any
 commit.
 
-## 6. Device-run plan (proposal, owner-gated)
+## 6. Device-run plan (executed for p5b)
+
+Status: executed for the corrected p5b candidate. The reported boot published
+the whole-device media and matched the same-boot media-path read, so F5 is
+measured PASS for that boot at 1-bit SDR, 400 kHz `[C]` (section 5 and
+`docs/emmc-driver.md` §5.3.37). The plan below remains the scope record; the
+initial P5-2 attempt failed at the report-client open and is preserved, not
+relabeled.
 
 The first F5 device run is a new image with `gta4l-emmc-block=1`, no
 `gta4l-emmc-probe` token, BOOT-only flash after a verified backup, and up to
@@ -712,28 +833,155 @@ not part of F5 and must not be smuggled into the publication rung.
    succeeded on Linux/QEMU: `scripts/audit-gta4l-storage-interface.py`
    produced the live `gdb-stop.json`, `derive.json`, `interface-audit.json`
    and `provenance.json` for candidate `ca983f7d…`, and the audit passes the
-   190-slot/176-binding/live-metaclass/native-4K checks. The concrete
-   bindings are generated from the compiled driver object in step 2.
-2. **Host implementation — in progress (2026-11-05).** The portable request
-   helper `package/Gta4lEmmcBlockCore.c/.h` is implemented and host-tested
-   (23 scenarios, 18 mutation controls). The platform extraction and archive
-   split are done; next: add the C++ adapter, the guarded personality
-   and the `gta4l-emmc-block` payload mapping. Run the full host battery, the
-   ABI/bindings gate, the duplicate-symbol check, the request-path tests, the
-   source-policy test and the probe-refactor regression.
-3. **Device candidate.** Build the `emmc-block-1` payload and boot image,
-   flash BOOT only after a verified backup, boot up to four times, and
-   collect the `GTA4L-EMMC P5 REPORT`.
-4. **Follow-ups.** 4-bit/HS publication, CMD18, a mount test and F6 are
-   separate rungs with separate approvals. None is a prerequisite for the
-   first whole-device F5 result.
+   190-slot/176-binding/live-metaclass/native-4K checks. The D8 batch then
+   re-ran the audit against the final relinked candidate `b509c511…`
+   (`6908349252b920c…`, 181 bindings, 0 binding-target diffs). The D9 batch
+   re-ran it once more against `2f8238b9…` (`1f456fec…`, provenance
+   `cdfe6950…`, 190 slots, 26 concrete overrides, 0 unresolved original
+   imports). The concrete bindings are generated from the compiled driver
+   object in step 2.
+2. **Host implementation — DONE (host-only, 2026-11-05).** The portable
+   request helper `package/Gta4lEmmcBlockCore.c/.h` passes 23 scenarios and
+   18 mutation controls; the thin C++ adapter
+   `package/Gta4lEmmcBlock.cpp`, the policy object
+   `package/Gta4lEmmcBlock.c/.h`, the guarded personality patch, the block
+   archive builder and the `gta4l-emmc-block` payload mapping are
+   implemented. `scripts/test-gta4l-emmc-block.py` also runs 32 adapter
+   scenarios against a host IOKit seam after the D9.4 correction, and the
+   builder produced the qualified `libGta4lEmmcBlock.a` (`6d36826a…`)
+   against `2f8238b9…`. The D9.4 correction opens the media before the
+   report read and closes it exactly once on every exit; the seam starts
+   closed and covers the unopened-read regression and balanced-open
+   accounting. The D8 batch enables the personality in
+   `configs/gta4l_defconfig` and adds the shared configuration-to-flag
+   translation, so the D8 host kernel `b509c511…` compiles and links the
+   adapter; the D9 host kernel `2f8238b9…` is the device candidate.
+3. **Device candidate — DONE (2026-11-05).** The `emmc-block-1` payload
+   (`47b9593d…`, 9/9 contract) and boot image (`e256b27d…`, 18/18 gate)
+   were built from the enabled-personality candidate, flashed BOOT only
+   after a verified backup, and booted. The owner-supplied `GTA4L-EMMC P5
+   REPORT` records `rc=0 stop=0`, the whole `IOMedia` (`whole=1`, 61,071,360
+   blocks of 512 bytes, `GUID_partition_scheme`, `writable=0`) and a
+   media-path read matching the same-boot baseline (`same=1`). F5 is
+   measured PASS for this boot at 1-bit SDR, 400 kHz `[C]`; the boot ordinal
+   and cold/warm class were not supplied. The follow-up host-only audit
+   (§5.3.38) matched `count=80` to the validated 80-entry GPT; partition
+   completeness is not claimed from the report alone.
+4. **Follow-ups.** F2 multi-block reads are measured PASS for one reported
+   cold boot but have no publication rung; 8-bit width, 4-bit/HS publication,
+   a CMD18 IOMedia path, a mount test and F6 are separate rungs with separate
+   approvals. None is a prerequisite for the first whole-device F5 result.
+
+### 9.2 D13 readiness (2026-11-06, host-only)
+
+The plan's N1 readiness pass is recorded in
+`docs/emmc-d13-readiness-2026-11-06.md` (design and source inspection only; no
+implementation, build, QEMU, device access or commit). It grounds the current
+one-sector adapter seam and the diagnostic CMD18/CMD12 API, and proposes a
+conservative first contract:
+
+- keep the 64-sector / 32-KiB / one-segment external request shape and the
+  `gta4l-emmc-block=1` singleton backend;
+- CMD17 for a singleton, two-sector CMD18 chunks and one CMD17 tail;
+- an optional multi-read callback that returns transport, requested and
+  completed sectors and the mandatory stop outcome separately;
+- a private bounded bounce, with no byte delivered until exact count and a
+  clean CMD12 qualify; a failed chunk contributes no bytes, earlier clean
+  chunks may be partial, and a failed stop is never repaired by a copy or a
+  CMD17 fallback;
+- first-failure preservation, fail closed/offline, no suffix I/O, retry,
+  fallback or recovery, one completion per accepted request and no callback
+  under the gate;
+- a new explicit selector, implemented as `gta4l-emmc-block=3`, that does not
+  silently change `=1`; no mount, write, DMA, CQE, ICE or width/speed work.
+
+File-by-file implementation map (N3 implemented host-only):
+
+| File | Proposed change |
+| --- | --- |
+| `package/Gta4lEmmcBlockCore.c/.h` | Add an optional multi-read callback and a chunk loop that qualifies transport/completed/stop before copy-out; add bounded counters for CMD17/CMD18 chunks, requested/completed/delivered bytes and stop status; keep the one-sector path unchanged for `=1`. |
+| `package/Gta4lEmmcBlock.c/.h` | Add the new selector and its conflicts; extend the report struct/format within the 2048-byte budget. |
+| `package/Gta4lEmmcBlock.cpp` | Implement the callback through a production wrapper; own the chunk bounce; copy out only qualified chunks; preserve the gate, single-completion and offline-notification order. |
+| `package/Gta4lEmmc.c/.h` | Add a wrapper that exposes completed and stop outcomes explicitly without changing the diagnostic `read_multi` semantics. |
+| `package/Gta4lEmmcPlatform.c/.h` | No change expected. |
+| `patches/xnu/gta4l-emmc-block.patch`, `scripts/build-gta4l-emmc-block.py` | Update only if new symbols or the personality flag require it. |
+| `scripts/sim-gta4l-emmc-block/*`, `scripts/test-gta4l-emmc-block.py` | Add chunk/split/failure scenarios and runtime-negative mutations. Implemented as 48 core / 38 mutation / 55 adapter plus 3 adapter-source mutations after the N3 corrective batch; the readiness inventory was 23/18/32. |
+| `scripts/sim-gta4l-emmc/*`, `scripts/test-gta4l-emmc.py` | Keep the 18 `multi-*` scenarios and 12 multi-block mutations; add wrapper-specific tests if the transport wrapper changes. |
+| `scripts/build-gta4l-diagnostic-payload.py`, `scripts/check-gta4l-payload.py`, `scripts/package-gta4l-diagnostic.py`, `docs/diagnostic-payload-input-inventory.md` | Add the new selector token/value, mutual-exclusion rule, allowlist and inventory row. |
+| `docs/emmc-driver.md`, `docs/gta4l-storage-publication-design.md`, `porting.toml`, `README.md`, `docs/evidence-baseline.md` | Update findings/evidence with the implementation; not part of this readiness batch. |
+
+The N3 host batch and its corrective pass implemented this map: the block
+suite now runs 48 core scenarios / 38 mutation controls, 55 adapter scenarios
+and 3 adapter-source mutations, and `emmc-block-3` is accepted end-to-end by
+the diagnostic builder/checker/packager tests. The corrective pass added the
+stop-failure accounting, the multi-result qualification contract and the
+mode-3 controlled reporter (exact-byte reference comparison, CMD18/CMD12 and
+odd-tail accounting, incidental-attribution exclusion, watchdog snapshot and
+terminal-race controls). N3 selected the first timing option: it keeps the
+two-sector shape and 64-sector ceiling, records the ~128–144 s pathological
+synchronous gate-hold bound as a host-development risk, and changes no timeout
+or advertised limit. The first hardware discriminator remains a two-sector
+GPT-array read plus an odd-length split/tail. N3 host acceptance is complete;
+it is not a hardware, initialization-reliability or general-I/O
+qualification. The next step is an N4 candidate proposal, which requires
+separate candidate-build and ABI/QEMU approval. The stale storage-ABI
+candidate/provenance still needs its own requalification path and is not
+repaired by this design pass.
+
+### 9.3 N5 mode-3 device observation (2026-11-07, one cold boot)
+
+The N4 candidate built the N3 contract through the archive/prelink/payload/BOOT
+flow (`docs/emmc-n5-integration-observation-2026-11-07.md`). Its BOOT image
+`54cdbfb6…` (85,688,320 bytes, 18/18 gate, payload `4a400ca8…` with a 9/9
+contract, packaged kernel `2e6d91a0…`) was flashed BOOT only to p69 after the
+existing pre-flash backup; the post-flash full hash, image-length prefix and
+unchanged tail matched, and RECOVERY/EFS/sec_efs were unchanged. One
+owner-controlled cold boot produced `rc=0 stop=0 mode=3` with the read-only
+whole media (`whole=1 base=0 size=31268536320 content=GUID_partition_scheme
+writable=0`) and an LBA 1 media-path read matching the same-boot baseline
+(`sum=2228245566 same=1`).
+
+Both controlled IOMedia requests at LBA 2 passed on that boot at 1-bit SDR,
+400 kHz:
+
+- the two-block request delivered 1,024 exact bytes through one two-sector
+  CMD18 chunk and one clean explicit CMD12 (`two_att=1 two_ok=1 two_reason=0
+  two_bytes=1024 two_mismatch=0 two_c18=1 two_c17=0 two_stops=1
+  two_sfail=0`);
+- the three-block request delivered 1,536 exact bytes through one two-sector
+  CMD18 chunk, one clean explicit CMD12 and one CMD17 odd tail (`att=1 ok=1
+  reason=0 bytes=1536 mismatch=0 c18=1 c17=1 stops=1 sfail=0`).
+
+The raw reference and baseline reads are direct transport reads outside the
+helper counters; the per-request QUAL fields bind the intentional requests,
+and the aggregate counters also include incidental partition-scheme reads. The
+report's `count=22 expected=84 waited_ms=0 reported=3` partition snapshot is an
+unsynchronized mid-publication observation: `expected` is the same-boot GPT
+entry-array slot count, `countPartitions()` stops at the first nonzero count,
+and `IOGUIDPartitionScheme::start()` publishes its scan result one media at a
+time. The validated GPT has 80 populated entries; partition completeness is not
+claimed. The final all-zero failure record and the report panic are the
+intentional report stop.
+
+Acceptance is limited to the two actual requests measured on that one cold
+boot. Arbitrary LBAs/sizes, the 64-sector ceiling, repeatability,
+initialization reliability, writable media, mount/root switch, DMA/CQE/ICE,
+wider/faster modes and partition completeness remain unqualified. The one-boot
+budget is consumed; any further observation needs a fresh owner decision.
 
 ## 10. What this design does not do
 
-- It does not add code, change the probe, build an image or touch a device.
-- It does not claim F5: no `IOMedia` object has been observed yet.
-- It does not use CMD18/CMD12, DMA, CQE, ICE, interrupts, DDR, HS200/HS400
-  or 8-bit; those remain separate rungs.
+- The first rung is measured for one reported boot at 1-bit SDR, 400 kHz:
+  the whole `IOMedia` was published and the media-path read matched the
+  same-boot baseline. It does not establish a second matching boot or any
+  other width/timing; the audited partition count is consistent with the
+  validated GPT, but completeness is not claimed from the report alone.
+- The measured p5b publication rung does not use CMD18/CMD12, DMA, CQE, ICE,
+  interrupts, DDR, HS200/HS400 or 8-bit; those remain separate rungs. The
+  host-only N3 mode-3 path does use two-sector CMD18 chunks, and N5 measured
+  exactly one two-block and one three-block IOMedia read on one cold boot;
+  that result does not change the measured p5b rung and does not qualify
+  arbitrary I/O, repeatability or reliability.
 - It does not add a filesystem driver, a mount, a root switch or a write
   path.
 - It does not resolve the cold-boot identification flake; that remains a

@@ -1,0 +1,17 @@
+diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -105,4 +105,13 @@
+     "     'IOProbeScore'    = 500:32;"
+     "   }"
+ #endif
++#if defined(XNU_NATIVE_GTA4L_EMMC_BLOCK) && XNU_NATIVE_GTA4L_EMMC_BLOCK
++    "   ,{"
++    "     'IOClass'         = Gta4lEmmcBlock;"
++    "     'IOMatchCategory' = Gta4lEmmcBlock;"
++    "     'IOProviderClass' = IOResources;"
++    "     'IOResourceMatch' = IOBSD;"
++    "     'IOProbeScore'    = 1000:32;"
++    "   }"
++#endif
+     ")";

@@ -106,11 +106,31 @@ SCENARIOS = [
     'cmd3-late-cc',
     'cmd9-timeout',
     'cmd3-identify',
-    'probe-h9-clean-no-fire',
-    'probe-h9-fire-pass',
-    'probe-h9-fire-fail',
-    'probe-h9-fire-second-ident',
-    'probe-h9-mismatch',
+    'probe-h9-map-fail',
+    'probe-h9-clock-fail',
+    'probe-h9-cmd1-fail',
+    'probe-h9-cmd2-fail',
+    'probe-h9-clean',
+    'probe-h9-timeout',
+    'probe-h9-status',
+    'probe-h9-error',
+    'probe-h9-later-fail',
+    'probe-h9-cc-between',
+    'probe-h9-cc-at-sample',
+    'probe-h9-update-no-cc',
+    'probe-h9-no-update',
+    'probe-h9-preexisting-r1',
+    'probe-h9-identical',
+    'probe-h9-multi-change',
+    'probe-h9-last-sample',
+    'probe-h9-terminal-only',
+    'probe-h9-late-cc',
+    'probe-h9-index-error',
+    'probe-h9-simultaneous',
+    'probe-h9-error-in-sample',
+    'probe-h9-error-after-read',
+    'probe-h9-inhibit',
+    'probe-h9-counter-stall',
     'cmd7-tc-only',
     'cmd7-fresh-window',
     'cmd7-cc-then-tc',
@@ -134,7 +154,19 @@ SCENARIOS = [
     'probe-last-error',
     'probe-md-success',
     'probe-md-mismatch',
+    'probe-md-final-mismatch',
+    'probe-md-swap',
+    'probe-md-sum-preserve',
+    'probe-md-short-mismatch',
+    'probe-md-short-second-mismatch',
+    'probe-md-accept-seam',
+    'probe-md-mid-stall',
     'probe-md-mid-fail',
+    'probe-md-r1-error',
+    'probe-md-recovery-fail',
+    'probe-md-recovery-block0-mismatch',
+    'probe-md-recovery-mismatch',
+    'probe-md-recovery-lba2-fail',
     'probe-md-stop-no-tc',
     'probe-md-drain-tc',
     'probe-md-drain-brr',
@@ -249,6 +281,7 @@ SCENARIOS = [
     'report-width-ident',
     'report-width-probe',
     'report-width-md',
+    'report-width-md-failure',
     'report-width-b1',
     'report-width-b2',
     'report-width-h9',
@@ -263,6 +296,7 @@ WIDTH_SCENARIOS = (
     'report-width-ident',
     'report-width-probe',
     'report-width-md',
+    'report-width-md-failure',
     'report-width-b1',
     'report-width-b2',
     'report-width-h9',
@@ -709,25 +743,116 @@ MUTATIONS = [
      '\t    "",\n',
      'probe-md-success',
      'the MD probe report does not name the MD step and log counts'),
-    ('md-sum-substituted',
-     '\tconst uint32_t *content = (mb_mode != 0) ? range->mb : '
-     'range->array;\n',
-     '\tconst uint32_t *content = range->array;\n',
+    ('md-short-barrier-skipped',
+     '\t\tif (range.short_mb.verdict != GTA4L_EMMC_OK) {\n'
+     '\t\t\tmb_failure = range.short_mb.verdict;\n'
+     '\t\t\tmb_stage = 1u;\n'
+     '\t\t}\n',
+     '\t\tif (range.short_mb.verdict != GTA4L_EMMC_OK) {\n'
+     '\t\t\tmb_stage = 1u;\n'
+     '\t\t}\n',
+     'probe-md-short-mismatch',
+     'the short mismatch did not report the validated count, '
+     'first divergence or not-run long request'),
+    ('md-long-barrier-skipped',
+     '\t\t\tif (range.long_mb.verdict != GTA4L_EMMC_OK) {\n'
+     '\t\t\t\tmb_failure = range.long_mb.verdict;\n'
+     '\t\t\t\tmb_stage = 2u;\n'
+     '\t\t\t}\n',
+     '\t\t\tif (range.long_mb.verdict != GTA4L_EMMC_OK) {\n'
+     '\t\t\t\tmb_stage = 2u;\n'
+     '\t\t\t}\n',
      'probe-md-mismatch',
-     'the MD mismatch report lost the CMD18 sums'),
+     'the long mismatch did not report the exact counts, first '
+     'divergence and not-run recovery state'),
+    ('md-byte-compare-skipped',
+     '\t\t\tif (blocks[(index * GTA4L_EMMC_BLOCK_BYTES) + byte] !=\n'
+     '\t\t\t    reference[(index * GTA4L_EMMC_BLOCK_BYTES) +\n'
+     '\t\t\t    byte]) {\n'
+     '\t\t\t\tsame = 0;\n'
+     '\t\t\t\tbreak;\n'
+     '\t\t\t}\n',
+     '\t\t\tif (blocks[(index * GTA4L_EMMC_BLOCK_BYTES) + byte] !=\n'
+     '\t\t\t    reference[(index * GTA4L_EMMC_BLOCK_BYTES) +\n'
+     '\t\t\t    byte]) {\n'
+     '\t\t\t\tsame = 1;\n'
+     '\t\t\t\tbreak;\n'
+     '\t\t\t}\n',
+     'probe-md-sum-preserve',
+     'a matching aggregate checksum turned a byte mismatch into '
+     'success'),
+    ('md-completed-check-skipped',
+     '\tif (mb->completed != requested) {\n'
+     '\t\treturn GTA4L_EMMC_PROBE_ERR_LENGTH;\n'
+     '\t}\n',
+     '\tif (mb->completed != requested) {\n'
+     '\t\treturn GTA4L_EMMC_OK;\n'
+     '\t}\n',
+     'probe-md-accept-seam',
+     'the acceptance seam rejected a qualifying state or accepted '
+     'an incomplete one'),
+    ('md-validated-check-skipped',
+     '\tif (mb->validated != requested) {\n'
+     '\t\treturn GTA4L_EMMC_PROBE_ERR_CONTENT;\n'
+     '\t}\n',
+     '\tif (mb->validated != requested) {\n'
+     '\t\treturn GTA4L_EMMC_OK;\n'
+     '\t}\n',
+     'probe-md-accept-seam',
+     'the acceptance seam rejected a qualifying state or accepted '
+     'an incomplete one'),
+    ('md-recovery-transport-stop-skipped',
+     '\t\t\tif (result != GTA4L_EMMC_OK) {\n'
+     '\t\t\t\trange.recovery_result = result;\n'
+     '\t\t\t\trange.recovery_same = 0;\n'
+     '\t\t\t\tmb_failure = result;\n'
+     '\t\t\t\tmb_stage = 3u;\n'
+     '\t\t\t} else {\n',
+     '\t\t\tif (result != GTA4L_EMMC_OK) {\n'
+     '\t\t\t\trange.recovery_result = result;\n'
+     '\t\t\t\trange.recovery_same = 0;\n'
+     '\t\t\t\tmb_stage = 3u;\n'
+     '\t\t\t} else {\n',
+     'probe-md-recovery-fail',
+     'the failed block-0 recovery read lost its transport result '
+     'or not-run LBA-2 state'),
+    ('md-recovery-divergence-stop-skipped',
+     '\t\t\t\t\trange.recovery_result =\n'
+     '\t\t\t\t\t    GTA4L_EMMC_PROBE_ERR_CONTENT;\n'
+     '\t\t\t\t\tmb_failure =\n'
+     '\t\t\t\t\t    GTA4L_EMMC_PROBE_ERR_CONTENT;\n'
+     '\t\t\t\t\tmb_stage = 3u;\n',
+     '\t\t\t\t\trange.recovery_result =\n'
+     '\t\t\t\t\t    GTA4L_EMMC_PROBE_ERR_CONTENT;\n'
+     '\t\t\t\t\tmb_stage = 3u;\n',
+     'probe-md-recovery-block0-mismatch',
+     'the block-0 recovery mismatch lost its LBA-0 divergence '
+     'flag or the not-run LBA-2 state'),
+    ('md-overall-gate-inverted',
+     '\t\tif ((mb_failure != GTA4L_EMMC_OK) ||\n'
+     '\t\t    (range.short_mb.verdict != GTA4L_EMMC_OK) ||\n',
+     '\t\tif ((mb_failure != GTA4L_EMMC_OK) ||\n'
+     '\t\t    (range.short_mb.verdict == GTA4L_EMMC_OK) ||\n',
+     'probe-md-success',
+     'the MD probe report does not carry the device capacity'),
     ('md-div-suppressed',
-     '\t\t\t\trange.mb_div = range.entries_lba + index;\n',
-     '\t\t\t\trange.mb_div = range.entries_lba;\n',
+     '\t\t} else if (*div == 0u) {\n'
+     '\t\t\t*div = first_lba + index;\n'
+     '\t\t}\n',
+     '\t\t} else if (*div == 0u) {\n'
+     '\t\t\t*div = first_lba;\n'
+     '\t\t}\n',
      'probe-md-mismatch',
-     'the MD mismatch report does not name the first differing LBA'),
+     'the long mismatch did not report the exact counts, first '
+     'divergence and not-run recovery state'),
     ('md-step-suppressed',
      '\t\thost.last_step = GTA4L_EMMC_STEP_PROBE_MB;\n',
      '\t\thost.last_step = GTA4L_EMMC_STEP_PROBE_LAST;\n',
      'probe-md-success',
      'the MD probe report does not name the MD step and log counts'),
     ('md-block-ordinal-suppressed',
-     '\t    host->last_step, host->multi_block,\n',
-     '\t    host->last_step, 0u,\n',
+     '\t    result, stage, host->last_step, host->multi_block,\n',
+     '\t    result, stage, host->last_step, 0u,\n',
      'probe-md-mid-fail',
      'the mid-CMD18 failure report lost the block ordinal, the stop '
      'result or the terminal record'),
@@ -1050,6 +1175,153 @@ MUTATIONS = [
      '\t    GTA4L_EMMC_OK, h14->drain.stop_response,\n',
      'probe-h14-cmd12-silent',
      'the silent H14 CMD12 lost its terminal tuple'),
+    ('h9-scheduled-response-omitted',
+     '\t\t\ttimeline_response0 = gta4l_emmc_read32(host,\n'
+     '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t\t\t    GTA4L_EMMC_REG_RESPONSE);\n',
+     '\t\t\ttimeline_response0 = 0u;\n',
+     'probe-h9-update-no-cc',
+     'the update-without-CC rung lost the updated sample',
+     'core'),
+    ('h9-last-schedule-retimed',
+     '\t\t65536u, 99999u\n',
+     '\t\t65536u, 99998u\n',
+     'probe-h9-timeout',
+     'the timeout rung lost the last scheduled sample',
+     'core'),
+    ('h9-scheduled-store-omitted',
+     '\t\t\tgta4l_emmc_cmd3_timeline_store(host,\n'
+     '\t\t\t    GTA4L_EMMC_CMD3_TRACE_SCHEDULED, step, normal,\n'
+     '\t\t\t    error, timeline_response0, timeline_ticks);\n'
+     '\t\t\thost->cmd3_timeline_cursor++;\n',
+     '\t\t\thost->cmd3_timeline_cursor++;\n',
+     'probe-h9-clean',
+     'the clean rung lost the scheduled completion sample',
+     'core'),
+    ('h9-terminal-slot-overwritten',
+     '\t\tslot = GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u;\n',
+     '\t\tslot = 0u;\n',
+     'probe-h9-clean',
+     'the clean rung lost the scheduled completion sample',
+     'core'),
+    ('h9-r1-content-treated-as-success',
+     '\tif ((result == GTA4L_EMMC_OK) &&\n'
+     '\t    ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0)) {\n'
+     '\t\treturn GTA4L_EMMC_ERR_CARD_STATUS;\n'
+     '\t}\n',
+     '\t/* R1 response content ignored by mutation. */\n'
+     '\t(void)response;\n',
+     'probe-h9-preexisting-r1',
+     'a retained R1 error was not reported as a card status failure',
+     'core'),
+    ('h9-timeout-terminal-omitted',
+     '\t\tif (timeline != 0) {\n'
+     '\t\t\t/* The timeout verdict is kept even if this fresh\n'
+     '\t\t\t * terminal NORMAL sample already shows late CC. */\n'
+     '\t\t\ttimeline_ticks = gta4l_emmc_counter(host) -\n'
+     '\t\t\t    poll_start;\n'
+     '\t\t\tgta4l_emmc_cmd3_timeline_store(host,\n'
+     '\t\t\t    GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT, step,\n'
+     '\t\t\t    normal, error, host->timeout_response[0],\n'
+     '\t\t\t    timeline_ticks);\n'
+     '\t\t}\n',
+     '',
+     'probe-h9-timeout',
+     'the timeout rung lost the terminal timeout sample',
+     'core'),
+    ('h9-final-error-store-omitted',
+     '\t\t\tif (timeline != 0) {\n'
+     '\t\t\t\tgta4l_emmc_cmd3_timeline_store(host,\n'
+     '\t\t\t\t    GTA4L_EMMC_CMD3_TRACE_TERM_ERROR, step,\n'
+     '\t\t\t\t    normal, error, host->fail_response[0],\n'
+     '\t\t\t\t    gta4l_emmc_counter(host) - poll_start);\n'
+     '\t\t\t}\n',
+     '',
+     'probe-h9-error-after-read',
+     'the final pre-clear check did not catch the error raised during '
+     'the successful response read',
+     'core'),
+    ('h9-version-report-changed',
+     '\t    GTA4L_EMMC_CMD3_TIMELINE_VERSION, rc, stop,\n',
+     '\t    2u, rc, stop,\n',
+     'probe-h9-clean',
+     'the H9 report does not carry the timeline version'),
+    ('h9-pre-response-omitted',
+     '\t\tif (timeline != 0) {\n'
+     '\t\t\t/* Four sequential raw-window reads after the status,\n'
+     '\t\t\t * enable and present samples above. Not an atomic\n'
+     '\t\t\t * snapshot; RESPONSE0..3 are read in register order. */\n'
+     '\t\t\tgta4l_emmc_read_raw_response(host,\n'
+     '\t\t\t    host->pre_cmd3_response);\n'
+     '\t\t\thost->pre_cmd3_response_valid = 1;\n'
+     '\t\t}\n',
+     '\t\t/* pre-CMD3 response reads removed by mutation */\n',
+     'probe-h9-clean',
+     'the clean rung lost the pre-CMD3 response',
+     'core'),
+    ('h9-extra-response-read',
+     '\t\t\ttimeline_response0 = gta4l_emmc_read32(host,\n'
+     '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t\t\t    GTA4L_EMMC_REG_RESPONSE);\n',
+     '\t\t\ttimeline_response0 = gta4l_emmc_read32(host,\n'
+     '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t\t\t    GTA4L_EMMC_REG_RESPONSE);\n'
+     '\t\t\t(void)gta4l_emmc_read32(host,\n'
+     '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t\t\t    GTA4L_EMMC_REG_RESPONSE);\n',
+     'probe-h9-clean',
+     'the clean rung changed the exact RESPONSE read count',
+     'core'),
+    ('h9-later-command-clears-trace',
+     '\tif (index == GTA4L_EMMC_CMD7) {\n'
+     '\t\t/* Capture the state after the pre-command clear and before\n',
+     '\tif (index == GTA4L_EMMC_CMD9) {\n'
+     '\t\tgta4l_emmc_cmd3_timeline_reset(host);\n'
+     '\t}\n'
+     '\tif (index == GTA4L_EMMC_CMD7) {\n'
+     '\t\t/* Capture the state after the pre-command clear and before\n',
+     'probe-h9-later-fail',
+     'the later-failure rung lost the preserved CMD3 trace',
+     'core'),
+    ('h9-frequency-zeroed',
+     '\t    probe->log_count, (unsigned int)probe->platform.counter_hz,\n',
+     '\t    probe->log_count, 0u,\n',
+     'probe-h9-clean',
+     'the clean rung lost the counter frequency'),
+    ('h9-unused-valid-invented',
+     '\t(h)->cmd3_timeline[i].valid, \\\n',
+     '\t1u, \\\n',
+     'probe-h9-cc-between',
+     'the between-sample rung invented a valid unused slot'),
+    ('h9-overflow-zeroed',
+     '\t    count, host->cmd3_timeline_overflow,\n',
+     '\t    count, 0u,\n',
+     'report-width-h9',
+     'the synthetic width H9 report lost the widest trace header'),
+    ('h9-extra-status-read',
+     '\t\t\ttimeline_response0 = gta4l_emmc_read32(host,\n'
+     '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t\t\t    GTA4L_EMMC_REG_RESPONSE);\n',
+     '\t\t\ttimeline_response0 = gta4l_emmc_read32(host,\n'
+     '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t\t\t    GTA4L_EMMC_REG_RESPONSE);\n'
+     '\t\t\t(void)gta4l_emmc_read16(host,\n'
+     '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+     '\t\t\t    GTA4L_EMMC_REG_NORMAL_INT_STATUS);\n',
+     'probe-h9-clean',
+     'the clean rung changed the exact NORMAL status read count',
+     'core'),
+    ('h9-late-cc-promoted',
+     '\t\tgta4l_emmc_clear_interrupts(host);\n'
+     '\t\treturn GTA4L_EMMC_ERR_CMD_TIMEOUT;\n',
+     '\t\tif ((normal & GTA4L_EMMC_INT_CC) != 0) {\n'
+     '\t\t\treturn GTA4L_EMMC_OK;\n'
+     '\t\t}\n'
+     '\t\tgta4l_emmc_clear_interrupts(host);\n'
+     '\t\treturn GTA4L_EMMC_ERR_CMD_TIMEOUT;\n',
+     'probe-h9-late-cc',
+     'a late terminal CC changed the timeout verdict',
+     'core'),
 ]
 
 

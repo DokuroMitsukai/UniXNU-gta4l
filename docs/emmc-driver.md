@@ -32,10 +32,12 @@ and reverted cleanly, so F4 is measured PASS at 1-bit/50 MHz `[C]`; the
 cold boot and one warm boot stopped pre-B2 at the H8 CMD3 timeout. Card
 identification,
 single-block sector reads and
-a partial multi-block data phase are therefore observed; a complete
-multi-block read, a filesystem, block-device publication and DMA/CQE/ICE
-remain `[U]`, and F3 is measured only at 4-bit SDR (`[C]`, §5.3.34) with
-8-bit untried. The 2026-11-04 protocol correction (§1a) withdraws the
+a partial multi-block data phase are therefore observed; one owner-reported
+cold boot of the D10.5 candidate also completed both bounded CMD18 requests
+with every sector byte-validated (§5.3.41), so a complete multi-block read is
+measured for that one boot `[C]`. Multi-block repeatability/reliability,
+multi-block publication, a filesystem and DMA/CQE/ICE remain `[U]`, and F3 is
+measured only at 4-bit SDR (`[C]`, §5.3.34) with 8-bit untried. The 2026-11-04 protocol correction (§1a) withdraws the
 byte-183 refusal, H12 DDR, stage-7 timeout and H13 CMD14-CRC causal claims
 and fixes the underlying width, bus-test, timeout and CMD18-readiness logic.
 The corrected width rung is H15 (`gta4l-emmc-probe=15`). Its first cold boot
@@ -54,7 +56,12 @@ bounded data reset (`rst=0`), the CMD14 pattern match (`trc=0`,
 `tw=te=000000a5`), the matching 4-bit content pass, the verified revert and
 the recovery read, so **F3 is measured PASS at 4-bit SDR, 400 kHz `[C]`**.
 The 8-bit width is untried and stays open separately. H14 remains paused. The
-core is
+D10.5 F2 candidate's owner-reported first cold boot (§5.3.41, 2026-11-05)
+completed both CMD18 requests and their explicit CMD12 stops with every
+requested sector byte-validated against the same-boot CMD17 reference, so
+**F2 is measured PASS for that one cold boot at 1-bit SDR, 400 kHz `[C]`**.
+Repeatability, cold-start reliability and multi-block publication remain open.
+The core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
 `sdhc-bus-power-activation` NO-GO still applies to any operation not separately
@@ -75,11 +82,11 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmcBlockCore.c/.h` | Portable read-only block request helper: validation, per-block loop, bounce copy, counters |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO through the platform object, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 179 scenarios and 104 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 187 scenarios and 115 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
-| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 163 scenarios and 77 mutation controls |
+| `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 23 scenarios plus 18 mutation controls |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 55 adapter scenarios and 3 adapter-source mutations against the host IOKit seam |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `configs/gta4l_defconfig` | Force-loads the SDHCI snapshot and both eMMC archives into the kernel |
@@ -323,9 +330,15 @@ returns `GTA4L_EMMC_ERR_UNSUPPORTED` before any sector read.
   each iteration also performs MMIO and optional diagnostic work.
 - `CMD17` is rejected when the block is at or beyond the discovered capacity.
 - The default path submits only `CMD17` sector reads. The optional
-  `gta4l-emmc-mb=1` mode additionally submits one open-ended `CMD18` read and
-  an explicit `CMD12` stop; the host `AUTO_CMD12` enable bit stays clear. There
-  is no `CMD24`/`CMD25`, DMA, CQE, ICE or tuning operation.
+  `gta4l-emmc-mb=1` mode runs the D10 F2 sequence: a two-sector open-ended
+  `CMD18` read at LBA 2, then one 21-sector `CMD18` over LBAs 2..22, each
+  stopped explicitly with `CMD12` (the host `AUTO_CMD12` enable bit stays
+  clear), each byte-compared against the same boot's `CMD17` reference, then
+  bounded `CMD17` recovery reads of block 0 and LBA 2. The report carries
+  per-request requested/completed/validated sectors, the first divergence,
+  drain, stop issue/result/status and the recovery outcome. A transfer
+  failure preserves its first record before cleanup and stops without a
+  retry. There is no `CMD24`/`CMD25`, DMA, CQE, ICE or tuning operation.
 
 ## 4. Host tests
 
@@ -3098,7 +3111,7 @@ Host checks: the core suite is 179 scenarios and 104 mutation controls (was
 176/104), adding `bus-test-tolerate-timeout` (tolerated timeout, clean reset,
 pattern accepted), `bus-test-tolerate-inhibit` (surviving `DAT_INHIBIT` stops
 before CMD14) and `bus-test-tolerate-write-crc` (a non-timeout write error is
-not tolerated). The probe suite is 163 scenarios and 77 mutation controls
+not tolerated). The probe suite is 168 scenarios and 77 mutation controls
 (was 158/77), adding `probe-h17-pass`, `probe-h17-content-div`,
 `probe-h17-pattern-mismatch`, `probe-h17-write-crc` and `probe-h17-inhibit`;
 the existing H15/H16 expectations are updated for the shared `B` line.
@@ -3222,11 +3235,963 @@ Raw H17 evidence stays outside the tracked tree at
 `out/gta4l/ram-root-emmc-probe-h17-evidence/` (`device-run-transcript.txt`,
 `device-run-record.json`, `flash-record.json`, build provenance and hashes).
 
-The Stage-C/F5 publication design is a separate host-only document:
-`docs/gta4l-storage-publication-design.md`. It surveys the prelinked
-IOStorageFamily personalities, the in-tree `IOBlockStorageDevice` templates
-and the existing CMD17 core, and proposes a read-only publication rung with
-no code or device action yet.
+### 5.3.35 P5-1 read-only block adapter host batch (2026-11-05)
+
+The Stage-C/F5 host implementation is recorded in
+`docs/gta4l-storage-publication-design.md` and adds no device result. The
+read-only `IOBlockStorageDevice` path now consists of:
+
+- `package/Gta4lEmmcBlock.cpp` — the thin adapter. It owns one
+  platform/host/helper state and one controller lock, maps and initializes
+  the platform once, registers only when report mode
+  `gta4l-emmc-block=1` is selected, implements the audited override set
+  (512-byte geometry, capacity `- 1` maximum block, non-removable and
+  non-ejectable, write protection, no write cache, refused destructive/
+  discard operations and the Generic device type), advertises 64 blocks /
+  32768 bytes and performs only read-direction requests through the
+  existing `gta4l_emmc_read_block` helper. A bounded report thread waits for
+  the whole `IOMedia`, checks its geometry and compares a same-boot baseline
+  sum with a media-path read; a watchdog bounds backend activity. The
+  adapter rejects mode 2 (publish-only) rather than enabling it silently and
+  refuses a probe-family argument, another SDHCI diagnostic or a duplicate
+  block token before MMIO.
+- `package/Gta4lEmmcBlock.c/.h` — the portable policy: mode selection,
+  request pre-validation with distinct refusal classes, the same-boot sum
+  (`sum * 31 + byte`) and the bounded `GTA4L-EMMC P5 READ:` / `P5 FAIL:`
+  report formatter.
+- `scripts/build-gta4l-emmc-block.py` — compiles the policy object with the
+  `bsd_init.o` record and the adapter with the `IOPlatformExpert.cpo` record
+  against the qualified storage headers, binds the original storage
+  base-class symbols from the interface audit and archives
+  `libGta4lEmmcBlock.a`. It refuses a missing, stale or wrong-candidate
+  storage-ABI audit and never marks the archive `runtime_qualified`.
+- `patches/xnu/gta4l-emmc-block.patch` — the guarded
+  `Gta4lEmmcBlock` personality appended to `KernelConfigTables.cpp` and
+  added to `patches/xnu/series`. At the D7 batch
+  `configs/gta4l_defconfig` set
+  `CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=n` and force-loaded the new archive,
+  so it was linked but inert: the shared build script did not yet translate
+  the personality key, and the adapter additionally requires report mode 1.
+  The D8 batch (section 5.3.36) enables the personality.
+- `emmc-block-1` in the diagnostic name map and payload contract, mapping to
+  `gta4l-emmc-block=1`. The contract refuses duplicates, a mixed probe/block
+  selection, a malformed probe token in block mode and the deferred mode 2.
+
+Build and host results:
+
+- The P5-1 builder produced `build/gta4l-emmc-block/libGta4lEmmcBlock.a`
+  (`fedd4bc3…`) from the recorded sources (`Gta4lEmmcBlock.c`
+  `a2689508…`, `.h` `1c13ce98…`, `.cpp` `021dd555…`), against candidate
+  `ca983f7d…` and interface audit `695c7bbe…` (190 virtual methods, 26
+  concrete overrides, 0 unresolved original imports). Qualification is
+  `true` under `out/gta4l/storage-abi/` (provenance `cbf3a80b…`); the
+  archive is explicitly not runtime-qualified. The D8 re-run in §5.3.36
+  supersedes the candidate and archive hashes; this pre-D8 output remains
+  recorded here.
+- `scripts/test-gta4l-emmc-block.py` passes 23 core scenarios with 18
+  mutation controls and 28 adapter scenarios against the host IOKit seam.
+  The adapter scenarios cover disabled/conflicting/duplicate/deferred
+  arguments, init/lock/thread failures, properties and limit advertisement,
+  write and invalid-request refusal, one/multiple/maximum reads, short and
+  overlong copies, first-error offline transition, media absence and wrong
+  geometry, media-read failure/short/divergence/match, GPT absence, the
+  watchdog and the policy mapping.
+- The existing core/probe suites pass 179/104 and 168/77; the storage-ABI
+  positive/negative suite, the diagnostic payload contract, the inventory
+  and the board checks pass. The P5-1 device-repo core/probe archives are
+  `4c977fe1…`/`ae10304c…`; the D8 in-tree rebuild is `5e5ee937…`/
+  `19ac22d0…` (§5.3.36).
+
+The P5-1 batch built no kernel or payload image; the D8 batch then built a
+host kernel (§5.3.36). Nothing was flashed or booted, and no `IOMedia`
+object has been observed; F5 remains `[U]`. The device candidate and the
+P5-2 BOOT-only approval are a separate gate.
+
+### 5.3.36 D8 enabled-personality host candidate (2026-11-05)
+
+The D8 batch enables `CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=y` in
+`configs/gta4l_defconfig`, force-loads `libGta4lEmmcBlock.a` and adds the
+shared configuration-to-flag translation. The sibling UniXNU working tree
+adds `scripts/xnu-native-personality.sh` (sourced by
+`scripts/build-xnu-4k-baseline.sh`), which maps the value `0` or an absent
+key to no flag, `1` to `-DXNU_NATIVE_GTA4L_EMMC_BLOCK=1` and any other value
+to a hard error. The host kernel build exited 0 and produced the prelinked
+candidate `b509c511…` (51,187,712 bytes; `kernel.json` `candidate_sha256`
+matches); the `KernelConfigTables.cpo` compile record carries
+`-DXNU_NATIVE_GTA4L_EMMC_BLOCK=1`, so the personality is compiled in and the
+archive is linked. This is a host build only: no payload image was built,
+nothing was flashed or booted, no `IOMedia` object was observed, and F5
+remains `[U]`.
+
+A relink changes the candidate hash through the version timestamp, so the
+storage-ABI audit was re-run against the final kernel rather than the earlier
+`66977822…` build. The re-audit passes: `interface-audit.json`
+(`6908349252b920c…`) reports 190 method slots, 181 kernel bindings (167
+inherited + 14 pure virtual), live native 4K, the same `_bsd_init` stop
+(`0xfffffff0076e7a3c`) and 0 binding-target diffs against the earlier audit;
+`provenance.json` is `eace94306cd4…`. The audit's `gdb_stop_sha256` field
+names the `gdb-stop.py` harness script (`3ba447bc…`), while the builder's
+`gdb_stop_sha256` field names the `gdb-stop.json` snapshot (`d328190b…`);
+both are recorded so the two hashes are not confused.
+
+`scripts/build-gta4l-emmc-block.py` (`ae6fc34a…`, identical in the repository
+and the build tree) was then re-run in the tree without relinking the kernel.
+It produced a byte-identical `libGta4lEmmcBlock.a` (`ff447a48…`) from the
+policy object, the C++ object and the generated original bindings, with 190
+virtual methods, 26 concrete overrides and 0 unresolved original imports.
+The qualification records `qualified=true`, `candidate_matches_audit=true`,
+`personality_enabled=true` and `runtime_qualified=false`; the in-tree core
+and probe archives are `5e5ee937…` and `19ac22d0…`. The host suites pass
+(block 23/18 plus 28 adapter scenarios, core 179/104, probe 168/77), and the
+storage-ABI, payload-contract, inventory, package and boot-image suites pass.
+The earlier P5-1 output (`fedd4bc3…` against `ca983f7d…`) remains recorded in
+§5.3.35 as the pre-D8 artifact.
+
+### 5.3.37 P5-2 device run and corrected report-client lifecycle (2026-11-05)
+
+The first approved P5-2 BOOT-only flash used the D8 candidate `b509c511…`
+(block archive `ff447a48…`, payload `7b2ac8c0…`, boot image `4a635cae…`).
+Its first cold boot published the whole `IOMedia` but the report client did
+not hold a valid open, so the media-path read failed. The audit attributed
+the failure to the adapter's report-client lifecycle, not to the transport
+or the card; the initial candidate and its failure remain recorded in
+`out/gta4l/ram-root-emmc-block-p5-evidence/` and are not relabeled.
+
+The D9.4 correction opens the media before the report read with
+`media->open(this, 0, kIOStorageAccessReader)` and closes exactly once on
+every success, failure and cancellation exit, recording the access mode; the
+same client is used for read and close. The host IOKit seam now starts
+closed, returns `kIOReturnNotOpen` on an unopened read, models open refusal
+and descriptor failure, and checks access mode, client identity and close
+accounting. The block suite passes 23 core scenarios with 18 mutation
+controls and 32 adapter scenarios (was 28); the new adapter scenarios include
+the unopened-read regression and the balanced-open check.
+
+The corrected p5b candidate was rebuilt from the same working tree with the
+new source binding: kernel `2f8238b9…` (51,187,712 bytes; `kernel.json`
+candidate matches), qualified block archive `6d36826a…` (350,248 bytes; 190
+virtual methods, 26 concrete overrides, 0 unresolved original imports,
+requalified against the new candidate with interface audit `1f456fec…` and
+provenance `cdfe6950…`), payload `47b9593d…` (9/9 contract, exactly one
+`gta4l-emmc-block=1`, no probe token) and boot image `e256b27d…` (18/18 gate,
+only the ramdisk differs from the `ce4d76e8…` baseline). The packaged payload
+kernel is `26af8293…`; `kernel-string-verification.txt` records the class,
+personality and report strings and the payload token counts.
+
+The owner approved a fresh BOOT-only flash and the image was written to
+`/dev/block/mmcblk0p69` only: pre-flash p69 `21f3b5f2…` (the initial P5-2
+image), post-flash prefix `e256b27d…`, unchanged tail `a28b4ea2…`, full p69
+`f1954fd4…`; RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…`
+unchanged; battery 100%; the host issued no reboot. Evidence is in
+`out/gta4l/ram-root-emmc-block-p5b-evidence/` (`flash-record.json`,
+`owner-report.txt`, `device-run-record.json`, `build-provenance.json`,
+`kernel-string-verification.txt`).
+
+The owner-supplied report is `rc=0 stop=0 blocks=61071360 bs=512
+bytes=31268536320 wid=0 tim=0 clk=400000` (`wid=0` is the EXT_CSD 1-bit
+encoding). The driver reports `online=1 wp=1 reads=10 blocks=30 fails=0
+max=8`; the whole media is `whole=1 base=0 size=31268536320
+content=GUID_partition_scheme writable=0`; the media-path read is `lba=1
+attempted=1 ok=1 bytes=512 sum=2228245566 base=2228245566 same=1`; the
+failure record is all zero. The terminal panic is the intentional report-mode
+panic (`Gta4lEmmcBlock.cpp:914`, the shared report panic).
+
+F5 is therefore measured PASS for this reported boot at 1-bit SDR, 400 kHz:
+whole-device publication plus a full-length 512-byte media-path read matching
+the same-boot baseline. The boot ordinal and cold/warm class were not
+supplied and are not inferred; the owner confirmed on 2026-11-05 that the
+tablet returned to TWRP. Partition discovery is a separate observation: the
+report shows `count=80 expected=84 waited_ms=0 error=0 reported=3`, but
+`gta4l_emmc_block_gpt_entries()` derives `expected` from the GPT header
+entry-array length, not the number of populated entries, and the reporter
+stops waiting on any nonzero count. Section 5.3.38 audits the count against
+the validated GPT evidence; it finds no missing-partition or counting defect,
+but partition completeness is not claimed from the report alone. F2, 8-bit,
+4-bit/HS publication, mount/root switch and F6 remain separate gates.
+
+### 5.3.38 P5-2 partition accounting audit (host-only, 2026-11-05)
+
+The owner supplied no new device evidence for this audit; the tablet was back
+in TWRP. The audit re-used the validated recovery GPT capture and the
+reporter's registry walk. `docs/emmc-reference.md` records the capture
+(`primary-gpt.bin` SHA-256 `98bcfd9a…`, backup `12f80350…`): 84 entries of
+128 bytes, 80 nonempty partitions, no overlaps and identical primary/backup
+arrays. The `gpt-report-verified.json` record agrees (`partition_count=80`,
+`partitions_equal=true`).
+
+- `IOGUIDPartitionScheme::scan()` reads the GPT header, validates the
+  entry-array CRC, iterates all 84 slots, skips entries with a null type GUID
+  (`isPartitionUsed`) and creates one non-whole `IOMedia` per used entry with
+  base and size taken from the entry. The 80 populated entries therefore
+  produce 80 child media.
+- `Gta4lEmmcBlock::countPartitions()` enumerates `IOMedia` services whose
+  provider chain reaches the driver within four levels, skips the whole
+  media and counts the rest. The owner report's `count=80` matches the 80
+  populated entries, and its first three children (bases 4,194,304,
+  8,388,608 and 12,582,912 bytes, each 4,194,304 bytes) match GPT entries
+  1-3 exactly. `waited_ms=0` means the first snapshot already saw 80; the
+  loop breaks on any nonzero count and takes a final snapshot, which also
+  returned 80.
+- `expected=84` is the entry-array slot count from the header, not a
+  populated-entry expectation. The label remains misleading to a reader but
+  the counted value is correct, and the audit found no missing-partition or
+  counting defect. Partition completeness is not re-qualified on-device by
+  this audit; it rests on the validated primary/backup capture and the
+  matching count, and the accepted p5b report and artifacts are unchanged.
+  A future reporter that parses the entry array to print a populated count
+  would need a new image and a fresh BOOT-only approval; this audit does not
+  propose or implement that change.
+
+### 5.3.39 D10 F2 host batch: short/long CMD18 qualification (host-only, 2026-11-05)
+
+The D10 F2 batch replaces the single open-ended `CMD18` experiment in
+`gta4l-emmc-mb=1` with the bounded sequence the plan requires. Stage A still
+reads the 21 primary GPT array sectors (LBAs 2..22) with `CMD17` and keeps the
+exact bytes as the same-boot reference, in addition to the existing per-sector
+sums. The MD pass then:
+
+1. issues a two-sector `CMD18` request at LBA 2, stops it explicitly with
+   `CMD12`, and byte-compares both sectors against the reference;
+2. issues one 21-sector `CMD18` request over LBAs 2..22, stops it explicitly,
+   and byte-compares every completed sector;
+3. after clean termination, reads block 0 and LBA 2 again with `CMD17` and
+   compares them with the pre-transfer reference, proving the card and
+   controller still serve single-block reads.
+
+The core keeps a completed-sector count (`multi_completed`) separate from the
+software drain ordinal (`multi_block`) and from the validated count. A
+transfer failure preserves the first failure record before any stop or reset
+can overwrite it, emits the failure report, and does not retry or advance to
+another CMD18 request. The probe report adds the `MB` line with per-request
+`result/requested/completed/validated/first-divergence/stop-result/
+stop-normal/stop-error/stop-response0` groups and the `rec=` recovery group;
+the success counters are `step=19`/`log=55`.
+
+The probe simulator now models live FIFO readiness separately from a latched
+BRR. It flags any data-port read while a CMD18 transfer is active and the
+FIFO is not live-ready (`mb_ready_violations`), and it can hold BRR latched
+after a sector while withholding readiness for a configured delay. New
+scenarios cover a short-request content divergence, a mid-transfer readiness
+stall, an R1-error transfer, a failed recovery read and a diverging recovery
+read; the existing mid-transfer data-error, stop-timeout and drain scenarios
+were re-based on the short+long order.
+
+Host results: core 179 scenarios/104 mutation controls and probe 168
+scenarios/77 mutation controls pass, together with the report-width,
+oversized-report, storage-ABI, payload, package, boot-image, inventory and
+workflow gates. This is host-only evidence. No candidate image was built,
+flashed or booted for this batch, and F2 remains `[U]` until a device boot
+shows both requests byte-exact with clean completion and stop handling and
+successful post-transfer `CMD17` reads.
+
+### 5.3.40 D10.4a corrective host gate: enforced CMD18 acceptance (host-only, 2026-11-05)
+
+The D10.4a correction closes the acceptance gap in §5.3.39: that batch
+snapshotted and byte-validated each CMD18 request but advanced on the
+transport return code alone. A short-request content mismatch could therefore
+issue the long CMD18, and a long-request or recovery mismatch could reach
+`gta4l_emmc_probe_report_probe()` and its hardcoded `rc=0`. The initial host
+batch remains recorded above as its own evidence; this section records the
+enforced gate.
+
+The probe now treats each request as an explicit barrier:
+
+- `gta4l_emmc_probe_mb_accept()` returns a diagnostic verdict from the
+  preserved transport result, the explicit `CMD12` result, the requested
+  length, the completed count and the exact-byte validated count, in that
+  order. A content-only failure returns `GTA4L_EMMC_PROBE_ERR_CONTENT`
+  (`-21`) without overwriting the successful transport result or inventing a
+  hardware failure record; a length/accounting failure returns
+  `GTA4L_EMMC_PROBE_ERR_LENGTH`, now `-24` so it cannot collide with a
+  controller `GTA4L_EMMC_ERR_TIMING` code.
+- A failed short request records `mb_failure`/`mb_stage=1` and issues no long
+  CMD18 or recovery `CMD17`. A failed long request records stage 2 and issues
+  no recovery read. A failed or diverging block-0 recovery read records stage
+  3 and issues no LBA-2 read; a failed or diverging LBA-2 read records stage
+  4. There is no retry and no cleanup command beyond the existing bounded
+  stop.
+- The recovery state is initialized before any transfer
+  (`result`/`attempted`/`compared`/`same` clear, `same` set only after both
+  requests qualify), so a not-run recovery can never read as a successful
+  one. LBA 0 is disambiguated from "no divergence" by
+  `recovery_div_valid`; a later read cannot overwrite the first recovery
+  failure.
+- The hardcoded `rc=0` success report is reachable only through one overall
+  gate that requires both request verdicts to be clean, both requests to have
+  been attempted, `recovery_same=1`, `recovery_result=OK` and both recovery
+  comparisons to have run (the attempted/compared bitmask must be 3 for the
+  block-0 and LBA-2 reads). Any other state emits the failure report
+  below.
+
+The failure report is bounded and keeps the request context:
+
+```
+GTA4L-EMMC PROBE FAILED: mb rc=<r> stage=<s> step=<n> mb=<n> mbc=<n>
+    att=<short_attempted><long_attempted>
+    s=<result/requested/completed/validated/div/stop_result/stop_normal/stop_error/stop_response0>
+    l=<same long-request group>
+    rec=<result/block0_result/lba2_result/attempted/compared/same/div/div_valid>
+    fail=<valid/index/argument/command/error/normal/present/step>
+```
+
+The `s=`/`l=` groups report `requested/completed/validated` separately from
+the first divergent LBA and keep the stop capture, and `rec=` carries the
+transport results and the attempted/compared/not-run flags. The terminal
+`fail=` record is the preserved hardware failure when one exists, not a
+synthesized content failure.
+
+Coverage added by this correction:
+
+- Scenarios: `probe-md-final-mismatch` (last array sector), `probe-md-swap`
+  (reordered sectors), `probe-md-sum-preserve` (bytes changed with an
+  unchanged aggregate checksum), `probe-md-short-second-mismatch`,
+  `probe-md-recovery-block0-mismatch`, `probe-md-recovery-lba2-fail`,
+  `probe-md-accept-seam` (a controlled host seam that calls the production
+  acceptance helper with synthetic snapshots, because an otherwise-correct
+  simulator cannot produce a successful transport with incomplete sector
+  accounting) and `report-width-md-failure` (width form 13).
+- Mutation controls: short and long barrier removal, exact-byte comparison
+  removal, completed and validated count-gate removal, recovery transport and
+  divergence early-stop removal, and an inverted overall gate. The
+  first-divergence mutation now targets the validation assignment, and the
+  former checksum-substitution mutation is replaced because
+  `probe-md-sum-preserve` plus the byte-comparison mutation proves that a
+  matching checksum cannot substitute for exact comparison.
+- The widest failure form materializes both request groups, the recovery
+  group and the terminal record at their field bounds against the real
+  2048-byte panic buffer; it is the thirteenth width materialization.
+
+Host results after the correction: core 179 scenarios/104 mutation controls
+(unchanged) and probe 176 scenarios/84 mutation controls/13 width-bound
+materializations, plus the oversized-report control. This is host-only
+evidence. No candidate image was built, flashed or booted for this
+correction, no device access occurred, and F2 remains `[U]` until a device
+boot shows both requests byte-exact with clean completion and stop handling
+and successful post-transfer `CMD17` reads.
+
+### 5.3.41 D10.5 F2 device run: first cold boot passes both CMD18 requests (2026-11-05)
+
+The D10.5 candidate, which is the D10.4a acceptance gate of §5.3.40, was
+built, flashed BOOT-only to `p69` and booted by the owner. The owner supplied
+the terminal report and clarified that it came from the first cold boot of the
+candidate. The raw report, that clarification and the closeout record are in
+`out/gta4l/ram-root-emmc-mb-d10.5-closeout-evidence/`
+(`owner-report.txt`, `owner-clarification.txt`, `device-run-record.json` and
+`evidence-sha256.txt`); the original build and flash artifacts remain in the
+immutable `out/gta4l/ram-root-emmc-mb-d10.5-evidence/` tree (94-file
+manifest, verified 94/94). The candidate is the recorded dirty-tree state on
+device HEAD `1ee1f4f9…` and shared HEAD `0a1cc714…`: prelinked kernel
+`bb22f6ca…` (51,187,712 bytes), entry-patched kernel `2d87a4be…`, payload
+`93110d8c…` (8/8 contract, exactly one `gta4l-emmc-probe=1` and one
+`gta4l-emmc-mb=1`) and BOOT image `bcc93a47…` (18/18 gate).
+
+The report is reproduced here with the identifying CID/CSD and per-sector
+content lines omitted; the complete text stays in the ignored evidence tree:
+
+```
+GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 cap=61071360 rev=8
+  bw=0 ocr=c0ff8080 ext=000009cb hc2=0008 ven=00018a9c dll=6000642c
+  dst=00000000 pst=00000000 step=19 log=55 mb=1
+GTA4L-EMMC PROBE LSTLBA=61071359 sum=a89b26d5 mbsame=1 drain=0/0/0/0
+GTA4L-EMMC PROBE MB clk=0007 s=0/2/2/2/0/0/0003/0000/00000b00
+  l=0/21/21/21/0/0/0003/0000/00000b00 rec=0/1/0
+```
+
+`step=19`, `log=55` and `mb=1` identify the D10.4a success gate rather than a
+stage-A-only pass. Each `s=`/`l=` group is
+`result/requested/completed/validated/div/stop_result/stop_normal/stop_error/stop_response0`:
+the short request is a clean transport with 2 requested, 2 completed and 2
+byte-validated sectors and no divergence, and the long request is a clean
+transport with 21/21/21 over LBAs 2..22 and no divergence. Both explicit
+`CMD12` stops report result 0, `NORMAL=0x0003` (CC and TC) and
+`ERROR=0x0000`, with response word `0x00000b00`. The compact success `rec=`
+tuple is `result/same/div` only, so the printed `rec=0/1/0` says the recovery
+result was clean, the contents matched and no divergence was seen; the
+attempted/compared bitmask is not printed there, but the `rc=0` gate requires
+both post-transfer `CMD17` recovery reads (block 0, then LBA 2) to have been
+attempted and compared. `mbsame=1` is the aggregate agreement of the
+multi-block bytes with the same-boot CMD17 reference. `drain=0/0/0/0` records
+that the optional post-bound drain was not used and earns no credit for this
+result. `bw=0` and `clk=0007` are the unchanged 1-bit legacy identification
+configuration, not a new width or speed claim.
+
+This is one owner-reported cold boot, so **F2 is measured PASS for that boot
+at 1-bit SDR, 400 kHz `[C]`**. It is not repeatability, a cold-start
+reliability result, general performance or multi-block publication; those
+remain `[U]`. The owner confirmed the tablet was on TWRP after the boot, so
+the recovery disposition is confirmed and no host reboot was issued. The
+original build provenance keeps `owner_boot_pending=true` as its pre-run
+snapshot; the closeout record supersedes it without rewriting the original
+evidence.
+
+### 5.3.42 D12 offline initialization/reliability audit (host-only, 2026-11-06)
+
+The D12 audit asked whether the existing H8/H9, A2, H15-H17, p5/p5b and D10.5
+records demonstrate a host-correctable initialization defect, or whether the
+cause remains unknown and needs one discriminating observation. It used only
+ignored evidence and the current source; no device access, build, flash,
+boot, reboot, commit or push was performed. The matrix, per-hypothesis
+reasoning and instrumentation proposal are outside tracked trees at
+`out/gta4l/ram-root-emmc-d12-reliability-audit/`
+(`failure-matrix.json`, `hypothesis-analysis.md`,
+`discriminating-observation.md`, `audit-summary.md`).
+
+The dominant class is CMD3 completion-silent: a plausible R1 status word is
+present at the timeout while `CC` is never observed over the full
+100,000-iteration (~1.14 s) window, yet the same image can complete CMD3 in
+~0.3 ms on another boot. Pre-CMD3 status, enables and `PRESENT_STATE` are
+identical in clean and failing H9 boots; the failing sample has
+`CMD_INHIBIT` clear, `ERROR=0`, the correct command and argument. A2 attempt 3
+boot 1 captures both the post-CMD2 response window and the timeout window, and
+`RESPONSE0` changed after CMD2, so the timeout word is not simply the stale
+CMD2 window; that makes a fresh card response plausible but does not show
+whether `CC` was ever asserted. No command-construction, inhibit, CRC/index,
+CMD1-readiness or W1C defect is demonstrated. The CMD17 TC-only and CMD18
+data-timeout classes are separate and are not assumed to share the CMD3 cause;
+p5's report-client-not-open is a corrected adapter lifecycle defect, not a
+transport failure. Cold/warm correlation and any probability model remain
+unestablished, and the cross-image counts are not a controlled comparison.
+
+**Disposition: no defect demonstrated; missing discriminating observation.**
+The proposed next step is a bounded diagnostic-only extension of the existing
+H9 rung: capture `RESPONSE0..3` immediately before CMD3 and a log-spaced
+`(iteration, NORMAL, RESPONSE0)` trace through the existing poll, with the
+command count, arguments, wait bound, poll step and W1C ordering unchanged.
+It allocates no new probe number and adds about 24 bounded MMIO reads over the
+~1.14 s window (not claimed observationally free). The audit stops before
+implementation, build or flash for an owner decision. F2 remains measured PASS
+for the one D10.5 cold boot and F5 remains measured PASS for p5b; neither
+verdict is changed by this audit.
+
+### 5.3.43 D12.5 stage-9 no-retry CMD3 timeline (host-only, 2026-11-06)
+
+Stage 9 keeps the `gta4l-emmc-probe=9` selector but now means a **versioned
+no-retry identification capture**, not the historical duplicate-CMD3 retry
+experiment. Historical H9 images, stop codes 10-13 and their transcripts are
+unchanged; this section documents the new meaning and does not reinterpret
+them. The duplicate-CMD3 retry seam remains in the portable core for its direct
+regression tests but stage 9 sets `cmd3_retry_enabled = 0`, enables
+`cmd3_timeline_enabled`, and keeps `identify_only` so a clean run stops after
+the TRAN wait, before any EXT_CSD or sector command.
+
+Capture contract and storage. Fixed-capacity state lives in
+`struct gta4l_emmc_host`, not a VLA, heap allocation or formatter temporary:
+`GTA4L_EMMC_CMD3_TIMELINE_VERSION` 1, 19 scheduled slots plus one reserved
+terminal slot (`GTA4L_EMMC_CMD3_TIMELINE_ENTRIES` 20), and entry kinds
+scheduled / terminal-success / terminal-timeout / terminal-error. The
+zero-based scheduled RESPONSE0 samples are at
+`0,1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384,32768,65536,99999`;
+a point beyond the actual poll limit is never reached and the poll is never
+extended for one. Reinitialization clears the trace fields, validity, indices
+and counters without clearing caller configuration.
+
+Sequential order. At the existing post-clear, pre-ARGUMENT/COMMAND point the
+code reads `RESPONSE0..3` in register order after the existing status, enable
+and present samples; these are four sequential observations, not an atomic
+snapshot. At a scheduled iteration the existing `ERROR`/`NORMAL` values are
+reused and one `RESPONSE0` read is added; the completion decision still uses
+the original status values, never response content. The counter delta is
+sampled after that read and is a one-sided bound, not an atomic
+status/response timestamp. The reserved terminal slot reuses the existing
+success response read, the fresh timeout status/raw-response capture or the
+latched failure capture, and it is only marked valid when those source fields
+exist. The CMD3 transport result is stored independently of R1 validation and
+the later identification result, so a timeout stays a timeout even if the
+fresh terminal NORMAL sample contains late CC.
+
+Bounds. One diagnostic CMD3 adds at most 4 pre-command response words plus 19
+scheduled RESPONSE0 reads (23 32-bit response reads) and at most 20 counter
+reads (19 scheduled plus one terminal). It adds zero status reads, no new
+reads on disabled paths or unrelated commands, and no extra sleep, reset,
+retry, power operation or command. The added cost is not claimed to be
+observationally free and no percentage or microsecond overhead is asserted.
+
+Report and stops. `GTA4L-EMMC H9T REPORT ver=1` is one bounded panic: header
+(`rc stop sub att tr r1 retry step log hz`), `C3P` (pre-command window and
+response), `C3L` (poll history), `C3T` (timeout capture), `TRC` (count,
+overflow) and a fixed 20-line `T00..T19` trace, then the terminal `FAIL`
+record. Unused slots print kind `?` and valid 0 so the length is bounded and
+nothing is invented. The clean materialization is 1658 bytes and the widest
+field-wise synthetic form stays below the 2048-byte panic budget including
+the terminator. Stop codes are 0 (clean identification), 14 (CMD3 not clean or
+never submitted) and 15 (CMD3 clean, later identification failed); historical
+retry stops 10-13 are unreachable here. The formatter performs no MMIO and
+does not touch an unverified clock window.
+
+Interpretation limits. A RESPONSE0 change after submission bounds a register
+update to an interval and does not prove a fresh card response or a lost
+hardware CC. An unchanged sampled window is inconclusive: it cannot separate
+no response, an identical new response, an intermediate change missed between
+samples and a retained/controller-produced value. A first change only in the
+terminal capture is bounded between the last scheduled sample and the
+terminal read, not an arrival time. A late terminal CC after an exhausted poll
+remains a timeout and is not promoted to success or replayed. NORMAL is
+sampled every ordinary iteration, so a CC pulse between reads is unobservable.
+Full pre/terminal windows are also sequential. These limits supersede the
+older D12 sketch's duplicate-CMD3 retry, overhead-percentage and stronger
+causal readings; the D12 audit artifacts remain immutable historical evidence.
+
+Host-only status. Host suites pass core 187 scenarios/115 mutation controls
+and probe 196 scenarios/100 mutation controls with 13 width-bound
+materializations and the oversized-report control. Stage-9 scenarios are
+`probe-h9-map-fail`, `probe-h9-clock-fail`, `probe-h9-cmd1-fail`,
+`probe-h9-cmd2-fail`, `probe-h9-clean`, `probe-h9-timeout`,
+`probe-h9-status`, `probe-h9-error`, `probe-h9-later-fail`,
+`probe-h9-cc-between`, `probe-h9-cc-at-sample`, `probe-h9-update-no-cc`,
+`probe-h9-no-update`, `probe-h9-preexisting-r1`, `probe-h9-identical`,
+`probe-h9-multi-change`, `probe-h9-last-sample`, `probe-h9-terminal-only`,
+`probe-h9-late-cc`, `probe-h9-index-error`, `probe-h9-simultaneous`,
+`probe-h9-error-in-sample`, `probe-h9-error-after-read`,
+`probe-h9-inhibit` and `probe-h9-counter-stall`; the core keeps the
+historical direct retry scenarios and adds `cmd3-timeline-clean`,
+`cmd3-timeline-timeout`, `cmd3-timeline-stale-cc`, `cmd3-timeline-mixed`,
+`cmd3-timeline-reinit`, `cmd3-timeline-short-budget`,
+`cmd3-timeline-store-boundary` and `cmd3-timeline-saturation`. The probe suite
+also carries the stage-9 mutation gates for a scheduled response read, the
+last schedule point, a scheduled store, the terminal slot, R1 content, the
+timeout terminal entry, the final error store, the report version, the
+pre-CMD3 response, an extra response read, an extra status read, a
+later-command trace clear, the counter frequency, an invented valid unused
+slot, the overflow field and a late-CC promotion; the core adds gates for
+retry-coupled capture, an unguarded capture-disabled read, an extended poll,
+a forced capacity overflow, a capacity-guard removal and a pre-capture clear
+removal. No kernel/archive
+candidate was built, no image was packaged, flashed or booted, no device access
+occurred, and no commit or push was made. F2 and p5b F5 keep their measured
+verdicts; reliability remains unresolved pending a separately approved
+observation.
+
+### 5.3.44 D12.5 stage-9 observation closeout and H9T kind-column finding (host-only, 2026-11-06)
+
+The single authorized D12.5 stage-9 observation was consumed on the BOOT-only
+candidate `9e0317909530f7d59eeb7d8d80dfa9f0a8ed354d2fd0bb5165c646c6b17f6bc2`
+(85,688,320 bytes, 18/18 gate, p69 only), built from device HEAD `1ee1f4f9`
+and shared HEAD `0a1cc714` with the dirty-tree diff bound by
+`device-unstaged-diff.sha256`. The owner classified the boot as cold, supplied
+the report and a photograph, and confirmed return to TWRP. No host-issued
+reboot, reflash between boots or further attempt occurred; the authorization is
+exhausted. This is a host-only closeout and does not reinterpret the D12.5 host
+batch or the D10.5/p5b verdicts. The dated analysis is
+`docs/emmc-d12.5-closeout-2026-11-06.md`.
+
+Report decode. Header `ver=1 rc=0 stop=0 sub=1 att=1 tr=0 r1=0 retry=0/0
+step=13 log=4 hz=19200000`: CMD3 was submitted once with the retry seam
+disabled. The `C3L` history is valid with 25 iterations, first NORMAL `0000`,
+last NORMAL `0001` and zero-based terminal iteration 24. The reserved terminal
+slot 19 records kind SUCCESS, NORMAL `0001`, ERROR `0000`, RESPONSE0
+`00000500`, valid 1 and ticks `0x14f0`; `C3T v=0` means no timeout capture.
+`TRC n=6 ov=0` counts scheduled entries at iterations 0, 1, 2, 4, 8 and 16;
+slots 6-18 are unused (`?`, valid 0) and slot 19 is reserved. The zero-validity
+`FAIL` record is the intentional report stop, not a recorded hardware failure.
+
+Limits. The six scheduled samples are the retained long-response window's
+first word (the CMD2 CID prefix) read while polling before completion; they are
+not CMD3 responses. The terminal sample is a later sequential read. Comparing
+it with the last scheduled sample bounds a register change to an interval; it
+does not prove a fresh card response, an exact arrival time or a card-state
+transition. The driver applies its R1 error mask to the terminal RESPONSE0 and
+reported no masked error (`r1=0`); it assigns the RCA in the CMD3 argument and
+does not parse an RCA from the response. No timing estimate is derived from the
+counter ticks.
+
+Disposition. Clean instrumented identification / CMD3 completion-silent
+non-reproduction. Initialization reliability remains unresolved: one boot does
+not qualify repeatability, cold-start reliability or a failure rate. F2 remains
+measured PASS for the one D10.5 cold boot and p5b F5 keeps its measured verdict.
+
+Missing kind column. `package/Gta4lEmmcProbe.c:1488` emits each trace line with
+`GTA4L-EMMC H9T T%02u %c %u %04x %04x %08x %u %08x%08x\n`. The on-screen report
+and the typed transcript omit the `%c` kind (`S` scheduled, `?` unused, `C`
+terminal success, `T` terminal timeout, `E` terminal error); `Txx` is the slot
+index. The photograph confirms the omission is not a transcription artifact.
+The panic is rendered by the freestanding formatter in the sibling UniXNU
+checkout `scripts/xnu-panic-screen.c` (SHA-256
+`54b950a7d83c30f7720d30551c6d5f10cea5e40dcccc5adb2b4c70a98240a68b`, identical
+to the build-tree copy). Its `format()` supports `%s`, `%x`/`%X`, `%u`/`%d`
+and `%p` but has no `%c` branch; it still consumes one variadic slot at
+`u64 v = args[used++]`, so the kind is dropped while the following fields stay
+aligned. The probe harness's `panic()` calls libc `vsnprintf`
+(`scripts/sim-gta4l-emmc-probe/harness.c:1966`), which handles `%c`, so the
+existing host suite cannot observe the device behavior. The fetched XNU kernel
+source handles `%c` (`out/feeds/xnu-b7545ced/osfmk/kern/printf.c:459`),
+confirming the divergence is in the panic-screen path rather than in the report
+format or the probe.
+
+`scripts/test-gta4l-panic-format.py` extracts the pinned `put`, `number` and
+`format` bodies, compiles them with a memory sink and runs the exact H9T format
+with synthetic values. It checks the production output (double space, no kind),
+the libc reference (kind present), an unaffected control without `%c` and a
+textual mutation that adds a `%c` branch and restores the kind. It pins the
+formatter SHA-256 and the probe format string, uses no private response word
+and does not read device state. The test passes.
+
+This is a finding, not a fix. A formatter fix needs an exact invariant (one
+`%c` consumes one argument and emits that byte), a minimal seam, the
+baseline-failing reproducer above and a mutation that restores failure, then a
+separate implementation decision. The missing kind column limits trace-format
+acceptance; it does not erase the independently visible clean header,
+completion and trace-field evidence. No formatter or driver change, candidate
+build, flash, boot, device access, commit or push was made in this closeout.
+
+Validation (host-only, from `src/UniXNU-gta4l/`, `LC_ALL=C`,
+`/usr/bin/python3.11 -B`). The 24-script `scripts/test-*.py` battery passed 23
+scripts, including the new panic-format test, with these exact counts: core 187
+scenarios/115 mutation controls, probe 196/100 with 13 width-bound
+materializations and one oversized-report control, block core 23/18.
+`scripts/test-gta4l-storage-abi.py` failed with `Derived candidate does not
+match the plan`; the shared `kernel.macho` is the D12.5 prelinked
+`b1871d40ec0c6b5021ca6dd14a83951650255b40824399483679116cf6b4eef3`, while the
+storage-ABI derive and provenance remain pinned to the p5b kernel `2f8238b9`.
+That is a pre-existing artifact-staleness condition, not a regression from this
+batch; the storage-ABI artifacts were not regenerated. `scripts/check-gta4l.py`
+passes, `porting.toml`/`board.toml`/`feeds.toml` parse with `tomllib` (13
+porting areas), and `git diff --check` is clean.
+
+Evidence. Private raw evidence is under the ignored
+`out/gta4l/ram-root-emmc-d12.5-cmd3-timeline-evidence/observation-1/` (exact
+owner transcript, original photograph bytes, structured record and
+interpretation), covered by a new closeout SHA-256 manifest. The original
+40-file sealed manifest is unchanged. Raw response windows and CID fragments
+remain private and are not repeated here.
+
+### 5.3.45 H9T kind-column panic formatter fix (host-only, 2026-11-06)
+
+Follow-up to §5.3.44. The H9T trace format at `package/Gta4lEmmcProbe.c:1488`
+includes `%c`, but the shared panic formatter in the sibling UniXNU checkout
+(`scripts/xnu-panic-screen.c`) consumed one variadic slot for every conversion
+and had no `%c` branch, so the kind byte was dropped while the following fields
+stayed aligned. The fix adds one branch after the slot is consumed:
+
+```c
+    if (c == 'c') {
+      put (g, (u8)v);
+    } else if (c == 's') {
+```
+
+The invariant is that a plain `%c` consumes exactly one slot and emits its low
+byte; no other conversion, argument order or report length bound changes. The
+file comment now lists `%c`. The old formatter hash was
+`54b950a7d83c30f7720d30551c6d5f10cea5e40dcccc5adb2b4c70a98240a68b`. The
+`%c` branch alone produced a 2615-byte (`0xa37`) linked image at the D12.5
+panic cave, 7 bytes past `PANIC_CAVE_END`; the `--panic-screen --no-reset`
+recipe has only the 2608-byte (`0xa30`) stage-2-to-end padding. The
+`PANIC_TEXT` log path is now compiled only when `PANIC_TEXT` is nonzero, which
+is dead code on the D12.5 kernel (it has no `_boot_progress_panic_text`). The
+guarded formatter is 2519 bytes (`0x9d7`) with 89 bytes spare, and the file
+hash is
+`8b71ed5a1fadbf3bea5839ce4b614f5b6e0c998e37131e60c1d37b3f2686ba95`.
+Kernels that define `PANIC_TEXT` keep the previous log behavior.
+
+`scripts/test-gta4l-panic-format.py` was rewritten from a defect reproducer
+into a regression test. It pins the fixed hash and the probe format, compares
+exact output with libc for kinds `S`, `?`, `C`, `T` and `E`, an unaffected
+control and an adjacent `%c`/`%%` format, and requires a branch-removal
+mutation to reproduce the old `T19  7` and `AB7C%DE1234` output. It also
+compiles the full formatter for `aarch64-none-elf` with the production flags
+and the D12.5 cave/symbol addresses, rejects writable data, requires
+`panic_screen` first in `.text`, and requires at least 32 bytes spare. The
+pre-fix source fails with `the %c branch is missing; the pre-fix formatter
+drops the H9T kind`; the unguarded `%c` source (hash `3915f34f...`) passes the
+behavior phase but fails the fit phase with `panic screen is 0xa37 bytes ...
+only -7 bytes before ...`; the guarded source prints `FIT: panic screen 0x9d7
+bytes ... 89 bytes spare`.
+
+Validation (host-only, from `src/UniXNU-gta4l/`, `LC_ALL=C`,
+`/usr/bin/python3.11 -B`). The 24-script battery passed 23 scripts, including
+the fixed panic-format test, with core 187/115, probe 196/100 and block 23/18.
+`scripts/test-gta4l-storage-abi.py` still fails with `Derived candidate does
+not match the plan` because the shared `kernel.macho` is the D12.5 prelinked
+`b1871d40` while the storage-ABI derive and provenance remain pinned to the
+p5b kernel `2f8238b9`; the artifacts were not regenerated. The porting-record
+schema check (`scripts/porting-record.py check --device ../UniXNU-gta4l`),
+`scripts/check-gta4l.py`, the TOML parse (13 areas), the baseline fixture
+recipe and `git diff --check` in both repositories pass.
+
+Evidence is under the ignored `out/gta4l/ram-root-emmc-panic-format-fix/`
+(pre-fix/fixed formatter copies, diff, pre-fix failure log, full test output,
+host checks, source hashes and a new manifest). The D12.5 closeout manifest
+remains an unchanged historical snapshot. No candidate was built, flashed or
+booted, no device access occurred, and the D12.5 image still carries the old
+formatter. A new candidate and on-device observation need fresh explicit
+approval; reliability remains unresolved, F2 and p5b F5 are unchanged and D13
+is separate. No commit or push was made.
+
+### 5.3.46 D12.6 panic-format candidate observation (host-only closeout, 2026-11-06)
+
+Follow-up to §5.3.44 and §5.3.45. The owner supplied one H9T report from a
+D12.6 candidate boot and confirmed a cold start, no intervening attempts and a
+return to TWRP. The candidate was BOOT image `7c76c7eb` (18/18 gate, payload
+`e384cc06`, packaged kernel `12385bc7`), flashed BOOT/p69 only with the recorded
+prefix match, protected partitions matching the pre-flash values and a saved
+rollback. No exact timestamp or photo bytes were supplied.
+
+The header is `ver=1 rc=0 stop=0 sub=1 att=1 tr=0 r1=0 retry=0/0 step=13 log=4
+hz=19200000`. CMD3 was submitted once with no retry; the 25-iteration poll
+ended at zero-based iteration 24 with terminal kind `C`, NORMAL `0001`, ERROR
+`0000`, RESPONSE0 `00000500`, valid 1 and ticks `0x14f2`; no timeout capture
+exists. `TRC n=6 ov=0` has scheduled entries at 0/1/2/4/8/16, unused slots
+6-18 and reserved slot 19; the six scheduled words are private. FAIL validity
+is zero, so the panic is the intentional report stop.
+
+The kind column renders as expected (`S`, `?`, `C`), accepting the §5.3.45
+formatter correction for this report; it does not qualify the framebuffer path,
+other conversions or future candidates. The scheduled samples remain
+interval-bounded polling reads, not CMD3 responses or exact arrival times, and
+the terminal ticks are not a command-latency measurement. Disposition: clean
+instrumented identification / CMD3 non-reproduction; initialization reliability
+remains unresolved and F2/p5b F5 are unchanged. Private evidence is under
+`out/gta4l/ram-root-emmc-d12.6-panic-format-evidence/observation-1/`; see
+`docs/emmc-d12.6-panic-format-observation-2026-11-06.md`. No device access,
+build, flash, boot, commit or push in this batch.
+
+### 5.3.47 D13 readiness: grounded adapter/CMD18 contract (host-only, 2026-11-06)
+
+Follow-up to §5.3.42–§5.3.46. This batch performs the plan's host-only D13.1
+grounding and D13.2 scenario enumeration; it does not implement the proposed
+backend, build a candidate, launch QEMU, access the device or commit. Source
+identity is device HEAD `1ee1f4f9143b` with the existing closeout working tree
+and shared HEAD `0a1cc71407a3`. The dated record is
+`docs/emmc-d13-readiness-2026-11-06.md`; it is design and inspection only.
+
+The inspected seam is the current one-sector adapter, not the probe:
+`doAsyncReadWrite` rejects before acceptance and without a completion (null
+arguments, zero/out-of-range blocks, the 64-block ceiling, a short descriptor,
+write or non-read direction, an absent gate), takes the gate for an accepted
+request, clears the request buffer, completes once after unlocking, and sends
+the media-state notification last (`package/Gta4lEmmcBlock.cpp:501-604`). The
+portable core loops one CMD17 sector through a 512-byte bounce, counts a block
+only after a full copy and marks the media offline on the first read or copy
+failure (`package/Gta4lEmmcBlockCore.c:50-148`). The diagnostic
+`gta4l_emmc_read_multi` writes data directly into its caller's buffer before
+the mandatory CMD12 outcome is known, returns a collapsed result and preserves
+the completed/failing ordinal and stop result only in separate `multi_*`
+fields (`package/Gta4lEmmc.c:3658-3971`); the probe's static references and
+acceptance gates are diagnostic-only and must not leak into production reads.
+
+The proposed first contract keeps the accepted 64-sector/32-KiB/one-segment
+request shape and the `gta4l-emmc-block=1` singleton backend, adds CMD17 for a
+singleton and two-sector CMD18 chunks plus one CMD17 tail, requires an optional
+multi-read callback that exposes transport, requested/completed sectors and the
+stop outcome separately, and delivers a chunk only after exact count and a
+clean mandatory CMD12. It uses a private bounded bounce (not a VLA or large
+kernel-stack allocation), preserves the first failure, fails closed/offline,
+stops issuing suffix chunks, does not retry or fall back, and keeps one
+completion per accepted request with no callback under the gate. The new
+selector value remains open and must not silently change `=1`. No mount, root
+switch, write path, DMA, CQE, ICE or width/speed change is part of it.
+
+The timing derivation is a named open decision: with 1 s command and data
+bounds, a 0.5 s drain and up to 2 s of stop waits, a pathologically slow chunk
+can hold the gate for roughly 4–4.5 s; 32 two-sector chunks can therefore
+exceed any interactive expectation, while a failed chunk is bounded before the
+request stops. The implementation decision must choose explicitly between
+accepting/documenting the 64-sector synchronous bound, using a larger bounded
+chunk, or changing the external ceiling. The first hardware discriminator stays
+small: a two-sector GPT-array read plus an odd-length split/tail, not a
+64-sector sweep.
+
+The host scenario inventory to preserve and extend is core 23 scenarios/18
+mutation controls, adapter 32 scenarios, and diagnostic 18 `multi-*`/12
+multi-block mutations. The readiness record enumerates the required transfer,
+rejection, failure/partial-delivery, lifetime/completion and runtime-negative
+cases, plus the reporting and counter constraints. The batch re-ran the TOML
+parse, `porting-record.py check`, `check-gta4l.py`, the eMMC evidence-count
+test, `git diff --check` and the privacy scan; `scripts/test-gta4l-storage-abi.py`
+still fails closed on the stale p5b candidate/provenance and was not
+regenerated. The N2 owner decision selected host implementation, and the
+follow-up N3 batch is recorded in §5.3.48.
+
+### 5.3.48 D13 N3 chunked report-mode host implementation (host-only, 2026-11-06)
+
+Follow-up to §5.3.47. This batch implements the D13 contract on the host only;
+it does not build a candidate or archive, launch QEMU, access the device,
+flash, boot, commit or push. The measured p5b/F5 rung and the F2 verdict are
+unchanged. Source identity remains device HEAD `1ee1f4f9143b` with the
+existing dirty tree and shared HEAD `0a1cc71407a3`; raw host evidence is under
+`out/gta4l/ram-root-emmc-d13-n3-chunk-evidence/`.
+
+**Selector and dispatch.** `gta4l-emmc-block=3` is the new report-chunked
+mode (`GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED`,
+`GTA4L_EMMC_BLOCK_SELECT_REPORT_CHUNKED`). `=1` remains the CMD17 report mode,
+`=2` remains refused and a probe token, another SDHCI diagnostic or a duplicate
+block token is still refused before MMIO. The adapter sets `chunkedMode` from
+the selection and passes `read_multi`, `chunk_buffer` and `chunk_buffer_bytes`
+only in mode 3; `initializeHardware()` runs after that flag is set.
+
+**Portable contract.** The helper has an optional
+`read_multi(context, block, count, buffer, result)` callback. Its
+`gta4l_emmc_block_multi_result` carries `transport_result`,
+`requested_blocks`, `completed_blocks`, `stop_attempted` and `stop_result`.
+A singleton and an odd tail use CMD17; multi-block requests use two-sector
+CMD18 chunks (`GTA4L_EMMC_BLOCK_CHUNK_BLOCKS=2`,
+`GTA4L_EMMC_BLOCK_CHUNK_BYTES=1024`) when the callback is present, otherwise
+the old one-block loop. A chunk is copied out only when the callback return
+code is zero, `transport_result` is zero, the requested and completed counts
+both equal the chunk size, the mandatory stop was attempted and
+`stop_result` is zero. Earlier qualified chunks may contribute partial bytes;
+a failed chunk contributes none, clears `online`, latches the first failure,
+counts `chunk_failures` (and `stop_failures` only when a stop was attempted and
+failed), and stops suffix I/O. There is no retry, CMD17 fallback or recovery
+in-request.
+
+**Adapter and transport.** The adapter owns a 1024-byte `chunk` member and
+maps `readMultiCallback()` to `gta4l_emmc_read_multi_result()`. That wrapper
+snapshots the existing `multi_completed`, `multi_stop_valid` and
+`multi_stop_result` fields and returns the unchanged collapsed
+`gta4l_emmc_read_multi()` result; diagnostic callers and the probe are
+unchanged. The adapter still takes the gate for an accepted request, clears
+the request buffer before the callback, completes exactly once outside the
+lock, and sends the media-state notification last.
+
+**Report.** `fillDriverReport()` (under the gate) and
+`fillWatchdogReport()` (without it) copy `mode=3` for chunked mode and the
+existing counters plus `requested_blocks`, `cmd17_reads`, `cmd18_chunks`,
+`cmd18_blocks`, `chunk_failures`, `stop_attempts`, `stop_failures` and
+`last_stop_result`. The formatter emits `mode=` on the header line and a
+`GTA4L-EMMC P5 XFER:` line with `req`, `c17`, `c18`, `c18b`, `cfail`, `stops`,
+`sfail` and `last_stop` inside the 2048-byte buffer; an overflow fails closed
+rather than truncating. The watchdog snapshot still does not take the gate, so
+new fields do not assume a locked read.
+
+**Host results.** `scripts/test-gta4l-emmc-block.py` passes 48 core scenarios
+with 38 mutation controls, 55 adapter scenarios against the host IOKit seam
+and 3 adapter-source mutations (double completion, callback under lock and a
+stale request buffer). The chunk scenarios cover singleton, pair, odd split,
+exact boundary, 21-sector and 64-sector requests, first/middle/last failure,
+short count, data-phase result, stop failure, missing stop, short copy,
+overlong copy, missing/small bounce, stale bounce and offline state; the
+adapter scenarios add mode-3 selection, conflict, read/tail/max, failure,
+partial delivery, stop failure, short-count, watchdog snapshot/terminal-race
+and the controlled qualification reporter cases in §5.3.49. The diagnostic
+payload suite passes with `emmc-block-3` -> `gta4l-emmc-block=3`; the builder,
+checker, packager and inventory accept exactly one block token, refuse
+duplicates and mixed probe/block tokens, and still refuse the deferred `=2`.
+The unchanged core and probe suites remain 187/115 and 196/100.
+
+**Limits and next gate.** The known synchronous gate-hold bound is unchanged:
+a pathologically slow two-sector chunk can consume roughly 4–4.5 s, so a
+64-sector request can hold the gate for roughly 128–144 s; the 30,000 ms
+report watchdog covers the report thread, not general I/O, and
+`GTA4L_EMMC_BLOCK_READ_WAIT_MS` is still unused. There is no offline recovery
+path. This batch is not a hardware result or a reliability disposition; the
+first hardware discriminator remains a small two-sector GPT-array read plus an
+odd-length split/tail. N4 requires separate candidate-build and ABI/QEMU
+approval, and the stale storage-ABI candidate/provenance still needs its own
+requalification path.
+
+### 5.3.49 N3 corrective host batch (host-only, 2026-11-06)
+
+**Stop-failure accounting.** The portable multi-result callback contract now
+distinguishes refusal from execution: a nonzero return means the callback
+refused the chunk and no execution record exists; zero means `result` is
+always filled, including a failed data phase or stop. The helper increments
+`stop_attempts` and `stop_failures` before any return branch, so a stop
+failure is visible even when the collapsed transport result is also nonzero,
+and it never copies chunk bytes before the transport result qualifies.
+
+**Qualification contract.** `readMultiCallback()` maps the diagnostic
+`gta4l_emmc_multi_result` transport/requested/completed/stop fields into
+`gta4l_emmc_block_multi_result`; only a pre-command argument refusal keeps a
+nonzero return. `copyOutCallback()` compares every delivered byte against the
+reference capture while a qualification window is active.
+
+**Mode-3 controlled reporter.** In chunked mode `runReport()` reads a
+three-block reference at LBA 2 before opening the media, then performs one
+intentional two-block and one three-block `IOMedia` read at LBA 2 through the
+adapter. The two-block read exercises one CMD18/CMD12 chunk; the three-block
+read exercises one CMD18 chunk plus the CMD17 odd tail. A coherent capture
+records exact byte matches/mismatch offset, CMD17/CMD18 counts, requested
+chunk blocks, stop attempts/failures and the last stop result. Reason codes:
+1 reference unavailable, 2 transport/count/copy/lifetime failure, 3 byte
+mismatch, 4 command-shape mismatch, 5 ambiguous attribution. A second request
+with the controlled block/count/length identity marks the window ambiguous, so
+an incidental scan cannot be credited to the intentional read; ordinary
+requests are otherwise ignored by the capture. The reporter never holds the
+controller gate across `media->read()`, which re-enters the adapter.
+
+**Terminal ownership and watchdog.** `claimTerminal()` gives exactly one
+terminal owner. `panicWithReport()` claims first, takes a coherent snapshot,
+then sets `reportDone` and formats; the watchdog uses a bounded try-lock
+snapshot (`P5 SNAP: locked=0/1`) with `rc=stop=16` and defers while the
+terminal owner is active. A watchdog thread-start failure now reports
+`stop=16 stage=17` instead of returning success.
+
+**Host results.** The block suite passes 48 core scenarios with 38 mutation
+controls, 55 adapter scenarios and 3 adapter-source mutations. New adapter
+controls cover reporter success, incidental attribution, a two-block mismatch,
+a sum-preserving byte mismatch (`+1`/`-31` at adjacent bytes preserves the
+rolling 31-based sum, so only an exact byte comparison detects it), an odd-tail
+mismatch, wrong command shape, an unavailable reference, ambiguous attribution
+and a stop failure. `read-one` also requires the request buffer to be cleared;
+the adapter mutations must fail on double completion, callback-under-lock and
+a stale request buffer. The watchdog controls cover start failure, a blocked
+try-lock snapshot and terminal-race suppression of a second panic. Host
+acceptance is complete for the intentional mode-3 path; it is not a hardware,
+initialization-reliability or general-I/O qualification. Evidence:
+`out/gta4l/ram-root-emmc-n3-corrective-evidence/`.
+
+### 5.3.50 D13 N4 candidate and N5 chunked hardware observation (2026-11-07)
+
+Follow-up to §5.3.48–§5.3.49. N4 built the approved `gta4l-emmc-block=3`
+integration candidate through the archive/prelink/payload/BOOT flow into
+`out/gta4l/ram-root-emmc-n4-candidate-evidence/`: prelinked kernel
+`f37f8404…` (51,224,576 bytes), packaged kernel `2e6d91a0…`, linked archive
+`e0f022ac…` (460,352 bytes, 190 method slots, 181 kernel bindings,
+`runtime_qualified=false`), payload `4a400ca8…` (83,886,080 bytes, 9/9
+contract), BOOT image `54cdbfb6…` (85,688,320 bytes, 18/18 gate, only the
+ramdisk differs from the `ce4d76e8…` baseline) and a candidate-specific
+storage-ABI audit (`72d4df59…` interface audit, `672aa25b…` snapshot). N4 did
+not flash, boot or authorize a boot; its closeout is `n4-closeout.txt` and its
+read-only proposal is `n5-hardware-proposal.txt` in that directory.
+
+N5 flashed that BOOT image to `/dev/block/mmcblk0p69` only, under the standing
+backup/gate policy. Pre-flash p69 `b19c59b8…` was saved as
+`boot-before-n5.img.xz` (`8b37f41c…`, decompressing to `b19c59b8…`); the
+post-flash p69 is `22bea393…`, the image-length prefix is `54cdbfb6…`, the
+tail is `a28b4ea2…` and RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` are unchanged. No host-issued reboot, retry or reflash occurred.
+The one owner-controlled cold boot returned to TWRP and produced one
+`GTA4L-EMMC P5 REPORT` with `rc=0 stop=0 mode=3 blocks=61071360 bs=512
+bytes=31268536320 wid=0 tim=0 clk=400000`, `online=1 wp=1 reads=12 blocks=35
+fails=0 max=8`, `req=35 c17=9 c18=13 c18b=26 cfail=0 stops=13 sfail=0
+last_stop=0`, a read-only whole media (`whole=1 base=0 size=31268536320
+content=GUID_partition_scheme writable=0`) and an LBA 1 read matching the
+same-boot baseline (`sum=2228245566 same=1`).
+
+The two controlled IOMedia requests both pass for this one cold boot at
+1-bit SDR, 400 kHz. The two-block LBA 2 read delivered 1,024 exact bytes
+through one two-sector CMD18 chunk and one clean CMD12 (`two_att=1 two_ok=1
+two_reason=0 two_bytes=1024 two_mismatch=0 two_c18=1 two_c17=0 two_stops=1
+two_sfail=0`). The three-block LBA 2 read delivered 1,536 exact bytes through
+one two-sector CMD18 chunk, one clean CMD12 and one CMD17 odd tail (`att=1
+ok=1 reason=0 bytes=1536 mismatch=0 c18=1 c17=1 stops=1 sfail=0`). The raw
+baseline and three-block reference reads are direct transport reads outside
+the helper counters; the per-request QUAL fields bind the intentional reads.
+The final all-zero failure record and the report panic at
+`Gta4lEmmcBlock.cpp:1148` are the intentional report stop.
+
+Partition discovery is a separate observation:
+`count=22 expected=84 waited_ms=0 error=0 reported=3`. `expected` is the
+same-boot GPT header entry-array slot count, not a populated count; the
+validated recovery GPT has 80 populated entries. `countPartitions()` stops
+waiting at the first nonzero count and then takes one immediate snapshot, and
+`IOGUIDPartitionScheme::start()` publishes its scan result one `IOMedia` at a
+time. A count concurrent with that loop can observe a prefix; a failed scan
+would publish nothing. The presence of 22 non-whole media proves the scan
+succeeded and publication had begun, but the report cannot prove the final
+count is 22. The most consistent host-side explanation is a mid-publication
+snapshot, not a lost-partition or read failure; partition completeness is not
+claimed. The earlier p5b boot reported 80 with the same counting logic, so the
+snapshot is timing-dependent. No source or instrument change is made in this
+batch.
+
+N5 acceptance is limited to the two actual IOMedia requests measured. It does
+not qualify arbitrary LBAs or sizes, the 64-sector ceiling, repeatability,
+writable media, a mount/root switch, DMA/CQE/ICE, wider/faster modes or
+initialization reliability. The one-boot budget is consumed; any further
+observation or partition-snapshot instrument needs a fresh owner decision.
+Evidence: `out/gta4l/ram-root-emmc-n5-hardware-evidence/` (flash board and
+`observation-1/`) and `docs/emmc-n5-integration-observation-2026-11-07.md`.
 
 ## 6. Expected report
 
@@ -3243,11 +4208,21 @@ On a full success the probe panics with a report containing:
   (LBAs 2..22), the first usable LBA (`DATA 34`) and the last sector
   (`LSTLBA=61071359`), and the `step=18`/`log=30` stage-A counters.
 - In the optional MD mode (`gta4l-emmc-mb=1`) the header line gains ` mb=1`,
-  `BLOCKS` is replaced by `MBLOCKS 2=… 22=…` carrying the CMD18 pass sums, and
-  the `LSTLBA` line gains `mbsame=1` or `mbsame=0 mbdiv=<first differing LBA>`
-  followed by `drain=used/resolved/blocks/iterations`; the counters are
-  `step=19`/`log=51`. An MD failure line carries the same `drain` field
-  between `mb=` and `stop=`.
+  `BLOCKS` is replaced by `MBLOCKS 2=… 22=…` carrying the long CMD18 request
+  sums, and the `LSTLBA` line gains `mbsame=1` or `mbsame=0
+  mbdiv=<first differing LBA>` followed by
+  `drain=used/resolved/blocks/iterations`. The counters are `step=19`/`log=55`.
+  A following `GTA4L-EMMC PROBE MB clk=<hex>` line reports the short request
+  (`s=`), the long request (`l=`) and the recovery reads (`rec=`). Each request
+  group is `result/requested/completed/validated/first-divergence/stop-result/
+  stop-normal/stop-error/stop-response0`; `rec=` is
+  `result/same/first-divergence`. An MD failure emits
+  `GTA4L-EMMC PROBE FAILED: mb rc=<verdict> stage=<barrier> step=19
+  mb=<block> mbc=<completed> att=<short><long>`, the same `s=` and `l=`
+  request groups, an eight-field
+  `rec=result/block0-result/lba2-result/attempted/compared/same/div/div-valid`
+  group and the terminal `fail=` record. A barrier that did not run keeps its
+  groups clear (`att=0`, zero results) and the success report is unreachable.
 - In the Stage-B1C mode (`gta4l-emmc-probe=5`) the same B1 form adds `bc=`,
   `e183a=` and `esa=` to the `BW=4` line: `bc=1` marks a continuation that
   ran, and the two re-read fields are zero when the continuation did not
@@ -3318,7 +4293,10 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   the bounded drain exhausted its window without draining another block or
   seeing `TC` and the `CMD12` stop again timed out `[C]`. A
   complete multi-block transfer, a filesystem, block-device publication and a
-  reliability test have not run `[U]`.
+  reliability test had not run at that point `[U]`; the later D10.5 F2 run
+  (§5.3.41) and p5b run (§5.3.37) supplied the first multi-block transfer and
+  whole-device publication, while a filesystem, repeatability and reliability
+  remain `[U]`.
 - The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
   levels, and it does not prove retention across suspend or shutdown `[U]`.
 - The 1.8 V signalling and pad-switch selection is a documented board policy
@@ -3350,15 +4328,21 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
   (5.3.8) adds a bounded post-bound drain and host simulator coverage; it was
   flashed and booted three times. The drain ran on the second boot and did
   not resolve the stall (no additional blocks, no `TC`, timed-out stop), and
-  the third boot failed earlier in the stage-A `CMD17` read, so F2 remains
-  `[U]`.
+  the third boot failed earlier in the stage-A `CMD17` read, so F2 remained
+  `[U]` at that point. The later D10.5 F2 run (§5.3.41) completed both CMD18
+  requests with clean CMD12 stops and byte-validated sectors on one reported
+  cold boot, so F2 is measured PASS for that boot `[C]`; repeatability,
+  cold-start reliability and multi-block publication remain `[U]`.
 - An 8-us CMD1-to-CMD2 timing candidate is specified in
   `docs/emmc-cmd1-gap-candidate.md` and was built, flashed and run on
   2026-11-01; it completed identification on three units (5.3.4) `[C]`. The
   8-us delay is not proven necessary, because earlier builds passed CMD2
   without it, and it is not adopted as a general fix `[S]/[U]`.
-- No block-device publication, mount, root switch or persistent Data path
-  exists `[U]`.
+- A read-only block-device publication adapter exists and is host-tested
+  (§5.3.35). The p5b candidate published the whole `IOMedia` and passed one
+  media-path CMD17 read on 2026-11-05 (§5.3.37), so F5 is measured PASS for
+  that reported boot `[C]`; repeatability, other widths/timings, a mount, a
+  root switch and a persistent Data path remain absent `[U]`.
 - microSD/SDHC2 is not implemented; only SDHC1/eMMC is in scope `[U]`.
 - The exact vendor source/binary correspondence and the firmware runtime slot
   table remain `[U]`.
@@ -3382,7 +4366,12 @@ complete: repeated CMD17 reads covered the GPT header and the full 84-entry
 primary array, and the live recovery readback bound every sum. The A2/F2
 multi-block rung remains partial after the attempt-3 runs (§5.3.8): the
 open-ended CMD18 is proven beyond one block, but the ordinal-20 stall
-reproduced and the bounded drain did not resolve it, so F2 is not established.
+reproduced and the bounded drain did not resolve it, so F2 was not
+established at that point. The D10 F2 host batch (§5.3.39) implements the
+plan's short+long CMD18 qualification with per-request validation, explicit
+stops and post-transfer CMD17 recovery reads; it was host-tested only, no
+candidate was built or booted, and F2 remained `[U]` until the later D10.5
+device run (§5.3.41), which is measured PASS for one reported cold boot.
 The ladder's next rung is Stage B (bus width and speed); the Stage-B1
 bus-width rung is implemented and host-tested (§5.3.9) and ran on 2026-11-02
 (§5.3.10). The B1R2 report-completeness re-run (§5.3.12) then booted the
@@ -3405,6 +4394,9 @@ accepted `HS_TIMING=1`, matched the full stage-A content pass at the 50 MHz
 floor and reverted cleanly, so F4 is measured PASS at 1-bit/50 MHz `[C]`
 (content-level only), while the cold boot and one warm boot stopped pre-B2
 at the H8 CMD3 timeout. F3 remains `[U]`, the pre-B1 H8/CMD17 stops remain
-open, and any further ladder step is owner-gated. No filesystem,
-block-device publication, mount, storage write, DMA, CQE or ICE result exists
+open, and any further ladder step is owner-gated. The read-only block
+publication adapter is implemented and host-tested (§5.3.35); the later p5b
+run observed whole-device publication and one media-path CMD17 read
+(§5.3.37), so F5 is measured PASS for that reported boot `[C]`. No filesystem,
+multi-block IOMedia read, mount, storage write, DMA, CQE or ICE result exists
 yet.

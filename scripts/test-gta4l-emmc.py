@@ -103,6 +103,12 @@ SCENARIOS = [
     'cmd3-retry-fail',
     'cmd3-retry-status',
     'cmd3-retry-later-fail',
+    'cmd3-timeline-clean',
+    'cmd3-timeline-timeout',
+    'cmd3-timeline-stale-cc',
+    'cmd3-timeline-store-boundary',
+    'cmd3-timeline-mixed',
+    'cmd3-timeline-reinit',
     'cmd9-late-error',
     'cmd7-tc-only',
     'cmd7-fresh-window',
@@ -205,6 +211,29 @@ SCENARIOS = [
     'hs-timing-cmd6-error',
     'hs-timing-clock-busy',
     'hs-timing-arg',
+]
+
+# Boundary variants: the same production core compiled with a shortened CMD3
+# poll budget and with a reduced timeline store capacity. They are not part of
+# the normal scenario list because each needs its own compile-time constants.
+VARIANTS = [
+    ('cmd3-timeline-short-budget',
+     'GTA4L_EMMC_CMD_TIMEOUT_US          1000000u',
+     'GTA4L_EMMC_CMD_TIMEOUT_US             1000u',
+     'Gta4lEmmc.h',
+     ('-DSIM_TIMELINE_EXPECT_COUNT=8u',
+      '-DSIM_TIMELINE_EXPECT_OVERFLOW=0u',
+      '-DSIM_TIMELINE_EXPECT_TERMINAL=100u',
+      '-DSIM_TIMELINE_EXPECT_LAST=64u')),
+    ('cmd3-timeline-saturation',
+     '\t\tif (host->cmd3_timeline_count >=\n'
+     '\t\t    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES) {',
+     '\t\tif (host->cmd3_timeline_count >= 3u) {',
+     'Gta4lEmmc.c',
+     ('-DSIM_TIMELINE_EXPECT_COUNT=3u',
+      '-DSIM_TIMELINE_EXPECT_OVERFLOW=16u',
+      '-DSIM_TIMELINE_EXPECT_TERMINAL=100000u',
+      '-DSIM_TIMELINE_EXPECT_LAST=2u')),
 ]
 
 FORBIDDEN_CORE = [
@@ -403,6 +432,7 @@ def build(compiler: str, directory: Path, name: str,
     output = directory / name
     command = [
         compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-O1',
+        '-DGTA4L_EMMC_HOST_TEST',
         *extra_flags,
         f'-I{header_dir}', f'-I{ROOT / "scripts" / "sim-gta4l-emmc"}',
         str(core), str(HARNESS), '-o', str(output),
@@ -474,6 +504,19 @@ def main() -> int:
         failures = 0
         for scenario in SCENARIOS:
             if not run(binary, scenario):
+                failures += 1
+        if failures:
+            return 1
+
+        # Boundary variants: compile the same core with the shortened poll
+        # budget and the reduced store capacity, then run the matching
+        # scenario against the real poll and store code.
+        for name, old, new, filename, flags in VARIANTS:
+            core = mutate(directory, name, old, new, filename)
+            variant = build(compiler, directory / name, f'emmc-{name}',
+                            core=core, header_dir=directory / name,
+                            extra_flags=flags)
+            if not run(variant, name):
                 failures += 1
         if failures:
             return 1
@@ -885,6 +928,14 @@ def main() -> int:
              '\t\t\t}\n'
              '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
              '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tif (timeline != 0) {\n'
+             '\t\t\t\ttimeline_ticks = gta4l_emmc_counter(host) -\n'
+             '\t\t\t\t    poll_start;\n'
+             '\t\t\t\tgta4l_emmc_cmd3_timeline_store(host,\n'
+             '\t\t\t\t    GTA4L_EMMC_CMD3_TRACE_TERM_ERROR, step,\n'
+             '\t\t\t\t    normal, error, host->fail_response[0],\n'
+             '\t\t\t\t    timeline_ticks);\n'
+             '\t\t\t}\n'
              '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
              '\t\t\treturn gta4l_emmc_map_error(error, 0);\n'
              '\t\t}\n',
@@ -911,6 +962,14 @@ def main() -> int:
              '\t\t\t}\n'
              '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
              '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tif (timeline != 0) {\n'
+             '\t\t\t\ttimeline_ticks = gta4l_emmc_counter(host) -\n'
+             '\t\t\t\t    poll_start;\n'
+             '\t\t\t\tgta4l_emmc_cmd3_timeline_store(host,\n'
+             '\t\t\t\t    GTA4L_EMMC_CMD3_TRACE_TERM_ERROR, step,\n'
+             '\t\t\t\t    normal, error, host->fail_response[0],\n'
+             '\t\t\t\t    timeline_ticks);\n'
+             '\t\t\t}\n'
              '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
              '\t\t\treturn gta4l_emmc_map_error(error, 0);\n'
              '\t\t}\n',
@@ -979,6 +1038,12 @@ def main() -> int:
              '\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
              '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
              '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tif (timeline != 0) {\n'
+             '\t\t\t\tgta4l_emmc_cmd3_timeline_store(host,\n'
+             '\t\t\t\t    GTA4L_EMMC_CMD3_TRACE_TERM_ERROR, step,\n'
+             '\t\t\t\t    normal, error, host->fail_response[0],\n'
+             '\t\t\t\t    gta4l_emmc_counter(host) - poll_start);\n'
+             '\t\t\t}\n'
              '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
              '\t\t\treturn gta4l_emmc_map_error(error, 0);\n'
              '\t\t}\n',
@@ -1029,8 +1094,10 @@ def main() -> int:
              'Gta4lEmmc.c', (), 'multi-success'),
             ('mb-failing-ordinal',
              '\t\t\thost->multi_block = (done < count) ? done : count - 1u;\n'
+             '\t\t\thost->multi_completed = done;\n'
              '\t\t\tgta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,\n',
              '\t\t\thost->multi_block = done + 1u;\n'
+             '\t\t\thost->multi_completed = done;\n'
              '\t\t\tgta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,\n',
              'Gta4lEmmc.c', (), 'multi-late-error'),
             ('mb-block-size',
@@ -1063,12 +1130,14 @@ def main() -> int:
             ('mb-drain-error-unmapped',
              '\t\t\t\thost->multi_block = (done < count) ?\n'
              '\t\t\t\t    done : count - 1u;\n'
+             '\t\t\t\thost->multi_completed = done;\n'
              '\t\t\t\tgta4l_emmc_record_failure(host,\n'
              '\t\t\t\t    GTA4L_EMMC_CMD18, (uint32_t)start_lba,\n'
              '\t\t\t\t    command, error, normal, present);\n'
              '\t\t\t\tresult = gta4l_emmc_map_error(error, 1);\n',
              '\t\t\t\thost->multi_block = (done < count) ?\n'
              '\t\t\t\t    done : count - 1u;\n'
+             '\t\t\t\thost->multi_completed = done;\n'
              '\t\t\t\tgta4l_emmc_record_failure(host,\n'
              '\t\t\t\t    GTA4L_EMMC_CMD18, (uint32_t)start_lba,\n'
              '\t\t\t\t    command, error, normal, present);\n'
@@ -1329,6 +1398,89 @@ def main() -> int:
              '\t\tif (result == GTA4L_EMMC_ERR_CMD_TIMEOUT) {\n',
              '\t\twhile (result == GTA4L_EMMC_ERR_CMD_TIMEOUT) {\n',
              'Gta4lEmmc.c', (), 'cmd3-retry-fail'),
+            ('timeline-mixed-accepted',
+             '\tif ((host->cmd3_timeline_enabled != 0) &&\n'
+             '\t    (host->cmd3_retry_enabled != 0)) {\n'
+             '\t\t/* The no-retry timeline diagnostic must never replay '
+             'CMD3.\n'
+             '\t\t * Refuse the mixed configuration before any command. '
+             '*/\n'
+             '\t\treturn GTA4L_EMMC_ERR_ARG;\n'
+             '\t}\n',
+             '\t/* mixed capture/retry check removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-mixed'),
+            ('timeline-terminal-slot-collision',
+             '\t\tslot = GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u;\n',
+             '\t\tslot = 0u;\n',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-clean'),
+            ('timeline-reset-keeps-entries',
+             '\tfor (index = 0; index < GTA4L_EMMC_CMD3_TIMELINE_ENTRIES; '
+             'index++) {\n'
+             '\t\thost->cmd3_timeline[index].kind = '
+             'GTA4L_EMMC_CMD3_TRACE_NONE;\n'
+             '\t\thost->cmd3_timeline[index].iteration = 0;\n'
+             '\t\thost->cmd3_timeline[index].normal = 0;\n'
+             '\t\thost->cmd3_timeline[index].error = 0;\n'
+             '\t\thost->cmd3_timeline[index].response0 = 0;\n'
+             '\t\thost->cmd3_timeline[index].valid = 0;\n'
+             '\t\thost->cmd3_timeline[index].ticks = 0;\n'
+             '\t}\n',
+             '',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-reinit'),
+            ('timeline-enable-discarded',
+             '\thost->cmd3_timeline_count = 0;\n'
+             '\thost->cmd3_timeline_overflow = 0;\n'
+             '\thost->cmd3_timeline_cursor = 0;\n',
+             '\thost->cmd3_timeline_count = 0;\n'
+             '\thost->cmd3_timeline_overflow = 0;\n'
+             '\thost->cmd3_timeline_cursor = 0;\n'
+             '\thost->cmd3_timeline_enabled = 0;\n',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-reinit'),
+            ('timeline-schedule-extended',
+             '\t\t65536u, 99999u\n',
+             '\t\t65536u, 199999u\n',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-timeout'),
+            ('timeline-capacity-forced-overflow',
+             '\t\tif (host->cmd3_timeline_count >=\n'
+             '\t\t    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES) {',
+             '\t\tif (host->cmd3_timeline_count >= 3u) {',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-timeout'),
+            ('timeline-capacity-guard-removed',
+             '\t\tif (host->cmd3_timeline_count >=\n'
+             '\t\t    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES) {',
+             '\t\tif (0) {',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-store-boundary'),
+            ('timeline-pre-clear-retimed',
+             '\tgta4l_emmc_clear_interrupts(host);\n'
+             '\tif (index == GTA4L_EMMC_CMD2) {\n',
+             '\t/* pre-command clear removed before capture by mutation */\n'
+             '\tif (index == GTA4L_EMMC_CMD2) {\n',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-stale-cc'),
+            ('timeline-retry-coupled',
+             '\ttimeline = ((index == GTA4L_EMMC_CMD3) &&\n'
+             '\t    (host->cmd3_timeline_enabled != 0)) ? 1 : 0;\n',
+             '\ttimeline = ((index == GTA4L_EMMC_CMD3) &&\n'
+             '\t    (host->cmd3_timeline_enabled != 0) &&\n'
+             '\t    (host->cmd3_retry_enabled != 0)) ? 1 : 0;\n',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-clean'),
+            ('timeline-capture-unguarded',
+             '\t\tif (timeline != 0) {\n'
+             '\t\t\t/* Four sequential raw-window reads after the status,\n'
+             '\t\t\t * enable and present samples above. Not an atomic\n'
+             '\t\t\t * snapshot; RESPONSE0..3 are read in register order. */\n'
+             '\t\t\tgta4l_emmc_read_raw_response(host,\n'
+             '\t\t\t    host->pre_cmd3_response);\n'
+             '\t\t\thost->pre_cmd3_response_valid = 1;\n'
+             '\t\t}\n',
+             '\t\t/* pre-CMD3 response capture no longer gated by mutation */\n'
+             '\t\tgta4l_emmc_read_raw_response(host,\n'
+             '\t\t    host->pre_cmd3_response);\n'
+             '\t\thost->pre_cmd3_response_valid = 1;\n',
+             'Gta4lEmmc.c', (), 'cmd3-identify'),
+            ('timeline-poll-extended',
+             '\titerations = gta4l_emmc_poll_iterations(timeout_us);\n',
+             '\titerations = gta4l_emmc_poll_iterations(timeout_us) + 1u;\n',
+             'Gta4lEmmc.c', (), 'cmd3-timeline-timeout'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -1455,6 +1607,30 @@ def main() -> int:
                 'the duplicate CMD3 did not use the same argument',
             'cmd3-retry-extra':
                 'FAIL: cmd3-retry-fail returned 0',
+            'timeline-mixed-accepted':
+                'mixed capture/retry configuration was not refused',
+            'timeline-terminal-slot-collision':
+                'the first timeline slot is not a scheduled sample',
+            'timeline-reset-keeps-entries':
+                'reinitialization left stale timeline entries',
+            'timeline-enable-discarded':
+                'reinitialization discarded the caller enable',
+            'timeline-schedule-extended':
+                'the timeline boundary run stored the wrong number of '
+                'scheduled samples',
+            'timeline-capacity-forced-overflow':
+                'the timeline boundary run stored the wrong number of '
+                'scheduled samples',
+            'timeline-capacity-guard-removed':
+                'the store advanced past its scheduled capacity',
+            'timeline-pre-clear-retimed':
+                'the timeline stale-CC run lost the post-clear completion',
+            'timeline-retry-coupled':
+                'the timeline-clean run did not store one scheduled sample',
+            'timeline-capture-unguarded':
+                'capture-disabled run recorded a pre-CMD3 response',
+            'timeline-poll-extended':
+                'the terminal timeout has the wrong iteration',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)
@@ -1467,8 +1643,8 @@ def main() -> int:
                 print(f'mutation {name} was accepted')
                 return 1
 
-    print(f'PASS gta4l eMMC core: {len(SCENARIOS)} scenarios, '
-          f'{len(mutations)} mutation controls')
+    print(f'PASS gta4l eMMC core: {len(SCENARIOS) + len(VARIANTS)} '
+          f'scenarios, {len(mutations)} mutation controls')
     return 0
 
 

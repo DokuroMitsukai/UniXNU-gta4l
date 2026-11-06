@@ -104,10 +104,11 @@ cache `17693480cbb8d0ebab55adf4728717ce004957666d6ad47bfb9dc46d4c3716c0`
 | Input | Consumed by | Identity | SHA-256 | Availability | Notes |
 | --- | --- | --- | --- | --- | --- |
 | XNU source revision | kernel build | `unixnu.lock` `[source."xnu"]` | commit `d8b80295118ef25ac3a784134bcf95cd8e88109f` | tracked | `unixnu.lock` is in the device repo; the feed checkout is under `src/UniXNU/out/feeds/` `[S]` |
-| XNU patches | kernel build | `src/UniXNU/out/.../gta4l/xnu-inputs.json` | 59 patches, including device-repo `patches/xnu/gta4l-sdhci-handoff-audit.patch` `2b7668e643d248e5191c6b84dd740e54ad67b9a05c9d7006ad23f7bfc806af9f` | present-out | Current build record; no equivalent record was found in the evidence directories for the v5 or host-init kernels `[S]/[U]` |
-| Kernel link archive | kernel build | `libGta4lSdhciSnapshot.a` | audit evidence `ef6646ce0a2deb55d7e63bb403638e00734a13154b1d478cfd695cd447b8f56a`; current build `8db3f178725bfdede748b7dab210883905de981af94a2b097441ea765a3989b8` | present-out | Built from `kits/gta4l/Gta4lSdhciSnapshot.c`, `Gta4lSdhciHandoffAudit.c` and `Gta4lSdhciHostInit.c`; current archive contains three objects, the audit archive two `[S]` |
-| Device configuration | payload build | `board.toml` | `505bef50b59b1cd9324ea88244891d91db9b6f157c19702a1a29e8b511fb31ed` | tracked | `[payload.adt]`, `[payload]` kernel args, `[[bootimg.dtb_node]]` `[S]` |
-| Kernel configuration | kernel build | `configs/gta4l_defconfig` | `92e78f49383fc97dab2379f0ede7437db509f535b74f2482d29a668c2e67ce26` | tracked | `CONFIG_XNU_EXTRA_LD_ARCHIVES` force-loads the SDHCI snapshot plus the eMMC core and probe archives `[S]` |
+| XNU patches | kernel build | `src/UniXNU/out/.../gta4l/xnu-inputs.json` | 61 patches, including device-repo `patches/xnu/gta4l-sdhci-handoff-audit.patch` `2b7668e643d248e5191c6b84dd740e54ad67b9a05c9d7006ad23f7bfc806af9f` and `patches/xnu/gta4l-emmc-block.patch` `ee33d6789148f4a2f78572f6e9f45a6d3aebc3dc90bf0a9348e5061ea56759da` | present-out | D8/p5b kernel build record; the block patch is part of the recorded build `[S]` |
+| Kernel link archive | kernel build | `libGta4lSdhciSnapshot.a` | audit evidence `ef6646ce0a2deb55d7e63bb403638e00734a13154b1d478cfd695cd447b8f56a`; current p5b build `bd38adb6b96cb6eb8fd243e7e7c5c955d106fc2f62edf3035257fb1e71019e5f` | present-out | Built from `kits/gta4l/Gta4lSdhciSnapshot.c`, `Gta4lSdhciHandoffAudit.c` and `Gta4lSdhciHostInit.c`; current archive contains three objects, the audit archive two `[S]` |
+| eMMC link archives | kernel build | `libGta4lEmmcCore.a`, `libGta4lEmmcProbe.a`, `libGta4lEmmcBlock.a` | core `e9c72ad2…`, probe `2d9970df…`, block `6d36826a…` | present-out | p5b kernel-link build (in-tree); the block archive was rebuilt for the D9.4 report-client correction and requalified against kernel `2f8238b9…`. All three are force-loaded and the block personality is enabled (`CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=y`) `[S]` |
+| Device configuration | payload build | `board.toml` | `9ef9b3e655bcc818c923370f96d1aca40d069311a66b2c955389a2aa38dc19d9` | tracked | `[payload.adt]`, `[payload]` kernel args, `[[bootimg.dtb_node]]`, archive list `[S]` |
+| Kernel configuration | kernel build | `configs/gta4l_defconfig` | `d1117b5b4f1fc692634bc8ca0f4b743cf55d8cb5f276dcdba52ac26d7b973ce7` | tracked | `CONFIG_XNU_EXTRA_LD_ARCHIVES` force-loads the SDHCI snapshot plus the eMMC core, probe and block archives; `CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=y` `[S]` |
 | Resolved source set | fetch/build | `unixnu.lock` | `fc1bf57c489ba2809d471fde20a550424e35789a78a95977e917e84255e89550` | tracked | XNU, sm6115, libdispatch and the other pinned sources `[S]` |
 | Feed configuration | fetch/build | `feeds.toml` | `3be886c449404f678c0e52034bf5d0b3232f07227be7e15af082c2e377528aca` | tracked | SM6115 source pin `[S]` |
 | UniXNU checkout | payload build | `src/UniXNU` | commit `6ee4ada8a82f5bd2d9032b4d7cf033e878e0551f` | present-sibling | Detached; supplies `unixnu`, payload builder and boot-image helper `[S]` |
@@ -231,10 +232,10 @@ payload hash. Replay inputs:
 
 | Script | SHA-256 |
 | --- | --- |
-| `scripts/build-gta4l-diagnostic-payload.py` | `f7370d869eb5102e083f8e0bda64640bcffc0cbd15587efeb6dc21c1b7c08230` |
-| `scripts/package-gta4l-diagnostic.py` | `ad0924ce67e7066f8fdf912d49fd5182361c58dc148897bbce1bd1323579935f` |
+| `scripts/build-gta4l-diagnostic-payload.py` | `e7bf7a00464d388a34ef0fac2b7d342d030005652bb5d262cfb915352b9fc43d` |
+| `scripts/package-gta4l-diagnostic.py` | `7280464486dc735866e042e4492f1198d45bd3b1a2e52d60f5f77fc511ab3a0a` |
 | `scripts/check-gta4l-boot-image.py` | `879ee0ede5ddbebe4e24915c8720fa40a7b1e253642f6fd2a4d4dff937586bf4` |
-| `scripts/check-gta4l-payload.py` | `24178635b2e0fa1b8d17d901a17c30771f4a10b80767fe7969ef8cc765b4f34c` |
+| `scripts/check-gta4l-payload.py` | `73fdc296e39c21e6b79b40cc95d6ad0261251755bc860177e90dbd86fc07748b` |
 
 The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2`,
 `emmc-probe-3`, `emmc-probe-4`, `emmc-probe-5`, `emmc-probe-6`,
@@ -246,14 +247,23 @@ The diagnostic wrapper also accepts `emmc-probe-1`, `emmc-probe-2`,
 `emmc-probe-5` for the Stage-B1C continuation build, `emmc-probe-6` for the
 1-bit CMD19/CMD14 discriminator build, `emmc-probe-7` for the data-timeout
 audit build, `emmc-probe-8` for the Stage-B2 HS-timing build,
-`emmc-probe-9` for the Stage-H9 CMD3-completion retry build,
+`emmc-probe-9` for the Stage-H9 build (historically the CMD3-completion
+retry discriminator; D12.5 redefines the same selector as the versioned
+no-retry CMD3 timeline capture),
 `emmc-probe-10` for the Stage-H10 width-at-HS continuation build,
 `emmc-probe-11` for the Stage-H11 width-value continuation build,
 `emmc-probe-12` for the Stage-H12 record-only DDR attempt build,
 `emmc-probe-13` for the Stage-H13 rung-1 write-phase recovery build,
 `emmc-probe-14` for the Stage-H14 rung-2 forced post-write drain build,
-`emmc-probe-15` for the corrected verified-width rung and `emmc-probe-16` for
-the content-only isolation rung). The stage-2
+`emmc-probe-15` for the corrected verified-width rung, `emmc-probe-16` for
+the content-only isolation rung and `emmc-probe-17` for the Linux-compatible
+bus-test completion rung). The wrapper also accepts `emmc-block-1`, mapping
+to `gta4l-emmc-block=1` (CMD17 report mode), and `emmc-block-3`, mapping to
+`gta4l-emmc-block=3` (chunked report mode with two-sector CMD18 chunks and an
+adapter-owned bounce). The block family is mutually exclusive with every probe
+token: the contract refuses a mixed selection, a duplicate block token, a
+malformed probe token in block mode and the deferred `gta4l-emmc-block=2`. The
+stage-2
 image built on
 2026-10-31 is
 `out/gta4l/ram-root-emmc-probe-evidence/boot-ram-root-emmc-probe-stage2.img`
@@ -361,6 +371,21 @@ successful block 0 and block 1 `CMD17` reads. The SM-T505 run has no flash
 record in the tree and its image identity is owner-reported/shared. See
 `docs/emmc-cmd2-crc-audit.md` §2.12 and `docs/emmc-driver.md` §5.3.5. The run
 reports are owner-supplied photographs; no photo file or hash is in the tree.
+
+The D10.5 F2 candidate is a separate diagnostic payload from the stage-1
+image: it selects exactly one `gta4l-emmc-probe=1` and one
+`gta4l-emmc-mb=1` (the multi-block modifier), with `rd=md0 sheng-pmgr=2`, and
+no block-publication token. It was built from the recorded dirty-tree state on
+device HEAD `1ee1f4f9…` and shared HEAD `0a1cc714…`, not from a clean revision.
+The prelinked kernel is `bb22f6ca…` (51,187,712 bytes), the entry-patched
+kernel `2d87a4be…`, the payload `93110d8c…` (83,886,080 bytes, 8/8 contract)
+and the BOOT image `bcc93a47…` (85,688,320 bytes, 18/18 gate). The build and
+flash records are in `out/gta4l/ram-root-emmc-mb-d10.5-evidence/`; the owner
+report and closeout record are in
+`out/gta4l/ram-root-emmc-mb-d10.5-closeout-evidence/`. The shared output
+kernel was restored to p5b after the F2 copy, so a later p5b package must not
+be described as this F2 candidate. The owner-reported first cold boot passed
+both CMD18 requests (see `docs/emmc-driver.md` §5.3.41).
 
 This establishes the packaging step only. The inputs are existing artifacts;
 the replay does not reproduce the kernel or firmware.

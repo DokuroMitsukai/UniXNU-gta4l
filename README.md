@@ -117,7 +117,28 @@ partition layout, payload policy and packaging.
   blocks and no `TC` before the `CMD12` stop again timed out, and the third
   failed earlier with a single-block `CMD17` data timeout at array LBA 2. The
   drain therefore did not resolve the stall, H8 is intermittent, and F2
-  remains unproven. Stage B1 (`gta4l-emmc-probe=4`) is implemented and
+  remains unproven. The D10 F2 host batch reworks the mode into a two-sector
+  request plus one 21-sector request, each explicitly stopped and byte-compared
+  against the same-boot `CMD17` reference, followed by bounded recovery reads
+  (`docs/emmc-driver.md` §5.3.39). The D10.4a correction then made each request
+  an explicit acceptance barrier: a short or long content/length failure stops
+  before the next request, recovery failures keep their transport and
+  comparison state, and the hardcoded `rc=0` success report is reachable only
+  through one overall gate (`docs/emmc-driver.md` §5.3.40). Both batches were
+  host-tested only. The D10.5 candidate (kernel `bb22f6ca…`, payload
+  `93110d8c…`, boot image `bcc93a47…`, 8/8 contract and 18/18 gate) was then
+  built and flashed BOOT only. Its owner-reported **first cold boot**
+  (2026-11-05) returned `rc=0 step=19 log=55 mb=1`: the two-sector and
+  21-sector CMD18 requests both completed (`2/2` and `21/21` sectors), every
+  sector was byte-validated against the same-boot CMD17 reference
+  (`s=0/2/2/2/0/0/0003/0000/00000b00`,
+  `l=0/21/21/21/0/0/0003/0000/00000b00`), both explicit CMD12 stops reported
+  `0x0003`, and the block-0/LBA-2 recovery reads were clean (`mbsame=1`,
+  `rec=0/1/0`). **F2 is measured PASS for this one cold boot at 1-bit SDR,
+  400 kHz `[C]`** (`docs/emmc-driver.md` §5.3.41). It is a single cold-start
+  observation, not repeatability, a reliability result, general performance or
+  multi-block publication; the boot ordinal and cold class are owner-reported.
+  Stage B1 (`gta4l-emmc-probe=4`) is implemented and
   host-tested: it switches the card EXT_CSD BUS_WIDTH to 4-bit and then
   8-bit, verifies the byte-183 readback and the SDHCI `HOST_CONTROL` bit,
   runs the CMD19/CMD14 bus test at each width, and repeats the stage-A
@@ -388,7 +409,7 @@ partition layout, payload policy and packaging.
   line records `wrc`/`rst`/`ci` beside `trc`/`tw`/`te`. H15/H16/H17 stop
   codes are 0/10/11/12/13/14/15/16, with 10 (baseline read failed) and 13
   (bus test) the additions. No HS, DDR, 8-bit, CMD18, CMD25 or
-  user-data write. Core 179/104 and probe 163/77. **4-bit SDR sector reads
+  user-data write. Core 179/104 and probe 176/84. **4-bit SDR sector reads
   are measured `[C]`**, and **F3 is measured PASS at 4-bit SDR, 400 kHz
   `[C]`**: the fourth boot of the H17 image (cold, then three warm; the first
   three stopped at the known pre-identification CMD3 class) returned
@@ -419,16 +440,95 @@ partition layout, payload policy and packaging.
   actual `ca983f7d…` candidate at `_bsd_init`, recorded the live
   `IOBlockStorageDevice`/`IOService` metaclasses and ran the full 190-slot
   audit (176 kernel bindings, native 4K, original storage code unchanged).
-  The audit artifacts are pinned in `docs/evidence-baseline.md`, and
-  `scripts/test-gta4l-storage-abi.py` covers the positive audit, mutated
-  snapshots, a wrong candidate and the preserved run record. The portable
-  request helper (`package/Gta4lEmmcBlockCore.c/.h`) is now implemented and
-  host-tested (23 scenarios, 18 mutation controls); it uses explicit
-  READ/WRITE/INVALID directions, returns per-request completed bytes, is
-  read-only, capped at 64 blocks/32 KiB and fails closed. This clears the ABI and request-helper
-  gates only: no driver is linked, and the C++ adapter, personality,
-  concrete bindings and device run are still ahead.
+  The D8 re-audit against the final `b509c511…` candidate reports 190 slots
+  and 181 kernel bindings (167 inherited + 14 pure virtual) with 0
+  binding-target diffs. The audit artifacts are pinned in
+  `docs/evidence-baseline.md`, and `scripts/test-gta4l-storage-abi.py`
+  covers the positive audit, mutated snapshots, a wrong candidate and the
+  preserved run record. The portable request helper
+  (`package/Gta4lEmmcBlockCore.c/.h`) passes 48 scenarios and 38 mutation
+  controls; it uses explicit READ/WRITE/INVALID directions, returns
+  per-request completed bytes, is read-only, capped at 64 blocks/32 KiB and
+  fails closed. The thin read-only adapter (`package/Gta4lEmmcBlock.cpp`)
+  and its policy object are also implemented:
+  `scripts/build-gta4l-emmc-block.py` produced the qualified
+  `libGta4lEmmcBlock.a` (`ff447a48…`) against the D8 `b509c511…`
+  candidate (190 virtual methods, 26 concrete overrides, no unresolved
+  imports; the earlier P5-1 build was `fedd4bc3…` against `ca983f7d…`), and
+  `scripts/test-gta4l-emmc-block.py` passes 55 adapter scenarios and 3
+  adapter-source mutations on top of the 48/38 helper suite. The adapter maps the audited override set,
+  advertises 64 blocks/32768 bytes, accepts report mode
+  `gta4l-emmc-block=1` and chunked report mode `gta4l-emmc-block=3`, refuses
+  mode 2 and conflicting diagnostic arguments, and waits for the whole
+  `IOMedia` plus a same-boot media-path read in its bounded report thread. The D8 batch enables the personality
+  in the board configuration (`CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=y`) and
+  adds the shared configuration-to-flag translation, so the D8 host kernel
+  `b509c511…` compiles and links the adapter.
+
+  The first P5-2 device run published the whole `IOMedia` but failed its
+  report read because the report client was not open; the D9.4 correction
+  opens the media before the read and closes it exactly once on every exit.
+  The corrected p5b candidate (`2f8238b9…`, block archive `6d36826a…`,
+  payload `47b9593d…`, boot image `e256b27d…`, 18/18 gate) was flashed BOOT
+  only with fresh owner approval. The owner-supplied report is `rc=0
+  stop=0` with `whole=1`, 61,071,360 blocks of 512 bytes, `writable=0`,
+  `content=GUID_partition_scheme` and a media-path read matching the
+  same-boot baseline (`same=1`); the terminal panic is the intentional
+  report-mode panic. **F5 is measured PASS for this boot at 1-bit SDR,
+  400 kHz `[C]`.** The boot ordinal and cold/warm class were not supplied;
+  the owner confirmed TWRP recovery, and a host-only audit found `count=80`
+  consistent with the validated 80-entry GPT (the `expected=84` field is the
+  entry-array slot count, not a populated count). Partition completeness is
+  not claimed from the report alone. F2 repeatability/reliability, 8-bit,
+  4-bit/HS publication, mount/root switch and F6 remain separate gates.
+  Evidence is under `out/gta4l/ram-root-emmc-block-p5b-evidence/`.
+  The 2026-11-06 host-only D13 readiness pass is recorded in
+  [docs/emmc-d13-readiness-2026-11-06.md](docs/emmc-d13-readiness-2026-11-06.md):
+  it grounds the current adapter/CMD18 seam, proposes a conservative
+  two-sector chunk contract with exact-count and clean-stop delivery, and
+  enumerates the required host scenarios. The readiness pass itself
+  implemented nothing. The follow-up N3 host implementation is recorded in
+  [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.48: `gta4l-emmc-block=3`
+  adds two-sector CMD18 chunks with an adapter-owned 1024-byte bounce,
+  explicit transport/completed/stop results, exact-count and clean-CMD12
+  delivery, first-failure preservation and fail-closed suffix suppression;
+  `=1` stays CMD17 and `=2` remains refused. The N3 corrective host batch
+  fixed the multi-result stop-failure accounting, wired the callback result
+  contract and added the mode-3 controlled qualification reporter with
+  exact-byte comparison, CMD18/CMD12 and odd-tail accounting,
+  incidental-attribution exclusion, a bounded watchdog snapshot and
+  terminal-race suppression. The block suite now passes 48 core
+  scenarios/38 mutation controls, 55 adapter scenarios and 3 adapter-source
+  mutations, and `emmc-block-3` is accepted end-to-end by the diagnostic
+  builder, checker, packager and tests. Host acceptance is complete for the
+  intentional mode-3 path; it is not hardware or initialization-reliability
+  acceptance. The ~128–144 s pathological 64-sector synchronous
+  gate-hold bound is a recorded host-development risk; the 30 s report
+  watchdog does not qualify general I/O. N3 builds nothing, launches no
+  QEMU, accesses no device and authorizes no candidate, boot or reliability
+  claim; N4 needs separate approval. The D12.6
+  panic-format observation closeout is in
+  [docs/emmc-d12.6-panic-format-observation-2026-11-06.md](docs/emmc-d12.6-panic-format-observation-2026-11-06.md).
+  The N4 candidate build and the N5 hardware observation are recorded in
+  [docs/emmc-n5-integration-observation-2026-11-07.md](docs/emmc-n5-integration-observation-2026-11-07.md):
+  the mode-3 candidate (prelinked kernel `f37f8404…`, packaged kernel
+  `2e6d91a0…`, payload `4a400ca8…` with a 9/9 contract and BOOT image
+  `54cdbfb6…` with an 18/18 gate) was flashed BOOT only to p69 with prefix and
+  protected-partition verification. One owner-classified cold boot returned
+  `rc=0 stop=0 mode=3` with the read-only whole media and an LBA 1 baseline
+  match; one two-block and one three-block IOMedia read at LBA 2 delivered
+  1,024 and 1,536 exact bytes through one two-sector CMD18 chunk each, with a
+  clean explicit CMD12 and a CMD17 odd tail for the three-block request. The
+  report's `count=22 expected=84` partition snapshot is an unsynchronized
+  mid-publication observation, not a completeness verdict; `expected` is the
+  GPT entry-array slot count and the validated GPT has 80 populated entries.
+  Acceptance is limited to those two requests on that one cold boot at 1-bit
+  SDR, 400 kHz; repeatability, initialization reliability, wider/faster modes,
+  arbitrary I/O, mount/root switch, DMA/CQE/ICE and partition completeness
+  remain separate gates. The one-boot budget is consumed and no further boot
+  or flash is authorized.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
+  [docs/gta4l-storage-publication-design.md](docs/gta4l-storage-publication-design.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),
   [docs/emmc-cmd1-gap-candidate.md](docs/emmc-cmd1-gap-candidate.md) and
   [docs/emmc-cmd7-timeout-finding.md](docs/emmc-cmd7-timeout-finding.md).

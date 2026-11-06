@@ -367,14 +367,43 @@ gta4l_emmc_probe_width_fixture(int form)
 		gta4l_emmc_probe_report_b2(&host, &probe, &b2,
 		    GTA4L_EMMC_ERR_CLOCK, 13);
 	} else if (form == 6) {
-		/* H9 form: both attempt slots at their field bounds and a
-		 * failed duplicate so the stop code stays non-clean. */
+		/* H9 form: the versioned no-retry timeline at its field
+		 * bounds. All 19 scheduled slots and the reserved terminal
+		 * slot carry a sample, the stop is non-clean and the two
+		 * legacy attempt captures stay populated for the C3P/C3L/C3T
+		 * summary lines. */
 		host.fail_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		host.cmd3_retry_enabled = 1u;
 		host.cmd3_retry_engaged = 1u;
 		host.cmd3_retry_ok = 0u;
+		host.cmd3_submitted = 1u;
+		host.cmd3_transport_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+		host.cmd3_r1_error = 0xFFFFFFFFu;
 		host.cmd3_attempt_count = GTA4L_EMMC_CMD3_ATTEMPTS;
+		host.cmd3_timeline_enabled = 1u;
+		host.cmd3_timeline_count = GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES;
+		host.cmd3_timeline_overflow = GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES;
+		host.pre_cmd3_response_valid = 1;
+		for (index = 0; index < 4u; index++) {
+			host.pre_cmd3_response[index] = 0xFFFFFFFFu;
+		}
+		for (index = 0; index < GTA4L_EMMC_CMD3_TIMELINE_ENTRIES;
+		    index++) {
+			struct gta4l_emmc_cmd3_timeline_entry *entry =
+			    &host.cmd3_timeline[index];
+
+			entry->kind = (index ==
+			    (GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u)) ?
+			    GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT :
+			    GTA4L_EMMC_CMD3_TRACE_SCHEDULED;
+			entry->iteration = GTA4L_EMMC_MAX_POLL_ITERATIONS;
+			entry->normal = 0xFFFFu;
+			entry->error = 0xFFFFu;
+			entry->response0 = 0xFFFFFFFFu;
+			entry->valid = 1u;
+			entry->ticks = 0xFFFFFFFFFFFFFFFFull;
+		}
 		for (index = 0; index < GTA4L_EMMC_CMD3_ATTEMPTS; index++) {
 			struct gta4l_emmc_cmd3_capture *capture =
 			    &host.cmd3_attempt[index];
@@ -396,6 +425,8 @@ gta4l_emmc_probe_width_fixture(int form)
 			capture->pre_present = host.pre_cmd3_present;
 			capture->pre_normal_enable = host.pre_cmd3_normal_enable;
 			capture->pre_error_enable = host.pre_cmd3_error_enable;
+			capture->pre_response_valid =
+			    host.pre_cmd3_response_valid;
 			capture->timeout_valid = host.timeout_capture_valid;
 			capture->timeout_index = host.timeout_index;
 			capture->timeout_command = host.timeout_command;
@@ -412,6 +443,10 @@ gta4l_emmc_probe_width_fixture(int form)
 			capture->fail_response[1] = host.fail_response[1];
 			capture->fail_response[2] = host.fail_response[2];
 			capture->fail_response[3] = host.fail_response[3];
+			capture->pre_response[0] = host.pre_cmd3_response[0];
+			capture->pre_response[1] = host.pre_cmd3_response[1];
+			capture->pre_response[2] = host.pre_cmd3_response[2];
+			capture->pre_response[3] = host.pre_cmd3_response[3];
 			capture->timeout_response[0] =
 			    host.timeout_response[0];
 			capture->timeout_response[1] =
@@ -720,5 +755,95 @@ gta4l_emmc_probe_width_fixture(int form)
 		host.last_step = GTA4L_EMMC_STEP_HS_CLOCK;
 		gta4l_emmc_probe_report_h14(&host, &probe, &h14,
 		    GTA4L_EMMC_ERR_UNSUPPORTED, 13);
+	} else if (form == 12) {
+		/* F2 failure form: both request summaries, the recovery state
+		 * and the terminal record at their widest production forms.
+		 * The block counts are bounded by the 16-bit CMD18 count; the
+		 * divergence LBAs are arbitrary 32-bit values. */
+		host.last_step = GTA4L_EMMC_STEP_PROBE_MB;
+		host.multi_block = 0xFFFEu;
+		host.multi_completed = 0xFFFFu;
+		range.short_mb.result = GTA4L_EMMC_PROBE_ERR_LENGTH;
+		range.short_mb.attempted = 1u;
+		range.short_mb.requested = 0xFFFFu;
+		range.short_mb.completed = 0xFFFFu;
+		range.short_mb.validated = 0xFFFFu;
+		range.short_mb.div = 0xFFFFFFFFu;
+		range.short_mb.stop_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+		range.short_mb.stop_normal = 0xFFFFu;
+		range.short_mb.stop_error = 0xFFFFu;
+		range.short_mb.stop_response[0] = 0xFFFFFFFFu;
+		range.long_mb = range.short_mb;
+		range.recovery_result = GTA4L_EMMC_PROBE_ERR_LENGTH;
+		range.recovery0_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+		range.recovery2_result = GTA4L_EMMC_ERR_UNSUPPORTED;
+		range.recovery_attempted = 3u;
+		range.recovery_compared = 3u;
+		range.recovery_same = 0u;
+		range.recovery_div = 0xFFFFFFFFu;
+		range.recovery_div_valid = 1u;
+		gta4l_emmc_probe_report_multi_failure(&host, &range,
+		    GTA4L_EMMC_PROBE_ERR_LENGTH, 5u);
 	}
+}
+
+/*
+ * Host-test-only controlled seam for the D10.4a CMD18 acceptance barrier.
+ * The fixture is included at the end of the production probe source, so it
+ * can call the static acceptance helper with synthetic request snapshots.
+ * Each state below is a controlled host seam, not a reachable device state.
+ * The function always panics: PASS means every synthetic state produced the
+ * intended verdict; FAIL names the first check that did not.
+ */
+void
+gta4l_emmc_probe_accept_seam(void)
+{
+	struct gta4l_emmc_probe_mb mb;
+
+	memset(&mb, 0, sizeof(mb));
+	mb.result = GTA4L_EMMC_OK;
+	mb.stop_result = GTA4L_EMMC_OK;
+	mb.attempted = 1u;
+	mb.requested = GTA4L_EMMC_PROBE_ARRAY_BLOCKS;
+	mb.completed = GTA4L_EMMC_PROBE_ARRAY_BLOCKS;
+	mb.validated = GTA4L_EMMC_PROBE_ARRAY_BLOCKS;
+	if (gta4l_emmc_probe_mb_accept(&mb,
+	    GTA4L_EMMC_PROBE_ARRAY_BLOCKS) != GTA4L_EMMC_OK) {
+		panic("GTA4L-EMMC PROBE ACCEPT SEAM: FAIL complete");
+	}
+	mb.completed = GTA4L_EMMC_PROBE_ARRAY_BLOCKS - 1u;
+	if (gta4l_emmc_probe_mb_accept(&mb,
+	    GTA4L_EMMC_PROBE_ARRAY_BLOCKS) !=
+	    GTA4L_EMMC_PROBE_ERR_LENGTH) {
+		panic("GTA4L-EMMC PROBE ACCEPT SEAM: FAIL completed");
+	}
+	mb.completed = GTA4L_EMMC_PROBE_ARRAY_BLOCKS;
+	mb.validated = GTA4L_EMMC_PROBE_ARRAY_BLOCKS - 1u;
+	if (gta4l_emmc_probe_mb_accept(&mb,
+	    GTA4L_EMMC_PROBE_ARRAY_BLOCKS) !=
+	    GTA4L_EMMC_PROBE_ERR_CONTENT) {
+		panic("GTA4L-EMMC PROBE ACCEPT SEAM: FAIL validated");
+	}
+	mb.validated = GTA4L_EMMC_PROBE_ARRAY_BLOCKS;
+	mb.requested = GTA4L_EMMC_PROBE_ARRAY_BLOCKS - 1u;
+	if (gta4l_emmc_probe_mb_accept(&mb,
+	    GTA4L_EMMC_PROBE_ARRAY_BLOCKS) !=
+	    GTA4L_EMMC_PROBE_ERR_LENGTH) {
+		panic("GTA4L-EMMC PROBE ACCEPT SEAM: FAIL requested");
+	}
+	mb.requested = GTA4L_EMMC_PROBE_ARRAY_BLOCKS;
+	mb.stop_result = GTA4L_EMMC_ERR_CMD_TIMEOUT;
+	if (gta4l_emmc_probe_mb_accept(&mb,
+	    GTA4L_EMMC_PROBE_ARRAY_BLOCKS) !=
+	    GTA4L_EMMC_ERR_CMD_TIMEOUT) {
+		panic("GTA4L-EMMC PROBE ACCEPT SEAM: FAIL stop");
+	}
+	mb.stop_result = GTA4L_EMMC_OK;
+	mb.result = GTA4L_EMMC_ERR_DATA_TIMEOUT;
+	if (gta4l_emmc_probe_mb_accept(&mb,
+	    GTA4L_EMMC_PROBE_ARRAY_BLOCKS) !=
+	    GTA4L_EMMC_ERR_DATA_TIMEOUT) {
+		panic("GTA4L-EMMC PROBE ACCEPT SEAM: FAIL transport");
+	}
+	panic("GTA4L-EMMC PROBE ACCEPT SEAM: PASS");
 }

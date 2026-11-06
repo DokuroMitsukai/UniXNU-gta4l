@@ -44,11 +44,16 @@ DIAGNOSTIC_NAMES = {
     'emmc-probe-15': 'gta4l-emmc-probe=15',
     'emmc-probe-16': 'gta4l-emmc-probe=16',
     'emmc-probe-17': 'gta4l-emmc-probe=17',
+    'emmc-block-1': 'gta4l-emmc-block=1',
+    'emmc-block-3': 'gta4l-emmc-block=3',
 }
 
 # Derived from the name map so a new stage cannot be added to one list and
 # forgotten in the other.
 DIAGNOSTICS = tuple(DIAGNOSTIC_NAMES.values())
+PROBE_PREFIX = 'gta4l-emmc-probe='
+BLOCK_PREFIX = 'gta4l-emmc-block='
+BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
 
 
 def run_tool(*args):
@@ -153,6 +158,28 @@ def xnu_args(path):
     raise ValueError('unixnu.toml has no xnu entry')
 
 
+def diagnostic_contract(args, expected='any'):
+    """Return the ordered diagnostic checks for an xnu argument string."""
+    tokens = args.split()
+    found = [item for item in DIAGNOSTICS if item in tokens]
+    block_tokens = [item for item in tokens if item.startswith(BLOCK_PREFIX)]
+    probe_tokens = [item for item in tokens if item.startswith(PROBE_PREFIX)]
+    checks = {'exactly_one_diagnostic_argument': len(found) == 1}
+    block_selected = [DIAGNOSTIC_NAMES[name] for name in BLOCK_DIAGNOSTICS
+                      if DIAGNOSTIC_NAMES[name] in found]
+    if block_selected:
+        checks['exactly_one_block_mode_token'] = (
+            block_tokens == block_selected)
+        checks['no_probe_token_in_block_mode'] = not probe_tokens
+    else:
+        checks['no_block_token_outside_block_mode'] = not block_tokens
+    if expected != 'any':
+        checks[f'{expected}_diagnostic_selected'] = (
+            found == [DIAGNOSTIC_NAMES[expected]])
+    checks['unixnu_toml_has_xnu_args'] = bool(args)
+    return checks
+
+
 def check(image, expected='any'):
     image = Path(image)
     result = {'payload': str(image), 'expected_diagnostic': expected,
@@ -195,13 +222,8 @@ def check(image, expected='any'):
                     addon_present == ('GpuAddon' in memory_map))
 
             args = xnu_args(toml_path)
-            tokens = args.split()
-            found = [item for item in DIAGNOSTICS if item in tokens]
-            require('exactly_one_diagnostic_argument', len(found) == 1)
-            if expected != 'any':
-                require(f'{expected}_diagnostic_selected',
-                        found == [DIAGNOSTIC_NAMES[expected]])
-            require('unixnu_toml_has_xnu_args', bool(args))
+            for name, ok in diagnostic_contract(args, expected).items():
+                require(name, ok)
         result['pass'] = True
     except (ValueError, OSError) as error:
         result['pass'] = False
@@ -213,15 +235,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--payload')
     parser.add_argument('--expect-diagnostic',
-                        choices=('any', 'host-init', 'audit', 'snapshot',
-                                 'emmc-probe-1', 'emmc-probe-2',
-                                 'emmc-probe-3', 'emmc-probe-4',
-                                 'emmc-probe-5', 'emmc-probe-6', 'emmc-probe-7',
-                                 'emmc-probe-8', 'emmc-probe-9',
-                                 'emmc-probe-10', 'emmc-probe-11',
-                                 'emmc-probe-12', 'emmc-probe-13',
-                                 'emmc-probe-14', 'emmc-probe-15',
-                                 'emmc-probe-16', 'emmc-probe-17'),
+                        choices=('any', *DIAGNOSTIC_NAMES),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

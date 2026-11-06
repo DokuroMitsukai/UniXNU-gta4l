@@ -28,6 +28,7 @@
 
 void gta4l_emmc_probe_run(void);
 void gta4l_emmc_probe_width_fixture(int form);
+void gta4l_emmc_probe_accept_seam(void);
 uint64_t gta4l_emmc_probe_test_counter(void);
 uint64_t gta4l_emmc_probe_test_counter_hz(void);
 void gta4l_emmc_probe_test_delay_us(uint32_t microseconds);
@@ -247,18 +248,23 @@ static int h14_cmd13_crc;
 static unsigned int h14_cmd12_count;
 static unsigned int h14_cmd13_count;
 static int cmd2_crc_fail;
+static int cmd1_crc_fail;
 static int cmd3_no_cc;
 static int cmd3_late_cc;
 static int cmd3_cc_delay;
 static int cmd3_identify_status;
 static int cmd3_timeouts_remaining;
 static int cmd3_r1_error_after;
+static int cmd3_transport_error;
 static unsigned int cmd3_count;
 static uint32_t cmd3_arguments[4];
 static int cmd9_timeout;
 static unsigned int cmd17_fail_on;
 static uint16_t cmd17_fail_error;
 static unsigned int cmd17_count;
+/* Optional post-transfer CMD17 corruption for the MD recovery-read check. */
+static unsigned int cmd17_corrupt_on;
+static uint32_t cmd17_corrupt_lba = 0xFFFFFFFFu;
 static unsigned int cmd17_index;
 static unsigned int cmd19_count;
 static unsigned int cmd14_count;
@@ -268,6 +274,28 @@ static const uint32_t *expected_lbas;
 static unsigned int expected_lba_count;
 static int expected_lba_wrap;
 static unsigned int cmd3_normal_reads;
+/* Stage-9 CMD3 timeline adversarial modeling. The response register is
+ * independent of the completion/error latches: `cmd3_response_value` changes
+ * only at the scheduled poll iteration or RESPONSE-read ordinal configured
+ * below. This lets the tests prove the trace reports only sampled values and
+ * never invents an intermediate response or treats response content as CC. */
+static uint32_t cmd3_response_value = 0x00000900u;
+static int cmd3_response_preset;
+static int cmd3_change_iter[8];
+static uint32_t cmd3_change_iter_value[8];
+static unsigned int cmd3_change_iter_count;
+static int cmd3_change_read[8];
+static uint32_t cmd3_change_read_value[8];
+static unsigned int cmd3_change_read_count;
+static int cmd3_error_at_iter = -1;
+static uint16_t cmd3_error_iter_value;
+static int cmd3_error_at_read;
+static uint16_t cmd3_error_read_value;
+static int cmd3_simultaneous_iter = -1;
+static int cmd3_inhibit_stuck;
+static int cmd3_counter_stall;
+static unsigned int cmd3_response_reads;
+static uint16_t cmd3_transport_error_value = GTA4L_EMMC_INT_ERR_CMD_CRC;
 static uint32_t ext_csd_count = 0x01000000u;
 /* Multi-block CMD18/CMD12 modeling. mb_fail_done injects a data error after
  * that many fully drained sectors (0 disables it); mb_corrupt_lba changes the
@@ -285,6 +313,15 @@ static int buffer_ready;
 static int mb_stop_no_tc;
 static int mb_r1_error;
 static uint32_t mb_corrupt_lba = 0xFFFFFFFFu;
+/* D10.4a acceptance coverage. mb_corrupt_short_only restricts the corrupt
+ * sector to the two-sector request so a removed short barrier can be
+ * distinguished from the long barrier. The swap pair reorders two sectors.
+ * mb_sum_preserve_lba changes bytes while keeping the production accumulator
+ * sum equal to the CMD17 reference. */
+static int mb_corrupt_short_only;
+static uint32_t mb_swap_first_lba = 0xFFFFFFFFu;
+static uint32_t mb_swap_second_lba = 0xFFFFFFFFu;
+static uint32_t mb_sum_preserve_lba = 0xFFFFFFFFu;
 /* Delayed multi-block events. Each delay is measured from the moment the
  * event is scheduled: mb_last_brr_delay_us from the penultimate sector drain,
  * mb_tc_delay_us from the final sector drain, and mb_error_delay_us from the
@@ -299,6 +336,15 @@ static int mb_error_pending;
 static uint64_t mb_tc_due;
 static uint64_t mb_last_brr_due;
 static uint64_t mb_error_due;
+/* Mid-transfer readiness stall: after this many drained sectors keep BRR
+ * latched but withhold live FIFO readiness until the delay expires. */
+static int mb_mid_stall_done;
+static int mb_mid_stall_delay_us = -1;
+static int mb_mid_stall_pending;
+static uint64_t mb_mid_stall_due;
+/* Counts data-port reads attempted while a CMD18 transfer is active but the
+ * modeled FIFO is not live-ready. The correct core never does this. */
+static unsigned int mb_ready_violations;
 static unsigned int mb_stop_count;
 static int auto_cmd12_seen;
 static int bad_mb_command;
@@ -460,22 +506,58 @@ sim_fill_block(uint32_t lba)
 }
 
 /* CMD18 payload. Only the selected sector differs from the CMD17 pass, so a
- * report that substitutes the CMD17 sums for the CMD18 sums is caught. */
-static void
-sim_fill_mb_block(uint32_t lba)
+ * report that substitutes the CMD17 sums for the CMD18 sums is caught. The
+ * reorder pair, the short-request-only corruption and the checksum-preserving
+ * corruption exercise the D10.4a acceptance barriers. */
+static uint32_t
+sim_mb_source_lba(uint32_t lba)
 {
-	uint8_t bytes[GTA4L_EMMC_BLOCK_BYTES];
+	if (lba == mb_swap_first_lba) {
+		return mb_swap_second_lba;
+	}
+	if (lba == mb_swap_second_lba) {
+		return mb_swap_first_lba;
+	}
+	return lba;
+}
+
+static void
+sim_mb_bytes(uint32_t lba, uint32_t count, uint8_t *bytes)
+{
+	uint32_t source = sim_mb_source_lba(lba);
 	uint32_t index;
 
-	if (lba == mb_corrupt_lba) {
+	if (source == 1u) {
+		sim_gpt_block(bytes);
+	} else {
+		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+			bytes[index] =
+			    (uint8_t)((source * 7u) + (index * 13u));
+		}
+	}
+	if ((lba == mb_corrupt_lba) &&
+	    ((mb_corrupt_short_only == 0) || (count == 2u))) {
 		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
 			bytes[index] =
 			    (uint8_t)((lba * 7u) + (index * 13u) + 1u);
 		}
-		sim_fill_buffer_words(bytes);
-		return;
 	}
-	sim_fill_block(lba);
+	if (lba == mb_sum_preserve_lba) {
+		/* The probe accumulator is sum = sum * 31 + byte, so
+		 * subtracting one from byte 510 and adding 31 to byte 511
+		 * cancels in 32-bit arithmetic. The bytes still differ. */
+		bytes[510] = (uint8_t)(bytes[510] - 1u);
+		bytes[511] = (uint8_t)(bytes[511] + 31u);
+	}
+}
+
+static void
+sim_fill_mb_block(uint32_t lba)
+{
+	uint8_t bytes[GTA4L_EMMC_BLOCK_BYTES];
+
+	sim_mb_bytes(lba, mb_count, bytes);
+	sim_fill_buffer_words(bytes);
 }
 
 static uint32_t
@@ -498,7 +580,9 @@ sim_block_sum(uint32_t lba)
 	return sum;
 }
 
-/* CMD18-pass sum for one LBA, including the optional corruption. */
+/* CMD18-pass sum for one LBA, including the optional corruption. The expected
+ * MBLOCKS line only materializes the 21-sector request, so short-only
+ * corruption is never applied here. */
 static uint32_t
 sim_mb_block_sum(uint32_t lba)
 {
@@ -506,14 +590,7 @@ sim_mb_block_sum(uint32_t lba)
 	uint32_t sum = 0;
 	uint32_t index;
 
-	if (lba == mb_corrupt_lba) {
-		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
-			bytes[index] =
-			    (uint8_t)((lba * 7u) + (index * 13u) + 1u);
-		}
-	} else {
-		return sim_block_sum(lba);
-	}
+	sim_mb_bytes(lba, SIM_GPT_ARRAY_BLOCKS, bytes);
 	for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
 		sum = (sum * 31u) + bytes[index];
 	}
@@ -743,6 +820,12 @@ sim_apply_mb_events(void)
 		error_int |= mb_fail_error;
 		return;
 	}
+	if ((mb_mid_stall_pending != 0) &&
+	    (counter_value >= mb_mid_stall_due)) {
+		mb_mid_stall_pending = 0;
+		sim_fill_mb_block(mb_argument + mb_done);
+		normal_int |= GTA4L_EMMC_INT_BRR;
+	}
 	if ((mb_last_brr_pending != 0) &&
 	    (counter_value >= mb_last_brr_due)) {
 		mb_last_brr_pending = 0;
@@ -800,6 +883,14 @@ sim_command(uint16_t command)
 		if (flags != GTA4L_EMMC_CMD_RESP_SHORT) {
 			bad_command_format = 1;
 		}
+		if (cmd1_crc_fail != 0) {
+			/* A transport error on the first CMD1: the core must
+			 * stop before CMD2/CMD3 and leave the CMD3 timeline
+			 * empty. */
+			error_int |= GTA4L_EMMC_INT_ERR_CMD_CRC;
+			normal_int |= 0x8000u;
+			return;
+		}
 		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
 		    GTA4L_EMMC_OCR_VALUE | 0x80000000u);
 		normal_int |= GTA4L_EMMC_INT_CC;
@@ -830,9 +921,10 @@ sim_command(uint16_t command)
 		return;
 	}
 	if (index == GTA4L_EMMC_CMD3) {
-		uint32_t response = cmd3_identify_status ?
-		    0x00000500u : 0x00000900u;
-
+		if (cmd3_response_preset == 0) {
+			cmd3_response_value = cmd3_identify_status ?
+			    0x00000500u : 0x00000900u;
+		}
 		if (flags != (GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX)) {
 			bad_command_format = 1;
@@ -843,10 +935,20 @@ sim_command(uint16_t command)
 		cmd3_count++;
 		if ((cmd3_r1_error_after > 0) &&
 		    (cmd3_count >= (unsigned int)cmd3_r1_error_after)) {
-			response |= 0x00000080u;
+			cmd3_response_value |= 0x00000080u;
 		}
-		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, response);
+		if (cmd3_transport_error != 0) {
+			/* A command transport error: no response and no CC.
+			 * The core must record a terminal error observation
+			 * rather than inventing a completion. */
+			error_int |= cmd3_transport_error_value;
+			normal_int |= 0x8000u;
+			return;
+		}
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+		    cmd3_response_value);
 		cmd3_normal_reads = 0;
+		cmd3_response_reads = 0;
 		if (cmd3_timeouts_remaining > 0) {
 			cmd3_timeouts_remaining--;
 		} else if ((cmd3_no_cc == 0) && (cmd3_late_cc == 0) &&
@@ -1149,7 +1251,7 @@ sim_command(uint16_t command)
 		}
 		if ((block_size != GTA4L_EMMC_BLOCK_BYTES) ||
 		    ((block_count != SIM_GPT_ARRAY_BLOCKS) &&
-		    (block_count != 8u)) ||
+		    (block_count != 2u) && (block_count != 8u)) ||
 		    (last_argument != SIM_GPT_ARRAY_LBA) ||
 		    ((transfer_mode & (GTA4L_EMMC_TM_READ |
 		    GTA4L_EMMC_TM_BLOCK_COUNT_EN |
@@ -1217,7 +1319,7 @@ sim_command(uint16_t command)
 		}
 		if ((last_argument != 0u) ||
 		    ((mb_count != SIM_GPT_ARRAY_BLOCKS) &&
-		    (mb_count != 8u)) ||
+		    (mb_count != 2u) && (mb_count != 8u)) ||
 		    (mb_argument != SIM_GPT_ARRAY_LBA)) {
 			bad_mb_command = 1;
 		}
@@ -1325,6 +1427,11 @@ sim_command(uint16_t command)
 				return;
 			}
 			sim_fill_block(last_argument);
+			if ((cmd17_corrupt_on != 0u) &&
+			    (cmd17_count == cmd17_corrupt_on) &&
+			    (last_argument == cmd17_corrupt_lba)) {
+				buffer_data[0] ^= 0xFFu;
+			}
 		}
 		normal_int |= GTA4L_EMMC_INT_CC | GTA4L_EMMC_INT_BRR |
 		    GTA4L_EMMC_INT_TC;
@@ -1364,7 +1471,32 @@ gta4l_emmc_probe_test_read16(uint32_t space, uint32_t offset)
 		if (offset == GTA4L_EMMC_REG_NORMAL_INT_STATUS) {
 			sim_apply_mb_events();
 			if (last_index == GTA4L_EMMC_CMD3) {
+				unsigned int iteration;
+				unsigned int change;
+
 				cmd3_normal_reads++;
+				iteration = cmd3_normal_reads - 1u;
+				for (change = 0;
+				    change < cmd3_change_iter_count;
+				    change++) {
+					if (cmd3_change_iter[change] !=
+					    (int)iteration) {
+						continue;
+					}
+					cmd3_response_value =
+					    cmd3_change_iter_value[change];
+					sim_store(sdhci,
+					    GTA4L_EMMC_REG_RESPONSE, 4u,
+					    cmd3_response_value);
+				}
+				if (cmd3_error_at_iter == (int)iteration) {
+					error_int |= cmd3_error_iter_value;
+				}
+				if (cmd3_simultaneous_iter ==
+				    (int)iteration) {
+					normal_int |= GTA4L_EMMC_INT_CC;
+					error_int |= cmd3_error_iter_value;
+				}
 				if ((cmd3_late_cc != 0) &&
 				    (cmd3_normal_reads >
 				    (GTA4L_EMMC_CMD_TIMEOUT_US /
@@ -1429,6 +1561,28 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 				sim_apply_cmd7_events();
 			}
 		}
+		if ((offset == GTA4L_EMMC_REG_RESPONSE) &&
+		    (last_index == GTA4L_EMMC_CMD3)) {
+			unsigned int change;
+
+			cmd3_response_reads++;
+			for (change = 0;
+			    change < cmd3_change_read_count; change++) {
+				if (cmd3_change_read[change] !=
+				    (int)cmd3_response_reads) {
+					continue;
+				}
+				cmd3_response_value =
+				    cmd3_change_read_value[change];
+				sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u,
+				    cmd3_response_value);
+			}
+			if ((cmd3_error_at_read != 0) &&
+			    (cmd3_error_at_read ==
+			    (int)cmd3_response_reads)) {
+				error_int |= cmd3_error_read_value;
+			}
+		}
 		if (offset == GTA4L_EMMC_REG_CORE_PWRCTL_STATUS) {
 			return pwr_status;
 		}
@@ -1440,11 +1594,19 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 				value |=
 				    GTA4L_EMMC_PRESENT_BUFFER_READ_READY;
 			}
+			if ((cmd3_inhibit_stuck != 0) &&
+			    (cmd_count == 3u)) {
+				value |= GTA4L_EMMC_PRESENT_CMD_INHIBIT |
+				    GTA4L_EMMC_PRESENT_DAT_INHIBIT;
+			}
 			return value;
 		}
 		if (offset == GTA4L_EMMC_REG_BUFFER_DATA_PORT) {
 			uint32_t word = 0;
 
+			if ((mb_active != 0) && (buffer_ready == 0)) {
+				mb_ready_violations++;
+			}
 			if (buffer_index <
 			    (GTA4L_EMMC_BLOCK_BYTES / 4u)) {
 				word = buffer_data[buffer_index];
@@ -1469,6 +1631,15 @@ gta4l_emmc_probe_test_read32(uint32_t space, uint32_t offset)
 					normal_int &= (uint16_t)
 					    ~GTA4L_EMMC_INT_BRR;
 					error_int |= mb_fail_error;
+				} else if ((mb_mid_stall_done != 0) &&
+				    (mb_done == (uint32_t)mb_mid_stall_done) &&
+				    (mb_mid_stall_delay_us >= 0)) {
+					/* Keep the stale BRR latched but
+					 * leave live FIFO readiness clear
+					 * until the delay expires. */
+					mb_mid_stall_pending = 1;
+					mb_mid_stall_due = counter_value +
+					    (uint64_t)mb_mid_stall_delay_us;
 				} else if (mb_done < mb_count) {
 					if ((mb_done == (mb_count - 1u)) &&
 					    (mb_last_brr_delay_us >= 0)) {
@@ -1719,6 +1890,10 @@ gta4l_emmc_probe_test_write32(uint32_t space, uint32_t offset, uint32_t value)
 uint64_t
 gta4l_emmc_probe_test_counter(void)
 {
+	if ((cmd3_counter_stall != 0) &&
+	    (last_index == GTA4L_EMMC_CMD3)) {
+		return 0;
+	}
 	return counter_value;
 }
 
@@ -1806,6 +1981,7 @@ panic(const char *format, ...)
 static int failures;
 static int panicked;
 static int width_form;
+static int accept_seam;
 
 static void
 check(int condition, const char *message)
@@ -1890,18 +2066,19 @@ static const uint8_t order_h9_clean[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13
 };
-static const uint8_t order_h9_retry[] = {
-	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
-	GTA4L_EMMC_CMD3, GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7,
-	GTA4L_EMMC_CMD13
+/* No-retry CMD3 stop: the first CMD3 fails or reports an R1 error, so no
+ * later command is issued. */
+static const uint8_t order_h9_cmd3_stop[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3
 };
-static const uint8_t order_h9_retry_fail[] = {
-	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
-	GTA4L_EMMC_CMD3
+/* Pre-CMD3 CMD1 failure: the probe stops before CMD2/CMD3. */
+static const uint8_t order_h9_cmd1_stop[] = {
+	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1
 };
-static const uint8_t order_h9_retry_later[] = {
+/* Clean CMD3, then the later identification command fails. */
+static const uint8_t order_h9_later_stop[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
-	GTA4L_EMMC_CMD3, GTA4L_EMMC_CMD9
+	GTA4L_EMMC_CMD9
 };
 static const uint8_t order_probe_block0[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
@@ -1939,7 +2116,8 @@ static const uint8_t order_probe_full[] = {
 	GTA4L_EMMC_CMD17
 };
 /* The MD pass replaces nothing in the CMD17 sequence: the same 33 commands,
- * then one open-ended CMD18 and one explicit CMD12. */
+ * then the short CMD18/CMD12 pair, the long CMD18/CMD12 pair, and two
+ * post-transfer CMD17 recovery reads (block 0 and the first array sector). */
 static const uint8_t order_probe_md[] = {
 	GTA4L_EMMC_CMD0, GTA4L_EMMC_CMD1, GTA4L_EMMC_CMD2, GTA4L_EMMC_CMD3,
 	GTA4L_EMMC_CMD9, GTA4L_EMMC_CMD7, GTA4L_EMMC_CMD13, GTA4L_EMMC_CMD8,
@@ -1951,7 +2129,9 @@ static const uint8_t order_probe_md[] = {
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
 	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17,
-	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD18, GTA4L_EMMC_CMD12
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD18, GTA4L_EMMC_CMD12,
+	GTA4L_EMMC_CMD18, GTA4L_EMMC_CMD12,
+	GTA4L_EMMC_CMD17, GTA4L_EMMC_CMD17
 };
 /* Stage B1 keeps the stage-A 1-bit content pass, then repeats the switch,
  * bus test and content pass at 4-bit and 8-bit. A failing scenario stops
@@ -2500,9 +2680,18 @@ static const uint32_t lbas_array_first[] = {
 static const uint32_t lbas_array_mid[] = {
 	0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u
 };
+/* The stage-A CMD17 baseline: block 0, block 1, the 21 GPT array
+ * sectors, the data sector and the last LBA. */
 static const uint32_t lbas_full[] = {
 	0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u,
 	14u, 15u, 16u, 17u, 18u, 19u, 20u, 21u, 22u, 34u, 61071359u
+};
+/* MD adds the post-transfer recovery reads: block 0, then the first array
+ * sector again. */
+static const uint32_t lbas_full_md[] = {
+	0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u,
+	14u, 15u, 16u, 17u, 18u, 19u, 20u, 21u, 22u, 34u, 61071359u,
+	0u, SIM_GPT_ARRAY_LBA
 };
 static const uint32_t lbas_full_max[] = {
 	0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u,
@@ -2668,39 +2857,214 @@ main(int argc, char **argv)
 		cmd7_tc_immediate = 1;
 		set_expected_order(order_ident,
 		    (unsigned int)(sizeof(order_ident) / sizeof(order_ident[0])));
-	} else if (strcmp(scenario, "probe-h9-clean-no-fire") == 0) {
+	} else if (strcmp(scenario, "probe-h9-map-fail") == 0) {
+		stage = 9;
+		map_fail = 1;
+	} else if (strcmp(scenario, "probe-h9-clock-fail") == 0) {
+		stage = 9;
+		rcg_stuck = 1;
+	} else if (strcmp(scenario, "probe-h9-cmd1-fail") == 0) {
+		stage = 9;
+		cmd1_crc_fail = 1;
+		set_expected_order(order_h9_cmd1_stop,
+		    (unsigned int)(sizeof(order_h9_cmd1_stop) /
+		    sizeof(order_h9_cmd1_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-cmd2-fail") == 0) {
+		stage = 9;
+		cmd2_crc_fail = 1;
+		set_expected_order(order_cmd2,
+		    (unsigned int)(sizeof(order_cmd2) /
+		    sizeof(order_cmd2[0])));
+	} else if (strcmp(scenario, "probe-h9-clean") == 0) {
 		stage = 9;
 		cmd7_tc_immediate = 1;
 		set_expected_order(order_h9_clean,
 		    (unsigned int)(sizeof(order_h9_clean) /
 		    sizeof(order_h9_clean[0])));
-	} else if (strcmp(scenario, "probe-h9-fire-pass") == 0) {
+	} else if (strcmp(scenario, "probe-h9-timeout") == 0) {
 		stage = 9;
 		cmd3_timeouts_remaining = 1;
-		cmd7_tc_immediate = 1;
-		set_expected_order(order_h9_retry,
-		    (unsigned int)(sizeof(order_h9_retry) /
-		    sizeof(order_h9_retry[0])));
-	} else if (strcmp(scenario, "probe-h9-fire-fail") == 0) {
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-status") == 0) {
 		stage = 9;
-		cmd3_timeouts_remaining = 2;
-		set_expected_order(order_h9_retry_fail,
-		    (unsigned int)(sizeof(order_h9_retry_fail) /
-		    sizeof(order_h9_retry_fail[0])));
-	} else if (strcmp(scenario, "probe-h9-fire-second-ident") == 0) {
+		cmd3_r1_error_after = 1;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-error") == 0) {
 		stage = 9;
-		cmd3_timeouts_remaining = 1;
+		cmd3_transport_error = 1;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-later-fail") == 0) {
+		stage = 9;
 		cmd9_timeout = 1;
-		set_expected_order(order_h9_retry_later,
-		    (unsigned int)(sizeof(order_h9_retry_later) /
-		    sizeof(order_h9_retry_later[0])));
-	} else if (strcmp(scenario, "probe-h9-mismatch") == 0) {
+		set_expected_order(order_h9_later_stop,
+		    (unsigned int)(sizeof(order_h9_later_stop) /
+		    sizeof(order_h9_later_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-cc-between") == 0) {
+		/* Clean CMD3 completion at iteration 3, between the scheduled
+		 * samples at 2 and 4. */
 		stage = 9;
-		cmd3_timeouts_remaining = 1;
-		cmd3_r1_error_after = 2;
-		set_expected_order(order_h9_retry_fail,
-		    (unsigned int)(sizeof(order_h9_retry_fail) /
-		    sizeof(order_h9_retry_fail[0])));
+		cmd3_cc_delay = 3;
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_h9_clean,
+		    (unsigned int)(sizeof(order_h9_clean) /
+		    sizeof(order_h9_clean[0])));
+	} else if (strcmp(scenario, "probe-h9-cc-at-sample") == 0) {
+		/* Clean CMD3 completion exactly at the scheduled iteration 4. */
+		stage = 9;
+		cmd3_cc_delay = 4;
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_h9_clean,
+		    (unsigned int)(sizeof(order_h9_clean) /
+		    sizeof(order_h9_clean[0])));
+	} else if (strcmp(scenario, "probe-h9-update-no-cc") == 0) {
+		/* The response register changes at iteration 3 without a CC;
+		 * the trace must show the change at the next sampled point but
+		 * keep the timeout verdict. */
+		stage = 9;
+		cmd3_no_cc = 1;
+		cmd3_change_iter_count = 1;
+		cmd3_change_iter[0] = 3;
+		cmd3_change_iter_value[0] = 0x00000500u;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-no-update") == 0) {
+		/* No response update and no CC: every sample stays identical. */
+		stage = 9;
+		cmd3_no_cc = 1;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-preexisting-r1") == 0) {
+		/* The window already holds an R1 error status before CMD3.
+		 * The trace must show that retained value, and the R1 content
+		 * must be reported as a card-status failure, not a completion
+		 * inferred from response content. */
+		stage = 9;
+		cmd3_response_preset = 1;
+		cmd3_response_value = 0xFDF9A080u;
+		sim_store(sdhci, GTA4L_EMMC_REG_RESPONSE, 4u, 0xFDF9A080u);
+		cmd3_cc_delay = 0;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-identical") == 0) {
+		/* A new response identical to the retained value is
+		 * observationally indistinguishable from no update. */
+		stage = 9;
+		cmd3_cc_delay = 2;
+		cmd3_change_iter_count = 1;
+		cmd3_change_iter[0] = 1;
+		cmd3_change_iter_value[0] = 0x00000900u;
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_h9_clean,
+		    (unsigned int)(sizeof(order_h9_clean) /
+		    sizeof(order_h9_clean[0])));
+	} else if (strcmp(scenario, "probe-h9-multi-change") == 0) {
+		/* Two updates between the sampled iterations 2 and 4. Only the
+		 * final value may appear; the intermediate value was never
+		 * read. */
+		stage = 9;
+		cmd3_no_cc = 1;
+		cmd3_change_iter_count = 2;
+		cmd3_change_iter[0] = 3;
+		cmd3_change_iter_value[0] = 0x11111111u;
+		cmd3_change_iter[1] = 3;
+		cmd3_change_iter_value[1] = 0x22222222u;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-last-sample") == 0) {
+		/* The response changes at the last scheduled iteration. */
+		stage = 9;
+		cmd3_no_cc = 1;
+		cmd3_change_iter_count = 1;
+		cmd3_change_iter[0] = 99999;
+		cmd3_change_iter_value[0] = 0x0000BEEFu;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-terminal-only") == 0) {
+		/* The response changes only in the terminal timeout capture,
+		 * after the last scheduled sample. */
+		stage = 9;
+		cmd3_no_cc = 1;
+		cmd3_change_read_count = 1;
+		cmd3_change_read[0] = 20;
+		cmd3_change_read_value[0] = 0x0000CAFEu;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-late-cc") == 0) {
+		/* CC appears only in the fresh post-timeout sample. The verdict
+		 * stays a timeout and no second CMD3 is issued. */
+		stage = 9;
+		cmd3_late_cc = 1;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-index-error") == 0) {
+		/* A latched command-index error at issue. */
+		stage = 9;
+		cmd3_transport_error = 1;
+		cmd3_transport_error_value = GTA4L_EMMC_INT_ERR_CMD_INDEX;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-simultaneous") == 0) {
+		/* CC and a command error appear together; the error must win
+		 * and the trace must record the terminal error. */
+		stage = 9;
+		cmd3_simultaneous_iter = 0;
+		cmd3_error_iter_value = GTA4L_EMMC_INT_ERR_CMD_CRC;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-error-in-sample") == 0) {
+		/* A command error is asserted during the scheduled response
+		 * read at iteration 1 and must be caught at the next existing
+		 * error boundary (iteration 2). */
+		stage = 9;
+		cmd3_no_cc = 1;
+		cmd3_error_at_read = 2;
+		cmd3_error_read_value = GTA4L_EMMC_INT_ERR_CMD_CRC;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-error-after-read") == 0) {
+		/* A command error is asserted during the successful response
+		 * read and must be caught by the final pre-clear check. */
+		stage = 9;
+		cmd3_cc_delay = 0;
+		cmd3_error_at_read = 2;
+		cmd3_error_read_value = GTA4L_EMMC_INT_ERR_CMD_CRC;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-inhibit") == 0) {
+		/* The controller stays inhibited before CMD3, so CMD3 is never
+		 * submitted and the trace stays empty. */
+		stage = 9;
+		cmd3_inhibit_stuck = 1;
+		set_expected_order(order_h9_cmd3_stop,
+		    (unsigned int)(sizeof(order_h9_cmd3_stop) /
+		    sizeof(order_h9_cmd3_stop[0])));
+	} else if (strcmp(scenario, "probe-h9-counter-stall") == 0) {
+		/* The counter does not advance during CMD3; ticks stay zero and
+		 * the samples remain valid. */
+		stage = 9;
+		cmd3_cc_delay = 2;
+		cmd3_counter_stall = 1;
+		cmd7_tc_immediate = 1;
+		set_expected_order(order_h9_clean,
+		    (unsigned int)(sizeof(order_h9_clean) /
+		    sizeof(order_h9_clean[0])));
 	} else if (strcmp(scenario, "cmd9-timeout") == 0) {
 		/* CMD3 completes but CMD9 times out, so the timeout capture is
 		 * for a different command than the CMD3 poll history. */
@@ -2957,13 +3321,13 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
-		set_expected_lbas(lbas_full,
-		    (unsigned int)(sizeof(lbas_full) /
-		    sizeof(lbas_full[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
 	} else if (strcmp(scenario, "probe-md-mismatch") == 0) {
-		/* One CMD18 sector differs from its CMD17 counterpart. This
-		 * is a content mismatch, not a hardware failure: the report
-		 * keeps rc=0 and names the first differing LBA. */
+		/* One long-request sector differs from its CMD17 counterpart.
+		 * The long acceptance barrier reports a nonzero content
+		 * verdict and no recovery read is issued. */
 		stage = 1;
 		ext_csd_count = 61071360u;
 		sim_init_ext_csd();
@@ -2973,9 +3337,197 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
-		set_expected_lbas(lbas_full,
-		    (unsigned int)(sizeof(lbas_full) /
-		    sizeof(lbas_full[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-final-mismatch") == 0) {
+		/* The last long-request sector differs: the first divergence
+		 * is the final array LBA and no recovery read is issued. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_corrupt_lba = SIM_GPT_ARRAY_LBA + SIM_GPT_ARRAY_BLOCKS - 1u;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-swap") == 0) {
+		/* Two long-request sectors are reordered. Both bytes differ
+		 * from their own references and the first divergence is the
+		 * lower LBA; no recovery read is issued. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_swap_first_lba = 7u;
+		mb_swap_second_lba = 8u;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-sum-preserve") == 0) {
+		/* One long-request sector is altered while its production
+		 * accumulator sum is preserved. The secondary checksum still
+		 * agrees, so only the exact byte comparison can reject it. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_sum_preserve_lba = 7u;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-short-mismatch") == 0) {
+		/* The first short-request sector differs and the long request
+		 * is clean. The short barrier reports a nonzero content
+		 * verdict and no long CMD18 is issued. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_corrupt_lba = SIM_GPT_ARRAY_LBA;
+		mb_corrupt_short_only = 1;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-short-second-mismatch") == 0) {
+		/* The second short-request sector differs and the long request
+		 * is clean. One short sector validates and the first
+		 * divergence is the second array LBA. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_corrupt_lba = SIM_GPT_ARRAY_LBA + 1u;
+		mb_corrupt_short_only = 1;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-accept-seam") == 0) {
+		/* Controlled host seam: the production acceptance helper is
+		 * called with synthetic snapshots because an otherwise-correct
+		 * simulator cannot produce a successful transport with
+		 * incomplete sector accounting. */
+		accept_seam = 1;
+	} else if (strcmp(scenario, "probe-md-mid-stall") == 0) {
+		/* BRR stays latched after the first sector while live FIFO
+		 * readiness is clear. A correct core waits for readiness; a
+		 * BRR-only core drains stale data. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_mid_stall_done = 1;
+		mb_mid_stall_delay_us = 100000;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-r1-error") == 0) {
+		/* The short CMD18 completes its data phase with an R1 error;
+		 * the transfer result is a card-status failure after the
+		 * explicit stop, and no further CMD18 is attempted. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		mb_r1_error = 1;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-recovery-fail") == 0) {
+		/* Both CMD18 requests pass, then the first post-transfer
+		 * CMD17 recovery read fails. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		cmd17_fail_on = 26;
+		cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-recovery-mismatch") == 0) {
+		/* Both CMD18 requests pass, then the array-sector recovery
+		 * read returns different bytes from its pre-transfer
+		 * reference. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		cmd17_corrupt_on = 27;
+		cmd17_corrupt_lba = SIM_GPT_ARRAY_LBA;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario,
+	    "probe-md-recovery-block0-mismatch") == 0) {
+		/* Both CMD18 requests pass, then the block-0 recovery read
+		 * returns different bytes. LBA 0 is a valid first divergence,
+		 * and the LBA-2 recovery read must not be issued. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		cmd17_corrupt_on = 26;
+		cmd17_corrupt_lba = 0u;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
+	} else if (strcmp(scenario, "probe-md-recovery-lba2-fail") == 0) {
+		/* Both CMD18 requests pass, block 0 matches, then the LBA-2
+		 * recovery read fails. */
+		stage = 1;
+		ext_csd_count = 61071360u;
+		sim_init_ext_csd();
+		cmd7_tc_immediate = 1;
+		mb_mode_arg = 1;
+		cmd17_fail_on = 27;
+		cmd17_fail_error = GTA4L_EMMC_INT_ERR_DATA_CRC;
+		set_expected_order(order_probe_md,
+		    (unsigned int)(sizeof(order_probe_md) /
+		    sizeof(order_probe_md[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
 	} else if (strcmp(scenario, "probe-md-mid-fail") == 0) {
 		/* Three CMD18 sectors drain, then the data timeout fires. The
 		 * CMD18 stop is still attempted and succeeds. */
@@ -2989,9 +3541,9 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
-		set_expected_lbas(lbas_full,
-		    (unsigned int)(sizeof(lbas_full) /
-		    sizeof(lbas_full[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
 	} else if (strcmp(scenario, "probe-md-stop-no-tc") == 0) {
 		/* Every sector drains, but CMD12 returns CC without TC, so
 		 * the stop times out and the report names the stop result. */
@@ -3004,9 +3556,9 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
-		set_expected_lbas(lbas_full,
-		    (unsigned int)(sizeof(lbas_full) /
-		    sizeof(lbas_full[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
 	} else if (strcmp(scenario, "probe-md-drain-tc") == 0) {
 		/* Every sector drains, but TC arrives only inside the
 		 * post-bound window; the pass succeeds and reports the drain
@@ -3020,9 +3572,9 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
-		set_expected_lbas(lbas_full,
-		    (unsigned int)(sizeof(lbas_full) /
-		    sizeof(lbas_full[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
 	} else if (strcmp(scenario, "probe-md-drain-brr") == 0) {
 		/* The last sector becomes buffer-read ready only inside the
 		 * post-bound window; the drain reads it and TC follows. */
@@ -3035,9 +3587,9 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
-		set_expected_lbas(lbas_full,
-		    (unsigned int)(sizeof(lbas_full) /
-		    sizeof(lbas_full[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
 	} else if (strcmp(scenario, "probe-md-drain-error") == 0) {
 		/* Every sector drains but TC is withheld; a data CRC error
 		 * becomes visible inside the post-bound window and keeps its
@@ -3053,9 +3605,9 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
-		set_expected_lbas(lbas_full,
-		    (unsigned int)(sizeof(lbas_full) /
-		    sizeof(lbas_full[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
 	} else if (strcmp(scenario, "probe-md-stall-tc") == 0) {
 		/* Attempt-2 replay: every sector drains and TC never comes;
 		 * the pass reports an exhausted post-bound window. */
@@ -3068,9 +3620,9 @@ main(int argc, char **argv)
 		set_expected_order(order_probe_md,
 		    (unsigned int)(sizeof(order_probe_md) /
 		    sizeof(order_probe_md[0])));
-		set_expected_lbas(lbas_full,
-		    (unsigned int)(sizeof(lbas_full) /
-		    sizeof(lbas_full[0])));
+		set_expected_lbas(lbas_full_md,
+		    (unsigned int)(sizeof(lbas_full_md) /
+		    sizeof(lbas_full_md[0])));
 	} else if (strcmp(scenario, "probe-mb-bare-refuse") == 0) {
 		/* The modifier cannot stand alone: no probe argument means no
 		 * MMIO mapping and an explicit refusal. */
@@ -3926,6 +4478,11 @@ main(int argc, char **argv)
 		    0xFFFFFFFFu);
 		sim_store(sdhci, GTA4L_EMMC_REG_CORE_DLL_STATUS, 4u,
 		    0xFFFFFFFFu);
+	} else if (strcmp(scenario, "report-width-md-failure") == 0) {
+		/* Synthetic F2 failure bound: the fixture fills both request
+		 * summaries, the recovery state and the terminal failure
+		 * record at their widest forms. */
+		width_form = 13;
 	} else if (strcmp(scenario, "report-width-budget-control") == 0) {
 		/* Negative control for the report-budget predicate: the last
 		 * byte that still leaves room for the NUL must be accepted and
@@ -3959,6 +4516,8 @@ main(int argc, char **argv)
 		panic_ready = 1;
 		if (width_form != 0) {
 			gta4l_emmc_probe_width_fixture(width_form - 1);
+		} else if (accept_seam != 0) {
+			gta4l_emmc_probe_accept_seam();
 		} else {
 			gta4l_emmc_probe_run();
 		}
@@ -3974,10 +4533,13 @@ main(int argc, char **argv)
 		check(sdhci_accesses == 0ul,
 		    "a disabled probe touched SDHCI");
 		check(gcc_accesses == 0ul, "a disabled probe touched GCC");
-	} else if (strcmp(scenario, "map-fail") == 0) {
+	} else if ((strcmp(scenario, "map-fail") == 0) ||
+	    (strcmp(scenario, "probe-h9-map-fail") == 0)) {
 		check(panicked == 1, "an MMIO map failure did not panic");
 		check(strstr(panic_message, "MMIO map failed") != NULL,
 		    "panic does not name the MMIO map failure");
+		check(strstr(panic_message, "H9T REPORT") == NULL,
+		    "a map failure emitted an H9T report");
 		check(sdhci_accesses == 0ul,
 		    "an MMIO map failure touched SDHCI");
 		check(gcc_accesses == 0ul, "an MMIO map failure touched GCC");
@@ -4369,151 +4931,407 @@ main(int argc, char **argv)
 		check(strlen(panic_message) < 2048u,
 		    "the maximum-width failure report exceeds the 2048-byte "
 		    "panic-text budget");
-	} else if ((strcmp(scenario, "probe-h9-clean-no-fire") == 0) ||
-	    (strcmp(scenario, "probe-h9-fire-pass") == 0) ||
-	    (strcmp(scenario, "probe-h9-fire-fail") == 0) ||
-	    (strcmp(scenario, "probe-h9-fire-second-ident") == 0) ||
-	    (strcmp(scenario, "probe-h9-mismatch") == 0)) {
+	} else if (strncmp(scenario, "probe-h9-", 9u) == 0) {
 		check(panicked == 1, "the H9 rung did not report");
 		check(bad_command_format == 0,
 		    "an H9 command used the wrong flags");
 		check(bad_command_order == 0,
 		    "the H9 run sent commands in the wrong order");
-		if (strcmp(scenario, "probe-h9-clean-no-fire") == 0) {
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9T REPORT ver=1") != NULL,
+		    "the H9 report does not carry the timeline version");
+		check(strstr(panic_message, "retry=0/0") != NULL,
+		    "the H9 timeline run enabled or engaged the retry seam");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9T TRC n=") != NULL,
+		    "the H9 report does not carry the trace header");
+		check(strstr(panic_message,
+		    "order=k,i,n,e,r0,v,ticks") != NULL,
+		    "the H9 trace does not document its field order");
+		check(strlen(panic_message) < 2048u,
+		    "the H9 timeline report exceeds the 2048-byte panic "
+		    "budget");
+
+		if (strcmp(scenario, "probe-h9-clock-fail") == 0) {
 			check(strstr(panic_message,
-			    "GTA4L-EMMC H9 REPORT: rc=0 stop=0") != NULL,
-			    "the clean H9 run does not name stop 0");
-			check(strstr(panic_message,
-			    "retry=0/0 att=1") != NULL,
-			    "the clean H9 run invented a retry");
-			check(strstr(panic_message,
-			    "A1 n=1 rc=0 r1=0 "
-			    "fail=0/0/0/00000000/0000/0000/00000000/0")
+			    "REPORT ver=1 rc=-5 stop=14 sub=0 att=0")
 			    != NULL,
-			    "the clean H9 attempt-1 record is wrong");
+			    "the stage-9 clock failure did not report stop 14");
+			check(strstr(panic_message, "TRC n=0 ov=0") != NULL,
+			    "the stage-9 clock failure invented a sample");
 			check(strstr(panic_message,
-			    "A1P c3p=1/0000/0000/00000000/0033/07ff")
+			    "T00 ? 0 0000 0000 00000000 0 "
+			    "0000000000000000") != NULL,
+			    "the stage-9 clock failure lost the unused trace");
+			check(strstr(panic_message,
+			    "C3P v=0/0000/0000/00000000/0000/0000 rv=0")
 			    != NULL,
-			    "the clean H9 run lost the pre-CMD3 state");
+			    "the stage-9 clock failure invented a pre-CMD3 "
+			    "capture");
+			check(cmd3_count == 0u,
+			    "the stage-9 clock failure issued CMD3");
+		} else if (strcmp(scenario, "probe-h9-cmd1-fail") == 0) {
 			check(strstr(panic_message,
-			    "A1L c3l=1/3/0001/0001/1/"
-			    "0000000000000000/1000000") != NULL,
-			    "the clean H9 run lost the CMD3 poll history");
-			check(strstr(panic_message, "A2 n=0 rc=0") != NULL,
-			    "the clean H9 run invented a second attempt");
-			check(strstr(panic_message,
-			    "C cid=15010044,5836384d,42009005,f4661900 "
-			    "cmd1=1/0") != NULL,
-			    "the clean H9 report lost the CID");
-			check(strstr(panic_message,
-			    "H9 FAIL fail=0/0/0/00000000/0000/0000/"
-			    "00000000/0") != NULL,
-			    "the clean H9 report invented a failure");
-			check(cmd_count == 7u,
-			    "the clean H9 run did not stop after TRAN");
-			check(last_index == GTA4L_EMMC_CMD13,
-			    "the clean H9 run did not stop at CMD13");
-		}
-		if (strcmp(scenario, "probe-h9-fire-pass") == 0) {
-			check(strstr(panic_message,
-			    "GTA4L-EMMC H9 REPORT: rc=0 stop=10") != NULL,
-			    "the H9 retry pass does not name stop 10");
-			check(strstr(panic_message,
-			    "retry=1/1 att=2") != NULL,
-			    "the H9 retry pass lost the retry state");
-			check(strstr(panic_message,
-			    "A1 n=1 rc=-7 r1=0 "
-			    "fail=1/3/65536/0000031a/0000/0000/00000000/9")
+			    "REPORT ver=1 rc=-8 stop=14 sub=0 att=0")
 			    != NULL,
-			    "the H9 attempt-1 timeout record is wrong");
+			    "the stage-9 CMD1 failure did not report stop 14");
+			check(strstr(panic_message, "TRC n=0 ov=0") != NULL,
+			    "the stage-9 CMD1 failure invented a sample");
 			check(strstr(panic_message,
-			    "A1L c3l=1/3/0000/0000/100000/"
-			    "00000000000f4240/1000000") != NULL,
-			    "the H9 attempt-1 poll history is wrong");
-			check(strstr(panic_message,
-			    "A2 n=2 rc=0 r1=0 "
-			    "fail=0/0/0/00000000/0000/0000/00000000/0")
+			    "C3P v=0/0000/0000/00000000/0000/0000 rv=0")
 			    != NULL,
-			    "the H9 duplicate CMD3 record is wrong");
+			    "the stage-9 CMD1 failure invented a pre-CMD3 "
+			    "capture");
+			check(cmd3_count == 0u,
+			    "the stage-9 CMD1 failure issued CMD3");
+		} else if (strcmp(scenario, "probe-h9-cmd2-fail") == 0) {
 			check(strstr(panic_message,
-			    "A2P c3p=1/0000/0000/00000000/0033/07ff")
+			    "REPORT ver=1 rc=-8 stop=14 sub=0 att=0")
 			    != NULL,
-			    "the duplicate CMD3 lost its pre-command state");
+			    "the stage-9 CMD2 failure did not report stop 14");
+			check(strstr(panic_message, "TRC n=0 ov=0") != NULL,
+			    "the stage-9 CMD2 failure invented a sample");
 			check(strstr(panic_message,
-			    "A2L c3l=1/3/0001/0001/1/"
-			    "0000000000000000/1000000") != NULL,
-			    "the duplicate CMD3 poll history is wrong");
-			check(strstr(panic_message,
-			    "C cid=15010044,5836384d,42009005,f4661900")
+			    "C3P v=0/0000/0000/00000000/0000/0000 rv=0")
 			    != NULL,
-			    "the H9 retry pass lost the CID");
-			check(cmd_count == 8u,
-			    "the H9 retry pass did not issue exactly one "
-			    "duplicate");
-			check(last_index == GTA4L_EMMC_CMD13,
-			    "the H9 retry pass did not stop after TRAN");
-		}
-		if (strcmp(scenario, "probe-h9-fire-fail") == 0) {
+			    "the stage-9 CMD2 failure invented a pre-CMD3 "
+			    "capture");
+			check(cmd3_count == 0u,
+			    "the stage-9 CMD2 failure issued CMD3");
+		} else if (strcmp(scenario, "probe-h9-clean") == 0) {
+			check(cmd3_count == 1u,
+			    "the clean rung issued more than one CMD3");
 			check(strstr(panic_message,
-			    "GTA4L-EMMC H9 REPORT: rc=-7 stop=11") != NULL,
-			    "the H9 double timeout does not name stop 11");
-			check(strstr(panic_message,
-			    "retry=1/0 att=2") != NULL,
-			    "the H9 double timeout lost the retry state");
-			check((strstr(panic_message, "A1 n=1 rc=-7") != NULL) &&
-			    (strstr(panic_message, "A2 n=2 rc=-7") != NULL),
-			    "the H9 double timeout lost an attempt record");
-			check(strstr(panic_message,
-			    "A2 n=2 rc=-7 r1=0 fail=1/3/65536/0000031a/")
+			    "REPORT ver=1 rc=0 stop=0 sub=1 att=1 tr=0 r1=0")
 			    != NULL,
-			    "the duplicate CMD3 timeout record is wrong");
-			check(cmd_count == 5u,
-			    "the H9 double timeout issued more than two CMD3 "
-			    "attempts or a later command");
-			check(last_index == GTA4L_EMMC_CMD3,
-			    "the H9 double timeout stopped after an unexpected "
-			    "command");
-		}
-		if (strcmp(scenario, "probe-h9-fire-second-ident") == 0) {
+			    "the clean rung did not report a clean "
+			    "identification");
+			check(strstr(panic_message, "hz=1000000") != NULL,
+			    "the clean rung lost the counter frequency");
+			check(strstr(panic_message, "C3P v=1/0000/0000/") != NULL,
+			    "the clean rung lost the cleared pre-CMD3 window");
+			check(strstr(panic_message, "rv=1 rsp=") != NULL,
+			    "the clean rung lost the pre-CMD3 response");
+			check(sdhci_read_count[GTA4L_EMMC_REG_RESPONSE] == 15u,
+			    "the clean rung changed the exact RESPONSE read "
+			    "count");
+			check(sdhci_read_count[GTA4L_EMMC_REG_NORMAL_INT_STATUS] ==
+			    11u,
+			    "the clean rung changed the exact NORMAL status "
+			    "read count");
+			check(sdhci_read_count[GTA4L_EMMC_REG_ERROR_INT_STATUS] ==
+			    18u,
+			    "the clean rung changed the exact ERROR status "
+			    "read count");
+			check(strstr(panic_message, "TRC n=1 ov=0") != NULL,
+			    "the clean rung did not store exactly the "
+			    "completion sample");
 			check(strstr(panic_message,
-			    "GTA4L-EMMC H9 REPORT: rc=-7 stop=12") != NULL,
-			    "the later H9 failure does not name stop 12");
+			    "T00 S 0 0001 0000 00000900 1 ") != NULL,
+			    "the clean rung lost the scheduled completion "
+			    "sample");
 			check(strstr(panic_message,
-			    "retry=1/1 att=2") != NULL,
-			    "the later H9 failure lost the retry state");
+			    "T19 C 0 0001 0000 00000900 1 ") != NULL,
+			    "the clean rung lost the terminal completion");
+		} else if (strcmp(scenario, "probe-h9-timeout") == 0) {
+			check(cmd3_count == 1u,
+			    "the timeout rung issued more than one CMD3");
 			check(strstr(panic_message,
-			    "A2 n=2 rc=0 r1=0") != NULL,
-			    "the later H9 failure lost the clean duplicate");
+			    "REPORT ver=1 rc=-7 stop=14 sub=1 att=1 tr=-7")
+			    != NULL,
+			    "the timeout rung did not report the CMD3 "
+			    "transport timeout");
+			check(strstr(panic_message, "TRC n=19 ov=0") != NULL,
+			    "the timeout rung did not fill every scheduled "
+			    "sample");
 			check(strstr(panic_message,
-			    "H9 FAIL fail=1/9/65536/00000909/") != NULL,
-			    "the later H9 failure did not name the CMD9 "
-			    "timeout");
-			check(cmd_count == 6u,
-			    "the later H9 failure did not stop at CMD9");
-			check(last_index == GTA4L_EMMC_CMD9,
-			    "the later H9 failure stopped after an unexpected "
-			    "command");
-		}
-		if (strcmp(scenario, "probe-h9-mismatch") == 0) {
+			    "T00 S 0 0000 0000 00000900 1 ") != NULL,
+			    "the timeout rung lost the first sample");
 			check(strstr(panic_message,
-			    "GTA4L-EMMC H9 REPORT: rc=-15 stop=13") != NULL,
-			    "the H9 R1 mismatch does not name stop 13");
+			    "T18 S 99999 0000 0000 00000900 1 ") != NULL,
+			    "the timeout rung lost the last scheduled "
+			    "sample");
 			check(strstr(panic_message,
-			    "retry=1/0 att=2") != NULL,
-			    "the H9 R1 mismatch lost the retry state");
+			    "T19 T 100000 0000 0000 00000900 1 ") != NULL,
+			    "the timeout rung lost the terminal timeout "
+			    "sample");
+		} else if (strcmp(scenario, "probe-h9-status") == 0) {
+			check(cmd3_count == 1u,
+			    "the status rung issued more than one CMD3");
 			check(strstr(panic_message,
-			    "A2 n=2 rc=-15 r1=1") != NULL,
-			    "the H9 R1 mismatch lost the status record");
+			    "REPORT ver=1 rc=-15 stop=14 sub=1 att=1 tr=0 "
+			    "r1=1") != NULL,
+			    "the status rung did not report the R1 card "
+			    "status failure");
 			check(strstr(panic_message,
-			    "H9 FAIL fail=0/0/0/00000000/0000/0000/"
-			    "00000000/0") != NULL,
-			    "the H9 R1 mismatch invented a transport failure");
-			check(cmd_count == 5u,
-			    "the H9 R1 mismatch issued more than two CMD3 "
-			    "attempts");
-			check(last_index == GTA4L_EMMC_CMD3,
-			    "the H9 R1 mismatch stopped after an unexpected "
-			    "command");
+			    "T00 S 0 0001 0000 00000980 1 ") != NULL,
+			    "the status rung lost the R1 sample");
+			check(strstr(panic_message,
+			    "T19 C 0 0001 0000 00000980 1 ") != NULL,
+			    "the status rung lost the terminal R1 sample");
+		} else if (strcmp(scenario, "probe-h9-error") == 0) {
+			check(cmd3_count == 1u,
+			    "the error rung issued more than one CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-8 stop=14 sub=1 att=1 tr=-8")
+			    != NULL,
+			    "the error rung did not report the command "
+			    "CRC failure");
+			check(strstr(panic_message, "TRC n=0 ov=0") != NULL,
+			    "the error rung invented a poll sample");
+			check(strstr(panic_message,
+			    "T19 E 0 8000 0002 ") != NULL,
+			    "the error rung lost the terminal error");
+		} else if (strcmp(scenario, "probe-h9-later-fail") == 0) {
+			check(cmd3_count == 1u,
+			    "the later-failure rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-7 stop=15 sub=1 att=1 tr=0")
+			    != NULL,
+			    "the later-failure rung did not report stop 15");
+			check(strstr(panic_message,
+			    "T00 S 0 0001 0000 00000900 1 ") != NULL,
+			    "the later-failure rung lost the preserved CMD3 "
+			    "trace");
+			check(strstr(panic_message,
+			    "T19 C 0 0001 0000 00000900 1 ") != NULL,
+			    "the later-failure rung lost the preserved CMD3 "
+			    "completion");
+		} else if (strcmp(scenario, "probe-h9-cc-between") == 0) {
+			check(cmd3_count == 1u,
+			    "the between-sample rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message, "TRC n=3 ov=0") != NULL,
+			    "the between-sample rung stored a sample at the "
+			    "unscheduled iteration");
+			check(strstr(panic_message, "T02 S 2 0000 0000 ") != NULL,
+			    "the between-sample rung lost the last sample "
+			    "before completion");
+			check(strstr(panic_message,
+			    "T03 ? 0 0000 0000 00000000 0 "
+			    "0000000000000000") != NULL,
+			    "the between-sample rung invented a valid unused "
+			    "slot");
+			check(strstr(panic_message,
+			    "T19 C 3 0001 0000 00000900 1 ") != NULL,
+			    "the between-sample rung lost the completion "
+			    "iteration");
+		} else if (strcmp(scenario, "probe-h9-cc-at-sample") == 0) {
+			check(cmd3_count == 1u,
+			    "the at-sample rung issued more than one CMD3");
+			check(strstr(panic_message, "TRC n=4 ov=0") != NULL,
+			    "the at-sample rung did not store the scheduled "
+			    "completion sample");
+			check(strstr(panic_message,
+			    "T03 S 4 0001 0000 00000900 1 ") != NULL,
+			    "the at-sample rung lost the scheduled "
+			    "completion sample");
+			check(strstr(panic_message,
+			    "T19 C 4 0001 0000 00000900 1 ") != NULL,
+			    "the at-sample rung lost the terminal "
+			    "completion");
+		} else if (strcmp(scenario, "probe-h9-update-no-cc") == 0) {
+			check(cmd3_count == 1u,
+			    "the update-without-CC rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-7 stop=14") != NULL,
+			    "a response update without CC changed the "
+			    "timeout verdict");
+			check(strstr(panic_message, "TRC n=19 ov=0") != NULL,
+			    "the update-without-CC rung lost samples");
+			check(strstr(panic_message,
+			    "T02 S 2 0000 0000 00000900 1 ") != NULL,
+			    "the update-without-CC rung lost the sample "
+			    "before the update");
+			check(strstr(panic_message,
+			    "T03 S 4 0000 0000 00000500 1 ") != NULL,
+			    "the update-without-CC rung lost the updated "
+			    "sample");
+			check(strstr(panic_message,
+			    "T19 T 100000 0000 0000 00000500 1 ") != NULL,
+			    "the update-without-CC rung lost the terminal "
+			    "value");
+		} else if (strcmp(scenario, "probe-h9-no-update") == 0) {
+			check(cmd3_count == 1u,
+			    "the no-update rung issued more than one CMD3");
+			check(strstr(panic_message, "TRC n=19 ov=0") != NULL,
+			    "the no-update rung lost samples");
+			check(strstr(panic_message,
+			    "T03 S 4 0000 0000 00000900 1 ") != NULL,
+			    "the no-update rung changed the retained value");
+			check(strstr(panic_message,
+			    "T19 T 100000 0000 0000 00000900 1 ") != NULL,
+			    "the no-update rung changed the terminal value");
+		} else if (strcmp(scenario,
+		    "probe-h9-preexisting-r1") == 0) {
+			check(cmd3_count == 1u,
+			    "the preexisting-R1 rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-15 stop=14 sub=1 att=1 tr=0 "
+			    "r1=1") != NULL,
+			    "a retained R1 error was not reported as a card "
+			    "status failure");
+			check(strstr(panic_message,
+			    "T00 S 0 0001 0000 fdf9a080 1 ") != NULL,
+			    "the preexisting-R1 rung lost the retained "
+			    "response");
+			check(strstr(panic_message,
+			    "T19 C 0 0001 0000 fdf9a080 1 ") != NULL,
+			    "the preexisting-R1 rung lost the terminal "
+			    "response");
+		} else if (strcmp(scenario, "probe-h9-identical") == 0) {
+			check(cmd3_count == 1u,
+			    "the identical-response rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message, "TRC n=3 ov=0") != NULL,
+			    "the identical-response rung stored an invented "
+			    "change");
+			check(strstr(panic_message,
+			    "T02 S 2 0001 0000 00000900 1 ") != NULL,
+			    "the identical-response rung lost the "
+			    "indistinguishable sample");
+			check(strstr(panic_message,
+			    "T19 C 2 0001 0000 00000900 1 ") != NULL,
+			    "the identical-response rung lost the terminal "
+			    "sample");
+		} else if (strcmp(scenario, "probe-h9-multi-change") == 0) {
+			check(cmd3_count == 1u,
+			    "the multi-change rung issued more than one CMD3");
+			check(strstr(panic_message, "TRC n=19 ov=0") != NULL,
+			    "the multi-change rung lost samples");
+			check(strstr(panic_message,
+			    "T03 S 4 0000 0000 22222222 1 ") != NULL,
+			    "the multi-change rung lost the final value at "
+			    "the next sample");
+			check(strstr(panic_message,
+			    "T19 T 100000 0000 0000 22222222 1 ") != NULL,
+			    "the multi-change rung lost the terminal value");
+			check(strstr(panic_message, "11111111") == NULL,
+			    "the multi-change rung reported an intermediate "
+			    "value that was never sampled");
+		} else if (strcmp(scenario, "probe-h9-last-sample") == 0) {
+			check(cmd3_count == 1u,
+			    "the last-sample rung issued more than one CMD3");
+			check(strstr(panic_message,
+			    "T18 S 99999 0000 0000 0000beef 1 ") != NULL,
+			    "the last-sample rung lost the change at the "
+			    "last scheduled sample");
+			check(strstr(panic_message,
+			    "T19 T 100000 0000 0000 0000beef 1 ") != NULL,
+			    "the last-sample rung lost the terminal value");
+		} else if (strcmp(scenario, "probe-h9-terminal-only") == 0) {
+			check(cmd3_count == 1u,
+			    "the terminal-only rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message,
+			    "T18 S 99999 0000 0000 00000900 1 ") != NULL,
+			    "the terminal-only rung changed the last "
+			    "scheduled sample");
+			check(strstr(panic_message,
+			    "T19 T 100000 0000 0000 0000cafe 1 ") != NULL,
+			    "the terminal-only rung lost the terminal-only "
+			    "change");
+		} else if (strcmp(scenario, "probe-h9-late-cc") == 0) {
+			check(cmd3_count == 1u,
+			    "the late-CC rung issued a second CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-7 stop=14") != NULL,
+			    "a late terminal CC changed the timeout verdict");
+			check(strstr(panic_message,
+			    "T19 T 100000 0001 0000 00000900 1 ") != NULL,
+			    "the late-CC rung lost the fresh terminal CC "
+			    "sample");
+		} else if (strcmp(scenario, "probe-h9-index-error") == 0) {
+			check(cmd3_count == 1u,
+			    "the index-error rung issued more than one CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-9 stop=14 sub=1 att=1 tr=-9")
+			    != NULL,
+			    "the index-error rung did not report the command "
+			    "index failure");
+			check(strstr(panic_message,
+			    "T19 E 0 8000 0008 ") != NULL,
+			    "the index-error rung lost the terminal error");
+		} else if (strcmp(scenario, "probe-h9-simultaneous") == 0) {
+			check(cmd3_count == 1u,
+			    "the simultaneous rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-8 stop=14") != NULL,
+			    "a simultaneous CC and error did not keep the "
+			    "error verdict");
+			check(strstr(panic_message,
+			    "T19 E 0 0001 0002 00000900 1 ") != NULL,
+			    "the simultaneous rung lost the error sample");
+		} else if (strcmp(scenario, "probe-h9-error-in-sample") == 0) {
+			check(cmd3_count == 1u,
+			    "the in-sample-error rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-8 stop=14") != NULL,
+			    "the in-sample error was not reported");
+			check(strstr(panic_message, "TRC n=2 ov=0") != NULL,
+			    "the in-sample-error rung invented samples");
+			check(strstr(panic_message,
+			    "T01 S 1 0000 0000 00000900 1 ") != NULL,
+			    "the in-sample-error rung lost the sample whose "
+			    "read raised the error");
+			check(strstr(panic_message,
+			    "T19 E 2 0000 0002 00000900 1 ") != NULL,
+			    "the in-sample error was not caught at the next "
+			    "existing error boundary");
+		} else if (strcmp(scenario,
+		    "probe-h9-error-after-read") == 0) {
+			check(cmd3_count == 1u,
+			    "the after-read-error rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-8 stop=14") != NULL,
+			    "the after-read error was not reported");
+			check(strstr(panic_message,
+			    "T00 S 0 0001 0000 00000900 1 ") != NULL,
+			    "the after-read-error rung lost the completion "
+			    "sample");
+			check(strstr(panic_message,
+			    "T19 E 0 0001 0002 00000900 1 ") != NULL,
+			    "the final pre-clear check did not catch the "
+			    "error raised during the successful response "
+			    "read");
+		} else if (strcmp(scenario, "probe-h9-inhibit") == 0) {
+			check(cmd3_count == 0u,
+			    "the inhibit rung submitted a CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=-17 stop=14 sub=0 att=0")
+			    != NULL,
+			    "the inhibit rung invented a CMD3 submission");
+			check(strstr(panic_message, "TRC n=0 ov=0") != NULL,
+			    "the inhibit rung invented a timeline sample");
+			check(strstr(panic_message, "T00 ? ") != NULL,
+			    "the inhibit rung stored a scheduled sample");
+			check(strstr(panic_message, "T19 ? ") != NULL,
+			    "the inhibit rung stored a terminal sample");
+		} else if (strcmp(scenario, "probe-h9-counter-stall") == 0) {
+			check(cmd3_count == 1u,
+			    "the counter-stall rung issued more than one "
+			    "CMD3");
+			check(strstr(panic_message,
+			    "REPORT ver=1 rc=0 stop=0") != NULL,
+			    "the counter-stall rung did not complete");
+			check(strstr(panic_message, "TRC n=3 ov=0") != NULL,
+			    "the counter-stall rung lost samples");
+			check(strstr(panic_message,
+			    "T02 S 2 0001 0000 00000900 1 "
+			    "0000000000000000") != NULL,
+			    "the stalled counter produced a non-zero "
+			    "timestamp");
+			check(strstr(panic_message,
+			    "T19 C 2 0001 0000 00000900 1 "
+			    "0000000000000000") != NULL,
+			    "the stalled counter produced a non-zero "
+			    "terminal timestamp");
 		}
 	} else if (strcmp(scenario, "cmd3-identify") == 0) {
 		check(panicked == 1, "the identification success did not report");
@@ -4780,7 +5598,7 @@ main(int argc, char **argv)
 		    "GTA4L-EMMC PROBE REPORT: rc=0 mci=10000072 rca=1 "
 		    "cap=61071360 rev=8 bw=0") != NULL,
 		    "the MD probe report does not carry the device capacity");
-		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
+		check(strstr(panic_message, "step=19 log=55 mb=1") != NULL,
 		    "the MD probe report does not name the MD step and log "
 		    "counts");
 		sim_expected_blocks_label(expected, sizeof(expected),
@@ -4791,6 +5609,11 @@ main(int argc, char **argv)
 		    "the MD probe report lost the matching comparison");
 		check(strstr(panic_message, "mbsame=0") == NULL,
 		    "the MD probe report reported a mismatch for equal sums");
+		check(strstr(panic_message,
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/21/0/0/0003/0000/00000900 rec=0/1/0") != NULL,
+		    "the MD report lost the short, long or recovery "
+		    "qualification");
 		check(strstr(panic_message, "GTA4L-EMMC PROBE BLOCKS") == NULL,
 		    "the MD probe report kept the CMD17 sum line");
 		check(bad_command_format == 0,
@@ -4803,57 +5626,242 @@ main(int argc, char **argv)
 		    "the MD probe used the wrong CMD18/CMD12 form");
 		check(auto_cmd12_seen == 0,
 		    "the MD probe left AUTO_CMD12 enabled");
-		check(mb_stop_count == 1u,
-		    "the MD probe did not issue exactly one explicit stop");
-		check(cmd_count == 35u,
-		    "the MD probe did not issue CMD18 and one CMD12");
+		check(mb_ready_violations == 0u,
+		    "the MD probe drained the FIFO without live readiness");
+		check(mb_stop_count == 2u,
+		    "the MD probe did not issue one stop per CMD18 request");
+		check(cmd_count == 39u,
+		    "the MD probe did not issue both CMD18 requests, both "
+		    "stops and both recovery reads");
 		check(strlen(panic_message) < 2048u,
 		    "the MD probe report exceeds the 2048-byte panic budget");
 	} else if (strcmp(scenario, "probe-md-mismatch") == 0) {
-		char expected[512];
-
 		check(panicked == 1, "the MD mismatch probe did not report");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC PROBE REPORT: rc=0") != NULL,
-		    "a content mismatch was reported as a hardware failure");
-		check(strstr(panic_message, "mbsame=0 mbdiv=7") != NULL,
-		    "the MD mismatch report does not name the first differing "
-		    "LBA");
-		sim_expected_blocks_label(expected, sizeof(expected),
-		    "MBLOCKS", 1);
-		check(strstr(panic_message, expected) != NULL,
-		    "the MD mismatch report lost the CMD18 sums");
-		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
-		    "the MD mismatch report does not name the MD step and log "
-		    "counts");
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-21 stage=2 step=19 "
+		    "mb=20 mbc=21 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/20/7/0/0003/0000/00000900 "
+		    "rec=0/0/0/0/0/0/0/0") != NULL,
+		    "the long mismatch did not report the exact counts, first "
+		    "divergence and not-run recovery state");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a long-request content mismatch still emitted the success "
+		    "report");
+		check(mb_stop_count == 2u,
+		    "the long mismatch probe did not issue both stops");
+		check(cmd_count == 37u,
+		    "the long mismatch probe issued a recovery read");
+	} else if (strcmp(scenario, "probe-md-final-mismatch") == 0) {
+		check(panicked == 1, "the final-sector mismatch probe did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-21 stage=2 step=19 "
+		    "mb=20 mbc=21 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/20/22/0/0003/0000/00000900 "
+		    "rec=0/0/0/0/0/0/0/0") != NULL,
+		    "the final-sector mismatch did not name the last array "
+		    "LBA or the validated count");
+		check(cmd_count == 37u,
+		    "the final-sector mismatch probe issued a recovery read");
+	} else if (strcmp(scenario, "probe-md-swap") == 0) {
+		check(panicked == 1, "the reordered MD probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-21 stage=2 step=19 "
+		    "mb=20 mbc=21 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/19/7/0/0003/0000/00000900 "
+		    "rec=0/0/0/0/0/0/0/0") != NULL,
+		    "the reordered transfer did not report both differing "
+		    "sectors or the first divergence");
+		check(cmd_count == 37u,
+		    "the reordered probe issued a recovery read");
+	} else if (strcmp(scenario, "probe-md-sum-preserve") == 0) {
+		check(panicked == 1, "the checksum-preserving probe did not "
+		    "report");
+		check(sim_mb_block_sum(7u) == sim_block_sum(7u),
+		    "the checksum-preserving corruption changed the aggregate "
+		    "sum");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-21 stage=2 step=19 "
+		    "mb=20 mbc=21 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/20/7/0/0003/0000/00000900 "
+		    "rec=0/0/0/0/0/0/0/0") != NULL,
+		    "a matching aggregate checksum turned a byte mismatch into "
+		    "success");
+		check(cmd_count == 37u,
+		    "the checksum-preserving probe issued a recovery read");
+	} else if (strcmp(scenario, "probe-md-short-mismatch") == 0) {
+		check(panicked == 1, "the short mismatch probe did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-21 stage=1 step=19 "
+		    "mb=1 mbc=2 att=10 "
+		    "s=0/2/2/1/2/0/0003/0000/00000900 "
+		    "l=0/0/0/0/0/0/0000/0000/00000000 "
+		    "rec=0/0/0/0/0/0/0/0") != NULL,
+		    "the short mismatch did not report the validated count, "
+		    "first divergence or not-run long request");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a short-request content mismatch still emitted the "
+		    "success report");
 		check(mb_stop_count == 1u,
-		    "the MD mismatch probe did not issue exactly one stop");
+		    "the short mismatch probe issued more than one stop");
 		check(cmd_count == 35u,
-		    "the MD mismatch probe did not issue CMD18 and one CMD12");
+		    "the short mismatch probe issued a long CMD18 or recovery "
+		    "read");
+	} else if (strcmp(scenario, "probe-md-short-second-mismatch") == 0) {
+		check(panicked == 1, "the second-sector short mismatch probe "
+		    "did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-21 stage=1 step=19 "
+		    "mb=1 mbc=2 att=10 "
+		    "s=0/2/2/1/3/0/0003/0000/00000900 "
+		    "l=0/0/0/0/0/0/0000/0000/00000000") != NULL,
+		    "the second short sector did not validate the first sector "
+		    "or name the second divergence");
+		check(cmd_count == 35u,
+		    "the second-sector short mismatch issued a long CMD18 or "
+		    "recovery read");
+	} else if (strcmp(scenario, "probe-md-accept-seam") == 0) {
+		check(panicked == 1, "the acceptance seam did not report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE ACCEPT SEAM: PASS") != NULL,
+		    "the acceptance seam rejected a qualifying state or "
+		    "accepted an incomplete one");
+		check(sdhci_accesses == 0ul,
+		    "the acceptance seam touched SDHCI");
+		check(gcc_accesses == 0ul,
+		    "the acceptance seam touched GCC");
+	} else if (strcmp(scenario, "probe-md-mid-stall") == 0) {
+		check(panicked == 1, "the mid-transfer stall probe did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE REPORT: rc=0") != NULL,
+		    "a readiness stall was reported as a failure");
+		check(strstr(panic_message,
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/21/0/0/0003/0000/00000900 rec=0/1/0") != NULL,
+		    "the stall report lost the qualified contents");
+		check(mb_ready_violations == 0u,
+		    "the probe drained the FIFO while BRR was latched but "
+		    "live readiness was false");
+		check(mb_stop_count == 2u,
+		    "the stall probe did not issue both stops");
+	} else if (strcmp(scenario, "probe-md-r1-error") == 0) {
+		check(panicked == 1, "an R1-error CMD18 did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-15 stage=1 step=19 "
+		    "mb=1 mbc=2 att=10 "
+		    "s=-15/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/0/0/0/0/0/0000/0000/00000000") != NULL,
+		    "the R1-error report lost the card-status result or the "
+		    "explicit stop");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "an R1-error CMD18 still emitted the success report");
+		check(mb_stop_count == 1u,
+		    "the R1-error transfer was not stopped explicitly");
+		check(cmd_count == 35u,
+		    "the R1-error sequence did not stop before the long "
+		    "request");
+	} else if (strcmp(scenario, "probe-md-recovery-fail") == 0) {
+		check(panicked == 1, "a failed recovery read did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-12 stage=3 step=19 "
+		    "mb=20 mbc=21 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/21/0/0/0003/0000/00000900 "
+		    "rec=-12/-12/0/1/0/0/0/0") != NULL,
+		    "the failed block-0 recovery read lost its transport "
+		    "result or not-run LBA-2 state");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a failed recovery read still emitted the success report");
+		check(mb_stop_count == 2u,
+		    "the recovery-failure sequence did not stop both CMD18 "
+		    "requests");
+		check(cmd_count == 38u,
+		    "the recovery-failure sequence did not stop before the "
+		    "LBA-2 recovery read");
+	} else if (strcmp(scenario,
+	    "probe-md-recovery-block0-mismatch") == 0) {
+		check(panicked == 1, "a block-0 recovery mismatch did not "
+		    "panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-21 stage=3 step=19 "
+		    "mb=20 mbc=21 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/21/0/0/0003/0000/00000900 "
+		    "rec=-21/0/0/1/1/0/0/1") != NULL,
+		    "the block-0 recovery mismatch lost its LBA-0 divergence "
+		    "flag or the not-run LBA-2 state");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a block-0 recovery mismatch still emitted the success "
+		    "report");
+		check(cmd_count == 38u,
+		    "the block-0 mismatch sequence issued the LBA-2 recovery "
+		    "read");
+	} else if (strcmp(scenario, "probe-md-recovery-mismatch") == 0) {
+		check(panicked == 1, "the recovery mismatch probe did not "
+		    "report");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-21 stage=4 step=19 "
+		    "mb=20 mbc=21 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/21/0/0/0003/0000/00000900 "
+		    "rec=-21/0/0/3/3/0/2/1") != NULL,
+		    "the report does not name the LBA-2 recovery divergence "
+		    "or the completed recovery comparisons");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "a recovery mismatch still emitted the success report");
+		check(mb_stop_count == 2u,
+		    "the recovery mismatch probe did not issue both stops");
+		check(cmd_count == 39u,
+		    "the recovery mismatch sequence did not issue both "
+		    "recovery reads");
+	} else if (strcmp(scenario, "probe-md-recovery-lba2-fail") == 0) {
+		check(panicked == 1, "the LBA-2 recovery failure did not "
+		    "panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-12 stage=4 step=19 "
+		    "mb=20 mbc=21 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/21/0/0/0003/0000/00000900 "
+		    "rec=-12/0/-12/3/1/0/0/0") != NULL,
+		    "the LBA-2 recovery failure lost its transport result or "
+		    "the block-0 comparison state");
+		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
+		    "an LBA-2 recovery failure still emitted the success "
+		    "report");
+		check(cmd_count == 39u,
+		    "the LBA-2 recovery failure did not issue both recovery "
+		    "reads");
 	} else if (strcmp(scenario, "probe-md-mid-fail") == 0) {
 		check(panicked == 1, "a mid-CMD18 data error did not panic");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-11 "
-		    "step=19 mb=3 drain=0/0/0/0 "
-		    "stop=0/1/1/0003/0000/00000000/00000c1b/"
-		    "00000000 fail=1/18/2/0000123a/0010/0001/00000000/19")
-		    != NULL,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-11 stage=2 step=19 "
+		    "mb=3 mbc=3 att=11 "
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=-11/21/3/3/0/0/0003/0000/00000900 "
+		    "rec=0/0/0/0/0/0/0/0 "
+		    "fail=1/18/2/0000123a/0010/0001/00000000/19") != NULL,
 		    "the mid-CMD18 failure report lost the block ordinal, the "
 		    "stop result or the terminal record");
 		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
 		    "a failed CMD18 still emitted the success report");
-		check(mb_stop_count == 1u,
+		check(mb_stop_count == 2u,
 		    "the failed CMD18 transfer was not stopped explicitly");
-		check(cmd_count == 35u,
+		check(cmd_count == 37u,
 		    "the mid-CMD18 failure did not reach the explicit stop");
 	} else if (strcmp(scenario, "probe-md-stop-no-tc") == 0) {
 		check(panicked == 1, "a CMD12 timeout did not panic");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-7 "
-		    "step=19 mb=20 drain=0/0/0/0 "
-		    "stop=-7/1/1/0001/0000/00000000/00000c1b/"
-		    "00000000 fail=1/12/0/00000c1b/0000/0001/00000000/19")
-		    != NULL,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-7 stage=1 step=19 "
+		    "mb=1 mbc=2 att=10 "
+		    "s=-7/2/2/2/0/-7/0001/0000/00000900 "
+		    "l=0/0/0/0/0/0/0000/0000/00000000 "
+		    "rec=0/0/0/0/0/0/0/0 "
+		    "fail=1/12/0/00000c1b/0000/0001/00000000/19") != NULL,
 		    "the CMD12 timeout report lost the stop capture or the "
 		    "terminal record");
 		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
@@ -4869,20 +5877,25 @@ main(int argc, char **argv)
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE REPORT: rc=0") != NULL,
 		    "a drain-resolved transfer was reported as a failure");
-		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
+		check(strstr(panic_message, "step=19 log=55 mb=1") != NULL,
 		    "the drained MD report does not name the MD step and log "
 		    "counts");
 		sim_expected_blocks_label(expected, sizeof(expected),
 		    "MBLOCKS", 1);
 		check(strstr(panic_message, expected) != NULL,
 		    "the drained MD report lost the CMD18 sums");
+		check(strstr(panic_message,
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/21/0/0/0003/0000/00000900 rec=0/1/0") != NULL,
+		    "the drained MD report lost the qualified contents");
 		check(strstr(panic_message, "mbsame=1 drain=1/1/0/121") != NULL,
 		    "the drained MD report lost the completion-only drain "
 		    "resolution");
-		check(mb_stop_count == 1u,
-		    "the drained MD probe did not issue exactly one stop");
-		check(cmd_count == 35u,
-		    "the drained MD probe did not issue CMD18 and one CMD12");
+		check(mb_stop_count == 2u,
+		    "the drained MD probe did not issue both stops");
+		check(cmd_count == 39u,
+		    "the drained MD probe did not complete both CMD18 "
+		    "requests");
 	} else if (strcmp(scenario, "probe-md-drain-brr") == 0) {
 		char expected[512];
 
@@ -4890,29 +5903,35 @@ main(int argc, char **argv)
 		check(strstr(panic_message,
 		    "GTA4L-EMMC PROBE REPORT: rc=0") != NULL,
 		    "a pending-BRR drain was reported as a failure");
-		check(strstr(panic_message, "step=19 log=51 mb=1") != NULL,
+		check(strstr(panic_message, "step=19 log=55 mb=1") != NULL,
 		    "the late-BRR MD report does not name the MD step and log "
 		    "counts");
 		sim_expected_blocks_label(expected, sizeof(expected),
 		    "MBLOCKS", 1);
 		check(strstr(panic_message, expected) != NULL,
 		    "the late-BRR MD report lost the CMD18 sums");
+		check(strstr(panic_message,
+		    "s=0/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/21/21/21/0/0/0003/0000/00000900 rec=0/1/0") != NULL,
+		    "the late-BRR MD report lost the qualified contents");
 		check(strstr(panic_message, "mbsame=1 drain=1/1/1/121") != NULL,
 		    "the late-BRR MD report lost the block-drain resolution");
-		check(mb_stop_count == 1u,
-		    "the late-BRR MD probe did not issue exactly one stop");
-		check(cmd_count == 35u,
-		    "the late-BRR MD probe did not issue CMD18 and one CMD12");
+		check(mb_stop_count == 2u,
+		    "the late-BRR MD probe did not issue both stops");
+		check(cmd_count == 39u,
+		    "the late-BRR MD probe did not complete both CMD18 "
+		    "requests");
 	} else if (strcmp(scenario, "probe-md-drain-error") == 0) {
 		check(panicked == 1, "a drain-window data error did not panic");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-12 "
-		    "step=19 mb=20 drain=1/0/0/101 "
-		    "stop=0/1/1/0003/0000/00000000/00000c1b/"
-		    "00000000 fail=1/18/2/0000123a/0020/0001/00000000/19")
-		    != NULL,
-		    "the drain-window error report lost the drain outcome, the "
-		    "error result or the terminal record");
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-12 stage=1 step=19 "
+		    "mb=1 mbc=2 att=10 "
+		    "s=-12/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/0/0/0/0/0/0000/0000/00000000 "
+		    "rec=0/0/0/0/0/0/0/0 "
+		    "fail=1/18/2/0000123a/0020/0001/00000000/19") != NULL,
+		    "the drain-window error report lost the error result or "
+		    "the terminal record");
 		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
 		    "a drain-window error still emitted the success report");
 		check(mb_stop_count == 1u,
@@ -4922,12 +5941,13 @@ main(int argc, char **argv)
 	} else if (strcmp(scenario, "probe-md-stall-tc") == 0) {
 		check(panicked == 1, "an exhausted drain window did not panic");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC PROBE FAILED: mb read lba=2 n=21 rc=-11 "
-		    "step=19 mb=20 drain=1/0/0/50000 "
-		    "stop=0/1/1/0003/0000/00000000/00000c1b/"
-		    "00000000 fail=1/18/2/0000123a/0000/0001/00000000/19")
-		    != NULL,
-		    "the exhausted drain report lost the drain outcome or the "
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-11 stage=1 step=19 "
+		    "mb=1 mbc=2 att=10 "
+		    "s=-11/2/2/2/0/0/0003/0000/00000900 "
+		    "l=0/0/0/0/0/0/0000/0000/00000000 "
+		    "rec=0/0/0/0/0/0/0/0 "
+		    "fail=1/18/2/0000123a/0000/0001/00000000/19") != NULL,
+		    "the exhausted drain report lost the error result or the "
 		    "terminal record");
 		check(strstr(panic_message, "GTA4L-EMMC PROBE REPORT") == NULL,
 		    "an exhausted drain still emitted the success report");
@@ -7466,40 +8486,42 @@ main(int argc, char **argv)
 		check(panicked == 1, "the synthetic width H9 report did not "
 		    "panic");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC H9 REPORT: rc=-18 stop=13 mci=ffffffff "
-		    "rca=1 cap=4294967295 rev=255 bw=15 ocr=ffffffff "
-		    "ext=ffffffff hci=ff retry=1/0 att=2 step=24 log=99999")
-		    != NULL,
+		    "GTA4L-EMMC H9T REPORT ver=1 rc=-18 stop=13 sub=1 "
+		    "att=2 tr=-18 r1=4294967295 retry=1/1 step=24 log=99999 "
+		    "hz=1000000000") != NULL,
 		    "the synthetic width H9 report lost the widest header");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC H9 A1 n=1 rc=-18 r1=1 "
-		    "fail=1/63/4294967295/0000ffff/ffff/ffff/ffffffff/24 "
-		    "rsp=ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "GTA4L-EMMC H9T C3P v=1/ffff/ffff/ffffffff/ffff/ffff "
+		    "rv=1 rsp=ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
 		    "the synthetic width H9 report lost the widest first "
-		    "attempt");
+		    "pre-command and response capture");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC H9 A1P c3p=1/ffff/ffff/ffffffff/ffff/ffff "
-		    "c3t=1/63/ffff/ffffffff/1/"
-		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
-		    "the synthetic width H9 report lost the widest first "
-		    "pre-command and timeout capture");
-		check(strstr(panic_message,
-		    "GTA4L-EMMC H9 A1L c3l=1/63/ffff/ffff/100000/"
-		    "ffffffffffffffff/1000000000") != NULL,
+		    "GTA4L-EMMC H9T C3L v=1/63/ffff/ffff/100000/"
+		    "ffffffffffffffff") != NULL,
 		    "the synthetic width H9 report lost the widest first "
 		    "poll history");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC H9 A2 n=2 rc=-18 r1=1 "
-		    "fail=1/63/4294967295/0000ffff/ffff/ffff/ffffffff/24 "
-		    "rsp=ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
-		    "the synthetic width H9 report lost the widest second "
-		    "attempt");
+		    "GTA4L-EMMC H9T C3T v=1/63/ffff/ffffffff/1/"
+		    "ffffffff,ffffffff,ffffffff,ffffffff") != NULL,
+		    "the synthetic width H9 report lost the widest first "
+		    "timeout capture");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC H9 C cid=ffffffff,ffffffff,ffffffff,ffffffff "
-		    "cmd1=20/20") != NULL,
-		    "the synthetic width H9 report lost the widest card data");
+		    "GTA4L-EMMC H9T TRC n=19 ov=19 "
+		    "order=k,i,n,e,r0,v,ticks") != NULL,
+		    "the synthetic width H9 report lost the widest trace "
+		    "header");
 		check(strstr(panic_message,
-		    "GTA4L-EMMC H9 FAIL fail=1/63/4294967295/0000ffff/"
+		    "GTA4L-EMMC H9T T00 S 100000 ffff ffff ffffffff 1 "
+		    "ffffffffffffffff") != NULL,
+		    "the synthetic width H9 report lost the widest scheduled "
+		    "trace entry");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9T T19 T 100000 ffff ffff ffffffff 1 "
+		    "ffffffffffffffff") != NULL,
+		    "the synthetic width H9 report lost the widest terminal "
+		    "trace entry");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC H9T FAIL fail=1/63/4294967295/0000ffff/"
 		    "ffff/ffff/ffffffff/24") != NULL,
 		    "the synthetic width H9 report lost the widest failure "
 		    "record");
@@ -7720,6 +8742,24 @@ main(int argc, char **argv)
 		    "record");
 		check(report_budget_accepts(strlen(panic_message)),
 		    "the synthetic width H14 report does not fit the "
+		    "2048-byte panic buffer including the NUL");
+	} else if (strcmp(scenario, "report-width-md-failure") == 0) {
+		check(panicked == 1,
+		    "the synthetic width MD failure report did not panic");
+		check(strstr(panic_message,
+		    "GTA4L-EMMC PROBE FAILED: mb rc=-24 stage=5 step=19 "
+		    "mb=65534 mbc=65535 att=11 "
+		    "s=-24/65535/65535/65535/4294967295/-18/ffff/ffff/"
+		    "ffffffff "
+		    "l=-24/65535/65535/65535/4294967295/-18/ffff/ffff/"
+		    "ffffffff "
+		    "rec=-24/-18/-18/3/3/0/4294967295/1 "
+		    "fail=1/63/4294967295/0000ffff/ffff/ffff/ffffffff/15")
+		    != NULL,
+		    "the synthetic width MD failure report lost the widest "
+		    "request, recovery or terminal fields");
+		check(report_budget_accepts(strlen(panic_message)),
+		    "the synthetic width MD failure report does not fit the "
 		    "2048-byte panic buffer including the NUL");
 	} else if ((strcmp(scenario, "cmd7-tc-only") == 0) ||
 	    (strcmp(scenario, "cmd7-fresh-window") == 0) ||
@@ -8093,8 +9133,10 @@ main(int argc, char **argv)
 	if ((width_form == 0) &&
 	    (strcmp(scenario, "stage-off") != 0) &&
 	    (strcmp(scenario, "map-fail") != 0) &&
+	    (strcmp(scenario, "probe-h9-map-fail") != 0) &&
 	    (strcmp(scenario, "conflict") != 0) &&
 	    (strcmp(scenario, "probe-mb-bare-refuse") != 0) &&
+	    (strcmp(scenario, "probe-md-accept-seam") != 0) &&
 	    (strcmp(scenario, "branch-apps") != 0) &&
 	    (strcmp(scenario, "branch-ahb") != 0)) {
 		check(sdhci_read_count[GTA4L_EMMC_REG_HOST_VERSION] == 1u,

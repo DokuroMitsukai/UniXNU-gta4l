@@ -33,6 +33,7 @@ archives = [
   "build-platform-power.py",
   "build-gta4l-sdhci-snapshot.py",
   "build-gta4l-emmc-probe.py",
+  "build-gta4l-emmc-block.py",
 ]
 
 [device_tree]

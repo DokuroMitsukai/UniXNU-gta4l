@@ -241,6 +241,11 @@ gta4l_emmc_clear_failure(struct gta4l_emmc_host *host)
 	host->pre_cmd3_normal_enable = 0;
 	host->pre_cmd3_error_enable = 0;
 	host->pre_cmd3_capture_valid = 0;
+	host->pre_cmd3_response[0] = 0;
+	host->pre_cmd3_response[1] = 0;
+	host->pre_cmd3_response[2] = 0;
+	host->pre_cmd3_response[3] = 0;
+	host->pre_cmd3_response_valid = 0;
 	host->poll_first_normal = 0;
 	host->poll_last_normal = 0;
 	host->poll_iterations = 0;
@@ -299,6 +304,8 @@ gta4l_emmc_clear_failure(struct gta4l_emmc_host *host)
 	host->cmd7_term_argument = 0;
 	host->cmd7_term_capture_valid = 0;
 	host->multi_block = 0;
+	host->multi_completed = 0;
+	host->multi_data_result = 0;
 	host->multi_stop_result = 0;
 	host->multi_stop_normal = 0;
 	host->multi_stop_error = 0;
@@ -312,6 +319,100 @@ gta4l_emmc_clear_failure(struct gta4l_emmc_host *host)
 	host->multi_stop_valid = 0;
 	host->multi_stop_capture_valid = 0;
 }
+
+/* Reset the caller-opt-in CMD3 timeline state at the start of an
+ * identification attempt. Caller configuration (`cmd3_timeline_enabled`) is
+ * deliberately preserved. This is separate from gta4l_emmc_clear_failure() so
+ * a later command failure cannot discard the CMD3 evidence. */
+static void
+gta4l_emmc_cmd3_timeline_reset(struct gta4l_emmc_host *host)
+{
+	uint32_t index;
+
+	host->cmd3_submitted = 0;
+	host->cmd3_transport_result = GTA4L_EMMC_OK;
+	host->cmd3_r1_error = 0;
+	host->cmd3_timeline_count = 0;
+	host->cmd3_timeline_overflow = 0;
+	host->cmd3_timeline_cursor = 0;
+	for (index = 0; index < 4u; index++) {
+		host->pre_cmd3_response[index] = 0;
+	}
+	host->pre_cmd3_response_valid = 0;
+	for (index = 0; index < GTA4L_EMMC_CMD3_TIMELINE_ENTRIES; index++) {
+		host->cmd3_timeline[index].kind = GTA4L_EMMC_CMD3_TRACE_NONE;
+		host->cmd3_timeline[index].iteration = 0;
+		host->cmd3_timeline[index].normal = 0;
+		host->cmd3_timeline[index].error = 0;
+		host->cmd3_timeline[index].response0 = 0;
+		host->cmd3_timeline[index].valid = 0;
+		host->cmd3_timeline[index].ticks = 0;
+	}
+}
+
+/* Fixed zero-based poll iterations that store a RESPONSE0 sample. The array is
+ * static read-only storage: no allocation, no VLA and no formatting in the
+ * poll. A sample is stored only when its iteration is actually reached; the
+ * poll is never extended for a scheduled point. */
+static uint32_t
+gta4l_emmc_cmd3_schedule(uint32_t slot)
+{
+	static const uint32_t schedule[GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES] = {
+		0u, 1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u, 256u,
+		512u, 1024u, 2048u, 4096u, 8192u, 16384u, 32768u,
+		65536u, 99999u
+	};
+
+	return schedule[slot];
+}
+
+/* Store one bounded timeline observation. Scheduled entries fill the first 19
+ * slots in order; the reserved terminal slot (index 19) is never used for a
+ * scheduled entry. Overflow is explicit and saturating: once the scheduled
+ * area is full only the overflow counter advances, so the earliest entries and
+ * the terminal slot keep their contents. */
+static void
+gta4l_emmc_cmd3_timeline_store(struct gta4l_emmc_host *host, uint32_t kind,
+    uint32_t iteration, uint32_t normal, uint32_t error, uint32_t response0,
+    uint64_t ticks)
+{
+	struct gta4l_emmc_cmd3_timeline_entry *entry;
+	uint32_t slot;
+
+	if (kind == GTA4L_EMMC_CMD3_TRACE_SCHEDULED) {
+		if (host->cmd3_timeline_count >=
+		    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES) {
+			host->cmd3_timeline_overflow++;
+			return;
+		}
+		slot = host->cmd3_timeline_count;
+		host->cmd3_timeline_count = slot + 1u;
+	} else {
+		slot = GTA4L_EMMC_CMD3_TIMELINE_ENTRIES - 1u;
+	}
+	entry = &host->cmd3_timeline[slot];
+	entry->kind = kind;
+	entry->iteration = iteration;
+	entry->normal = normal;
+	entry->error = error;
+	entry->response0 = response0;
+	entry->valid = 1;
+	entry->ticks = ticks;
+}
+
+#ifdef GTA4L_EMMC_HOST_TEST
+/* Test-only seam: call the real bounded store without widening the production
+ * API. The host test compiles the core with GTA4L_EMMC_HOST_TEST; production
+ * and probe builds do not, so this symbol is absent from shipped archives. */
+void
+gta4l_emmc_cmd3_timeline_store_test(struct gta4l_emmc_host *host,
+    uint32_t kind, uint32_t iteration, uint32_t normal, uint32_t error,
+    uint32_t response0, uint64_t ticks)
+{
+	gta4l_emmc_cmd3_timeline_store(host, kind, iteration, normal, error,
+	    response0, ticks);
+}
+#endif
 
 /* Fold one CMD3 attempt into its H9 capture slot. The fail, pre-command,
  * timeout and poll fields are sequential register samples; the capture is a
@@ -340,6 +441,7 @@ gta4l_emmc_cmd3_snapshot(struct gta4l_emmc_host *host,
 	capture->pre_present = host->pre_cmd3_present;
 	capture->pre_normal_enable = host->pre_cmd3_normal_enable;
 	capture->pre_error_enable = host->pre_cmd3_error_enable;
+	capture->pre_response_valid = host->pre_cmd3_response_valid;
 	capture->timeout_valid = host->timeout_capture_valid;
 	capture->timeout_index = host->timeout_index;
 	capture->timeout_command = host->timeout_command;
@@ -355,6 +457,7 @@ gta4l_emmc_cmd3_snapshot(struct gta4l_emmc_host *host,
 		capture->fail_response[index] = host->fail_response[index];
 		capture->timeout_response[index] =
 		    host->timeout_response[index];
+		capture->pre_response[index] = host->pre_cmd3_response[index];
 		if ((result == GTA4L_EMMC_OK) ||
 		    (result == GTA4L_EMMC_ERR_CARD_STATUS)) {
 			capture->response[index] = response[index];
@@ -545,9 +648,12 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 	uint32_t iterations;
 	uint32_t step;
 	uint64_t poll_start;
+	uint64_t timeline_ticks;
+	uint32_t timeline_response0;
 	uint32_t busy_response;
 	int record_poll;
 	int record_cmd7;
+	int timeline;
 	int busy;
 	int cc_seen;
 	int tc_seen;
@@ -556,6 +662,9 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 	int result;
 
 	command = (uint16_t)((index << 8) | flags);
+	timeline = ((index == GTA4L_EMMC_CMD3) &&
+	    (host->cmd3_timeline_enabled != 0)) ? 1 : 0;
+	timeline_ticks = 0;
 	result = gta4l_emmc_wait_inhibit(host);
 	if (result != GTA4L_EMMC_OK) {
 		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
@@ -592,6 +701,14 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		    GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_ERROR_INT_ENABLE);
 		host->pre_cmd3_capture_valid = 1;
+		if (timeline != 0) {
+			/* Four sequential raw-window reads after the status,
+			 * enable and present samples above. Not an atomic
+			 * snapshot; RESPONSE0..3 are read in register order. */
+			gta4l_emmc_read_raw_response(host,
+			    host->pre_cmd3_response);
+			host->pre_cmd3_response_valid = 1;
+		}
 	}
 	if (index == GTA4L_EMMC_CMD7) {
 		/* Capture the state after the pre-command clear and before
@@ -620,6 +737,12 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_ARGUMENT, argument);
 	gta4l_emmc_barrier(host);
+	if (index == GTA4L_EMMC_CMD3) {
+		/* The COMMAND write is the submission boundary. An inhibit
+		 * failure above returns before this point, so a diagnostic
+		 * record can tell "never submitted" from "submitted". */
+		host->cmd3_submitted = 1;
+	}
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_COMMAND, command);
 	gta4l_emmc_barrier(host);
@@ -640,6 +763,9 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		host->poll_ticks = 0;
 		host->poll_index = index;
 		host->poll_capture_valid = 0;
+	}
+	if (timeline != 0) {
+		host->cmd3_timeline_cursor = 0;
 	}
 	if (record_cmd7 != 0) {
 		host->cmd7_poll_or_normal = 0;
@@ -688,6 +814,14 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 			}
 			gta4l_emmc_record_failure(host, index, argument,
 			    command, error, normal, present);
+			if (timeline != 0) {
+				timeline_ticks = gta4l_emmc_counter(host) -
+				    poll_start;
+				gta4l_emmc_cmd3_timeline_store(host,
+				    GTA4L_EMMC_CMD3_TRACE_TERM_ERROR, step,
+				    normal, error, host->fail_response[0],
+				    timeline_ticks);
+			}
 			gta4l_emmc_clear_interrupts(host);
 			return gta4l_emmc_map_error(error, 0);
 		}
@@ -702,6 +836,25 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		if (record_cmd7 != 0) {
 			gta4l_emmc_note_cmd7_poll(host, step, normal, error,
 			    poll_start);
+		}
+		if ((timeline != 0) &&
+		    (host->cmd3_timeline_cursor <
+		    GTA4L_EMMC_CMD3_TIMELINE_SCHEDULES) &&
+		    (step == gta4l_emmc_cmd3_schedule(
+		    host->cmd3_timeline_cursor))) {
+			/* One extra RESPONSE0 read at this scheduled point.
+			 * The existing ERROR/NORMAL values above stay the
+			 * completion decision; response content is never
+			 * consulted for CC or error. */
+			timeline_response0 = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE);
+			timeline_ticks = gta4l_emmc_counter(host) -
+			    poll_start;
+			gta4l_emmc_cmd3_timeline_store(host,
+			    GTA4L_EMMC_CMD3_TRACE_SCHEDULED, step, normal,
+			    error, timeline_response0, timeline_ticks);
+			host->cmd3_timeline_cursor++;
 		}
 		if (busy != 0) {
 			if ((normal & GTA4L_EMMC_INT_CC) != 0) {
@@ -769,6 +922,16 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		    (host->timeout_response[1] == host->fail_response[1]) &&
 		    (host->timeout_response[2] == host->fail_response[2]) &&
 		    (host->timeout_response[3] == host->fail_response[3]);
+		if (timeline != 0) {
+			/* The timeout verdict is kept even if this fresh
+			 * terminal NORMAL sample already shows late CC. */
+			timeline_ticks = gta4l_emmc_counter(host) -
+			    poll_start;
+			gta4l_emmc_cmd3_timeline_store(host,
+			    GTA4L_EMMC_CMD3_TRACE_TERM_TIMEOUT, step,
+			    normal, error, host->timeout_response[0],
+			    timeline_ticks);
+		}
 		gta4l_emmc_clear_interrupts(host);
 		return GTA4L_EMMC_ERR_CMD_TIMEOUT;
 	}
@@ -798,6 +961,12 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 				    GTA4L_EMMC_REG_RESPONSE);
 			}
 		}
+		if (timeline != 0) {
+			/* Sampled after the existing RESPONSE0 read, so it
+			 * bounds that read on one side. The final pre-clear
+			 * error check below still decides success. */
+			timeline_ticks = gta4l_emmc_counter(host) - poll_start;
+		}
 		if (index == GTA4L_EMMC_CMD1) {
 			/* Keep the raw window from this CMD1 before the status
 			 * clear can invalidate it. card_ready marks it valid only
@@ -817,6 +986,12 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 			    GTA4L_EMMC_REG_PRESENT_STATE);
 			gta4l_emmc_record_failure(host, index, argument,
 			    command, error, normal, present);
+			if (timeline != 0) {
+				gta4l_emmc_cmd3_timeline_store(host,
+				    GTA4L_EMMC_CMD3_TRACE_TERM_ERROR, step,
+				    normal, error, host->fail_response[0],
+				    gta4l_emmc_counter(host) - poll_start);
+			}
 			gta4l_emmc_clear_interrupts(host);
 			return gta4l_emmc_map_error(error, 0);
 		}
@@ -850,6 +1025,12 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 		}
 	}
 
+	if (timeline != 0) {
+		timeline_response0 = (response != 0) ? response[0] : 0u;
+		gta4l_emmc_cmd3_timeline_store(host,
+		    GTA4L_EMMC_CMD3_TRACE_TERM_SUCCESS, step, normal, error,
+		    timeline_response0, timeline_ticks);
+	}
 	gta4l_emmc_clear_interrupts(host);
 	return GTA4L_EMMC_OK;
 }
@@ -3107,11 +3288,19 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 {
 	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
 	uint32_t response[4];
+	int transport;
 	int result;
 
 	if (host == 0) {
 		return GTA4L_EMMC_ERR_ARG;
 	}
+	if ((host->cmd3_timeline_enabled != 0) &&
+	    (host->cmd3_retry_enabled != 0)) {
+		/* The no-retry timeline diagnostic must never replay CMD3.
+		 * Refuse the mixed configuration before any command. */
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	gta4l_emmc_cmd3_timeline_reset(host);
 	host->cmd3_retry_engaged = 0;
 	host->cmd3_retry_ok = 0;
 	host->cmd3_attempt_count = 0;
@@ -3155,12 +3344,29 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 	host->cid[3] = response[3];
 	host->last_step = GTA4L_EMMC_STEP_CMD2;
 
-	result = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD3,
+	transport = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD3,
 	    GTA4L_EMMC_DEFAULT_RCA << 16, GTA4L_EMMC_CMD_RESP_SHORT |
 	    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX,
 	    GTA4L_EMMC_CMD_TIMEOUT_US, response);
-	result = gta4l_emmc_cmd3_result(result, response);
-	if (host->cmd3_retry_enabled != 0) {
+	host->cmd3_transport_result = transport;
+	host->cmd3_r1_error = 0;
+	if ((host->cmd3_submitted != 0) &&
+	    (transport == GTA4L_EMMC_OK) &&
+	    ((response[0] & GTA4L_EMMC_R1_ERROR_MASK) != 0)) {
+		host->cmd3_r1_error = 1;
+	}
+	result = gta4l_emmc_cmd3_result(transport, response);
+	if (host->cmd3_timeline_enabled != 0) {
+		/* No-retry timeline diagnostic: keep the actual CMD3 record
+		 * even though the historical retry seam is disabled. An
+		 * inhibit failure never wrote COMMAND, so it records no
+		 * attempt and invents no response or timing samples. */
+		if (host->cmd3_submitted != 0) {
+			host->cmd3_attempt_count = 1;
+			gta4l_emmc_cmd3_snapshot(host, &host->cmd3_attempt[0],
+			    1u, result, response);
+		}
+	} else if (host->cmd3_retry_enabled != 0) {
 		host->cmd3_attempt_count = 1;
 		gta4l_emmc_cmd3_snapshot(host, &host->cmd3_attempt[0], 1u,
 		    result, response);
@@ -3485,6 +3691,8 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 		return GTA4L_EMMC_ERR_ARG;
 	}
 	host->multi_block = 0;
+	host->multi_completed = 0;
+	host->multi_data_result = 0;
 	host->multi_stop_result = 0;
 	host->multi_stop_valid = 0;
 	host->multi_stop_capture_valid = 0;
@@ -3531,6 +3739,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 			    GTA4L_EMMC_SPACE_SDHCI,
 			    GTA4L_EMMC_REG_PRESENT_STATE);
 			host->multi_block = (done < count) ? done : count - 1u;
+			host->multi_completed = done;
 			gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,
 			    (uint32_t)start_lba, command, error, normal,
 			    present);
@@ -3585,6 +3794,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 				    GTA4L_EMMC_REG_NORMAL_INT_STATUS,
 				    GTA4L_EMMC_INT_BRR);
 				done++;
+				host->multi_completed = done;
 			}
 		}
 		if ((command_done != 0) && (done == count) &&
@@ -3600,6 +3810,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 				    GTA4L_EMMC_SPACE_SDHCI,
 				    GTA4L_EMMC_REG_PRESENT_STATE);
 				host->multi_block = count - 1u;
+				host->multi_completed = count;
 				gta4l_emmc_record_failure(host,
 				    GTA4L_EMMC_CMD18, (uint32_t)start_lba,
 				    command, error, normal, present);
@@ -3607,6 +3818,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 				break;
 			}
 			host->multi_block = count - 1u;
+			host->multi_completed = count;
 			completed = 1;
 			break;
 		}
@@ -3635,6 +3847,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 				    GTA4L_EMMC_REG_PRESENT_STATE);
 				host->multi_block = (done < count) ?
 				    done : count - 1u;
+				host->multi_completed = done;
 				gta4l_emmc_record_failure(host,
 				    GTA4L_EMMC_CMD18, (uint32_t)start_lba,
 				    command, error, normal, present);
@@ -3693,6 +3906,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 					    GTA4L_EMMC_REG_NORMAL_INT_STATUS,
 					    GTA4L_EMMC_INT_BRR);
 					done++;
+					host->multi_completed = done;
 					host->multi_drain_blocks++;
 				}
 			}
@@ -3709,6 +3923,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 					    GTA4L_EMMC_SPACE_SDHCI,
 					    GTA4L_EMMC_REG_PRESENT_STATE);
 					host->multi_block = count - 1u;
+					host->multi_completed = count;
 					gta4l_emmc_record_failure(host,
 					    GTA4L_EMMC_CMD18,
 					    (uint32_t)start_lba, command,
@@ -3718,6 +3933,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 					break;
 				}
 				host->multi_block = count - 1u;
+				host->multi_completed = count;
 				completed = 1;
 				break;
 			}
@@ -3736,6 +3952,7 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_PRESENT_STATE);
 		host->multi_block = (done < count) ? done : count - 1u;
+		host->multi_completed = done;
 		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,
 		    (uint32_t)start_lba, command, error, normal, present);
 		result = GTA4L_EMMC_ERR_DATA_TIMEOUT;
@@ -3748,9 +3965,47 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 		result = GTA4L_EMMC_ERR_CARD_STATUS;
 	}
 
+	host->multi_data_result = result;
 	stop_result = gta4l_emmc_send_stop(host);
 	if ((result == GTA4L_EMMC_OK) && (stop_result != GTA4L_EMMC_OK)) {
 		result = stop_result;
 	}
 	return result;
+}
+
+int
+gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
+    uint32_t count, void *buffer, struct gta4l_emmc_multi_result *result)
+{
+	int rc;
+
+	if (result == 0) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	result->transport_result = GTA4L_EMMC_ERR_ARG;
+	result->requested_blocks = count;
+	result->completed_blocks = 0;
+	result->stop_attempted = 0;
+	result->stop_result = 0;
+	if ((host == 0) || (buffer == 0) || (host->initialized == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if ((count == 0u) || (count > 0xFFFFu)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if ((host->capacity_blocks == 0u) ||
+	    (start_lba >= (uint64_t)host->capacity_blocks) ||
+	    (start_lba > 0xFFFFFFFFu) ||
+	    ((uint64_t)count >
+	    ((uint64_t)host->capacity_blocks - start_lba))) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	rc = gta4l_emmc_read_multi(host, start_lba, count, buffer);
+	result->requested_blocks = count;
+	result->completed_blocks = host->multi_completed;
+	result->stop_attempted = (host->multi_stop_valid != 0) ? 1u : 0u;
+	result->stop_result = host->multi_stop_result;
+	result->transport_result = (result->stop_attempted != 0) ?
+	    host->multi_data_result : rc;
+	return rc;
 }
