@@ -301,7 +301,10 @@ and mapping. The N10.4 unaligned deblock qualification adds
 token plus `gta4l-emmc-deblock=1`; both require the hold fixture, and the
 checker refuses an orphan, duplicate or non-1 deblock token, a mismatched
 personality, and any deblock+partobs, deblock+partcmp or deblock+partread
-combination. The host-only N10.4 batch rebuilt no payload. The
+combination. The host-only N10.4 batch rebuilt no payload. N10.5 rebuilt the
+same `emmc-block-3-deblock` payload (`924c7bbd…`) against the deblock kernel
+with the same fixture and mapping, and N10.6 flashed that payload in the BOOT
+image `bacc933f…` and booted it once. The
 stage-2
 image built on
 2026-10-31 is

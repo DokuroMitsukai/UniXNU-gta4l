@@ -779,8 +779,21 @@ partition layout, payload policy and packaging.
   adapter/support and eight policy mutation controls, core 187/115, probe
   196/100, payload 34, packager 13, storage-ABI, evidence-count, fixture
   recipe, board and TOML checks).
-  N10.5 performed no flash, boot or device access; N10.6 remains separately
-  gated and initialization reliability remains `[U]`. See
+  N10.5 performed no flash, boot or device access. The separately approved
+  N10.6 BOOT-only flash of the N10.5 image `bacc933f…` and one owner-reported
+  cold boot then completed all eleven pinned unaligned reads (`cases=11
+  passed=11 failed=0 reason=0 complete=1 reads=11 bytes=54364 span=56832
+  blocks=111 fails=0 cancel=0 budget=0 media=0 part=0 seg=3 cap=61071360`),
+  with the final case digest `b50aab9d…aa959774` matching the pinned value.
+  The whole-boot counters show a 24-block maximum subrequest (three 4 KiB
+  physical segments), so the real `IOBreaker`/`breakUpRequest()` split path
+  was entered rather than the direct `executeRequest()` short-circuit. No
+  post-boot readback was taken; the report is bound through the pre-boot
+  post-flash readback and the pinned digest. This qualifies only those eleven
+  ranges and the deblock/breakup path on that one boot; the boot budget is
+  consumed and no retry, reflash or repair is authorized. Initialization
+  reliability remains `[U]`. See
+  [docs/emmc-n10.6-deblock-hardware-result-2026-11-08.md](docs/emmc-n10.6-deblock-hardware-result-2026-11-08.md),
   [docs/emmc-n10.5-deblock-candidate-2026-11-08.md](docs/emmc-n10.5-deblock-candidate-2026-11-08.md),
   [docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md](docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md),
   [docs/emmc-n10.2-partread-hardware-result-2026-11-08.md](docs/emmc-n10.2-partread-hardware-result-2026-11-08.md),
@@ -794,7 +807,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.80,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.81,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

@@ -74,7 +74,17 @@ writes, wider/faster modes, DMA/CQE/ICE or initialization reliability. The
 owner-reported cold boot with `complete=1`, plus an independent read-only
 post-boot content and protected-partition comparison (§5.3.78) `[C]`; it
 qualifies only those ranges, not arbitrary I/O, mount, writes, wider/faster
-modes, DMA/CQE/ICE or initialization reliability.
+modes, DMA/CQE/ICE or initialization reliability. The 2026-11-08 N10.6
+unaligned deblock run then completed eleven pinned byte-unaligned reads on one
+owner-reported cold boot with `complete=1` and every digest matched, through
+the real `IOMedia`/`IOBlockStorageDriver`/`IODeblocker` path (§5.3.81) `[C]`.
+Its whole-boot counters show a 24-block maximum subrequest, exactly three
+4 KiB physical segments, so the real `IOBreaker`/`breakUpRequest()` split path
+was entered rather than the direct `executeRequest()` short-circuit. No
+post-boot readback was taken; the report is bound through the pre-boot flash
+readback and the pinned digest. It qualifies only those eleven ranges and the
+deblock/breakup path on that one boot, not arbitrary I/O, mount, writes,
+wider/faster modes, DMA/CQE/ICE or initialization reliability.
 
 This document records the native eMMC implementation. It is deliberately small:
 one-bit bus, legacy timing, polling, single 512-byte PIO reads and no card
@@ -5582,8 +5592,9 @@ evidence-count core 187/115, probe 196/100. The host deblock model is a
 reconstruction: it does not run the real `IOBlockStorageDriver`/`IODeblocker`
 code, so the hardware run is the only qualification of those layers. N10.4
 performed no candidate build, ABI/QEMU audit, device access, flash or boot;
-N10.5 and N10.6 are separately gated, the N10.1/N10.2 hardware results are
-preserved, and initialization reliability remains `[U]`. Findings:
+N10.5 produced the candidate and N10.6 then completed on one cold boot
+(§5.3.80, §5.3.81), the N10.1/N10.2 hardware results are preserved, and
+initialization reliability remains `[U]`. Findings:
 `docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md`.
 
 ### 5.3.80 N10.5 unaligned deblocked read candidate production (host-only, 2026-11-08)
@@ -5620,9 +5631,62 @@ and 143 adapter scenarios with 48 adapter/support and eight policy mutation
 controls; core 187/115, probe 196/100, payload 34, packager 13, boot-image
 self-test, storage-ABI positive/negative, evidence counts, fixture recipe,
 board and TOML checks. No flash, boot, device access, commit or push while
-producing the candidate; N10.6 remains separately gated and initialization
-reliability remains `[U]`. Findings:
+producing the candidate; N10.6 then completed on one owner-reported cold boot
+(§5.3.81) and initialization reliability remains `[U]`. Findings:
 `docs/emmc-n10.5-deblock-candidate-2026-11-08.md`.
+
+### 5.3.81 N10.6 unaligned deblocked read hardware result (2026-11-08)
+
+Follow-up to §5.3.80. The owner approved a BOOT-only write of the N10.5 BOOT
+image `bacc933f…` (85,688,320 bytes; payload `924c7bbd…`, prelinked kernel
+`b2837a5b…`, packaged kernel `00615136…`, requalified archive `f3789061…`) to
+p69 and controlled one cold boot. Only `/dev/block/mmcblk0p69` was written
+(20,920 x 4096 records, synced). The pre-flash p69 was the N10.2 post-flash
+image `4225defb…` with tail `a28b4ea2…`; the post-flash full readback
+`f4882047…` matched the candidate prefix `bacc933f…` plus the unchanged tail,
+and RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` were
+unchanged. The rollback image `boot-before-n10.6.img.xz` (`0a0fe70a…` -> raw
+`4225defb…`) was not restored.
+
+The owner report returned `rc=0 stop=0 mode=3` with the read-only whole media
+and `DEBLOCK: cases=11 passed=11 failed=0 reason=0 complete=1 reads=11
+bytes=54364 span=56832 blocks=111 fails=0 cancel=0 budget=0 media=0 part=0
+seg=3 cap=61071360`; the last case emitted `DEBLOCKREAD: index=10 target=1
+start=4096 length=1024 span=1024 actual=1024 status=0
+digest=b50aab9d52e4d1e36078fa5120e3aa1c`, the first 16 bytes of the pinned
+case-10 digest `b50aab9d…aa959774` at `package/Gta4lEmmcBlock.c:258-265`.
+Every pinned digest matched. `complete=1` is the guard at
+`package/Gta4lEmmcBlock.cpp:2835-2845`; `media=0 part=0` are clear failure
+flags; `seg=3` is the mode-scoped advertisement at
+`package/Gta4lEmmcBlock.cpp:864-867`.
+
+The whole-boot counters are `DRV: online=1 wp=1 reads=22 blocks=140 fails=0
+max=24` and `XFER: req=140 c17=12 c18=64 c18b=128 cfail=0 stops=64 sfail=0
+last_stop=0`. `max=24` is exactly three 4 KiB physical segments (3 x 8
+blocks), matching the three-segment advertisement; the one-segment
+partread/comparator modes fold only the first segment and their reports show
+`max=8`. Because case 8's aligned span is 64 blocks, a direct
+`executeRequest()` short-circuit would have passed 64 blocks; the observed
+maximum therefore shows the real `IOBreaker::getBreakSize()` /
+`breakUpRequest()` split path was entered. This is the first recorded N-series
+hardware observation of the three-segment fold and of a transport request
+larger than the eight-block one-segment break. The transport issued 12 CMD17
+single-block reads and 64 two-block CMD18 chunks with one successful CMD12
+stop per chunk; the 29-block difference from the 111-block case-table span is
+the deblocker's head/tail scratch reads and block rounding.
+
+No post-boot readback is recorded: the owner returned the tablet to TWRP after
+the one cold boot and no further device access is authorized, so the stored
+image after the boot is not independently re-verified in this record. The
+report is bound to the candidate by the pre-boot post-flash readback, the
+read-only target-binding re-verification and the pinned digest match. This is
+a bounded same-boot qualification of eleven pinned unaligned ranges and the
+real deblock/breakup layers on one boot, not an initialization-reliability or
+general I/O result; N8.5/N9.6/N9.7/N9.8 `complete=0`, the N9.10 comparator
+result, the N10.1 hardware/repeatability results and the N10.2 result are
+preserved. The one-boot budget is consumed; no retry, reflash, rollback,
+reset/repair, mount, commit or push was performed. Findings:
+`docs/emmc-n10.6-deblock-hardware-result-2026-11-08.md`.
 
 ## 6. Expected report
 
