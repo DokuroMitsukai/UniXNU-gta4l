@@ -1461,13 +1461,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `0e6c7984c3159816e2cab75485889a4c6ef774b2c9229eead5ec161da1a95aef` |
+| Repository README | `README.md` | `c9af123b9b534d16b93d55894ae5a468c756d28415134f0a4142c90ad7ff0eab` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `ef59610938bfab8b77bb2632b8b3f4399a579a2d1ee1e95836ce65eb3a62c6b2` |
+| Porting record | `porting.toml` | `489a2ba1779254f315d9ba736b369e92e7d8c91822a998f29dd68b823b8d2c4a` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `fb2f14cfd282ffd8c706d8622802f034fade61143cdc76cd9cb03a407ff4d100` |
+| eMMC driver record | `docs/emmc-driver.md` | `8239bbe9d4f62b93823eefeba5677faa41bdd4a06d0c17f0ad2bf0e4ec573c11` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1733,6 +1733,33 @@ suite passes 34 checks, the packager self-test 13 checks and the
 payload-checker self-test passes. The host deblock model is a reconstruction
 and does not run the real family code; the N10.1/N10.2 hardware results are
 preserved and initialization reliability remains `[U]`.
+The N10.5 unaligned deblocked read candidate production refreshed the
+`README.md`, `docs/emmc-driver.md` and `porting.toml` rows without adding a
+hash-table row; the new N10.5 candidate document, the §5.3.80 section and the
+private evidence directory are outside the table or not listed. The host-only
+candidate chain is prelinked kernel `b2837a5b…` (51,294,208 bytes; plan
+`a834fb1d…`), kernel-build archive `284323e6…`, candidate audit
+`out/gta4l/storage-abi-b2837a5b` (`gdb-stop.json` `7ca3d434…`,
+`interface-audit.json` `ab4113dd…`, `provenance.json` `943f8bdf…`,
+`run.json` `a3a1010b…`; 190 method slots, 181 kernel bindings, 26 concrete
+overrides, 0 unresolved original imports, `runtime_qualified=false`),
+requalified archive `f3789061…` with byte-identical members, packaged kernel
+`00615136…`, payload `924c7bbd…` (83,886,080 bytes; manifest `ddbb77f1…`;
+gate `fbfdf923…`; 23/23 contract; `emmc-block-3-deblock` mapping to
+`gta4l-emmc-block=3 gta4l-emmc-deblock=1`; hold root `327ac826…`, fixture
+`00363681…`) and BOOT image `bacc933f…` (85,688,320 bytes; manifest
+`95670b8e…`; gate `9c3d0558…`; 18/18, only the ramdisk differs from the
+`ce4d76e8…` v5 baseline; kernel section `a4b054e0…`, firmware `1e8a3132…`
+and DTB `dc4c719d…` unchanged). The eleven digests were re-derived from
+`lbas-0-33.bin` (cases 0-5), the v5 image (cases 6, 7 and 10) and the full
+boot-partition backup (cases 8-9); case 9 shares case 2's zero-filled digest.
+The host suites re-passed: block 48 core scenarios/38 mutation controls and
+143 adapter scenarios with 48 adapter/support and eight policy mutation
+controls, core 187/115, probe 196/100, payload 34, packager 13, boot-image
+self-test, storage-ABI positive/negative, evidence counts, fixture recipe,
+board and TOML checks. It records no flash, boot, device access, commit or
+push; the N10.1/N10.2 hardware results are preserved, N10.6 remains
+separately gated and initialization reliability remains `[U]`.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 

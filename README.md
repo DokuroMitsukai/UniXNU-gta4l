@@ -769,9 +769,19 @@ partition layout, payload policy and packaging.
   passes 48 core scenarios/38 mutation controls and 143 adapter scenarios
   with 45 adapter, three support and eight policy mutation controls;
   diagnostic payload 34 checks and packager self-test 13 checks also pass.
-  N10.4 performed no candidate build, ABI/QEMU audit, device access, flash or
-  boot; N10.5 and N10.6 remain separately gated and initialization
-  reliability remains `[U]`. See
+  N10.5 then produced the host-only candidate chain without device access:
+  prelinked kernel `b2837a5b…`, candidate audit
+  `out/gta4l/storage-abi-b2837a5b`, requalified archive `f3789061…`,
+  packaged kernel `00615136…`, payload `924c7bbd…` (23/23 contract) and BOOT
+  image `bacc933f…` (18/18 gate, only the ramdisk differs from the
+  `ce4d76e8…` baseline); the host suites re-passed (block 48 core
+  scenarios/38 mutation controls, 143 adapter scenarios with 48
+  adapter/support and eight policy mutation controls, core 187/115, probe
+  196/100, payload 34, packager 13, storage-ABI, evidence-count, fixture
+  recipe, board and TOML checks).
+  N10.5 performed no flash, boot or device access; N10.6 remains separately
+  gated and initialization reliability remains `[U]`. See
+  [docs/emmc-n10.5-deblock-candidate-2026-11-08.md](docs/emmc-n10.5-deblock-candidate-2026-11-08.md),
   [docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md](docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md),
   [docs/emmc-n10.2-partread-hardware-result-2026-11-08.md](docs/emmc-n10.2-partread-hardware-result-2026-11-08.md),
   [docs/emmc-n10.2-partread-candidate-2026-11-08.md](docs/emmc-n10.2-partread-candidate-2026-11-08.md),
@@ -784,7 +794,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.79,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.80,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

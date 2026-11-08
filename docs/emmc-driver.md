@@ -5586,6 +5586,44 @@ N10.5 and N10.6 are separately gated, the N10.1/N10.2 hardware results are
 preserved, and initialization reliability remains `[U]`. Findings:
 `docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md`.
 
+### 5.3.80 N10.5 unaligned deblocked read candidate production (host-only, 2026-11-08)
+
+Follow-up to §5.3.79. N10.5 builds and gates the N10.4 deblock mode without
+changing the selector, case table, bounce buffer, digests, report lines or
+guards. Candidate: prelinked kernel `b2837a5b…` (51,294,208 bytes; plan
+`a834fb1d…`), kernel-build archive `284323e6…` with `Gta4lEmmcBlock.c`
+`4cfbc466…` compiled to `Gta4lEmmcBlock.o` `dddd7761…` and
+`Gta4lEmmcBlock.cpp` `2721a6a7…` compiled to `Gta4lEmmcBlockCpp.o`
+`c1d9335c…`; candidate storage-ABI audit `out/gta4l/storage-abi-b2837a5b`
+(`gdb-stop.json` `7ca3d434…`, `interface-audit.json` `ab4113dd…`,
+`provenance.json` `943f8bdf…`, `run.json` `a3a1010b…`; 190 method slots, 181
+kernel bindings, 26 concrete overrides, 0 unresolved original imports,
+vtable `0xfffffff005cb44c0`, metaclass `0xfffffff006add1d0`, service
+metaclass `0xfffffff007afb5b8`, `runtime_qualified=false`); requalified
+archive `f3789061…` (865,448 bytes) with byte-identical members; packaged
+kernel `00615136…`; payload `924c7bbd…` (83,886,080 bytes, manifest
+`ddbb77f1…`, gate `fbfdf923…`, 23/23 contract, `emmc-block-3-deblock`
+mapping to `gta4l-emmc-block=3 gta4l-emmc-deblock=1`, hold root `327ac826…`
+and fixture `00363681…`); and BOOT image `bacc933f…` (85,688,320 bytes,
+manifest `95670b8e…`, gate `9c3d0558…`, 18/18, only the ramdisk differs from
+the `ce4d76e8…` v5 baseline; kernel section `a4b054e0…`, firmware
+`1e8a3132…` and DTB `dc4c719d…` unchanged; header `f369571b…`). The eleven
+pinned digests were re-derived from `lbas-0-33.bin` (cases 0-5), the v5 image
+(cases 6, 7 and 10) and the full boot-partition backup (cases 8-9); case 9
+shares case 2's zero-filled digest. The packaged kernel carries three
+`GTA4L-EMMC P5 REPORT` strings, one `PARTMAP`, one `READDETAIL`, one
+`PARTOBS`, one `PARTREAD`, one `READTEST`, one `READFAIL`, two `DEBLOCK`, one
+`DEBLOCKREAD`, one legacy `PART:`, seven each
+`gta4l-emmc-partread`/`partcmp`/`partobs`/`deblock` strings and no literal
+`complete=`. Host suites pass: block 48 core scenarios/38 mutation controls
+and 143 adapter scenarios with 48 adapter/support and eight policy mutation
+controls; core 187/115, probe 196/100, payload 34, packager 13, boot-image
+self-test, storage-ABI positive/negative, evidence counts, fixture recipe,
+board and TOML checks. No flash, boot, device access, commit or push while
+producing the candidate; N10.6 remains separately gated and initialization
+reliability remains `[U]`. Findings:
+`docs/emmc-n10.5-deblock-candidate-2026-11-08.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
