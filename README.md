@@ -728,7 +728,11 @@ partition layout, payload policy and packaging.
   independent read-only post-boot comparison confirmed the stored BOOT,
   unchanged RECOVERY/EFS/sec_efs and both pulled-byte gates (18/18 each). This
   qualifies only the six pinned ranges on that one boot; the boot budget is
-  consumed and no retry, reflash or repair is authorized.
+  consumed and no retry, reflash or repair is authorized. A host-only captured
+  repeatability protocol for this unchanged image is proposed in
+  [docs/emmc-n10.1-partread-repeatability-protocol-2026-11-08.md](docs/emmc-n10.1-partread-repeatability-protocol-2026-11-08.md)
+  (not executed; it requires separate owner approval and a finite cold-boot
+  budget).
   See
   [docs/emmc-n10.1-partread-hardware-result-2026-11-08.md](docs/emmc-n10.1-partread-hardware-result-2026-11-08.md),
   [docs/emmc-n10.1-partread-candidate-2026-11-08.md](docs/emmc-n10.1-partread-candidate-2026-11-08.md),

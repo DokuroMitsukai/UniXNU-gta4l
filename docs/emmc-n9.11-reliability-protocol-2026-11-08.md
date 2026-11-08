@@ -233,4 +233,3 @@ without the read-only pre/post checks above; every one was reported to show
 protocol's capture and verification requirements, and the three warm boots are
 outside its cold-boot scope. It supports descriptive repeatability only;
 initialization reliability remains `[U]`, and no further boot is needed.
-

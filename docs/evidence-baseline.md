@@ -1461,10 +1461,10 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `2565ed7d52f0efad5aa8f062b688adcedde63fabe2e0ac6a547ca9c60f5c6056` |
+| Repository README | `README.md` | `2ba07608f90ddba0175f68133c6b95aa4e6bda2f59f50e79cb1679a79da15253` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `62300a4ae85d76893d6b1cf8867baf3a1989130156f0b82bc76c50cac6d50d8f` |
+| Porting record | `porting.toml` | `f32ee87e1c187f05ad7fbce95acbacfd431b4075c5ce1637525cc45bde8d2a37` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
 | eMMC driver record | `docs/emmc-driver.md` | `0ab10bfea3526bef2f2c42e618df5751fd86cd7ee2193968b0df9325626d554c` |
@@ -1680,6 +1680,15 @@ the new hardware-result document, the §5.3.75 section, the corrected candidate
 illustrative line and the private evidence directory are outside the table or
 not listed. The independent read-only post-boot comparison is recorded with
 the hardware result and is not a second boot.
+The N10.1 read-only content-qualification captured repeatability protocol is a
+host-only proposal that refreshed the `README.md` and `porting.toml` rows
+without adding a hash-table row; the new N10.1 protocol document is outside
+the table or not listed. The proposal pins the unchanged N10.1 image, proposes
+three additional owner-controlled cold boots (owner-selected finite budget),
+requires per-attempt full-report capture and hash-chained evidence, defines
+PARTREAD outcome classes and stop rules, and authorizes no device access,
+flash, boot, commit or push. A formatting-only cleanup also removed the extra
+blank line at EOF from the N9.11 protocol document; its content is unchanged.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
