@@ -1087,9 +1087,18 @@ line to every `PARTMAP` report without changing transport policy; it performed
 no candidate build, flash or boot. N9.8 then built the read-detail candidate
 (prelinked kernel `2777bfce…`, candidate audit
 `out/gta4l/storage-abi-2777bfce`, payload `8d57eb3d…`, BOOT image `1e767155…`,
-18/18 gate) and stopped at the production record. N9.6/N9.7 `complete=0` are
-preserved, and a separately gated BOOT-only candidate and one owner-approved
-boot are required to read the new line.
+18/18 gate) and one owner-approved cold boot measured the first LBA 0/512-byte
+read failing with `kIOReturnDMAError` (`status=3758097108`, `actual=0`). The
+host trace selected the one-segment `breakUpRequest()` break-size exit; N9.9
+then moved every comparator read to one page-aligned bounce buffer without
+changing the advertised limits, and N9.10 produced the corrected candidate
+(prelinked kernel `fcc61714…`, payload `800d293d…`, BOOT image `dc79fab2…`,
+18/18 gate). One owner-approved cold boot of N9.10 returned `gpt=1 reason=0
+slots=84 used=80 media=80 match=1 complete=1` with `reads=25 blocks=45
+fails=0`: both GPT copies validated and agreed, all 80 media tuples matched
+the 80 used entries, and every comparator read succeeded. That is a same-boot
+completeness result, not a reliability result. N9.6/N9.7/N9.8 `complete=0` are
+preserved.
 
 ## 10. What this design does not do
 
@@ -1101,12 +1110,14 @@ boot are required to read the new line.
 - N6 measured a second clean CMD3 control on the unchanged stage-9 candidate;
   it does not add a second mode-3 publication boot, a partition-completeness
   result or a reliability rate.
-- The exact GPT-to-`IOMedia` comparator has not completed on hardware. N9.4
-  and N9.6 stopped before the first GPT read (`reason=10`); N9.7 passed
-  whole-media selection, GUID-scheme lookup and reader open, but its first
-  LBA 0/512-byte read failed (`reason=8`). N9.7's `complete=0` is not
-  upgraded, the cause is unresolved, and the read-detail capture is host-only
-  until a separately gated boot.
+- The exact GPT-to-`IOMedia` comparator completed once on hardware: N9.10's
+  one owner-approved cold boot returned `complete=1` (both GPT copies
+  validated and agreed, 80/80 media tuples matched, 25 reads/45 blocks with
+  no failure). N9.4 and N9.6 stopped before the first GPT read (`reason=10`)
+  and N9.7/N9.8 failed the first LBA 0/512-byte read (`reason=8`); those
+  historical `complete=0` results are not upgraded. The N9.10 result is one
+  cold boot, not initialization reliability, and the earlier read-failure
+  return site and physical page adjacency remain host reconstructions.
 - The measured p5b publication rung does not use CMD18/CMD12, DMA, CQE, ICE,
   interrupts, DDR, HS200/HS400 or 8-bit; those remain separate rungs. The
   host-only N3 mode-3 path does use two-sector CMD18 chunks, and N5 measured

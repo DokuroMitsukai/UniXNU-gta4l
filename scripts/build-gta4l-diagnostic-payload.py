@@ -6,10 +6,10 @@ The tracked board.toml is never modified. A temporary copy is made, its
 [payload.adt] packed_data_ramdisk is forced to false because the RAM-root
 fixture is a raw N4KROOT image. The payload is built by the normal UniXNU
 payload step and checked by scripts/check-gta4l-payload.py before it is copied
-to --output or a manifest is written. The partobs and partcmp personalities
-additionally require --data-ramdisk-manifest naming the fs-timer-hold fixture,
-so the old early-success-panic RAM-root fixture cannot be repackaged for the
-observation.
+to --output or a manifest is written. The partobs, partcmp and partread
+personalities additionally require --data-ramdisk-manifest naming the
+fs-timer-hold fixture, so the old early-success-panic RAM-root fixture cannot
+be repackaged for the observation.
 """
 import argparse
 import datetime
@@ -52,10 +52,14 @@ DIAGNOSTICS = {
     'emmc-block-3-partobs': 'gta4l-emmc-block=3 gta4l-emmc-partobs=1',
     'emmc-block-1-partcmp': 'gta4l-emmc-block=1 gta4l-emmc-partcmp=1',
     'emmc-block-3-partcmp': 'gta4l-emmc-block=3 gta4l-emmc-partcmp=1',
+    'emmc-block-1-partread': 'gta4l-emmc-block=1 gta4l-emmc-partread=1',
+    'emmc-block-3-partread': 'gta4l-emmc-block=3 gta4l-emmc-partread=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
-PARTITION_DIAGNOSTICS = PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS
+PARTREAD_DIAGNOSTICS = ('emmc-block-1-partread', 'emmc-block-3-partread')
+PARTITION_DIAGNOSTICS = (PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS +
+                         PARTREAD_DIAGNOSTICS)
 DATA_RAMDISK_DIAGNOSTICS = ('report', 'fs-timer', 'fs-timer-hold')
 
 

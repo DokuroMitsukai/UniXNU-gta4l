@@ -499,6 +499,50 @@ ADAPTER_MUTATIONS = [
      [('\t\tdestination = partmapDma;\n',
        '\t\tdestination = buffer;\n')],
      'partcmp-page-split'),
+    ('partread-select-refused-accepted',
+     [('\tif (partread == GTA4L_EMMC_BLOCK_PARTREAD_REFUSED) {\n',
+       '\tif ((partread == GTA4L_EMMC_BLOCK_PARTREAD_REFUSED) && 0) {\n')],
+     'partread-refused-value'),
+    ('partread-hash-skip',
+     [('\t\t\t\t\tif (memcmp(digest, item->expected,\n'
+       '\t\t\t\t\t    sizeof(digest)) != 0) {\n',
+       '\t\t\t\t\tif ((memcmp(digest, item->expected,\n'
+       '\t\t\t\t\t    sizeof(digest)) != 0) && 0) {\n')],
+     'partread-hash-mismatch'),
+    ('partread-short-accept',
+     [('\t\t\t\t} else if (actual != expectedBytes) {\n',
+       '\t\t\t\t} else if ((actual != expectedBytes) && 0) {\n')],
+     'partread-short-read'),
+    ('partread-read-error-accept',
+     [('\t\t\t\tif (status != kIOReturnSuccess) {\n',
+       '\t\t\t\tif ((status != kIOReturnSuccess) && 0) {\n')],
+     'partread-read-failure'),
+    ('partread-budget-skip',
+     [('\t\tif (partreadElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_PARTREAD_READ_BUDGET_MS) {\n',
+       '\t\tif ((partreadElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_PARTREAD_READ_BUDGET_MS) && 0) {\n')],
+     'partread-budget'),
+    ('partread-cancel-skip',
+     [('\t\tbzero(digest, sizeof(digest));\n'
+       '\t\tif (reportCancel) {\n',
+       '\t\tbzero(digest, sizeof(digest));\n'
+       '\t\tif (reportCancel && 0) {\n')],
+     'partread-cancel'),
+    ('partread-complete-claim',
+     [('\tcomplete = ((budget == 0) &&\n'
+       '\t    (reason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE) &&\n'
+       '\t    (failed == 0) && (passed == cases) && (cases != 0u)) ? 1u : 0u;\n',
+       '\tcomplete = 1u;\n')],
+     'partread-hash-mismatch'),
+    ('partread-whole-close-skip',
+     [('\tpartreadWholeOpen = true;\n',
+       '\tpartreadWholeOpen = false;\n')],
+     'partread-match'),
+    ('partread-boot-close-skip',
+     [('\t\t\t\t\tpartreadBootOpen = true;\n',
+       '\t\t\t\t\tpartreadBootOpen = false;\n')],
+     'partread-match'),
 ]
 
 POLICY_MUTATIONS = [
@@ -727,8 +771,33 @@ def check_adapter_source():
         'scheme lookup must enumerate attached service-plane children'
     assert 'object->metaCast("IOGUIDPartitionScheme")' in adapter, \
         'scheme lookup must keep the partition-scheme class guard'
-    assert adapter.count('getMatchingServices(matching)') == 4, \
-        'only whole-media and partition-media walks may use matching'
+    assert adapter.count('getMatchingServices(matching)') == 5, \
+        'only whole-media, partition-media and pinned-range walks may use matching'
+    assert '#define GTA4L_EMMC_BLOCK_PARTREAD_MAX_BLOCKS 64u' in \
+        policy_header, 'pinned-range reads must stay inside the request limit'
+    assert 'GTA4L_EMMC_BLOCK_PARTREAD_REASON_HASH 7u' in policy_header, \
+        'pinned-range digest mismatch must have a distinct reason'
+    assert 'GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES' in policy_header, \
+        'pinned-range boot geometry must be explicit'
+    assert 'GTA4L_EMMC_BLOCK_PARTREAD_ARG' in adapter, \
+        'adapter must parse the pinned-range token'
+    assert 'gta4l_emmc_block_partread_select' in adapter, \
+        'adapter must use the shared pinned-range selector'
+    assert 'runPartitionRead' in adapter, \
+        'adapter must implement the pinned-range qualification'
+    assert 'gta4l_emmc_block_sha256' in adapter, \
+        'adapter must use the portable pinned-content oracle'
+    assert 'partreadBuffer' in adapter and \
+        'IOFreeAligned(partreadBuffer' in adapter, \
+        'pinned-range scratch must be allocated and freed'
+    assert 'report.partread_complete = 0' in adapter, \
+        'pinned-range qualification must start as an explicit non-claim'
+    assert 'partreadElapsedMs() >=' in adapter, \
+        'pinned-range qualification must enforce the read budget'
+    assert 'static_assert(GTA4L_EMMC_BLOCK_PARTREAD_WORST_MS <' in adapter, \
+        'pinned-range worst case must stay below the watchdog'
+    assert 'static_assert(GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES <=' in \
+        adapter, 'pinned-range case must stay inside the request limit'
 
 
 def compile_adapter(compiler, temp):
@@ -736,6 +805,7 @@ def compile_adapter(compiler, temp):
     if not cxx:
         return None, None, None
     common = ['-std=c11', '-Wall', '-Wextra', '-Werror',
+              '-DGTA4L_EMMC_BLOCK_HOST_TEST',
               '-I', str(ROOT / 'package')]
     policy_objects = []
     for source in (POLICY, CORE):
@@ -816,6 +886,7 @@ def compile_policy_mutation(compiler, cxx, temp, name, replacements,
         policy = policy.replace(old, new)
     (package / POLICY.name).write_text(policy)
     common = ['-std=c11', '-Wall', '-Wextra', '-Werror',
+              '-DGTA4L_EMMC_BLOCK_HOST_TEST',
               '-I', str(ROOT / 'package')]
     objects = []
     for source in (package / POLICY.name, CORE):
@@ -892,8 +963,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 100, f'expected 100 adapter PASS lines, got {passes}'
-        print('PASS adapter: 99 scenarios against the host IOKit seam')
+        assert passes == 115, f'expected 115 adapter PASS lines, got {passes}'
+        print('PASS adapter: 114 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

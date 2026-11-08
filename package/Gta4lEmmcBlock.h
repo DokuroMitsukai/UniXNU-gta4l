@@ -20,6 +20,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PROBE_ARG "gta4l-emmc-probe"
 #define GTA4L_EMMC_BLOCK_PARTOBS_ARG "gta4l-emmc-partobs"
 #define GTA4L_EMMC_BLOCK_PARTCMP_ARG "gta4l-emmc-partcmp"
+#define GTA4L_EMMC_BLOCK_PARTREAD_ARG "gta4l-emmc-partread"
 
 #define GTA4L_EMMC_BLOCK_MODE_OFF 0
 #define GTA4L_EMMC_BLOCK_MODE_REPORT 1
@@ -40,6 +41,10 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTCMP_OFF 0
 #define GTA4L_EMMC_BLOCK_PARTCMP_ON 1
 #define GTA4L_EMMC_BLOCK_PARTCMP_REFUSED (-1)
+
+#define GTA4L_EMMC_BLOCK_PARTREAD_OFF 0
+#define GTA4L_EMMC_BLOCK_PARTREAD_ON 1
+#define GTA4L_EMMC_BLOCK_PARTREAD_REFUSED (-1)
 
 /* Bounded observation budgets. The media wait is the design's 20 s window;
  * the partition wait is an additional, non-fatal observation. The N8
@@ -80,6 +85,33 @@ extern "C" {
 	GTA4L_EMMC_BLOCK_PARTMAP_READ_BUDGET_MS + 1000u + \
 	GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS)
 #define GTA4L_EMMC_BLOCK_READ_WAIT_MS 5000u
+
+/* N10.1 bounded read-only IOMedia content qualification. Every request is a
+ * whole number of 512-byte media blocks and never exceeds the 64-block
+ * request limit. The media wait, the read budget, one in-flight 1,000 ms read
+ * and the partition stability deadline stay below the 30 s watchdog. */
+#define GTA4L_EMMC_BLOCK_PARTREAD_MAX_BLOCKS 64u
+#define GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES 512u
+#define GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES \
+	(GTA4L_EMMC_BLOCK_PARTREAD_MAX_BLOCKS * \
+	GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_PARTREAD_DEADLINE_MS 2000u
+#define GTA4L_EMMC_BLOCK_PARTREAD_STEP_MS 50u
+#define GTA4L_EMMC_BLOCK_PARTREAD_STABLE_MS 250u
+#define GTA4L_EMMC_BLOCK_PARTREAD_READ_BUDGET_MS 4000u
+#define GTA4L_EMMC_BLOCK_PARTREAD_WORST_MS \
+	(GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS + \
+	GTA4L_EMMC_BLOCK_PARTREAD_READ_BUDGET_MS + 1000u + \
+	GTA4L_EMMC_BLOCK_PARTREAD_DEADLINE_MS)
+
+/* The standard boot partition of the retained GPT layout. The base and size
+ * are layout constants, not identifiers; the expected content digests below
+ * bind the test to the retained GPT and pre-flash tail evidence. */
+#define GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES \
+	((uint64_t)2255360u * GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES \
+	((uint64_t)196608u * GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
+
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u
@@ -210,6 +242,36 @@ struct gta4l_emmc_block_report {
 	int32_t partmap_read_status;
 	uint64_t partmap_read_lba;
 	uint64_t partmap_read_actual;
+	/* Opt-in bounded read-only IOMedia content qualification. Each case is
+	 * a fixed range whose SHA-256 is pinned from retained evidence. */
+	uint32_t partread;
+	uint32_t partread_cases;
+	uint32_t partread_passed;
+	uint32_t partread_failed;
+	uint32_t partread_reason;
+	uint32_t partread_complete;
+	uint32_t partread_reads;
+	uint32_t partread_blocks;
+	uint32_t partread_bytes;
+	uint32_t partread_fails;
+	uint32_t partread_cancel;
+	uint32_t partread_budget;
+	uint32_t partread_media;
+	uint32_t partread_part;
+	uint32_t partread_capacity;
+	uint32_t partread_last_index;
+	uint32_t partread_last_target;
+	uint32_t partread_last_blocks;
+	uint64_t partread_last_offset;
+	uint32_t partread_last_ok;
+	int32_t partread_last_status;
+	uint64_t partread_last_actual;
+	uint8_t partread_last_digest[16];
+	uint32_t partread_fail_index;
+	uint32_t partread_fail_reason;
+	int32_t partread_fail_status;
+	uint64_t partread_fail_actual;
+	uint8_t partread_fail_digest[16];
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -282,6 +344,14 @@ int gta4l_emmc_block_partobs_select(int token_present, int token_value,
 int gta4l_emmc_block_partcmp_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected);
 
+/* Select the orthogonal read-only IOMedia content qualification. The token
+ * is accepted only when exactly one block mode 1/3 token is selected, the
+ * value is exactly 1, the token is not duplicated and neither partition
+ * observation is selected in the same boot. */
+int gta4l_emmc_block_partread_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int partobs_selected,
+    int partcmp_selected);
+
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_PMBR 1u
@@ -297,6 +367,42 @@ int gta4l_emmc_block_partcmp_select(int token_present, int token_value,
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_MISMATCH 11u
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_CHANGING 12u
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_CANCELLED 13u
+
+/* PARTREAD reason codes. The first failing case latches the reason; the
+ * counters keep every case that ran. */
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_MEDIA 1u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_PART 2u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_OPEN 3u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_DESC 4u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_READ 5u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_SHORT 6u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_HASH 7u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_BUDGET 8u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_CANCEL 9u
+#define GTA4L_EMMC_BLOCK_PARTREAD_REASON_ARG 10u
+
+#define GTA4L_EMMC_BLOCK_PARTREAD_TARGET_WHOLE 0u
+#define GTA4L_EMMC_BLOCK_PARTREAD_TARGET_BOOT 1u
+
+/* One pinned read. target selects the whole media or the boot partition
+ * media; from_end_blocks, when nonzero, makes the whole-media offset relative
+ * to the reported capacity. expected is the SHA-256 of the exact bytes. */
+struct gta4l_emmc_block_partread_case {
+	uint32_t target;
+	uint32_t blocks;
+	uint32_t from_end_blocks;
+	uint64_t offset;
+	uint8_t expected[32];
+};
+
+uint32_t gta4l_emmc_block_partread_case_count(void);
+const struct gta4l_emmc_block_partread_case *
+gta4l_emmc_block_partread_case_at(uint32_t index);
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+struct gta4l_emmc_block_partread_case *
+gta4l_emmc_block_partread_case_mutable(uint32_t index);
+#endif
 
 /* PARTMAP comparator read-detail states. The detail records the most recent
  * comparator media read while no failure has been observed; the first error

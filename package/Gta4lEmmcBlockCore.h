@@ -130,6 +130,12 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
     uint64_t block_number, uint32_t nblks, uint64_t buffer_bytes,
     enum gta4l_emmc_block_direction direction, uint64_t *completed_bytes);
 
+/* One-shot SHA-256 (FIPS 180-4) over a caller-owned buffer. This is the
+ * pinned-content oracle for the read-only IOMedia qualification; it performs
+ * no allocation and no transport access. */
+void gta4l_emmc_block_sha256(const uint8_t *data, uint32_t length,
+    uint8_t digest[32]);
+
 #ifdef __cplusplus
 }
 #endif

@@ -64,6 +64,12 @@ static_assert(GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES >=
 static_assert(GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES <=
     GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES,
     "PARTMAP bounce must not exceed the GPT array");
+static_assert(GTA4L_EMMC_BLOCK_PARTREAD_WORST_MS <
+    GTA4L_EMMC_BLOCK_WATCHDOG_MS,
+    "PARTREAD worst case must stay below the watchdog");
+static_assert(GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES <=
+    GTA4L_EMMC_BLOCK_MAX_BYTES,
+    "PARTREAD case must stay inside the 64-block request limit");
 
 /* The exact comparator needs a 16 KiB GPT array plus both validated copies
  * and two media snapshots. Keeping that state in the driver object would
@@ -189,6 +195,13 @@ private:
 	IOService *findGuidScheme(IOMedia *whole);
 	uint32_t snapshotPartitionMedia(IOService *scheme, IOMedia *whole,
 	    uint32_t *propErrors, uint32_t *nested);
+	IOMedia *findPartitionMedia(uint64_t base, uint64_t size,
+	    uint32_t *count);
+	void runPartitionRead(void);
+	void releasePartreadMedia(void);
+	void partreadReportFailure(uint32_t reason);
+	void partreadReportCancel(void);
+	uint64_t partreadElapsedMs(void);
 	IOMedia *findWholeMedia(void);
 	uint32_t countPartitions(void);
 	bool ancestryContains(IOService *service) const;
@@ -211,6 +224,7 @@ private:
 	bool reportMode = false;
 	bool partObsMode = false;
 	bool partCmpMode = false;
+	bool partReadMode = false;
 	bool partmapWholeOpen = false;
 	IOMedia *partmapWhole = nullptr;
 	IOService *partmapScheme = nullptr;
@@ -219,6 +233,12 @@ private:
 	uint8_t partmapHeader[GTA4L_EMMC_BLOCK_BYTES];
 	struct gta4l_emmc_block_partmap_scratch *partmapScratch = nullptr;
 	uint8_t *partmapDma = nullptr;
+	uint64_t partreadReadStart = 0;
+	uint8_t *partreadBuffer = nullptr;
+	IOMedia *partreadWhole = nullptr;
+	IOMedia *partreadBoot = nullptr;
+	bool partreadWholeOpen = false;
+	bool partreadBootOpen = false;
 	bool registered = false;
 	bool reportStarted = false;
 	thread_t reportThread = nullptr;
@@ -528,15 +548,19 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t conflictTokens;
 	uint32_t partobsTokens;
 	uint32_t partcmpTokens;
+	uint32_t partreadTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
+	int partreadValue = 0;
 	int parsed;
 	int partobsParsed;
 	int partcmpParsed;
+	int partreadParsed;
 	int mode;
 	int partobs;
 	int partcmp;
+	int partread;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -548,6 +572,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_PARTOBS_ARG);
 	partcmpTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_PARTCMP_ARG);
+	partreadTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_PARTREAD_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -568,6 +594,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	if ((partcmpParsed == 0) && (partcmpTokens != 0)) {
 		partcmpValue = -1;
 	}
+	partreadParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_PARTREAD_ARG,
+	    &partreadValue, sizeof(partreadValue));
+	if ((partreadParsed == 0) && (partreadTokens != 0)) {
+		partreadValue = -1;
+	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
 	if (mode == GTA4L_EMMC_BLOCK_SELECT_INERT) {
@@ -579,6 +610,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 		if (partcmpTokens != 0) {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-partcmp requires "
+			    "gta4l-emmc-block=1 or 3\n");
+		}
+		if (partreadTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-partread requires "
 			    "gta4l-emmc-block=1 or 3\n");
 		}
 		return false;
@@ -634,6 +670,41 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	partCmpMode = (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON);
+	partread = gta4l_emmc_block_partread_select(partreadTokens != 0,
+	    partreadValue, partreadTokens > 1u, 1,
+	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
+	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON);
+	if (partread == GTA4L_EMMC_BLOCK_PARTREAD_REFUSED) {
+		if (partreadTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-partread token\n");
+		} else if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partobs "
+			    "and gta4l-emmc-partread are mutually "
+			    "exclusive\n");
+		} else if (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partcmp "
+			    "and gta4l-emmc-partread are mutually "
+			    "exclusive\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
+			    "gta4l-emmc-partread value\n");
+		}
+		return false;
+	}
+	partReadMode = (partread == GTA4L_EMMC_BLOCK_PARTREAD_ON);
+	if (partReadMode) {
+		/* Every case is copied through one page-aligned buffer so the
+		 * descriptor never straddles a page boundary and every
+		 * request is a whole number of media blocks. */
+		partreadBuffer = (uint8_t *)IOMallocAligned(
+		    GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES, PAGE_SIZE);
+		if (partreadBuffer == nullptr) {
+			IOLog("GTA4L-EMMC P5 FAILED: partread buffer "
+			    "allocation\n");
+			return false;
+		}
+	}
 	if (partCmpMode) {
 		/* The exact comparator's array, GPT copies and media
 		 * snapshots are too large for the driver object. The
@@ -772,6 +843,11 @@ Gta4lEmmcBlock::stop(IOService *provider)
 void
 Gta4lEmmcBlock::free()
 {
+	if (partreadBuffer != nullptr) {
+		IOFreeAligned(partreadBuffer,
+		    GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES);
+		partreadBuffer = nullptr;
+	}
 	if (partmapDma != nullptr) {
 		IOFreeAligned(partmapDma,
 		    GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES);
@@ -1229,6 +1305,38 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		target->partmap_read_status = report.partmap_read_status;
 		target->partmap_read_lba = report.partmap_read_lba;
 		target->partmap_read_actual = report.partmap_read_actual;
+		target->partread = report.partread;
+		target->partread_cases = report.partread_cases;
+		target->partread_passed = report.partread_passed;
+		target->partread_failed = report.partread_failed;
+		target->partread_reason = report.partread_reason;
+		target->partread_complete = report.partread_complete;
+		target->partread_reads = report.partread_reads;
+		target->partread_blocks = report.partread_blocks;
+		target->partread_bytes = report.partread_bytes;
+		target->partread_fails = report.partread_fails;
+		target->partread_cancel = report.partread_cancel;
+		target->partread_budget = report.partread_budget;
+		target->partread_media = report.partread_media;
+		target->partread_part = report.partread_part;
+		target->partread_capacity = report.partread_capacity;
+		target->partread_last_index = report.partread_last_index;
+		target->partread_last_target = report.partread_last_target;
+		target->partread_last_blocks = report.partread_last_blocks;
+		target->partread_last_offset = report.partread_last_offset;
+		target->partread_last_ok = report.partread_last_ok;
+		target->partread_last_status = report.partread_last_status;
+		target->partread_last_actual = report.partread_last_actual;
+		memcpy(target->partread_last_digest,
+		    report.partread_last_digest,
+		    sizeof(target->partread_last_digest));
+		target->partread_fail_index = report.partread_fail_index;
+		target->partread_fail_reason = report.partread_fail_reason;
+		target->partread_fail_status = report.partread_fail_status;
+		target->partread_fail_actual = report.partread_fail_actual;
+		memcpy(target->partread_fail_digest,
+		    report.partread_fail_digest,
+		    sizeof(target->partread_fail_digest));
 		IOLockUnlock(reportLock);
 	}
 	return locked;
@@ -1605,6 +1713,66 @@ Gta4lEmmcBlock::findExactWholeMedia(uint32_t *count)
 	return found;
 }
 
+IOMedia *
+Gta4lEmmcBlock::findPartitionMedia(uint64_t base, uint64_t size,
+    uint32_t *count)
+{
+	OSDictionary *matching;
+	OSIterator *iterator;
+	IOMedia *found = nullptr;
+
+	if (count == nullptr) {
+		return nullptr;
+	}
+	*count = 0;
+	matching = IOService::serviceMatching("IOMedia");
+	if (matching == nullptr) {
+		return nullptr;
+	}
+	iterator = IOService::getMatchingServices(matching);
+	matching->release();
+	if (iterator == nullptr) {
+		return nullptr;
+	}
+	while (OSObject *object = iterator->getNextObject()) {
+		IOService *service = OSDynamicCast(IOService, object);
+		IOMedia *media = (service != nullptr) ?
+		    static_cast<IOMedia *>(service) : nullptr;
+		OSBoolean *whole;
+		OSNumber *baseProperty;
+		OSNumber *sizeProperty;
+
+		if ((media == nullptr) || !ancestryContains(media)) {
+			continue;
+		}
+		whole = OSDynamicCast(OSBoolean,
+		    media->getProperty(kIOMediaWholeKey));
+		if ((whole == nullptr) || whole->getValue()) {
+			continue;
+		}
+		baseProperty = OSDynamicCast(OSNumber,
+		    media->getProperty(kIOMediaBaseKey));
+		sizeProperty = OSDynamicCast(OSNumber,
+		    media->getProperty(kIOMediaSizeKey));
+		if ((baseProperty == nullptr) || (sizeProperty == nullptr)) {
+			continue;
+		}
+		if (baseProperty->unsigned64BitValue() != base) {
+			continue;
+		}
+		if (sizeProperty->unsigned64BitValue() != size) {
+			continue;
+		}
+		(*count)++;
+		if (found == nullptr) {
+			found = media;
+			found->retain();
+		}
+	}
+	iterator->release();
+	return found;
+}
+
 IOService *
 Gta4lEmmcBlock::findGuidScheme(IOMedia *whole)
 {
@@ -1752,6 +1920,402 @@ Gta4lEmmcBlock::snapshotPartitionMedia(IOService *scheme, IOMedia *whole,
 	}
 	iterator->release();
 	return count;
+}
+
+uint64_t
+Gta4lEmmcBlock::partreadElapsedMs()
+{
+	uint64_t now = gta4l_emmc_platform_counter();
+	uint64_t hz = gta4l_emmc_platform_counter_hz();
+	uint64_t ticks_per_ms;
+
+	if (hz == 0) {
+		return 0;
+	}
+	ticks_per_ms = hz / 1000u;
+	if (ticks_per_ms == 0) {
+		ticks_per_ms = 1;
+	}
+	return (now - partreadReadStart) / ticks_per_ms;
+}
+
+void
+Gta4lEmmcBlock::releasePartreadMedia()
+{
+	if (partreadBootOpen && (partreadBoot != nullptr)) {
+		partreadBoot->close(this, 0);
+		partreadBootOpen = false;
+	}
+	if (partreadBoot != nullptr) {
+		partreadBoot->release();
+		partreadBoot = nullptr;
+	}
+	if (partreadWholeOpen && (partreadWhole != nullptr)) {
+		partreadWhole->close(this, 0);
+		partreadWholeOpen = false;
+	}
+	if (partreadWhole != nullptr) {
+		partreadWhole->release();
+		partreadWhole = nullptr;
+	}
+}
+
+void
+Gta4lEmmcBlock::partreadReportFailure(uint32_t reason)
+{
+	IOLockLock(reportLock);
+	report.partread_reason = reason;
+	report.partread_complete = 0;
+	if (reason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_MEDIA) {
+		report.partread_media = 1;
+	}
+	if (reason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_PART) {
+		report.partread_part = 1;
+	}
+	if (reason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_BUDGET) {
+		report.partread_budget = 1;
+	}
+	IOLockUnlock(reportLock);
+	releasePartreadMedia();
+	panicWithReport();
+}
+
+void
+Gta4lEmmcBlock::partreadReportCancel()
+{
+	IOLockLock(reportLock);
+	report.partread_cancel = 1;
+	report.partread_complete = 0;
+	IOLockUnlock(reportLock);
+	releasePartreadMedia();
+	reportDone = true;
+}
+
+void
+Gta4lEmmcBlock::runPartitionRead()
+{
+	uint32_t wholeCount = 0;
+	uint32_t partCount = 0;
+	uint32_t waited = 0;
+	uint32_t index;
+	uint32_t cases;
+	uint32_t passed = 0;
+	uint32_t failed = 0;
+	uint32_t reads = 0;
+	uint32_t blocks = 0;
+	uint32_t bytes = 0;
+	uint32_t fails = 0;
+	uint32_t reason = GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE;
+	uint32_t complete;
+	uint32_t budget = 0;
+	uint32_t writable;
+	uint64_t wholeSize;
+	OSBoolean *writableProperty;
+	OSString *contentProperty;
+	int check;
+	uint8_t digest[32];
+
+	bzero(digest, sizeof(digest));
+	partreadWhole = nullptr;
+	partreadBoot = nullptr;
+	partreadWholeOpen = false;
+	partreadBootOpen = false;
+	IOLockLock(reportLock);
+	report.partread_cases = gta4l_emmc_block_partread_case_count();
+	report.partread_reason = GTA4L_EMMC_BLOCK_PARTREAD_REASON_MEDIA;
+	report.partread_capacity = capacityBlocks;
+	IOLockUnlock(reportLock);
+
+	while (waited < GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS) {
+		if (reportCancel) {
+			partreadReportCancel();
+			return;
+		}
+		wholeCount = 0;
+		partreadWhole = findExactWholeMedia(&wholeCount);
+		if (wholeCount > 1u) {
+			partreadReportFailure(
+			    GTA4L_EMMC_BLOCK_PARTREAD_REASON_MEDIA);
+			return;
+		}
+		if ((partreadWhole != nullptr) && (wholeCount == 1u)) {
+			break;
+		}
+		if (partreadWhole != nullptr) {
+			partreadWhole->release();
+			partreadWhole = nullptr;
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_MEDIA_STEP_MS);
+		waited += GTA4L_EMMC_BLOCK_MEDIA_STEP_MS;
+	}
+	if (partreadWhole == nullptr) {
+		partreadReportFailure(GTA4L_EMMC_BLOCK_PARTREAD_REASON_MEDIA);
+		return;
+	}
+
+	wholeSize = (uint64_t)capacityBlocks * GTA4L_EMMC_BLOCK_BYTES;
+	writableProperty = OSDynamicCast(OSBoolean,
+	    partreadWhole->getProperty(kIOMediaWritableKey));
+	contentProperty = OSDynamicCast(OSString,
+	    partreadWhole->getProperty(kIOMediaContentKey));
+	writable = ((writableProperty != nullptr) &&
+	    writableProperty->getValue()) ? 1u : 0u;
+	copyContent(mediaContent, (contentProperty != nullptr) ?
+	    contentProperty->getCStringNoCopy() : nullptr);
+	IOLockLock(reportLock);
+	report.media_valid = 1;
+	report.whole = 1;
+	report.base = 0;
+	report.size = wholeSize;
+	report.writable = writable;
+	report.content = mediaContent;
+	report.partread_capacity = capacityBlocks;
+	IOLockUnlock(reportLock);
+	check = gta4l_emmc_block_media_check(0, wholeSize, capacityBlocks, 1,
+	    (int)writable);
+	if (check != 0) {
+		partreadReportFailure(GTA4L_EMMC_BLOCK_PARTREAD_REASON_MEDIA);
+		return;
+	}
+	if (!partreadWhole->open(this, 0, kIOStorageAccessReader)) {
+		partreadReportFailure(GTA4L_EMMC_BLOCK_PARTREAD_REASON_OPEN);
+		return;
+	}
+	partreadWholeOpen = true;
+	partreadReadStart = gta4l_emmc_platform_counter();
+
+	cases = gta4l_emmc_block_partread_case_count();
+	for (index = 0; index < cases; index++) {
+		const struct gta4l_emmc_block_partread_case *item =
+		    gta4l_emmc_block_partread_case_at(index);
+		IOMedia *media = nullptr;
+		IOMemoryDescriptor *descriptor;
+		UInt64 actual = 0;
+		uint64_t offsetBytes = 0;
+		uint32_t blockCount = 0;
+		uint32_t expectedBytes;
+		uint32_t caseReason = GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE;
+		uint32_t ok = 0;
+		int32_t caseStatus = 0;
+		uint64_t caseActual = 0;
+		IOReturn status;
+
+		bzero(digest, sizeof(digest));
+		if (reportCancel) {
+			partreadReportCancel();
+			return;
+		}
+		if (partreadElapsedMs() >=
+		    GTA4L_EMMC_BLOCK_PARTREAD_READ_BUDGET_MS) {
+			budget = 1;
+			break;
+		}
+		if (item == nullptr) {
+			caseReason = GTA4L_EMMC_BLOCK_PARTREAD_REASON_ARG;
+		} else {
+			blockCount = item->blocks;
+			if ((blockCount == 0) || (blockCount >
+			    GTA4L_EMMC_BLOCK_PARTREAD_MAX_BLOCKS)) {
+				caseReason = GTA4L_EMMC_BLOCK_PARTREAD_REASON_ARG;
+			}
+		}
+		if ((item != nullptr) &&
+		    (caseReason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE)) {
+			if (item->target ==
+			    GTA4L_EMMC_BLOCK_PARTREAD_TARGET_WHOLE) {
+				media = partreadWhole;
+				if (item->from_end_blocks != 0u) {
+					if ((uint64_t)item->from_end_blocks >
+					    (uint64_t)capacityBlocks) {
+						caseReason =
+						    GTA4L_EMMC_BLOCK_PARTREAD_REASON_ARG;
+					} else {
+						offsetBytes =
+						    ((uint64_t)capacityBlocks -
+						    item->from_end_blocks) *
+						    GTA4L_EMMC_BLOCK_BYTES;
+					}
+				} else {
+					offsetBytes = item->offset;
+				}
+				if ((caseReason ==
+				    GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE) &&
+				    (((offsetBytes %
+				    GTA4L_EMMC_BLOCK_BYTES) != 0u) ||
+				    (offsetBytes > wholeSize) ||
+				    ((uint64_t)blockCount *
+				    GTA4L_EMMC_BLOCK_BYTES >
+				    wholeSize - offsetBytes))) {
+					caseReason =
+					    GTA4L_EMMC_BLOCK_PARTREAD_REASON_ARG;
+				}
+			} else if (item->target ==
+			    GTA4L_EMMC_BLOCK_PARTREAD_TARGET_BOOT) {
+				if (partreadBoot == nullptr) {
+					uint32_t waitPart = 0;
+
+					while (waitPart <
+					    GTA4L_EMMC_BLOCK_PARTREAD_DEADLINE_MS) {
+						if (reportCancel) {
+							partreadReportCancel();
+							return;
+						}
+						partCount = 0;
+						partreadBoot = findPartitionMedia(
+						    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+						    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+						    &partCount);
+						if (partCount > 1u) {
+							partreadReportFailure(
+							    GTA4L_EMMC_BLOCK_PARTREAD_REASON_PART);
+							return;
+						}
+						if ((partreadBoot != nullptr) &&
+						    (partCount == 1u)) {
+							break;
+						}
+						if (partreadBoot != nullptr) {
+							partreadBoot->release();
+							partreadBoot = nullptr;
+						}
+						IOSleep(GTA4L_EMMC_BLOCK_PARTREAD_STEP_MS);
+						waitPart +=
+						    GTA4L_EMMC_BLOCK_PARTREAD_STEP_MS;
+					}
+					if (partreadBoot == nullptr) {
+						partreadReportFailure(
+						    GTA4L_EMMC_BLOCK_PARTREAD_REASON_PART);
+						return;
+					}
+					if (!partreadBoot->open(this, 0,
+					    kIOStorageAccessReader)) {
+						partreadReportFailure(
+						    GTA4L_EMMC_BLOCK_PARTREAD_REASON_OPEN);
+						return;
+					}
+					partreadBootOpen = true;
+				}
+				media = partreadBoot;
+				offsetBytes = item->offset;
+				if (((offsetBytes %
+				    GTA4L_EMMC_BLOCK_BYTES) != 0u) ||
+				    (offsetBytes >
+				    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) ||
+				    ((uint64_t)blockCount *
+				    GTA4L_EMMC_BLOCK_BYTES >
+				    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES -
+				    offsetBytes)) {
+					caseReason =
+					    GTA4L_EMMC_BLOCK_PARTREAD_REASON_ARG;
+				}
+			} else {
+				caseReason = GTA4L_EMMC_BLOCK_PARTREAD_REASON_ARG;
+			}
+		}
+
+		if (caseReason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE) {
+			expectedBytes = blockCount * GTA4L_EMMC_BLOCK_BYTES;
+			descriptor = IOMemoryDescriptor::withAddress(
+			    partreadBuffer, expectedBytes, kIODirectionIn);
+			if (descriptor == nullptr) {
+				caseReason =
+				    GTA4L_EMMC_BLOCK_PARTREAD_REASON_DESC;
+			} else {
+				status = media->read(this, offsetBytes,
+				    descriptor, nullptr, &actual);
+				descriptor->release();
+				reads++;
+				blocks += blockCount;
+				bytes += (actual > 0xffffffffu) ?
+				    0xffffffffu : (uint32_t)actual;
+				caseStatus = (int32_t)status;
+				caseActual = actual;
+				if (status != kIOReturnSuccess) {
+					caseReason =
+					    GTA4L_EMMC_BLOCK_PARTREAD_REASON_READ;
+					fails++;
+				} else if (actual != expectedBytes) {
+					caseReason =
+					    GTA4L_EMMC_BLOCK_PARTREAD_REASON_SHORT;
+					fails++;
+				} else {
+					gta4l_emmc_block_sha256(
+					    partreadBuffer, expectedBytes,
+					    digest);
+					if (memcmp(digest, item->expected,
+					    sizeof(digest)) != 0) {
+						caseReason =
+						    GTA4L_EMMC_BLOCK_PARTREAD_REASON_HASH;
+					} else {
+						ok = 1;
+					}
+				}
+			}
+		}
+
+		if (caseReason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE) {
+			passed++;
+		} else {
+			failed++;
+			if (reason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE) {
+				reason = caseReason;
+				IOLockLock(reportLock);
+				report.partread_fail_index = index;
+				report.partread_fail_reason = caseReason;
+				report.partread_fail_status = caseStatus;
+				report.partread_fail_actual = caseActual;
+				memcpy(report.partread_fail_digest, digest,
+				    sizeof(report.partread_fail_digest));
+				IOLockUnlock(reportLock);
+			}
+		}
+		IOLockLock(reportLock);
+		report.partread_passed = passed;
+		report.partread_failed = failed;
+		report.partread_reads = reads;
+		report.partread_blocks = blocks;
+		report.partread_bytes = bytes;
+		report.partread_fails = fails;
+		report.partread_last_index = index;
+		report.partread_last_target =
+		    (item != nullptr) ? item->target : 0u;
+		report.partread_last_blocks = blockCount;
+		report.partread_last_offset = offsetBytes;
+		report.partread_last_ok = ok;
+		report.partread_last_status = caseStatus;
+		report.partread_last_actual = caseActual;
+		if (ok != 0) {
+			memcpy(report.partread_last_digest, digest,
+			    sizeof(report.partread_last_digest));
+		} else {
+			bzero(report.partread_last_digest,
+			    sizeof(report.partread_last_digest));
+		}
+		IOLockUnlock(reportLock);
+	}
+
+	complete = ((budget == 0) &&
+	    (reason == GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE) &&
+	    (failed == 0) && (passed == cases) && (cases != 0u)) ? 1u : 0u;
+	IOLockLock(reportLock);
+	report.partread_cases = cases;
+	report.partread_passed = passed;
+	report.partread_failed = failed;
+	report.partread_reason = (reason !=
+	    GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE) ? reason :
+	    ((budget != 0) ? GTA4L_EMMC_BLOCK_PARTREAD_REASON_BUDGET :
+	    GTA4L_EMMC_BLOCK_PARTREAD_REASON_NONE);
+	report.partread_complete = complete;
+	report.partread_reads = reads;
+	report.partread_blocks = blocks;
+	report.partread_bytes = bytes;
+	report.partread_fails = fails;
+	if (budget != 0) {
+		report.partread_budget = 1;
+	}
+	IOLockUnlock(reportLock);
+	releasePartreadMedia();
+	panicWithReport();
 }
 
 void
@@ -2333,6 +2897,14 @@ Gta4lEmmcBlock::runReport()
 	report.partmap = partCmpMode ? 1u : 0u;
 	report.partmap_deadline_ms = GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS;
 	report.partmap_complete = 0;
+	report.partread = partReadMode ? 1u : 0u;
+	report.partread_cases = gta4l_emmc_block_partread_case_count();
+	report.partread_complete = 0;
+	report.partread_reason = GTA4L_EMMC_BLOCK_PARTREAD_REASON_MEDIA;
+	if (partReadMode) {
+		runPartitionRead();
+		return;
+	}
 	if (partCmpMode) {
 		runPartitionComparison();
 		return;

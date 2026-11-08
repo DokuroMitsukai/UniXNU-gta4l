@@ -461,6 +461,16 @@ def test_emmc_block_3_partcmp(base):
                                   'partcmp')
 
 
+def test_emmc_block_1_partread(base):
+    check_observation_personality(base, 'emmc-block-1-partread', 1,
+                                  'partread')
+
+
+def test_emmc_block_3_partread(base):
+    check_observation_personality(base, 'emmc-block-3-partread', 3,
+                                  'partread')
+
+
 def test_partcmp_rejects_early_panic_fixture(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
@@ -486,6 +496,34 @@ def test_partcmp_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS partcmp rejects the early-panic fs-timer fixture')
+
+
+def test_partread_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-1-partread'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for partread')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS partread rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -568,6 +606,36 @@ def test_diagnostic_contract(_base):
     assert not plain_partcmp_expected['emmc-block-1_diagnostic_selected']
     missing_partcmp = checks('gta4l-emmc-block=1', 'emmc-block-1-partcmp')
     assert not missing_partcmp['emmc-block-1-partcmp_diagnostic_selected']
+    read = checks('rd=md0 gta4l-emmc-block=1 gta4l-emmc-partread=1',
+                  'emmc-block-1-partread')
+    assert all(read.values()), read
+    read_chunked = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-partread=1',
+        'emmc-block-3-partread')
+    assert all(read_chunked.values()), read_chunked
+    orphan_partread = checks('gta4l-emmc-probe=1 gta4l-emmc-partread=1')
+    assert not orphan_partread['no_partread_token_outside_block_mode']
+    duplicate_partread = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-partread=1 gta4l-emmc-partread=1',
+        'emmc-block-1-partread')
+    assert not duplicate_partread['at_most_one_partread_token']
+    bad_partread_value = checks('gta4l-emmc-block=1 gta4l-emmc-partread=2',
+                                'emmc-block-1-partread')
+    assert not bad_partread_value['partread_value_one']
+    assert not bad_partread_value[
+        'emmc-block-1-partread_diagnostic_selected']
+    partread_partobs = checks('gta4l-emmc-block=1 gta4l-emmc-partobs=1 '
+                              'gta4l-emmc-partread=1')
+    assert not partread_partobs['partread_partobs_exclusive']
+    partread_partcmp = checks('gta4l-emmc-block=1 gta4l-emmc-partcmp=1 '
+                              'gta4l-emmc-partread=1')
+    assert not partread_partcmp['partread_partcmp_exclusive']
+    plain_partread_expected = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-partread=1', 'emmc-block-1')
+    assert not plain_partread_expected['emmc-block-1_diagnostic_selected']
+    missing_partread = checks('gta4l-emmc-block=1', 'emmc-block-1-partread')
+    assert not missing_partread[
+        'emmc-block-1-partread_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -583,8 +651,10 @@ def main():
              test_emmc_probe_16, test_emmc_block_1, test_emmc_block_3,
              test_emmc_block_1_partobs, test_emmc_block_3_partobs,
              test_emmc_block_1_partcmp, test_emmc_block_3_partcmp,
+             test_emmc_block_1_partread, test_emmc_block_3_partread,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
+             test_partread_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)

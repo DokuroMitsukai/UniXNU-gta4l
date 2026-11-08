@@ -5175,6 +5175,104 @@ commit or push; N9.6/N9.7/N9.8 `complete=0` are preserved and initialization
 reliability remains `[U]`. Findings:
 `docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md`.
 
+### 5.3.71 N9.10 page-aligned comparator candidate production (host-only, 2026-11-08)
+
+Follow-up to §5.3.70. N9.10 carried the page-aligned comparator correction
+through the archive/prelink/audit/payload/BOOT flow and stopped at the
+production record. The owner separately approved a BOOT-only flash and one
+cold boot; the flash and observation are recorded in §5.3.72. No commit or
+push was performed, and the N9.6/N9.7/N9.8 `complete=0` verdicts are not
+upgraded.
+
+The prelinked kernel is `fcc61714…` (51,257,344 bytes; plan `240ea822…`). The
+kernel-build archive `b8557d3e…` records `Gta4lEmmcBlock.c` `f84d1bd2…`
+compiled to `Gta4lEmmcBlock.o` `bf2c80ce…` and `Gta4lEmmcBlock.cpp`
+`78144956…` compiled to `Gta4lEmmcBlockCpp.o` `44a5686d…`; the bindings
+object is unchanged at `3e53b66d…`. A fresh candidate-matched Linux/QEMU
+audit in `out/gta4l/storage-abi-fcc61714` (`gdb-stop.json` `e9e01873…`,
+`interface-audit.json` `4f66b116…`, `provenance.json` `64e46c60…`,
+`run.json` `94746dec…`) binds 190 slots, 181 kernel bindings (167 inherited
++ 14 pure virtual), 26 concrete overrides and 0 unresolved original imports,
+with live sizes 0x90/0x88, native 4K and `runtime_qualified=false`.
+Requalifying the archive against that audit produced `0575c413…`; all three
+members are byte-identical to the kernel-build archive and the container
+differs only in its index.
+
+The packaged kernel is `149b1e6c…`. The payload is `800d293d…` (83,886,080
+bytes; manifest `c600a8fd…`; 14/14 contract; diagnostic
+`emmc-block-3-partcmp` mapping to `gta4l-emmc-block=3 gta4l-emmc-partcmp=1`;
+hold root `327ac826…`, hold `fixture.json` `00363681…` with
+`diagnostic=fs-timer-hold` and `hold_after_success=true`, trust cache
+`30a72f78…`). The BOOT image is `dc79fab2…` (85,688,320 bytes; manifest
+`057efbb5…`; `boot-image-gate.json` `3290d179…`, 18/18, only the ramdisk
+differs from the hardware-tested `ce4d76e8…` v5 baseline; the baseline kernel
+section `a4b054e0…`, firmware `1e8a3132…` and boot DTB `dc4c719d…` are
+unchanged). The packaged kernel carries the same bounded report-string set as
+N9.8 (one `PARTMAP`, three `REPORT`, one `READDETAIL`, one `PARTOBS`, one
+legacy `PART:`, five each of the `partcmp`/`partobs` tokens, no literal
+`complete=`).
+
+The block suite passes 48 core scenarios/38 mutation controls and 99 adapter
+scenarios with 24 adapter and eight policy mutation controls; the payload,
+packager, boot-image, storage-ABI, evidence-count, fixture-recipe and board
+checks pass, and `git diff --check` is clean. The host seam still calls
+`doAsyncReadWrite` directly, so the breakup model and physical adjacency
+remain host reconstructions. Findings:
+`docs/emmc-n9.10-partcmp-page-aligned-candidate-2026-11-08.md`.
+
+### 5.3.72 N9.10 exact-comparator hardware observation (2026-11-08)
+
+Follow-up to §5.3.71. The owner-approved BOOT-only flash of `dc79fab2…`
+(85,688,320 bytes) and one owner-controlled cold boot returned the first
+hardware `complete=1` for the exact GPT-to-`IOMedia` comparator. The report
+selected the real whole media (`whole=1 base=0 size=31268536320
+content=GUID_partition_scheme writable=0`), found the attached GUID scheme and
+validated both GPT copies (`pmbr=1 hdr=1 arr=1 bak=1 xcheck=1 slots=84
+used=80`). All 80 qualifying media tuples matched the 80 used entries
+(`media=80 match=1 missing=0 extra=0 dup=0 nested=0 prop=0`) and the set was
+stable for 250 ms (`samples=9 changes=3 stable=1 timed_out=0 deadline_ms=2000
+budget=0 cancel=0`). The comparator performed exactly 25 reads/45 blocks with
+no failure: PMBR LBA 0, primary header LBA 1, 11 primary-array reads LBA 2-22,
+backup header LBA 61,071,359 and 11 backup-array reads LBA
+61,071,327-61,071,347 in two-block chunks. `READDETAIL state=4 lba=61071347
+blocks=1 bytes=512 status=0 actual=512 desc_len=512 desc_dir=1` is the final
+backup-array tail read, not an aggregate. `complete=1` is the guard at
+`package/Gta4lEmmcBlock.cpp:2034-2039` and cannot coexist with a mismatch,
+timeout, budget refusal, cancellation or read failure.
+
+The N9.8 first-read `kIOReturnDMAError` (`status=3758097108`, `actual=0`) did
+not recur on any N9.10 comparator read, which is direct hardware support that
+the N9.9 page-aligned bounce buffer removed the observed pre-adapter
+rejection. The N9.8 return site and the physical page adjacency remain host
+reconstructions. This is a same-boot completeness observation on one cold
+boot: it does not establish initialization reliability, a second matching
+boot, filesystem mount, arbitrary I/O, writes or wider/faster modes.
+N9.6/N9.7/N9.8 `complete=0` are preserved and initialization reliability
+remains `[U]`. The flash readback `004b9d6d…` matched the candidate prefix
+`dc79fab2…` plus the unchanged tail `a28b4ea2…`; RECOVERY/EFS/sec_efs were
+unchanged and the rollback `3c7e9e5f…` restores the N9.8 image `cf13acfc…`.
+No retry, reflash, rollback, reset/repair, commit or push. Findings:
+`docs/emmc-n9.10-partcmp-observation-2026-11-08.md`.
+
+### 5.3.73 N9.11 owner-reported unchanged-image repeatability (2026-11-08)
+
+Follow-up to §5.3.72. After the captured observation-1 cold boot, the owner
+reports three additional cold boots and three warm boots on the unchanged
+image, every one showing `complete=1`, with no photos or full reports, no
+intervening flash, and a return to TWRP. Totals are 4 cold and 3 warm boots
+since the N9.10 flash; the three warm boots are outside the written N9.11
+cold-boot protocol. Only observation-1 is captured: the six additional
+outcomes are owner-reported, and no pre-series or post-series p69 or
+protected-partition verification was performed. This supports descriptive
+repeatability of the owner-observed same-boot completeness outcome on this
+image; it does not verify the other report fields for the uncaptured boots,
+does not establish initialization reliability, a failure rate or a statistical
+bound, and does not qualify mount, arbitrary I/O, writes or wider/faster
+modes. N9.6/N9.7/N9.8 `complete=0` are preserved and initialization reliability
+remains `[U]`. No further boot is needed; any stronger claim needs a separately
+approved read-only re-verification and/or captured-boot protocol. Findings:
+`docs/emmc-n9.11-reliability-observation-2026-11-08.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

@@ -2874,6 +2874,387 @@ scenario_partobs_watchdog(void)
 	return 0;
 }
 
+static int g_partread_read_calls;
+static int g_partread_fail_at = -1;
+static int g_partread_short_at = -1;
+static int g_partread_corrupt_at = -1;
+static int g_partread_cancel_at = -1;
+static uint32_t g_partread_advance_ms;
+static int g_partread_unaligned_reads;
+static IOMedia *g_partread_whole_media;
+static IOMedia *g_partread_boot_media;
+
+static uint8_t
+partread_pattern_byte(uint64_t absolute_byte)
+{
+	uint64_t lba = absolute_byte / GTA4L_EMMC_BLOCK_BYTES;
+	uint32_t offset = (uint32_t)(absolute_byte %
+	    GTA4L_EMMC_BLOCK_BYTES);
+
+	return (uint8_t)(((lba * 131u) + offset) & 0xffu);
+}
+
+static void
+partread_expected_for_case(
+    const struct gta4l_emmc_block_partread_case *item, uint8_t digest[32])
+{
+	static uint8_t scratch[GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES];
+	uint64_t start;
+	uint64_t absolute;
+	uint32_t length;
+	uint32_t index;
+
+	if (item->target == GTA4L_EMMC_BLOCK_PARTREAD_TARGET_WHOLE) {
+		start = (item->from_end_blocks != 0u) ?
+		    ((uint64_t)gta4l_test.capacity_blocks -
+		    item->from_end_blocks) * GTA4L_EMMC_BLOCK_BYTES :
+		    item->offset;
+	} else {
+		start = GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES +
+		    item->offset;
+	}
+	length = item->blocks * GTA4L_EMMC_BLOCK_BYTES;
+	for (index = 0; index < length; index++) {
+		absolute = start + index;
+		scratch[index] = partread_pattern_byte(absolute);
+	}
+	gta4l_emmc_block_sha256(scratch, length, digest);
+}
+
+static IOReturn
+partread_read_hook(IOMedia *media, UInt64 byteStart,
+    IOMemoryDescriptor *buffer, UInt64 *actualByteCount)
+{
+	uint8_t *destination = (uint8_t *)buffer->address();
+	uint32_t length = (uint32_t)buffer->getLength();
+	uint64_t absolute = media->base_value + byteStart;
+	uint32_t call = (uint32_t)g_partread_read_calls++;
+	uint32_t index;
+
+	if ((((uintptr_t)destination) & (PAGE_SIZE - 1u)) != 0u) {
+		g_partread_unaligned_reads++;
+	}
+	if (g_partread_advance_ms != 0u) {
+		gta4l_test.now_ms += g_partread_advance_ms;
+	}
+	if ((g_partread_cancel_at >= 0) &&
+	    (call == (uint32_t)g_partread_cancel_at)) {
+		g_self->reportCancel = true;
+	}
+	if ((g_partread_fail_at >= 0) &&
+	    (call == (uint32_t)g_partread_fail_at)) {
+		return kIOReturnIOError;
+	}
+	for (index = 0; index < length; index++) {
+		destination[index] = partread_pattern_byte(absolute + index);
+	}
+	if ((g_partread_corrupt_at >= 0) &&
+	    (call == (uint32_t)g_partread_corrupt_at)) {
+		destination[length / 2u] ^= 0x5au;
+	}
+	if (actualByteCount != 0) {
+		*actualByteCount = ((g_partread_short_at >= 0) &&
+		    (call == (uint32_t)g_partread_short_at)) ?
+		    (length - GTA4L_EMMC_BLOCK_BYTES) : length;
+	}
+	return kIOReturnSuccess;
+}
+
+static void
+partread_reset_fixture(void)
+{
+	g_partread_read_calls = 0;
+	g_partread_fail_at = -1;
+	g_partread_short_at = -1;
+	g_partread_corrupt_at = -1;
+	g_partread_cancel_at = -1;
+	g_partread_advance_ms = 0u;
+	g_partread_unaligned_reads = 0;
+	g_partread_whole_media = 0;
+	g_partread_boot_media = 0;
+}
+
+static void
+partread_setup(bool withWhole, bool withBoot)
+{
+	uint32_t index;
+
+	partread_reset_fixture();
+	gta4l_test_media_read_hook = partread_read_hook;
+	if (withWhole) {
+		g_partread_whole_media = add_media(true, 0,
+		    (UInt64)gta4l_test.capacity_blocks *
+		    GTA4L_EMMC_BLOCK_BYTES, false,
+		    "GUID_partition_scheme", true);
+	}
+	if (withBoot) {
+		g_partread_boot_media = add_media(false,
+		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+		    false, "Apple_Boot", true);
+	}
+	for (index = 0; index < gta4l_emmc_block_partread_case_count();
+	    index++) {
+		struct gta4l_emmc_block_partread_case *item =
+		    gta4l_emmc_block_partread_case_mutable(index);
+
+		partread_expected_for_case(item, item->expected);
+	}
+}
+
+static void
+partread_digest_hex(const uint8_t *digest, char *text)
+{
+	static const char hex[] = "0123456789abcdef";
+	uint32_t index;
+
+	for (index = 0; index < 16u; index++) {
+		text[index * 2u] = hex[digest[index] >> 4];
+		text[index * 2u + 1u] = hex[digest[index] & 0x0fu];
+	}
+	text[32] = 0;
+}
+
+static int
+scenario_partread_refused_orphan(void)
+{
+	begin("gta4l-emmc-partread=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "gta4l-emmc-partread requires") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_refused_value(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=2");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "malformed gta4l-emmc-partread") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1 "
+	    "gta4l-emmc-partread=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "duplicate gta4l-emmc-partread") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_refused_partobs(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1 "
+	    "gta4l-emmc-partread=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_refused_partcmp(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1 "
+	    "gta4l-emmc-partread=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_match(void)
+{
+	const struct gta4l_emmc_block_partread_case *last;
+	char digest[33];
+	char expected[160];
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 PARTREAD: cases=6 passed=6 failed=0 reason=0 "
+	    "complete=1 reads=6 blocks=138 bytes=70656 fails=0 cancel=0 "
+	    "budget=0 media=0 part=0 cap=61071360") != 0);
+	last = gta4l_emmc_block_partread_case_at(5);
+	CHECK(last != 0);
+	partread_digest_hex(last->expected, digest);
+	snprintf(expected, sizeof(expected),
+	    "GTA4L-EMMC P5 READTEST: index=5 target=1 blocks=1 "
+	    "off=100662784 ok=1 status=0 actual=512 digest=%s", digest);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READFAIL: index=0 reason=0 status=0 actual=0 "
+	    "digest=00000000000000000000000000000000") != 0);
+	CHECK(g_partread_unaligned_reads == 0);
+	CHECK(g_partread_whole_media != 0);
+	CHECK(g_partread_whole_media->open_calls == 1);
+	CHECK(g_partread_whole_media->close_calls == 1);
+	CHECK(g_partread_boot_media != 0);
+	CHECK(g_partread_boot_media->open_calls == 1);
+	CHECK(g_partread_boot_media->close_calls == 1);
+	return 0;
+}
+
+static int
+scenario_partread_hash_mismatch(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	g_partread_corrupt_at = 0;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=6 passed=5 failed=1 reason=7 complete=0 reads=6 "
+	    "blocks=138 bytes=70656 fails=0") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READFAIL: index=0 reason=7 status=0 "
+	    "actual=17408") != 0);
+	CHECK(strstr(gta4l_test.panic, "digest=00000000000000000000000000000000")
+	    == 0);
+	return 0;
+}
+
+static int
+scenario_partread_read_failure(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	g_partread_fail_at = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=6 passed=5 failed=1 reason=5 complete=0 reads=6 "
+	    "blocks=138 bytes=53248 fails=1") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READFAIL: index=1 reason=5 "
+	    "status=3758097098 actual=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_short_read(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	g_partread_short_at = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=6 passed=5 failed=1 reason=6 complete=0 reads=6 "
+	    "blocks=138 bytes=70144 fails=1") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READFAIL: index=1 reason=6 status=0 "
+	    "actual=16896") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_media_absent(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(false, false);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=6 passed=0 failed=0 reason=1 complete=0 reads=0 "
+	    "blocks=0 bytes=0 fails=0 cancel=0 budget=0 media=1 part=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_part_absent(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, false);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=6 passed=2 failed=0 reason=2 complete=0 reads=2 "
+	    "blocks=68 bytes=34816 fails=0 cancel=0 budget=0 media=0 part=1") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_open_refused(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	g_partread_whole_media->open_refuse = true;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=6 passed=0 failed=0 reason=3 complete=0 reads=0 "
+	    "blocks=0 bytes=0 fails=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_descriptor_failure(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	gta4l_test.descriptor_alloc_fail = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=6 passed=0 failed=6 reason=4 complete=0 reads=0 "
+	    "blocks=0 bytes=0 fails=0") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READFAIL: index=0 reason=4 status=0 actual=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_budget(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	g_partread_advance_ms = 5000u;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=6 passed=1 failed=0 reason=8 complete=0 reads=1 "
+	    "blocks=34 bytes=17408 fails=0 cancel=0 budget=1") != 0);
+	return 0;
+}
+
+static int
+scenario_partread_cancel(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	g_partread_cancel_at = 0;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(gta4l_test.panic[0] == 0);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(g_self->report.partread_cancel == 1);
+	CHECK(g_self->report.partread_complete == 0);
+	CHECK(g_self->report.partread_reads == 1);
+	CHECK(g_partread_whole_media->close_calls == 1);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	partread_setup(true, true);
+	g_self->reportCancel = true;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(g_self->report.partread_cancel == 1);
+	CHECK(g_self->report.partread_reads == 0);
+	return 0;
+}
+
 static int
 scenario_policy(void)
 {
@@ -2936,6 +3317,22 @@ scenario_policy(void)
 	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
 	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 1, 1) ==
 	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
+	CHECK(gta4l_emmc_block_partread_select(0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTREAD_OFF);
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTREAD_ON);
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 1, 1, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
+	CHECK(gta4l_emmc_block_partread_select(1, 2, 0, 1, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 1, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 0, 1) ==
+	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
+	CHECK(gta4l_emmc_block_partread_case_count() == 6);
+	CHECK(gta4l_emmc_block_partread_case_at(6) == 0);
 	CHECK(gta4l_emmc_block_request_check(10, 0, 1, 512,
 	    GTA4L_EMMC_BLOCK_DIRECTION_READ, 1) ==
 	    GTA4L_EMMC_BLOCK_REQUEST_OK);
@@ -3142,6 +3539,44 @@ scenario_policy(void)
 	    "blocks=4294967295 bytes=4294967295 status=3758097098 "
 	    "actual=18446744073709551615 desc_len=4294967295 "
 	    "desc_dir=4294967295") != 0);
+
+	memset(&report, 0, sizeof(report));
+	report.partread = 1;
+	report.partread_cases = 6;
+	report.partread_passed = 6;
+	report.partread_complete = 1;
+	report.partread_reads = 6;
+	report.partread_blocks = 138;
+	report.partread_bytes = 70656;
+	report.partread_capacity = 61071360;
+	report.partread_last_index = 5;
+	report.partread_last_target = 1;
+	report.partread_last_blocks = 1;
+	report.partread_last_offset = 100662784u;
+	report.partread_last_ok = 1;
+	report.partread_last_actual = 512;
+	memset(report.partread_last_digest, 0xab,
+	    sizeof(report.partread_last_digest));
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 PARTREAD: cases=6 passed=6 "
+	    "failed=0 reason=0 complete=1 reads=6 blocks=138 bytes=70656 "
+	    "fails=0 cancel=0 budget=0 media=0 part=0 cap=61071360") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 READTEST: index=5 target=1 "
+	    "blocks=1 off=100662784 ok=1 status=0 actual=512 "
+	    "digest=abababababababababababababababab") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 READFAIL: index=0 reason=0 "
+	    "status=0 actual=0 "
+	    "digest=00000000000000000000000000000000") != 0);
+	report.partread = 0;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(strstr(buffer, "PARTREAD") == 0);
+	CHECK(strstr(buffer, "READTEST") == 0);
+	CHECK(strstr(buffer, "READFAIL") == 0);
 	CHECK(gta4l_emmc_block_report_format(small, sizeof(small),
 	    &report) == 0);
 	CHECK(small[0] == 0);
@@ -3264,6 +3699,21 @@ static const struct scenario_entry scenarios[] = {
 	{ "partcmp-budget", scenario_partcmp_budget },
 	{ "partcmp-cancel", scenario_partcmp_cancel },
 	{ "partcmp-watchdog", scenario_partcmp_watchdog },
+	{ "partread-refused-orphan", scenario_partread_refused_orphan },
+	{ "partread-refused-value", scenario_partread_refused_value },
+	{ "partread-refused-duplicate", scenario_partread_refused_duplicate },
+	{ "partread-refused-partobs", scenario_partread_refused_partobs },
+	{ "partread-refused-partcmp", scenario_partread_refused_partcmp },
+	{ "partread-match", scenario_partread_match },
+	{ "partread-hash-mismatch", scenario_partread_hash_mismatch },
+	{ "partread-read-failure", scenario_partread_read_failure },
+	{ "partread-short-read", scenario_partread_short_read },
+	{ "partread-media-absent", scenario_partread_media_absent },
+	{ "partread-part-absent", scenario_partread_part_absent },
+	{ "partread-open-refused", scenario_partread_open_refused },
+	{ "partread-descriptor-failure", scenario_partread_descriptor_failure },
+	{ "partread-budget", scenario_partread_budget },
+	{ "partread-cancel", scenario_partread_cancel },
 	{ "policy", scenario_policy },
 };
 

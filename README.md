@@ -683,13 +683,39 @@ partition layout, payload policy and packaging.
   from the hardware-tested `ce4d76e8…` baseline); that production batch
   performed no flash, boot or device access. The hardware `reason=8` cause
   remains unresolved, the page-straddle hypothesis and allocation failure
-  stay unselected, and N9.6/N9.7 `complete=0` are not upgraded. A separately
-  gated BOOT-only candidate and one owner-approved boot are required to read
-  the new line.
+  stay unselected, and N9.6/N9.7 `complete=0` are not upgraded. The owner then
+  approved the host-only N9.9 correction: comparator reads are issued from
+  one page-aligned `IOMallocAligned(size, PAGE_SIZE)` bounce buffer and
+  copied to the caller only after a full successful transfer, with the
+  advertised one-segment and request limits and the `READDETAIL` line
+  unchanged. The host seam models the worst-case `breakUpRequest()` constraint
+  and the block suite passes 48 core scenarios/38 mutation controls and 99
+  adapter scenarios with 24 adapter and eight policy mutation controls. N9.10
+  then produced the corrected candidate through the same flow: prelinked
+  kernel `fcc61714…`, candidate audit `out/gta4l/storage-abi-fcc61714`,
+  requalified archive `0575c413…`, packaged kernel `149b1e6c…`, payload
+  `800d293d…` (14/14 contract) and BOOT image `dc79fab2…` (18/18 gate, only
+  the ramdisk differs from the `ce4d76e8…` baseline). The separately approved
+  BOOT-only flash and one owner-controlled cold boot then returned the first
+  hardware `complete=1`: the real whole media and attached GUID scheme were
+  selected, both GPT copies validated and agreed, all 80 media tuples matched
+  the 80 used entries, the set was stable for 250 ms, and all 25 comparator
+  reads/45 blocks succeeded. This is a same-boot completeness observation, not
+  a reliability result. The owner later reported three additional cold boots
+  and three warm boots on the same unchanged image, all showing `complete=1`
+  without captures; that owner-reported repeatability series is recorded in
+  `docs/emmc-n9.11-reliability-observation-2026-11-08.md`. The host-only
+  protocol proposal is
+  [docs/emmc-n9.11-reliability-protocol-2026-11-08.md](docs/emmc-n9.11-reliability-protocol-2026-11-08.md)
+  (not fully followed).
   See
+  [docs/emmc-n9.11-reliability-observation-2026-11-08.md](docs/emmc-n9.11-reliability-observation-2026-11-08.md),
+  [docs/emmc-n9.10-partcmp-observation-2026-11-08.md](docs/emmc-n9.10-partcmp-observation-2026-11-08.md),
+  [docs/emmc-n9.10-partcmp-page-aligned-candidate-2026-11-08.md](docs/emmc-n9.10-partcmp-page-aligned-candidate-2026-11-08.md),
+  [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.68,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.72,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),
