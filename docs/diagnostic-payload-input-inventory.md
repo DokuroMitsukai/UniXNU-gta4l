@@ -294,7 +294,9 @@ refuses an orphan, duplicate or non-1 partread token, a mismatched
 personality, and any partread+partobs or partread+partcmp combination. The
 N10.1 production rebuilt the `emmc-block-3-partread` payload (`e2dc899d…`)
 against the partread kernel with the unchanged `fs-timer-hold` fixture
-(`00363681…`). The
+(`00363681…`). N10.2 rebuilt the same `emmc-block-3-partread` payload
+(`462870cd…`) against the fourteen-case partread kernel with the same fixture
+and mapping. The
 stage-2
 image built on
 2026-10-31 is

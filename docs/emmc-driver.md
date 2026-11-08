@@ -70,8 +70,11 @@ six pinned range reads on one owner-reported cold boot with `complete=1`, plus
 an independent read-only post-boot content and protected-partition comparison
 (§5.3.75) `[C]`; it qualifies only those ranges, not arbitrary I/O, mount,
 writes, wider/faster modes, DMA/CQE/ICE or initialization reliability. The
-2026-11-08 N10.2 host-only candidate then expanded the same mode to fourteen
-pinned ranges (§5.3.77); it has not run on a device.
+2026-11-08 N10.2 expansion then completed fourteen pinned range reads on one
+owner-reported cold boot with `complete=1`, plus an independent read-only
+post-boot content and protected-partition comparison (§5.3.78) `[C]`; it
+qualifies only those ranges, not arbitrary I/O, mount, writes, wider/faster
+modes, DMA/CQE/ICE or initialization reliability.
 
 This document records the native eMMC implementation. It is deliberately small:
 one-bit bus, legacy timing, polling, single 512-byte PIO reads and no card
@@ -5472,6 +5475,52 @@ flash, boot, device access, commit or push was part of N10.2; a BOOT-only
 flash and cold boot need fresh explicit owner approval. N10.1's hardware and
 repeatability results are preserved and initialization reliability remains
 `[U]`. Findings: `docs/emmc-n10.2-partread-candidate-2026-11-08.md`.
+
+### 5.3.78 N10.2 read-only IOMedia content qualification hardware result (2026-11-08)
+
+Follow-up to §5.3.77. The owner-approved BOOT-only flash wrote the N10.2 BOOT
+image `ca1789f0…` (85,688,320 bytes) to p69 only; the post-flash full readback
+`4225defb…` matched the candidate prefix `ca1789f0…` plus the preserved tail
+`a28b4ea2…`, and RECOVERY/EFS/sec_efs were unchanged. One owner-reported cold
+boot then returned the read-only whole-media profile (`whole=1 base=0
+size=31268536320 content=GUID_partition_scheme writable=0`) and:
+
+```
+GTA4L-EMMC P5 PARTREAD: cases=14 passed=14 failed=0 reason=0 complete=1 reads=14 blocks=334 bytes=171008 fails=0 cancel=0 budget=0 media=0 part=0 cap=61071360
+```
+
+The fourteen pinned cases are the N10.1 whole-media and boot-tail cases plus
+PMBR-only, primary GPT header, full primary array, LBA 34, full backup array,
+backup GPT header and two 64-block kernel-section ranges at 4,096 and
+1,048,576. `passed=14 failed=0 reason=0 complete=1` means all fourteen digests
+matched under the guard at `package/Gta4lEmmcBlock.cpp:2297-2299`;
+`reads=14 blocks=334 bytes=171008` is exactly the fourteen cases and
+334 x 512 bytes. `READTEST index=13 … off=1048576 … actual=32768
+digest=050f2b0d…` is the final kernel-section case, not an aggregate.
+`media=0 part=0` are failure flags: the source sets `partread_media=1` only
+for a media reason and `partread_part=1` only for a partition reason
+(`package/Gta4lEmmcBlock.cpp:1970-1973`), so both zero means neither failure
+occurred. `DRV reads=58 blocks=363` and `XFER req=363 c17=13 c18=175 c18b=350
+stops=175` are whole-boot aggregates that include the fourteen partread reads
+and are not additive with the partread counters. The zero `READFAIL`, `PART`,
+`READ`, `QUAL` and `QUAL3` lines are inactive legacy paths, and `SNAP
+locked=1`/`FAIL valid=0` are unchanged. The supplied suffix
+`@Gta41EmmcBlock.cpp:2642` preserves the supplied spelling; current source
+line 2642 is the intentional terminal `panic("%s", reportBuffer)` in
+`panicWithReport()`, not a fault.
+
+An independent read-only post-boot collection then matched the stored BOOT
+full/prefix/tail hashes, found RECOVERY/EFS/sec_efs unchanged, and passed
+18/18 boot-image and 18/18 payload checks on the pulled prefix and extracted
+payload. This confirms the stored content and protected-partition
+preservation; it is not a second boot. The result is one same-boot
+qualification of fourteen pinned ranges and does not establish arbitrary I/O,
+mount, writes, wider/faster modes, DMA/CQE/ICE or initialization reliability.
+N8.5/N9.6/N9.7/N9.8 `complete=0`, the N9.10 comparator result, the N10.1
+hardware result and its captured repeatability series are preserved. The
+owner returned to TWRP; the one-boot budget is consumed and no retry, reflash,
+rollback, reset/repair, commit or push was performed. Findings:
+`docs/emmc-n10.2-partread-hardware-result-2026-11-08.md`.
 
 ## 6. Expected report
 
