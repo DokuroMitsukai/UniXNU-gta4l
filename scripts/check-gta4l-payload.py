@@ -53,7 +53,15 @@ DIAGNOSTIC_NAMES = {
 DIAGNOSTICS = tuple(DIAGNOSTIC_NAMES.values())
 PROBE_PREFIX = 'gta4l-emmc-probe='
 BLOCK_PREFIX = 'gta4l-emmc-block='
+PARTOBS_PREFIX = 'gta4l-emmc-partobs='
 BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
+# The partobs token is a modifier, not an independent diagnostic: it is only
+# valid with exactly one block token. Each personality names the block
+# personality it extends.
+PARTOBS_DIAGNOSTICS = {
+    'emmc-block-1-partobs': 'emmc-block-1',
+    'emmc-block-3-partobs': 'emmc-block-3',
+}
 
 
 def run_tool(*args):
@@ -164,6 +172,8 @@ def diagnostic_contract(args, expected='any'):
     found = [item for item in DIAGNOSTICS if item in tokens]
     block_tokens = [item for item in tokens if item.startswith(BLOCK_PREFIX)]
     probe_tokens = [item for item in tokens if item.startswith(PROBE_PREFIX)]
+    partobs_tokens = [item for item in tokens
+                      if item.startswith(PARTOBS_PREFIX)]
     checks = {'exactly_one_diagnostic_argument': len(found) == 1}
     block_selected = [DIAGNOSTIC_NAMES[name] for name in BLOCK_DIAGNOSTICS
                       if DIAGNOSTIC_NAMES[name] in found]
@@ -171,11 +181,22 @@ def diagnostic_contract(args, expected='any'):
         checks['exactly_one_block_mode_token'] = (
             block_tokens == block_selected)
         checks['no_probe_token_in_block_mode'] = not probe_tokens
+        checks['at_most_one_partobs_token'] = len(partobs_tokens) <= 1
+        checks['partobs_value_one'] = all(
+            item == PARTOBS_PREFIX + '1' for item in partobs_tokens)
     else:
         checks['no_block_token_outside_block_mode'] = not block_tokens
+        checks['no_partobs_token_outside_block_mode'] = not partobs_tokens
     if expected != 'any':
-        checks[f'{expected}_diagnostic_selected'] = (
-            found == [DIAGNOSTIC_NAMES[expected]])
+        if expected in PARTOBS_DIAGNOSTICS:
+            base = PARTOBS_DIAGNOSTICS[expected]
+            checks[f'{expected}_diagnostic_selected'] = (
+                found == [DIAGNOSTIC_NAMES[base]] and
+                partobs_tokens == [PARTOBS_PREFIX + '1'])
+        else:
+            checks[f'{expected}_diagnostic_selected'] = (
+                found == [DIAGNOSTIC_NAMES[expected]] and
+                not partobs_tokens)
     checks['unixnu_toml_has_xnu_args'] = bool(args)
     return checks
 
@@ -235,7 +256,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--payload')
     parser.add_argument('--expect-diagnostic',
-                        choices=('any', *DIAGNOSTIC_NAMES),
+                        choices=('any', *DIAGNOSTIC_NAMES,
+                                 *PARTOBS_DIAGNOSTICS),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

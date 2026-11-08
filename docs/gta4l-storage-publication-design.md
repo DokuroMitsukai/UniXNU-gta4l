@@ -969,6 +969,53 @@ initialization reliability, writable media, mount/root switch, DMA/CQE/ICE,
 wider/faster modes and partition completeness remain unqualified. The one-boot
 budget is consumed; any further observation needs a fresh owner decision.
 
+### 9.4 N6 reliability control and the next measurement target (2026-11-07)
+
+N6 re-flashed the unchanged D12.6 stage-9 image (`7c76c7eb…`, payload
+`e384cc06…`) BOOT-only to p69 after saving the N5 image, and one
+owner-classified cold boot produced a second clean CMD3 control: `rc=0
+stop=0`, one attempt, no retry, a 25-iteration poll ending in command
+complete, no timeout capture and no recorded error. The typed C3L poll ticks
+are normalized to `0x14e4` from the source format and the prior D12.6 report;
+poll and terminal timings are distinct sequential measurements. This is a
+clean control/non-reproduction, not a failure-rate estimate, a fix or proof of
+reliable initialization, and it changes no storage verdict.
+
+The next design target is the partition-publication observation. The current
+reporter stops at the first nonzero count and takes one immediate snapshot, so
+N5's `count=22 expected=84` is not a completeness verdict. A bounded stability
+window would improve the observation but a stable count is still not proof of
+completion; any such change needs host tests, a candidate build and separate
+hardware approval. Initialization reliability remains a separate open issue.
+
+### 9.5 N8 bounded partition-observation design (2026-11-07, host-only)
+
+The N8.1 design is in
+`docs/emmc-n8-partition-observation-design-2026-11-07.md`. It replaces the
+first-nonzero inference with an opt-in `gta4l-emmc-partobs=1` observation: a
+4,000 ms deadline, a 50 ms sampling interval and a 250 ms count-unchanged
+window, all in the report thread and never under the controller gate. The
+`PARTOBS` line reports first/final counts and nominal times, changes,
+stability, timeout, none, error, the 84 GPT slot count and an explicit
+`complete=0`. A stable count is not completeness; no completeness claim is
+made without an independent validated GPT-to-`IOMedia` range/count comparison.
+The legacy mode-1 and mode-3 reporter is unchanged when the token is absent;
+iterator failure keeps `stop=15` and a deadline or zero count is not a failure.
+Host tests and mutation controls are specified in the design; no code, build,
+QEMU, device access, flash or boot is part of N8.1. Candidate production and
+any hardware observation need separate approvals, and initialization
+reliability remains a separate open issue.
+
+N8.2 completed the host implementation: the opt-in token is enforced by the
+selector, the bounded `PARTOBS` observation runs only in the report thread,
+and `complete=0` stays explicit. The diagnostic payload builder exposes
+`emmc-block-1-partobs` and `emmc-block-3-partobs`; the checker refuses orphan,
+duplicate or non-1 partobs tokens and the packager accepts both names. The
+host suites pass 48 core scenarios/38 mutation controls, 64 adapter scenarios
+(nine partobs) with 12 adapter mutation controls and three policy mutation
+controls, and 22 diagnostic payload checks. No candidate build, QEMU run,
+device access, flash or boot was performed.
+
 ## 10. What this design does not do
 
 - The first rung is measured for one reported boot at 1-bit SDR, 400 kHz:
@@ -976,6 +1023,9 @@ budget is consumed; any further observation needs a fresh owner decision.
   same-boot baseline. It does not establish a second matching boot or any
   other width/timing; the audited partition count is consistent with the
   validated GPT, but completeness is not claimed from the report alone.
+- N6 measured a second clean CMD3 control on the unchanged stage-9 candidate;
+  it does not add a second mode-3 publication boot, a partition-completeness
+  result or a reliability rate.
 - The measured p5b publication rung does not use CMD18/CMD12, DMA, CQE, ICE,
   interrupts, DDR, HS200/HS400 or 8-bit; those remain separate rungs. The
   host-only N3 mode-3 path does use two-sector CMD18 chunks, and N5 measured

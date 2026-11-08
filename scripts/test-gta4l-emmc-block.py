@@ -364,6 +364,84 @@ ADAPTER_MUTATIONS = [
        '\tif (result != GTA4L_EMMC_BLOCK_OK) {',
        '\tif (result != GTA4L_EMMC_BLOCK_OK) {')],
      'read-one'),
+    ('partobs-no-stability',
+     [('\t\tstable = ((count != 0) &&\n'
+       '\t\t    (stableMs >= GTA4L_EMMC_BLOCK_PART_STABLE_MS)) ?\n'
+       '\t\t    1u : 0u;\n',
+       '\t\tstable = (count != 0) ? 1u : 0u;\n')],
+     'partobs-incremental'),
+    ('partobs-complete-claim',
+     [('\treport.part_obs_slots = report.part_expected;\n'
+       '\treport.part_obs_complete = 0;\n'
+       '\treport.part_error = 0;\n',
+       '\treport.part_obs_slots = report.part_expected;\n'
+       '\treport.part_obs_complete = 1;\n'
+       '\treport.part_error = 0;\n')],
+     'partobs-incremental'),
+    ('partobs-slots-count',
+     [('\treport.part_obs_slots = report.part_expected;\n',
+       '\treport.part_obs_slots = report.part_count;\n')],
+     'partobs-stable-partial'),
+    ('partobs-slots-final',
+     [('\t\tprevious = count;\n'
+       '\t\tfinal = count;\n',
+       '\t\tprevious = count;\n'
+       '\t\tfinal = report.part_expected;\n')],
+     'partobs-stable-partial'),
+    ('partobs-cancel-skip',
+     [('\t\tif (reportCancel) {\n'
+       '\t\t\treportDone = true;\n'
+       '\t\t\treturn;\n'
+       '\t\t}\n'
+       '\t\tcount = countPartitions();\n',
+       '\t\tif (0) {\n'
+       '\t\t\treportDone = true;\n'
+       '\t\t\treturn;\n'
+       '\t\t}\n'
+       '\t\tcount = countPartitions();\n')],
+     'partobs-cancel'),
+    ('partobs-error-skip',
+     [('\t\tcount = countPartitions();\n'
+       '\t\tsamples++;\n'
+       '\t\tif (report.part_error != 0) {\n',
+       '\t\tcount = countPartitions();\n'
+       '\t\tsamples++;\n'
+       '\t\tif (0) {\n')],
+     'partobs-error'),
+    ('partobs-deadline-ignore',
+     [('\t\tif (elapsed >= GTA4L_EMMC_BLOCK_PART_OBSERVE_MS) {\n',
+       '\t\tif (samples >= 100u) {\n')],
+     'partobs-none'),
+    ('partobs-gate-across-sleep',
+     [('\t\tIOSleep(GTA4L_EMMC_BLOCK_PART_OBSERVE_STEP_MS);\n',
+       '\t\tIOLockLock(gate);\n'
+       '\t\tIOSleep(GTA4L_EMMC_BLOCK_PART_OBSERVE_STEP_MS);\n'
+       '\t\tIOLockUnlock(gate);\n')],
+     'partobs-incremental'),
+    ('partobs-media-report',
+     [('\t\tcount = countPartitions();\n'
+       '\t\tsamples++;\n',
+       '\t\tcount = countPartitions();\n'
+       '\t\tcount = report.part_reported;\n'
+       '\t\tsamples++;\n')],
+     'partobs-incremental'),
+]
+
+POLICY_MUTATIONS = [
+    ('partobs-value-accepted',
+     [('\tif (token_value != 1) {\n',
+       '\tif ((token_value != 1) && 0) {\n')],
+     'policy'),
+    ('partobs-block-required',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0)) {\n',
+       '\tif ((duplicate_tokens != 0) || ((block_selected == 0) && 0)) {\n')],
+     'policy'),
+    ('partobs-width-overflow',
+     [('\t\tgta4l_emmc_block_put_string(&writer,\n'
+       '\t\t    "GTA4L-EMMC P5 PARTOBS: ");\n',
+       '\t\tgta4l_emmc_block_put_string(&writer,\n'
+       '\t\t    "' + 'P' * 2100 + '");\n')],
+     'policy'),
 ]
 
 
@@ -496,10 +574,39 @@ def check_adapter_source():
         'adapter must not issue media writes'
     watchdog = re.search(r'#define GTA4L_EMMC_BLOCK_WATCHDOG_MS (\d+)u', adapter)
     assert watchdog is not None, 'missing adapter watchdog budget'
-    assert int(watchdog.group(1)) > 20000, \
-        'watchdog must exceed the 20 s media window'
+    media_wait = re.search(
+        r'#define GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS (\d+)u', policy_header)
+    observe = re.search(
+        r'#define GTA4L_EMMC_BLOCK_PART_OBSERVE_MS (\d+)u', policy_header)
+    step = re.search(
+        r'#define GTA4L_EMMC_BLOCK_PART_OBSERVE_STEP_MS (\d+)u',
+        policy_header)
+    stable = re.search(
+        r'#define GTA4L_EMMC_BLOCK_PART_STABLE_MS (\d+)u', policy_header)
+    assert media_wait is not None, 'missing media-wait budget'
+    assert observe is not None, 'missing observation deadline'
+    assert step is not None, 'missing observation step'
+    assert stable is not None, 'missing stability window'
+    assert int(observe.group(1)) == 4000
+    assert int(step.group(1)) == 50
+    assert int(stable.group(1)) == 250
+    assert int(watchdog.group(1)) > (
+        int(media_wait.group(1)) + int(observe.group(1))), \
+        'watchdog must exceed the media wait plus the observation deadline'
     assert 'GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS' in adapter, \
         'adapter must use the shared media window'
+    assert 'GTA4L_EMMC_BLOCK_PARTOBS_ARG' in adapter, \
+        'adapter must parse the opt-in observation token'
+    assert 'gta4l_emmc_block_partobs_select' in adapter, \
+        'adapter must use the shared observation selector'
+    assert 'runPartitionObservation' in adapter, \
+        'adapter must implement the bounded observation'
+    assert 'report.part_obs_complete = 0' in adapter, \
+        'observation must keep the explicit non-claim'
+    assert 'report.part_obs_slots = report.part_expected' in adapter, \
+        'observation must report the GPT slot count separately'
+    assert 'reportCancel' in adapter and 'countPartitions()' in adapter, \
+        'observation must keep cancellation and the registry walk'
 
 
 def compile_adapter(compiler, temp):
@@ -575,6 +682,48 @@ def compile_adapter_mutation(cxx, temp, name, replacements, scenario, objects):
                           capture_output=True), linked
 
 
+def compile_policy_mutation(compiler, cxx, temp, name, replacements,
+                            scenario):
+    mirror = temp / f'policy-{name}'
+    package = mirror / 'package'
+    package.mkdir(parents=True)
+    policy = POLICY.read_text()
+    for old, new in replacements:
+        assert policy.count(old) == 1, \
+            f'policy mutation {name}: anchor count {policy.count(old)}'
+        policy = policy.replace(old, new)
+    (package / POLICY.name).write_text(policy)
+    common = ['-std=c11', '-Wall', '-Wextra', '-Werror',
+              '-I', str(ROOT / 'package')]
+    objects = []
+    for source in (package / POLICY.name, CORE):
+        target = temp / f'policy-{name}-{source.stem}.o'
+        built = subprocess.run([compiler] + common + ['-c', str(source),
+                               '-o', str(target)], text=True,
+                               capture_output=True)
+        if built.returncode != 0:
+            return None, built
+        objects.append(str(target))
+    cxx_common = ['-std=c++17', '-Wall', '-Wextra', '-Werror',
+                  '-DGTA4L_EMMC_BLOCK_HOST_TEST',
+                  '-I', str(ROOT / 'package'), '-I', str(SIM)]
+    for source in (ADAPTER_SUPPORT, ADAPTER_HARNESS):
+        target = temp / f'policy-{name}-{source.stem}.o'
+        built = subprocess.run([cxx] + cxx_common + ['-c', str(source),
+                               '-o', str(target)], text=True,
+                               capture_output=True)
+        if built.returncode != 0:
+            return None, built
+        objects.append(str(target))
+    binary = temp / f'policy-{name}-test'
+    linked = subprocess.run([cxx] + objects + ['-o', str(binary)],
+                            text=True, capture_output=True)
+    if linked.returncode != 0:
+        return None, linked
+    return subprocess.run([str(binary), scenario], text=True,
+                          capture_output=True), linked
+
+
 def main():
     compiler = shutil.which('gcc') or shutil.which('clang')
     if not compiler:
@@ -621,8 +770,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 56, f'expected 56 adapter PASS lines, got {passes}'
-        print('PASS adapter: 55 scenarios against the host IOKit seam')
+        assert passes == 65, f'expected 65 adapter PASS lines, got {passes}'
+        print('PASS adapter: 64 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(
@@ -636,6 +785,18 @@ def main():
                 f'adapter mutation {name} did not fail {scenario}:\n' + \
                 (run.stdout + run.stderr)
             print(f'PASS adapter mutation {name} rejected ({scenario})')
+        for name, replacements, scenario in POLICY_MUTATIONS:
+            run, built = compile_policy_mutation(
+                compiler, cxx, temp, name, replacements, scenario)
+            assert run is not None, \
+                f'policy mutation {name}: compile failed:\n' + \
+                (built.stdout + built.stderr)
+            assert run.returncode != 0, \
+                f'policy mutation {name} was accepted ({scenario})'
+            assert f'FAIL {scenario}' in run.stdout, \
+                f'policy mutation {name} did not fail {scenario}:\n' + \
+                (run.stdout + run.stderr)
+            print(f'PASS policy mutation {name} rejected ({scenario})')
     print(f'PASS gta4l eMMC block core: 48 scenarios, '
           f'{len(MUTATIONS)} mutation controls')
     return 0

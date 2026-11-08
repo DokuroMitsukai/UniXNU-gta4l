@@ -324,6 +324,41 @@ def test_emmc_block_3(base):
     print('PASS emmc-block-3 maps to gta4l-emmc-block=3')
 
 
+def check_partobs_personality(base, personality, block_mode):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    record = base / 'argv.json'
+    os.environ['FAKE_UNIXNU_RECORD'] = str(record)
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = personality
+    code = run(module, [
+        *args,
+        '--kernel', str(kernel),
+        '--output', str(output),
+        '--manifest', str(manifest),
+    ])
+    assert code == 0
+    argv = json.loads(record.read_text())
+    kernel_args = [argv[index + 1] for index, value in enumerate(argv)
+                   if value == '--kernel-arg']
+    assert kernel_args[-2:] == [f'gta4l-emmc-block={block_mode}',
+                                'gta4l-emmc-partobs=1'], kernel_args
+    argument = f'gta4l-emmc-block={block_mode} gta4l-emmc-partobs=1'
+    assert json.loads(manifest.read_text())['diagnostic_argument'] == argument
+    print(f'PASS {personality} maps to {argument}')
+
+
+def test_emmc_block_1_partobs(base):
+    check_partobs_personality(base, 'emmc-block-1-partobs', 1)
+
+
+def test_emmc_block_3_partobs(base):
+    check_partobs_personality(base, 'emmc-block-3-partobs', 3)
+
+
 def test_diagnostic_contract(_base):
     spec = importlib.util.spec_from_file_location(
         'gta4l_payload_checker', ROOT / 'scripts/check-gta4l-payload.py')
@@ -358,6 +393,27 @@ def test_diagnostic_contract(_base):
     assert not deferred['exactly_one_diagnostic_argument']
     wrong = checks('gta4l-emmc-block=1', 'emmc-probe-1')
     assert not wrong['emmc-probe-1_diagnostic_selected']
+    observed = checks('rd=md0 gta4l-emmc-block=1 gta4l-emmc-partobs=1',
+                      'emmc-block-1-partobs')
+    assert all(observed.values()), observed
+    observed_chunked = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-partobs=1', 'emmc-block-3-partobs')
+    assert all(observed_chunked.values()), observed_chunked
+    orphan = checks('gta4l-emmc-probe=1 gta4l-emmc-partobs=1')
+    assert not orphan['no_partobs_token_outside_block_mode']
+    duplicate_partobs = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-partobs=1 gta4l-emmc-partobs=1',
+        'emmc-block-1-partobs')
+    assert not duplicate_partobs['at_most_one_partobs_token']
+    bad_value = checks('gta4l-emmc-block=1 gta4l-emmc-partobs=2',
+                       'emmc-block-1-partobs')
+    assert not bad_value['partobs_value_one']
+    assert not bad_value['emmc-block-1-partobs_diagnostic_selected']
+    plain_expected = checks('gta4l-emmc-block=1 gta4l-emmc-partobs=1',
+                            'emmc-block-1')
+    assert not plain_expected['emmc-block-1_diagnostic_selected']
+    missing_partobs = checks('gta4l-emmc-block=1', 'emmc-block-1-partobs')
+    assert not missing_partobs['emmc-block-1-partobs_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -371,6 +427,7 @@ def main():
              test_emmc_probe_10, test_emmc_probe_11, test_emmc_probe_12,
              test_emmc_probe_13, test_emmc_probe_14, test_emmc_probe_15,
              test_emmc_probe_16, test_emmc_block_1, test_emmc_block_3,
+             test_emmc_block_1_partobs, test_emmc_block_3_partobs,
              test_diagnostic_contract)
     for test in tests:
         with tempfile.TemporaryDirectory(prefix='gta4l-payload-test-') as tmp:

@@ -527,6 +527,24 @@ partition layout, payload policy and packaging.
   arbitrary I/O, mount/root switch, DMA/CQE/ICE and partition completeness
   remain separate gates. The one-boot budget is consumed and no further boot
   or flash is authorized.
+  The N6 reliability observation is recorded in
+  [docs/emmc-n6-reliability-observation-2026-11-07.md](docs/emmc-n6-reliability-observation-2026-11-07.md):
+  the unchanged D12.6 stage-9 image (`7c76c7eb…`, payload `e384cc06…`) was
+  flashed BOOT only to p69 after backing up the N5 image, and one
+  owner-classified cold boot returned `rc=0 stop=0 sub=1 att=1 retry=0/0`
+  with a 25-iteration CMD3 poll, command complete, no timeout capture and no
+  recorded error. This is a second clean cold-boot control, not a
+  reliability qualification or a failure-rate estimate; initialization
+  reliability remains open and the N6 boot budget is consumed.
+  The N8 bounded partition-observation design is in
+  [docs/emmc-n8-partition-observation-design-2026-11-07.md](docs/emmc-n8-partition-observation-design-2026-11-07.md):
+  it replaces the first-nonzero partition snapshot with an opt-in
+  `gta4l-emmc-partobs=1` deadline and count-unchanged window, and keeps
+  `complete=0` explicit; a stable count is not a completeness claim. N8.2
+  host implementation and tests are complete (including the
+  `emmc-block-1-partobs`/`emmc-block-3-partobs` payload personalities); no
+  candidate build, QEMU run, device access, flash or boot was performed, and
+  a hardware observation remains a separate approval.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/gta4l-storage-publication-design.md](docs/gta4l-storage-publication-design.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),

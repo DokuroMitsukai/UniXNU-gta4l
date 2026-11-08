@@ -18,6 +18,7 @@ extern "C" {
 
 #define GTA4L_EMMC_BLOCK_BOOT_ARG "gta4l-emmc-block"
 #define GTA4L_EMMC_BLOCK_PROBE_ARG "gta4l-emmc-probe"
+#define GTA4L_EMMC_BLOCK_PARTOBS_ARG "gta4l-emmc-partobs"
 
 #define GTA4L_EMMC_BLOCK_MODE_OFF 0
 #define GTA4L_EMMC_BLOCK_MODE_REPORT 1
@@ -31,11 +32,22 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SELECT_REPORT_CHUNKED 2
 #define GTA4L_EMMC_BLOCK_SELECT_REFUSED (-1)
 
+#define GTA4L_EMMC_BLOCK_PARTOBS_OFF 0
+#define GTA4L_EMMC_BLOCK_PARTOBS_ON 1
+#define GTA4L_EMMC_BLOCK_PARTOBS_REFUSED (-1)
+
 /* Bounded observation budgets. The media wait is the design's 20 s window;
- * the partition wait is an additional, non-fatal observation. */
+ * the partition wait is an additional, non-fatal observation. The N8
+ * partition-publication observation is opt-in and orthogonal to the read
+ * mode: 4 s deadline, 50 ms report-thread sample interval, 250 ms
+ * count-unchanged window. The 30 s watchdog in the adapter stays above the
+ * 20 s media wait plus the 4 s observation. */
 #define GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS 20000u
 #define GTA4L_EMMC_BLOCK_MEDIA_STEP_MS 100u
 #define GTA4L_EMMC_BLOCK_PART_WAIT_MS 2000u
+#define GTA4L_EMMC_BLOCK_PART_OBSERVE_MS 4000u
+#define GTA4L_EMMC_BLOCK_PART_OBSERVE_STEP_MS 50u
+#define GTA4L_EMMC_BLOCK_PART_STABLE_MS 250u
 #define GTA4L_EMMC_BLOCK_READ_WAIT_MS 5000u
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
@@ -104,6 +116,27 @@ struct gta4l_emmc_block_report {
 	uint32_t part_error;
 	uint32_t part_reported;
 	struct gta4l_emmc_block_part part[GTA4L_EMMC_BLOCK_PART_REPORT];
+	/* Opt-in bounded partition-publication observation. part_obs is the
+	 * enable flag; the observation is a count-only instrument and
+	 * part_obs_complete is always an explicit non-claim (0). */
+	uint32_t part_obs;
+	uint32_t part_obs_samples;
+	uint32_t part_obs_first;
+	uint32_t part_obs_first_ms;
+	uint32_t part_obs_first_nz;
+	uint32_t part_obs_first_nz_ms;
+	uint32_t part_obs_final;
+	uint32_t part_obs_final_ms;
+	uint32_t part_obs_changes;
+	uint32_t part_obs_stable;
+	uint32_t part_obs_stable_ms;
+	uint32_t part_obs_deadline_ms;
+	uint32_t part_obs_timed_out;
+	uint32_t part_obs_none;
+	uint32_t part_obs_error;
+	uint32_t part_obs_slots;
+	uint32_t part_obs_reported;
+	uint32_t part_obs_complete;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -160,6 +193,14 @@ uint32_t gta4l_emmc_block_token_count(const char *arguments,
  * two-sector CMD18 chunks. */
 int gta4l_emmc_block_mode_select(int arg_present, int arg_value,
     int probe_present, int other_conflict, int duplicate_tokens);
+
+/* Select the orthogonal partition-publication observation. The token is
+ * accepted only when exactly one block mode 1/3 token is selected, the token
+ * value is exactly 1 and the token is not duplicated. A token without a block
+ * selection is refused, not inert, so a mistyped diagnostic cannot silently
+ * fall back to the legacy reporter. */
+int gta4l_emmc_block_partobs_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected);
 
 /* Pre-validate a request before the adapter takes the controller lock. The
  * request helper repeats the checks; this mapping is what gives the caller

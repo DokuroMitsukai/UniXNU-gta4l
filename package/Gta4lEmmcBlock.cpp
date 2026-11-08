@@ -146,6 +146,7 @@ private:
 	void qualifyMediaRead(IOMedia *media, uint32_t blocks,
 	    struct qual_result *out);
 	void runReport(void);
+	void runPartitionObservation(void);
 	IOMedia *findWholeMedia(void);
 	uint32_t countPartitions(void);
 	bool ancestryContains(IOService *service) const;
@@ -166,6 +167,7 @@ private:
 	volatile bool reportDone = false;
 	bool terminalClaimed = false;
 	bool reportMode = false;
+	bool partObsMode = false;
 	bool registered = false;
 	bool reportStarted = false;
 	thread_t reportThread = nullptr;
@@ -470,9 +472,13 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t blockTokens;
 	uint32_t probeTokens;
 	uint32_t conflictTokens;
+	uint32_t partobsTokens;
 	int value = 0;
+	int partValue = 0;
 	int parsed;
+	int partobsParsed;
 	int mode;
+	int partobs;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -480,6 +486,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_BOOT_ARG);
 	probeTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_PROBE_ARG);
+	partobsTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_PARTOBS_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -490,9 +498,19 @@ Gta4lEmmcBlock::start(IOService *provider)
 	if ((parsed == 0) && (blockTokens != 0)) {
 		value = -1;
 	}
+	partobsParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_PARTOBS_ARG,
+	    &partValue, sizeof(partValue));
+	if ((partobsParsed == 0) && (partobsTokens != 0)) {
+		partValue = -1;
+	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
 	if (mode == GTA4L_EMMC_BLOCK_SELECT_INERT) {
+		if (partobsTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-partobs requires "
+			    "gta4l-emmc-block=1 or 3\n");
+		}
 		return false;
 	}
 	if ((mode != GTA4L_EMMC_BLOCK_SELECT_REPORT) &&
@@ -515,6 +533,19 @@ Gta4lEmmcBlock::start(IOService *provider)
 		}
 		return false;
 	}
+	partobs = gta4l_emmc_block_partobs_select(partobsTokens != 0,
+	    partValue, partobsTokens > 1u, 1);
+	if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_REFUSED) {
+		if (partobsTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-partobs token\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
+			    "gta4l-emmc-partobs value\n");
+		}
+		return false;
+	}
+	partObsMode = (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON);
 
 	if (!IOBlockStorageDevice::start(provider)) {
 		return false;
@@ -1014,6 +1045,32 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 	} else {
 		target->snapshot_locked = 0;
 	}
+	if (reportLock != nullptr) {
+		/* Copy the observation state in one briefly held snapshot so
+		 * the watchdog cannot observe a half-updated sample. */
+		IOLockLock(reportLock);
+		target->part_obs = report.part_obs;
+		target->part_obs_samples = report.part_obs_samples;
+		target->part_obs_first = report.part_obs_first;
+		target->part_obs_first_ms = report.part_obs_first_ms;
+		target->part_obs_first_nz = report.part_obs_first_nz;
+		target->part_obs_first_nz_ms =
+		    report.part_obs_first_nz_ms;
+		target->part_obs_final = report.part_obs_final;
+		target->part_obs_final_ms = report.part_obs_final_ms;
+		target->part_obs_changes = report.part_obs_changes;
+		target->part_obs_stable = report.part_obs_stable;
+		target->part_obs_stable_ms = report.part_obs_stable_ms;
+		target->part_obs_deadline_ms =
+		    report.part_obs_deadline_ms;
+		target->part_obs_timed_out = report.part_obs_timed_out;
+		target->part_obs_none = report.part_obs_none;
+		target->part_obs_error = report.part_obs_error;
+		target->part_obs_slots = report.part_obs_slots;
+		target->part_obs_reported = report.part_obs_reported;
+		target->part_obs_complete = report.part_obs_complete;
+		IOLockUnlock(reportLock);
+	}
 	return locked;
 }
 
@@ -1259,6 +1316,112 @@ Gta4lEmmcBlock::qualifyMediaRead(IOMedia *media, uint32_t blocks,
 }
 
 void
+Gta4lEmmcBlock::runPartitionObservation()
+{
+	uint32_t samples = 0;
+	uint32_t first = 0;
+	uint32_t firstMs = 0;
+	uint32_t firstNz = 0;
+	uint32_t firstNzMs = 0;
+	uint32_t previous = 0;
+	uint32_t final = 0;
+	uint32_t finalMs = 0;
+	uint32_t changes = 0;
+	uint32_t lastChangeMs = 0;
+	uint32_t stableMs = 0;
+	uint32_t elapsed = 0;
+	uint32_t count;
+	uint32_t stable = 0;
+	uint32_t timedOut = 0;
+	uint32_t none = 0;
+	uint32_t error = 0;
+
+	/* Publish the observation state in one coherent snapshot. The
+	 * watchdog copies these fields under the same lock. */
+	IOLockLock(reportLock);
+	report.part_obs = 1;
+	report.part_obs_deadline_ms = GTA4L_EMMC_BLOCK_PART_OBSERVE_MS;
+	report.part_obs_slots = report.part_expected;
+	report.part_obs_complete = 0;
+	report.part_error = 0;
+	IOLockUnlock(reportLock);
+
+	for (;;) {
+		/* Observation cancellation is checked before each registry
+		 * walk and after every report-thread sleep. */
+		if (reportCancel) {
+			reportDone = true;
+			return;
+		}
+		count = countPartitions();
+		samples++;
+		if (report.part_error != 0) {
+			/* Latch the first registry-walk failure and stop. */
+			error = 1;
+			report.stop = 15;
+			break;
+		}
+		if (samples == 1u) {
+			first = count;
+			firstMs = elapsed;
+		}
+		if ((count != 0) && (firstNz == 0)) {
+			firstNz = count;
+			firstNzMs = elapsed;
+		}
+		if ((samples > 1u) && (count != previous)) {
+			changes++;
+			lastChangeMs = elapsed;
+		}
+		previous = count;
+		final = count;
+		finalMs = elapsed;
+		stableMs = elapsed - lastChangeMs;
+		stable = ((count != 0) &&
+		    (stableMs >= GTA4L_EMMC_BLOCK_PART_STABLE_MS)) ?
+		    1u : 0u;
+		IOLockLock(reportLock);
+		report.part_count = final;
+		report.part_obs_samples = samples;
+		report.part_obs_first = first;
+		report.part_obs_first_ms = firstMs;
+		report.part_obs_first_nz = firstNz;
+		report.part_obs_first_nz_ms = firstNzMs;
+		report.part_obs_final = final;
+		report.part_obs_final_ms = finalMs;
+		report.part_obs_changes = changes;
+		report.part_obs_stable = stable;
+		report.part_obs_stable_ms = stableMs;
+		report.part_obs_timed_out = 0;
+		report.part_obs_none = 0;
+		report.part_obs_error = 0;
+		report.part_obs_reported = report.part_reported;
+		IOLockUnlock(reportLock);
+		if (stable != 0) {
+			break;
+		}
+		if (elapsed >= GTA4L_EMMC_BLOCK_PART_OBSERVE_MS) {
+			timedOut = 1;
+			none = (final == 0) ? 1u : 0u;
+			break;
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_PART_OBSERVE_STEP_MS);
+		elapsed += GTA4L_EMMC_BLOCK_PART_OBSERVE_STEP_MS;
+		if (elapsed > GTA4L_EMMC_BLOCK_PART_OBSERVE_MS) {
+			elapsed = GTA4L_EMMC_BLOCK_PART_OBSERVE_MS;
+		}
+	}
+	IOLockLock(reportLock);
+	report.part_obs_samples = samples;
+	report.part_obs_timed_out = timedOut;
+	report.part_obs_none = none;
+	report.part_obs_error = error;
+	report.part_obs_reported = report.part_reported;
+	IOLockUnlock(reportLock);
+	panicWithReport();
+}
+
+void
 Gta4lEmmcBlock::runReport()
 {
 	IOMedia *media;
@@ -1288,6 +1451,12 @@ Gta4lEmmcBlock::runReport()
 	bzero(&threeQual, sizeof(threeQual));
 	report.rc = 0;
 	report.stop = 0;
+	/* The opt-in token selects the PARTOBS report form even if the report
+	 * stops before the observation window starts. The fields stay zero
+	 * until the observation publishes its first coherent sample. */
+	report.part_obs = partObsMode ? 1u : 0u;
+	report.part_obs_deadline_ms = GTA4L_EMMC_BLOCK_PART_OBSERVE_MS;
+	report.part_obs_complete = 0;
 	report.qual_ref_lba = GTA4L_EMMC_BLOCK_QUAL_LBA;
 	report.qual_ref_blocks = GTA4L_EMMC_BLOCK_QUAL_REF_BLOCKS;
 	media = nullptr;
@@ -1455,6 +1624,11 @@ Gta4lEmmcBlock::runReport()
 	    GTA4L_EMMC_BLOCK_BYTES);
 	media->close(this, 0);
 	media->release();
+
+	if (partObsMode) {
+		runPartitionObservation();
+		return;
+	}
 
 	report.part_error = 0;
 	while (partWaited < GTA4L_EMMC_BLOCK_PART_WAIT_MS) {

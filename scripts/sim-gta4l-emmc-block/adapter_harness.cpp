@@ -77,6 +77,24 @@ invoke_thread(int index)
 	return 1;
 }
 
+static void
+partobs_cancel_hook(uint32_t sample, uint32_t visible)
+{
+	(void)visible;
+	if (sample == 1u) {
+		g_self->reportCancel = true;
+	}
+}
+
+static void
+partobs_watchdog_hook(uint32_t sample, uint32_t visible)
+{
+	(void)visible;
+	if (sample == 1u) {
+		(void)invoke_thread(1);
+	}
+}
+
 static IOReturn
 issue_read(UInt64 block, UInt64 nblks, int direction, UInt64 length,
     bool null_buffer)
@@ -111,6 +129,31 @@ add_media(bool whole, UInt64 base, UInt64 size, bool writable,
 	}
 	gta4l_test_add_media(media);
 	return media;
+}
+
+static void
+add_partition_media(uint32_t count)
+{
+	uint32_t index;
+
+	for (index = 0; index < count; index++) {
+		add_media(false, (UInt64)(2048u + index * 2048u), 1048576,
+		    false, "EFI", true);
+	}
+}
+
+static void
+publish_profile(const uint32_t *counts, uint32_t count)
+{
+	uint32_t index;
+
+	if (count > GTA4L_TEST_MAX_MEDIA) {
+		return;
+	}
+	for (index = 0; index < count; index++) {
+		gta4l_test.part_publish_counts[index] = counts[index];
+	}
+	gta4l_test.part_publish_count = (int)count;
 }
 
 static int
@@ -893,6 +936,8 @@ scenario_media_success(void)
 	CHECK(strstr(gta4l_test.panic, "expected=84") != 0);
 	CHECK(strstr(gta4l_test.panic, "GUID_partition_scheme") != 0);
 	CHECK(strstr(gta4l_test.panic, "Apple_APFS") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PART: ") != 0);
+	CHECK(strstr(gta4l_test.panic, "PARTOBS") == 0);
 	return 0;
 }
 
@@ -1002,6 +1047,8 @@ scenario_qual_success(void)
 	    "c17=1 stops=1 sfail=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 SNAP: locked=1") != 0);
 	CHECK(strstr(gta4l_test.panic, "stop=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PART: ") != 0);
+	CHECK(strstr(gta4l_test.panic, "PARTOBS") == 0);
 	return 0;
 }
 
@@ -1172,6 +1219,200 @@ scenario_qual_stop_failure(void)
 }
 
 static int
+scenario_partobs_incremental(void)
+{
+	static const uint32_t profile[] = { 0, 1, 5, 22, 80, 84, 84 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	add_partition_media(84);
+	publish_profile(profile, 7);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PARTOBS: ") != 0);
+	CHECK(strstr(gta4l_test.panic, "samples=11 first=0 first_ms=0 "
+	    "first_nz=1 first_nz_ms=50 final=84 final_ms=500 changes=5 "
+	    "stable=1 stable_ms=250 deadline_ms=4000 timed_out=0 none=0 "
+	    "error=0 slots=84 reported=3 complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PART1:") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PART: ") == 0);
+	CHECK(gta4l_test.part_publish_calls == 11);
+	CHECK(gta4l_test.sleep_with_lock == 0);
+	return 0;
+}
+
+static int
+scenario_partobs_delayed(void)
+{
+	static const uint32_t profile[] = { 0, 0, 0, 0, 0, 0, 84 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	add_partition_media(84);
+	publish_profile(profile, 7);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "samples=12 first=0 first_ms=0 "
+	    "first_nz=84 first_nz_ms=300 final=84 final_ms=550 changes=1 "
+	    "stable=1 stable_ms=250 deadline_ms=4000 timed_out=0 none=0 "
+	    "error=0 slots=84 reported=3 complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partobs_stable_partial(void)
+{
+	static const uint32_t profile[] = { 0, 22, 22, 22, 22, 22, 22, 84 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	add_partition_media(84);
+	publish_profile(profile, 8);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "samples=7 first=0 first_ms=0 "
+	    "first_nz=22 first_nz_ms=50 final=22 final_ms=300 changes=1 "
+	    "stable=1 stable_ms=250 deadline_ms=4000 timed_out=0 none=0 "
+	    "error=0 slots=84 reported=3 complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "final=84") == 0);
+	CHECK(gta4l_test.part_publish_calls == 7);
+	return 0;
+}
+
+static int
+scenario_partobs_late_growth(void)
+{
+	static const uint32_t profile[] = { 0, 22, 22, 22, 84, 84 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	add_partition_media(84);
+	publish_profile(profile, 6);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "samples=10 first=0 first_ms=0 "
+	    "first_nz=22 first_nz_ms=50 final=84 final_ms=450 changes=2 "
+	    "stable=1 stable_ms=250 deadline_ms=4000 timed_out=0 none=0 "
+	    "error=0 slots=84 reported=3 complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partobs_none(void)
+{
+	static const uint32_t profile[] = { 0 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	publish_profile(profile, 1);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "samples=81 first=0 first_ms=0 "
+	    "first_nz=0 first_nz_ms=0 final=0 final_ms=4000 changes=0 "
+	    "stable=0 stable_ms=4000 deadline_ms=4000 timed_out=1 none=1 "
+	    "error=0 slots=84 reported=0 complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "stop=0") != 0);
+	CHECK(gta4l_test.sleep_with_lock == 0);
+	return 0;
+}
+
+static int
+scenario_partobs_changing(void)
+{
+	uint32_t index;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	add_partition_media(2);
+	for (index = 0; index < 81; index++) {
+		gta4l_test.part_publish_counts[index] =
+		    ((index % 2u) == 0u) ? 1u : 2u;
+	}
+	gta4l_test.part_publish_count = 81;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "samples=81 first=1 first_ms=0 "
+	    "first_nz=1 first_nz_ms=0 final=1 final_ms=4000 changes=80 "
+	    "stable=0 stable_ms=0 deadline_ms=4000 timed_out=1 none=0 "
+	    "error=0 slots=84 reported=1 complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "stop=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partobs_error(void)
+{
+	static const uint32_t profile[] = { 0, 5, 84, 84 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	add_partition_media(5);
+	publish_profile(profile, 4);
+	gta4l_test.part_publish_error_at = 2;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "samples=3 first=0 first_ms=0 "
+	    "first_nz=5 first_nz_ms=50 final=5 final_ms=50 changes=1 "
+	    "stable=0 stable_ms=0 deadline_ms=4000 timed_out=0 none=0 "
+	    "error=1 slots=84 reported=3 complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "stop=15") != 0);
+	CHECK(gta4l_test.part_publish_errors == 1);
+	return 0;
+}
+
+static int
+scenario_partobs_cancel(void)
+{
+	static const uint32_t profile[] = { 0 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	add_partition_media(1);
+	publish_profile(profile, 1);
+	gta4l_test_partition_sample_hook = partobs_cancel_hook;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(gta4l_test.panic[0] == 0);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(gta4l_test.part_publish_calls == 2);
+	return 0;
+}
+
+static int
+scenario_partobs_watchdog(void)
+{
+	static const uint32_t profile[] = { 0 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1");
+	CHECK(g_started);
+	add_media(true, 0, (UInt64)g_self->capacityBlocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	add_partition_media(1);
+	publish_profile(profile, 1);
+	gta4l_test_partition_sample_hook = partobs_watchdog_hook;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic, "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PARTOBS: ") != 0);
+	CHECK(strstr(gta4l_test.panic, "samples=1 first=0 first_ms=0 "
+	    "first_nz=0 first_nz_ms=0 final=0 final_ms=0 changes=0 "
+	    "stable=0 stable_ms=0 deadline_ms=4000 timed_out=0 none=0 "
+	    "error=0 slots=84 reported=0 complete=0") != 0);
+	return 0;
+}
+
+static int
 scenario_policy(void)
 {
 	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
@@ -1207,6 +1448,16 @@ scenario_policy(void)
 	    GTA4L_EMMC_BLOCK_SELECT_REFUSED);
 	CHECK(gta4l_emmc_block_mode_select(1, 3, 0, 0, 1) ==
 	    GTA4L_EMMC_BLOCK_SELECT_REFUSED);
+	CHECK(gta4l_emmc_block_partobs_select(0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTOBS_OFF);
+	CHECK(gta4l_emmc_block_partobs_select(1, 1, 0, 1) ==
+	    GTA4L_EMMC_BLOCK_PARTOBS_ON);
+	CHECK(gta4l_emmc_block_partobs_select(1, 1, 1, 1) ==
+	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
+	CHECK(gta4l_emmc_block_partobs_select(1, 2, 0, 1) ==
+	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
+	CHECK(gta4l_emmc_block_partobs_select(1, 1, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
 	CHECK(gta4l_emmc_block_request_check(10, 0, 1, 512,
 	    GTA4L_EMMC_BLOCK_DIRECTION_READ, 1) ==
 	    GTA4L_EMMC_BLOCK_REQUEST_OK);
@@ -1280,6 +1531,32 @@ scenario_policy(void)
 	CHECK(strstr(buffer, "CID") == 0);
 	CHECK(strstr(buffer, "serial") == 0);
 	CHECK(strstr(buffer, "UUID") == 0);
+
+	report.part_obs = 1;
+	report.part_obs_samples = 81;
+	report.part_obs_first = 0xffffffffu;
+	report.part_obs_first_ms = 0xffffffffu;
+	report.part_obs_first_nz = 0xffffffffu;
+	report.part_obs_first_nz_ms = 0xffffffffu;
+	report.part_obs_final = 0xffffffffu;
+	report.part_obs_final_ms = 0xffffffffu;
+	report.part_obs_changes = 0xffffffffu;
+	report.part_obs_stable = 1;
+	report.part_obs_stable_ms = 0xffffffffu;
+	report.part_obs_deadline_ms = 4000;
+	report.part_obs_timed_out = 1;
+	report.part_obs_none = 0;
+	report.part_obs_error = 0;
+	report.part_obs_slots = 1024;
+	report.part_obs_reported = GTA4L_EMMC_BLOCK_PART_REPORT;
+	report.part_obs_complete = 0;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES - 128);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 PARTOBS: ") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 PART: ") == 0);
+	CHECK(strstr(buffer, "complete=0") != 0);
 	return 0;
 }
 
@@ -1354,6 +1631,15 @@ static const struct scenario_entry scenarios[] = {
 	{ "qual-reference-unavailable", scenario_qual_reference_unavailable },
 	{ "qual-ambiguous", scenario_qual_ambiguous },
 	{ "qual-stop-failure", scenario_qual_stop_failure },
+	{ "partobs-incremental", scenario_partobs_incremental },
+	{ "partobs-delayed", scenario_partobs_delayed },
+	{ "partobs-stable-partial", scenario_partobs_stable_partial },
+	{ "partobs-late-growth", scenario_partobs_late_growth },
+	{ "partobs-none", scenario_partobs_none },
+	{ "partobs-changing", scenario_partobs_changing },
+	{ "partobs-error", scenario_partobs_error },
+	{ "partobs-cancel", scenario_partobs_cancel },
+	{ "partobs-watchdog", scenario_partobs_watchdog },
 	{ "policy", scenario_policy },
 };
 

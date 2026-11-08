@@ -379,6 +379,8 @@ struct gta4l_test_thread {
 	void *context;
 };
 
+#define GTA4L_TEST_MAX_MEDIA 96
+
 struct gta4l_test_state {
 	const char *boot_args;
 	int map_result;
@@ -410,6 +412,7 @@ struct gta4l_test_state {
 	uint32_t registered;
 	uint32_t sleeps;
 	uint32_t now_ms;
+	uint32_t sleep_with_lock;
 	uint32_t message_count;
 	uint32_t message_type;
 	void *message_argument;
@@ -423,7 +426,17 @@ struct gta4l_test_state {
 	int thread_count;
 	int lock_depth;
 	int lock_depth_max;
+	int part_publish_active;
+	int part_publish_count;
+	uint32_t part_publish_counts[GTA4L_TEST_MAX_MEDIA];
+	uint32_t part_publish_calls;
+	int part_publish_error_at;
+	uint32_t part_publish_errors;
 };
+
+typedef void (*gta4l_test_partition_sample_fn)(uint32_t sample,
+    uint32_t visible);
+extern gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 
 extern gta4l_test_state gta4l_test;
 
@@ -431,7 +444,7 @@ typedef IOReturn (*gta4l_test_media_read_fn)(IOMedia *media, UInt64 byteStart,
     IOMemoryDescriptor *buffer, UInt64 *actualByteCount);
 extern gta4l_test_media_read_fn gta4l_test_media_read_hook;
 
-extern IOMedia *gta4l_test_media[8];
+extern IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 extern int gta4l_test_media_count;
 
 void gta4l_test_reset(void);

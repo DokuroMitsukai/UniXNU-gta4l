@@ -260,9 +260,14 @@ the content-only isolation rung and `emmc-probe-17` for the Linux-compatible
 bus-test completion rung). The wrapper also accepts `emmc-block-1`, mapping
 to `gta4l-emmc-block=1` (CMD17 report mode), and `emmc-block-3`, mapping to
 `gta4l-emmc-block=3` (chunked report mode with two-sector CMD18 chunks and an
-adapter-owned bounce). The block family is mutually exclusive with every probe
-token: the contract refuses a mixed selection, a duplicate block token, a
-malformed probe token in block mode and the deferred `gta4l-emmc-block=2`. The
+adapter-owned bounce). The N8.2 opt-in observation adds
+`emmc-block-1-partobs` and `emmc-block-3-partobs`, which map to the same block
+token plus `gta4l-emmc-partobs=1` as two kernel arguments; the payload checker
+refuses an orphan, duplicate or non-1 partobs token and a mismatched
+personality, and the packager accepts both names. The block family is mutually
+exclusive with every probe token: the contract refuses a mixed selection, a
+duplicate block token, a malformed probe token in block mode and the deferred
+`gta4l-emmc-block=2`. The
 stage-2
 image built on
 2026-10-31 is

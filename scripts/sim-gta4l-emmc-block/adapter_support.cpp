@@ -6,7 +6,8 @@
 
 gta4l_test_state gta4l_test;
 gta4l_test_media_read_fn gta4l_test_media_read_hook;
-IOMedia *gta4l_test_media[8];
+gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
+IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 int gta4l_test_media_count;
 
 void
@@ -30,7 +31,13 @@ gta4l_test_reset(void)
 	gta4l_test.media_read_replay = 0;
 	gta4l_test.short_copy_at = -1;
 	gta4l_test.descriptor_alloc_fail = 0;
+	gta4l_test.part_publish_active = 0;
+	gta4l_test.part_publish_count = 0;
+	gta4l_test.part_publish_calls = 0;
+	gta4l_test.part_publish_error_at = -1;
+	gta4l_test.part_publish_errors = 0;
 	gta4l_test_media_read_hook = 0;
+	gta4l_test_partition_sample_hook = 0;
 	gta4l_test_media_count = 0;
 }
 
@@ -173,6 +180,9 @@ IOLog(const char *format, ...)
 void
 IOSleep(unsigned milliseconds)
 {
+	if (gta4l_test.lock_depth != 0) {
+		gta4l_test.sleep_with_lock++;
+	}
 	gta4l_test.sleeps++;
 	gta4l_test.now_ms += milliseconds;
 }
@@ -579,10 +589,52 @@ IOService::serviceMatching(const char *className)
 OSIterator *
 IOService::getMatchingServices(OSDictionary *matching)
 {
-	static OSObject *items[8];
+	static OSObject *items[GTA4L_TEST_MAX_MEDIA];
 	int index;
+	int visible = 0;
+	int nonWhole = 0;
+	uint32_t published;
+	uint32_t call;
 
 	(void)matching;
+	if ((gta4l_test.part_publish_active != 0) &&
+	    (gta4l_test.part_publish_count > 0)) {
+		call = gta4l_test.part_publish_calls++;
+		if ((gta4l_test.part_publish_error_at >= 0) &&
+		    (call == (uint32_t)gta4l_test.part_publish_error_at)) {
+			gta4l_test.part_publish_errors++;
+			if (gta4l_test_partition_sample_hook != 0) {
+				gta4l_test_partition_sample_hook(call, 0);
+			}
+			return 0;
+		}
+		published = gta4l_test.part_publish_counts[
+		    (call < (uint32_t)gta4l_test.part_publish_count) ?
+		    call : (uint32_t)gta4l_test.part_publish_count - 1u];
+		for (index = 0; index < gta4l_test_media_count; index++) {
+			IOMedia *media = gta4l_test_media[index];
+
+			if (media == 0) {
+				continue;
+			}
+			if (media->whole_value) {
+				if (visible < GTA4L_TEST_MAX_MEDIA) {
+					items[visible++] = media;
+				}
+			} else if (published != 0) {
+				if (visible < GTA4L_TEST_MAX_MEDIA) {
+					items[visible++] = media;
+					nonWhole++;
+				}
+				published--;
+			}
+		}
+		if (gta4l_test_partition_sample_hook != 0) {
+			gta4l_test_partition_sample_hook(call,
+			    (uint32_t)nonWhole);
+		}
+		return new OSIterator(items, visible);
+	}
 	for (index = 0; index < gta4l_test_media_count; index++) {
 		items[index] = gta4l_test_media[index];
 	}
@@ -720,6 +772,11 @@ IOMedia::read(IOService *client, UInt64 byteStart,
 		if (actualByteCount != 0) {
 			*actualByteCount = GTA4L_EMMC_BLOCK_BYTES;
 		}
+		if ((byteStart == (UInt64)GTA4L_EMMC_BLOCK_REPORT_LBA *
+		    GTA4L_EMMC_BLOCK_BYTES) &&
+		    (gta4l_test.part_publish_count > 0)) {
+			gta4l_test.part_publish_active = 1;
+		}
 		return kIOReturnSuccess;
 	}
 	if ((byteStart % GTA4L_EMMC_BLOCK_BYTES) != 0) {
@@ -755,6 +812,12 @@ IOMedia::read(IOService *client, UInt64 byteStart,
 	}
 	if (actualByteCount != 0) {
 		*actualByteCount = record.actual;
+	}
+	if ((record.status == kIOReturnSuccess) &&
+	    (byteStart == (UInt64)GTA4L_EMMC_BLOCK_REPORT_LBA *
+	    GTA4L_EMMC_BLOCK_BYTES) &&
+	    (gta4l_test.part_publish_count > 0)) {
+		gta4l_test.part_publish_active = 1;
 	}
 	return record.status;
 }

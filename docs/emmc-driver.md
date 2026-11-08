@@ -4193,6 +4193,96 @@ observation or partition-snapshot instrument needs a fresh owner decision.
 Evidence: `out/gta4l/ram-root-emmc-n5-hardware-evidence/` (flash board and
 `observation-1/`) and `docs/emmc-n5-integration-observation-2026-11-07.md`.
 
+### 5.3.51 N6 reliability observation: second clean CMD3 control (2026-11-07)
+
+Follow-up to §5.3.46 and §5.3.50. N6 re-flashed the unchanged D12.6 stage-9
+candidate BOOT-only to `/dev/block/mmcblk0p69`: image `7c76c7eb…` (85,688,320
+bytes, 18/18 gate, payload `e384cc06…`, packaged kernel `12385bc7…`,
+`gta4l-emmc-probe=9`, arguments `rd=md0 sheng-pmgr=2`). The pre-flash p69
+(the N5 image `22bea393…`) was saved as `boot-before-n6.img.xz` (`5eaaa423…`,
+decompressing to `22bea393…`). The post-flash full p69 is `b19c59b8…`, the
+image-length prefix matches `7c76c7eb…`, the tail is `a28b4ea2…`, and
+RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` are unchanged.
+Battery was 100%; no host-issued reboot or write outside p69 occurred. No
+source, archive, kernel or payload was rebuilt.
+
+One owner-controlled cold boot returned to TWRP and produced one
+`GTA4L-EMMC H9T REPORT ver=1` with `rc=0 stop=0 sub=1 att=1 tr=0 r1=0
+retry=0/0 step=13 log=4 hz=19200000`. CMD3 was submitted once with retry
+disabled; the 25-iteration poll ended at zero-based iteration 24 with terminal
+kind `C`, NORMAL `0001`, ERROR `0000`, RESPONSE0 `00000500`, valid 1 and ticks
+`0x14f2` (about 279.27 us at 19.2 MHz). No timeout capture exists (`C3T v=0`).
+`TRC n=6 ov=0` records scheduled entries at iterations 0/1/2/4/8/16, unused
+slots 6-18 and the reserved terminal slot 19. The all-zero `FAIL` record and
+the panic at the report path are the intentional report stop. The typed C3L
+poll ticks show 15 hex digits (`0000000000014e4`); the source format is two
+eight-digit halves and the prior D12.6 report of the same candidate shows
+`00000000000014e4`, so the missing leading zero is a transcription omission.
+Normalized, the poll ticks are `0x14e4` (about 278.54 us); poll and terminal
+timings are distinct sequential measurements, not a card-response latency.
+
+The prior D12.6 cold boot of the same candidate reported the same C3L value
+and the same terminal ticks; the six scheduled samples here are each one tick
+higher. This is deterministic-looking timing within a tick, not a rate or a
+latency bound. **Classification: clean control / non-reproduction.** N6 is a
+second clean cold-boot control of the same candidate, separated by other
+ladder work and a reflash; it is not a continuous two-boot trial, a
+failure-rate estimate, a fix or proof of reliable initialization. Scheduled
+samples remain interval-bounded and are not CMD3 responses; the terminal read
+does not prove a fresh response, an exact arrival time or a card-state
+transition. F2, p5b/F5 and N5 verdicts are unchanged; initialization
+reliability remains unresolved. The N6 boot budget is consumed; any further
+observation or instrument change needs a fresh owner decision. Evidence:
+`out/gta4l/ram-root-emmc-n6-reliability-evidence/` and
+`docs/emmc-n6-reliability-observation-2026-11-07.md`.
+
+### 5.3.52 N8 bounded partition-observation design (host-only, 2026-11-07)
+
+Follow-up to §5.3.50–§5.3.51. N8.1 designs a bounded partition-publication
+observation for the existing reporter; it adds no code, build, QEMU, device
+access, flash, boot, commit or push. The current reporter's `countPartitions()`
+stops at the first nonzero count and then takes one immediate re-sample, and
+`expected` is the GPT header entry-array slot count (84), not a populated
+count. N5's `count=22 expected=84 waited_ms=0` is therefore an unsynchronized
+mid-publication snapshot, not a completeness verdict.
+
+The design chooses an opt-in `gta4l-emmc-partobs=1` token orthogonal to
+`gta4l-emmc-block=1|3`; when the token is absent, the mode-1/mode-3 reporter
+is unchanged. It proposes a 4,000 ms observation deadline, a 50 ms sampling
+interval and a 250 ms count-unchanged window, all in the report thread and
+never under the controller gate. The `PARTOBS` line reports the sample count,
+first/final counts and nominal times, first-nonzero, changes, stability,
+deadline, timeout, none, error, the 84 slot count and an explicit `complete=0`.
+A stable count is not a completion barrier, and no completeness claim is made
+without an independent validated GPT-to-`IOMedia` range/count comparison.
+Iterator failure keeps `stop=15`; a deadline or a zero count is not a failure.
+The worst-case report path is 24 s against the 30 s watchdog. Host scenarios
+cover incremental, delayed, stable-partial, late-growth, no-partition,
+changing, deadline, iterator-error, cancellation, watchdog, legacy, width and
+no-gate-sleep cases, with mutations for the old first-nonzero behavior, false
+completeness, slot-count substitution, skipped cancellation/error/deadline
+checks, list-order stability, gate-held sleep and field overflow.
+
+No transport, width, timing, write path, mount, DMA/CQE/ICE or request-limit
+change is part of N8; candidate production and any hardware observation need
+separate approvals. F2, p5b/F5, N5 and N6 verdicts are unchanged; initialization
+reliability remains unresolved. Evidence:
+`docs/emmc-n8-partition-observation-design-2026-11-07.md`.
+
+N8.2 then implemented the observation on the host. The selector accepts
+`gta4l-emmc-partobs=1` only with exactly one block token and refuses an
+orphan, duplicate or non-1 value; the legacy `PART` path is byte-for-byte
+unchanged when the token is absent. The `PARTOBS` line is bounded and keeps
+`complete=0`. The diagnostic payload builder now maps
+`emmc-block-1-partobs` and `emmc-block-3-partobs` to two kernel arguments, the
+payload checker refuses a partobs token without a block token (or with a
+mismatched personality), and the packager accepts both names. Effective host
+results: core 48 scenarios/38 mutation controls (unchanged), adapter 64
+scenarios (nine partobs) with 12 adapter mutation controls (nine partobs) and
+three policy mutation controls, all rejected for the intended reason; the
+diagnostic payload suite passes 22 checks including both partobs mappings. No
+candidate build, QEMU run, device access, flash or boot was performed.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

@@ -97,6 +97,14 @@ def main():
         assert not bad.exists()
         print('PASS wrong expected diagnostic refused by payload contract')
 
+        bad = tmp / 'partobs-diagnostic.img'
+        result = run(base_args(bad, tmp / 'partobs-diagnostic.json')
+                     + ['--expect-diagnostic', 'emmc-block-1-partobs'])
+        assert result.returncode != 0
+        assert 'payload/ADT contract' in result.stderr, result.stderr
+        assert not bad.exists()
+        print('PASS partobs personality accepted and forwarded to the contract')
+
         failed_payload = (REPO / 'out/gta4l/ram-root-sdhci-host-init-evidence/'
                           'payload.img')
         if failed_payload.is_file():

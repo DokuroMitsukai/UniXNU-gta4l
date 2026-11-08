@@ -81,6 +81,22 @@ gta4l_emmc_block_mode_select(int arg_present, int arg_value,
 	return GTA4L_EMMC_BLOCK_SELECT_REFUSED;
 }
 
+int
+gta4l_emmc_block_partobs_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected)
+{
+	if (token_present == 0) {
+		return GTA4L_EMMC_BLOCK_PARTOBS_OFF;
+	}
+	if ((duplicate_tokens != 0) || (block_selected == 0)) {
+		return GTA4L_EMMC_BLOCK_PARTOBS_REFUSED;
+	}
+	if (token_value != 1) {
+		return GTA4L_EMMC_BLOCK_PARTOBS_REFUSED;
+	}
+	return GTA4L_EMMC_BLOCK_PARTOBS_ON;
+}
+
 enum gta4l_emmc_block_request_result
 gta4l_emmc_block_request_check(uint32_t capacity_blocks, uint64_t block,
     uint64_t nblks, uint64_t buffer_bytes, uint32_t direction, uint8_t online)
@@ -412,22 +428,91 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 	gta4l_emmc_block_put_u64(&writer, report->writable);
 	gta4l_emmc_block_put_char(&writer, '\n');
 
-	gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 PART: ");
-	gta4l_emmc_block_put_key(&writer, "count");
-	gta4l_emmc_block_put_u64(&writer, report->part_count);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "expected");
-	gta4l_emmc_block_put_u64(&writer, report->part_expected);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "waited_ms");
-	gta4l_emmc_block_put_u64(&writer, report->part_wait_ms);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "error");
-	gta4l_emmc_block_put_u64(&writer, report->part_error);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "reported");
-	gta4l_emmc_block_put_u64(&writer, report->part_reported);
-	gta4l_emmc_block_put_char(&writer, '\n');
+	if (report->part_obs != 0) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 PARTOBS: ");
+		gta4l_emmc_block_put_key(&writer, "samples");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_samples);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "first");
+		gta4l_emmc_block_put_u64(&writer, report->part_obs_first);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "first_ms");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_first_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "first_nz");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_first_nz);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "first_nz_ms");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_first_nz_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "final");
+		gta4l_emmc_block_put_u64(&writer, report->part_obs_final);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "final_ms");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_final_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "changes");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_changes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "stable");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_stable);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "stable_ms");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_stable_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "deadline_ms");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_deadline_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "timed_out");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_timed_out);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "none");
+		gta4l_emmc_block_put_u64(&writer, report->part_obs_none);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "error");
+		gta4l_emmc_block_put_u64(&writer, report->part_obs_error);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "slots");
+		gta4l_emmc_block_put_u64(&writer, report->part_obs_slots);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reported");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_reported);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "complete");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->part_obs_complete);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	} else {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 PART: ");
+		gta4l_emmc_block_put_key(&writer, "count");
+		gta4l_emmc_block_put_u64(&writer, report->part_count);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "expected");
+		gta4l_emmc_block_put_u64(&writer, report->part_expected);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "waited_ms");
+		gta4l_emmc_block_put_u64(&writer, report->part_wait_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "error");
+		gta4l_emmc_block_put_u64(&writer, report->part_error);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reported");
+		gta4l_emmc_block_put_u64(&writer, report->part_reported);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
 
 	for (index = 0; index < GTA4L_EMMC_BLOCK_PART_REPORT; index++) {
 		if (index >= report->part_reported) {

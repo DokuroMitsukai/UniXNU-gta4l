@@ -45,6 +45,8 @@ DIAGNOSTICS = {
     'emmc-probe-17': 'gta4l-emmc-probe=17',
     'emmc-block-1': 'gta4l-emmc-block=1',
     'emmc-block-3': 'gta4l-emmc-block=3',
+    'emmc-block-1-partobs': 'gta4l-emmc-block=1 gta4l-emmc-partobs=1',
+    'emmc-block-3-partobs': 'gta4l-emmc-block=3 gta4l-emmc-partobs=1',
 }
 
 
@@ -173,7 +175,8 @@ def main():
         ]
         for value in args.kernel_arg:
             command.extend(['--kernel-arg', value])
-        command.extend(['--kernel-arg', DIAGNOSTICS[args.diagnostic]])
+        for token in DIAGNOSTICS[args.diagnostic].split():
+            command.extend(['--kernel-arg', token])
         print('+ ' + ' '.join(command), flush=True)
         subprocess.run(command, cwd=unixnu, check=True)
 
