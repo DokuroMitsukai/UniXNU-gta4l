@@ -6,6 +6,7 @@
 
 gta4l_test_state gta4l_test;
 gta4l_test_media_read_fn gta4l_test_media_read_hook;
+gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;
 gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 int gta4l_test_media_count;
@@ -40,7 +41,21 @@ gta4l_test_reset(void)
 	gta4l_test.part_publish_calls = 0;
 	gta4l_test.part_publish_error_at = -1;
 	gta4l_test.part_publish_errors = 0;
+	gta4l_test.deblock_model = 0;
+	gta4l_test.deblock_segment_override = 0;
+	gta4l_test.deblock_fail_at = -1;
+	gta4l_test.deblock_fail_status = 0;
+	gta4l_test.deblock_short_at = -1;
+	gta4l_test.deblock_short_mode = 0;
+	gta4l_test.deblock_corrupt_at = -1;
+	gta4l_test.deblock_cancel_at = -1;
+	gta4l_test.deblock_advance_ms = 0;
+	gta4l_test.deblock_read_calls = 0;
+	gta4l_test.deblock_adapter_calls = 0;
+	gta4l_test.deblock_dma_errors = 0;
+	gta4l_test.deblock_unaligned_bounce = 0;
 	gta4l_test_media_read_hook = 0;
+	gta4l_test_deblock_hook = 0;
 	gta4l_test_partition_sample_hook = 0;
 	gta4l_test_media_count = 0;
 	gta4l_test_scheme_count = 0;
@@ -612,12 +627,24 @@ IOService::setProperty(const char *key, unsigned long long value,
 OSObject *
 IOService::getProperty(const char *key) const
 {
-	if ((key != 0) &&
-	    (strcmp(key, kIOGUIDPartitionSchemeUUIDKey) == 0) &&
-	    (uuid_value_ != 0)) {
-		const_cast<IOService *>(this)->uuid_object_.setValue(
-		    uuid_value_);
-		return const_cast<OSString *>(&uuid_object_);
+	int index;
+
+	if (key != 0) {
+		if ((strcmp(key, kIOGUIDPartitionSchemeUUIDKey) == 0) &&
+		    (uuid_value_ != 0)) {
+			const_cast<IOService *>(this)->uuid_object_.setValue(
+			    uuid_value_);
+			return const_cast<OSString *>(&uuid_object_);
+		}
+		for (index = 0; index < property_count_; index++) {
+			if ((properties_[index].key != 0) &&
+			    (strcmp(properties_[index].key, key) == 0)) {
+				const_cast<IOService *>(this)->property_number_.
+				    setValue(properties_[index].value);
+				return const_cast<OSNumber *>(
+				    &property_number_);
+			}
+		}
 	}
 	return 0;
 }
@@ -834,6 +861,386 @@ gta4l_test_media_completion_action(void *target, void *parameter,
 	record->actual = actual;
 }
 
+#define GTA4L_TEST_DEBLOCK_CHUNK_MAX 3
+#define GTA4L_TEST_DEBLOCK_SEGMENT_MAX 16
+
+struct gta4l_test_deblock_chunk {
+	uint8_t *address;
+	uint64_t physical_address;
+	uint64_t length;
+	uint64_t span_offset;
+};
+
+struct gta4l_test_deblock_segment {
+	uint64_t address;
+	uint64_t length;
+};
+
+class gta4l_test_deblock_descriptor : public IOMemoryDescriptor {
+public:
+	gta4l_test_deblock_descriptor(
+	    const struct gta4l_test_deblock_chunk *chunks, int count,
+	    uint64_t span_offset, uint64_t length, int direction)
+	{
+		chunks_ = chunks;
+		count_ = count;
+		span_offset_ = span_offset;
+		descriptor_length_ = length;
+		descriptor_direction_ = direction;
+	}
+	IOByteCount writeBytes(IOByteCount offset, const void *source,
+	    IOByteCount length) override
+	{
+		const uint8_t *bytes = static_cast<const uint8_t *>(source);
+		uint64_t position;
+		uint64_t remaining;
+		int index;
+
+		if ((source == 0) || (offset > descriptor_length_) ||
+		    (length > descriptor_length_ - offset)) {
+			return 0;
+		}
+		position = span_offset_ + offset;
+		remaining = length;
+		while (remaining > 0) {
+			int found = 0;
+
+			for (index = 0; index < count_; index++) {
+				uint64_t begin = chunks_[index].span_offset;
+				uint64_t end = begin + chunks_[index].length;
+				uint64_t chunk_offset;
+				uint64_t copy;
+
+				if ((position < begin) || (position >= end)) {
+					continue;
+				}
+				chunk_offset = position - begin;
+				copy = end - position;
+				if (copy > remaining) {
+					copy = remaining;
+				}
+				if (chunks_[index].address != 0) {
+					memcpy(chunks_[index].address +
+					    chunk_offset, bytes, (size_t)copy);
+				}
+				bytes += copy;
+				position += copy;
+				remaining -= copy;
+				found = 1;
+				break;
+			}
+			if (found == 0) {
+				return 0;
+			}
+		}
+		return length;
+	}
+	UInt64 getLength() const override { return descriptor_length_; }
+	int getDirection() const override { return descriptor_direction_; }
+	void *address() const override { return 0; }
+private:
+	const struct gta4l_test_deblock_chunk *chunks_;
+	int count_;
+	uint64_t span_offset_;
+	UInt64 descriptor_length_;
+	int descriptor_direction_;
+};
+
+static int
+gta4l_test_deblock_segments(
+    const struct gta4l_test_deblock_chunk *chunks, int count,
+    uint64_t scratch_address,
+    struct gta4l_test_deblock_segment *segments, int capacity)
+{
+	int used = 0;
+	int index;
+
+	for (index = 0; index < count; index++) {
+		uint64_t address = (chunks[index].physical_address != 0) ?
+		    chunks[index].physical_address :
+		    (uint64_t)(uintptr_t)chunks[index].address;
+		uint64_t offset = 0;
+
+		if (chunks[index].length == 0) {
+			continue;
+		}
+		if (address == scratch_address) {
+			if (used >= capacity) {
+				return used;
+			}
+			segments[used].address = address;
+			segments[used].length = chunks[index].length;
+			used++;
+			continue;
+		}
+		while (offset < chunks[index].length) {
+			uint64_t segment_size = PAGE_SIZE -
+			    ((address + offset) & (PAGE_SIZE - 1u));
+
+			if (segment_size > chunks[index].length - offset) {
+				segment_size = chunks[index].length - offset;
+			}
+			if (used >= capacity) {
+				return used;
+			}
+			segments[used].address = address + offset;
+			segments[used].length = segment_size;
+			used++;
+			offset += segment_size;
+		}
+	}
+	return used;
+}
+
+static UInt64
+gta4l_test_deblock_break_size(
+    const struct gta4l_test_deblock_segment *segments, int count,
+    UInt64 max_block_count, UInt64 max_byte_count, UInt64 max_segment_count,
+    UInt64 block_size)
+{
+	UInt64 break_size = 0;
+	UInt64 chunk = 0;
+	UInt64 chunk_size = 0;
+	UInt64 limit = 0;
+	UInt32 segment_count = 0;
+	int index;
+
+	if (max_block_count != 0) {
+		limit = max_block_count * block_size;
+	}
+	if ((max_byte_count != 0) &&
+	    ((limit == 0) || (max_byte_count < limit))) {
+		limit = max_byte_count;
+	}
+	for (index = 0; index < count; index++) {
+		uint64_t address = segments[index].address;
+		uint64_t size = segments[index].length;
+
+		if (chunk == 0) {
+			break_size += size;
+			chunk = address;
+			chunk_size = size;
+			segment_count++;
+		} else if (chunk + chunk_size == address) {
+			break_size += size;
+			chunk_size += size;
+		} else {
+			if ((max_segment_count != 0) &&
+			    (segment_count == max_segment_count)) {
+				break;
+			}
+			break_size += size;
+			chunk = address;
+			chunk_size = size;
+			segment_count++;
+		}
+		if ((limit != 0) && (break_size >= limit)) {
+			break_size = limit;
+			break;
+		}
+	}
+	if (block_size != 0) {
+		break_size -= break_size % block_size;
+	}
+	return break_size;
+}
+
+static IOReturn
+gta4l_test_deblock_read(IOBlockStorageDevice *device,
+    UInt64 absolute_start, IOMemoryDescriptor *buffer,
+    UInt64 *actual_byte_count)
+{
+	struct gta4l_test_deblock_chunk chunks[GTA4L_TEST_DEBLOCK_CHUNK_MAX];
+	struct gta4l_test_deblock_segment segments[GTA4L_TEST_DEBLOCK_SEGMENT_MAX];
+	uint8_t scratch[GTA4L_EMMC_BLOCK_BYTES];
+	uint32_t request_length = (uint32_t)buffer->getLength();
+	uint32_t head = (uint32_t)(absolute_start %
+	    GTA4L_EMMC_BLOCK_BYTES);
+	uint32_t tail;
+	uint32_t span;
+	uint64_t block_start;
+	uint64_t max_blocks = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
+	uint64_t max_bytes = GTA4L_EMMC_BLOCK_MAX_BYTES;
+	uint64_t max_segments = 1;
+	uint64_t break_size;
+	uint64_t offset;
+	uint64_t remaining;
+	uint32_t call = (uint32_t)gta4l_test.deblock_read_calls++;
+	OSNumber *property;
+	IOReturn status;
+	int chunk_count = 0;
+	int segment_count;
+	int request_index;
+
+	memset(scratch, 0, sizeof(scratch));
+	if (gta4l_test.deblock_advance_ms != 0) {
+		gta4l_test.now_ms += gta4l_test.deblock_advance_ms;
+	}
+	if (gta4l_test_deblock_hook != 0) {
+		gta4l_test_deblock_hook(call, 0);
+	}
+	if ((gta4l_test.deblock_cancel_at >= 0) &&
+	    (call == (uint32_t)gta4l_test.deblock_cancel_at) &&
+	    (gta4l_test_deblock_hook != 0)) {
+		gta4l_test_deblock_hook(call, 2);
+	}
+	if ((gta4l_test.deblock_fail_at >= 0) &&
+	    (call == (uint32_t)gta4l_test.deblock_fail_at)) {
+		if (actual_byte_count != 0) {
+			*actual_byte_count = 0;
+		}
+		return (gta4l_test.deblock_fail_status != 0) ?
+		    gta4l_test.deblock_fail_status : kIOReturnIOError;
+	}
+	tail = (uint32_t)((absolute_start + request_length) %
+	    GTA4L_EMMC_BLOCK_BYTES);
+	if (tail != 0) {
+		tail = GTA4L_EMMC_BLOCK_BYTES - tail;
+	}
+	span = head + request_length + tail;
+	block_start = absolute_start - head;
+	if (head != 0) {
+		chunks[chunk_count].address = scratch;
+		chunks[chunk_count].physical_address = 0;
+		chunks[chunk_count].length = head;
+		chunks[chunk_count].span_offset = 0;
+		chunk_count++;
+	}
+	request_index = chunk_count;
+	chunks[chunk_count].address =
+	    static_cast<uint8_t *>(buffer->address());
+	chunks[chunk_count].physical_address = 0;
+	chunks[chunk_count].length = request_length;
+	chunks[chunk_count].span_offset = head;
+	chunk_count++;
+	if (tail != 0) {
+		chunks[chunk_count].address = scratch;
+		chunks[chunk_count].physical_address = 0;
+		chunks[chunk_count].length = tail;
+		chunks[chunk_count].span_offset = head + request_length;
+		chunk_count++;
+	}
+	if (gta4l_test.deblock_unaligned_bounce != 0) {
+		chunks[request_index].physical_address =
+		    0x7fff0000ull + PAGE_SIZE - 8u;
+	}
+	if ((head != 0) || (tail != 0)) {
+		uint64_t request_address =
+		    (gta4l_test.deblock_unaligned_bounce != 0) ?
+		    0x7fff0000ull + PAGE_SIZE - 8u :
+		    (uint64_t)(uintptr_t)buffer->address();
+		uint64_t first_segment = PAGE_SIZE -
+		    (request_address & (PAGE_SIZE - 1u));
+
+		if (first_segment < GTA4L_EMMC_BLOCK_BYTES) {
+			gta4l_test.deblock_dma_errors++;
+			if (actual_byte_count != 0) {
+				*actual_byte_count = 0;
+			}
+			return kIOReturnDMAError;
+		}
+	}
+
+	property = OSDynamicCast(OSNumber,
+	    device->getProperty(kIOMaximumBlockCountReadKey));
+	if (property != 0) {
+		max_blocks = property->unsigned64BitValue();
+	}
+	property = OSDynamicCast(OSNumber,
+	    device->getProperty(kIOMaximumByteCountReadKey));
+	if (property != 0) {
+		max_bytes = property->unsigned64BitValue();
+	}
+	property = OSDynamicCast(OSNumber,
+	    device->getProperty(kIOMaximumSegmentCountReadKey));
+	if (property != 0) {
+		max_segments = property->unsigned64BitValue();
+	}
+	if (gta4l_test.deblock_segment_override > 0) {
+		max_segments = (uint64_t)gta4l_test.deblock_segment_override;
+	}
+	segment_count = gta4l_test_deblock_segments(chunks, chunk_count,
+	    (uint64_t)(uintptr_t)scratch, segments,
+	    GTA4L_TEST_DEBLOCK_SEGMENT_MAX);
+	break_size = gta4l_test_deblock_break_size(segments, segment_count,
+	    max_blocks, max_bytes, max_segments, GTA4L_EMMC_BLOCK_BYTES);
+	if (break_size == 0) {
+		gta4l_test.deblock_dma_errors++;
+		if (actual_byte_count != 0) {
+			*actual_byte_count = 0;
+		}
+		return kIOReturnDMAError;
+	}
+
+	offset = 0;
+	remaining = span;
+	while (remaining > 0) {
+		uint64_t part = (break_size < remaining) ? break_size :
+		    remaining;
+		gta4l_test_deblock_descriptor descriptor(chunks, chunk_count,
+		    offset, part, kIODirectionIn);
+		struct gta4l_test_media_completion record;
+		IOStorageCompletion completion;
+
+		record.status = kIOReturnSuccess;
+		record.actual = 0;
+		record.calls = 0;
+		completion.target = 0;
+		completion.action = gta4l_test_media_completion_action;
+		completion.parameter = &record;
+		gta4l_test.deblock_adapter_calls++;
+		status = device->doAsyncReadWrite(&descriptor,
+		    (block_start + offset) / GTA4L_EMMC_BLOCK_BYTES,
+		    part / GTA4L_EMMC_BLOCK_BYTES, 0, &completion);
+		if (status != kIOReturnSuccess) {
+			if (actual_byte_count != 0) {
+				*actual_byte_count = 0;
+			}
+			return status;
+		}
+		if (record.status != kIOReturnSuccess) {
+			if (actual_byte_count != 0) {
+				*actual_byte_count = 0;
+			}
+			return record.status;
+		}
+		if (record.actual != part) {
+			if (actual_byte_count != 0) {
+				*actual_byte_count = 0;
+			}
+			return kIOReturnIOError;
+		}
+		offset += part;
+		remaining -= part;
+	}
+
+	if (gta4l_test_deblock_hook != 0) {
+		gta4l_test_deblock_hook(call, 1);
+	}
+	if ((gta4l_test.deblock_corrupt_at >= 0) &&
+	    (call == (uint32_t)gta4l_test.deblock_corrupt_at)) {
+		uint8_t *destination =
+		    static_cast<uint8_t *>(buffer->address());
+
+		destination[request_length / 2u] ^= 0x5au;
+	}
+	if (actual_byte_count != 0) {
+		*actual_byte_count = request_length;
+		if ((gta4l_test.deblock_short_at >= 0) &&
+		    (call == (uint32_t)gta4l_test.deblock_short_at)) {
+			if (gta4l_test.deblock_short_mode == 1) {
+				*actual_byte_count = 0;
+			} else if (gta4l_test.deblock_short_mode == 2) {
+				*actual_byte_count = request_length + 1u;
+			} else {
+				*actual_byte_count = (request_length == 0) ?
+				    0 : request_length - 1u;
+			}
+		}
+	}
+	return kIOReturnSuccess;
+}
+
 IOReturn
 IOMedia::read(IOService *client, UInt64 byteStart,
     IOMemoryDescriptor *buffer, IOStorageAttributes *attributes,
@@ -850,8 +1257,10 @@ IOMedia::read(IOService *client, UInt64 byteStart,
 	if (!open_value) {
 		return kIOReturnNotOpen;
 	}
-	if ((buffer == 0) || (buffer->getLength() < GTA4L_EMMC_BLOCK_BYTES) ||
-	    (buffer->address() == 0)) {
+	if ((buffer == 0) || (buffer->address() == 0) ||
+	    (buffer->getLength() == 0) ||
+	    ((gta4l_test.deblock_model == 0) &&
+	    (buffer->getLength() < GTA4L_EMMC_BLOCK_BYTES))) {
 		return kIOReturnBadArgument;
 	}
 	if (gta4l_test_media_read_hook != 0) {
@@ -878,6 +1287,10 @@ IOMedia::read(IOService *client, UInt64 byteStart,
 			gta4l_test.part_publish_active = 1;
 		}
 		return kIOReturnSuccess;
+	}
+	if (gta4l_test.deblock_model != 0) {
+		return gta4l_test_deblock_read(device, base_value + byteStart,
+		    buffer, actualByteCount);
 	}
 	if ((byteStart % GTA4L_EMMC_BLOCK_BYTES) != 0) {
 		return kIOReturnBadArgument;

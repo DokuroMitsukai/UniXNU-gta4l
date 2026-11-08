@@ -198,12 +198,12 @@ public:
 	static IOMemoryDescriptor *withAddress(void *address, UInt64 length,
 	    int direction);
 	const void *typeTag() const override { return &test_tag; }
-	IOByteCount writeBytes(IOByteCount offset, const void *source,
+	virtual IOByteCount writeBytes(IOByteCount offset, const void *source,
 	    IOByteCount length);
-	UInt64 getLength() const { return length_; }
-	int getDirection() const { return direction_; }
-	void *address() const { return address_; }
-private:
+	virtual UInt64 getLength() const { return length_; }
+	virtual int getDirection() const { return direction_; }
+	virtual void *address() const { return address_; }
+protected:
 	void *address_;
 	UInt64 length_;
 	int direction_;
@@ -214,8 +214,7 @@ public:
 	inline static const int test_tag = 0;
 	IOService() : property_count_(0), provider_(0), registered_(false),
 	    uuid_value_(0), child_count_(0) {}
-	const void *typeTag() const override { return &test_tag; }
-	virtual bool start(IOService *provider) { provider_ = provider; return true; }
+	const void *typeTag() const override { return &test_tag; }	virtual bool start(IOService *provider) { provider_ = provider; return true; }
 	virtual void stop(IOService *provider) { (void)provider; }
 	virtual void free() {}
 	virtual IOService *getProvider() const { return provider_; }
@@ -241,6 +240,7 @@ public:
 	bool registered_;
 	const char *uuid_value_;
 	OSString uuid_object_;
+	OSNumber property_number_;
 	IOService *children_[8];
 	int child_count_;
 };
@@ -487,6 +487,19 @@ struct gta4l_test_state {
 	uint32_t part_publish_calls;
 	int part_publish_error_at;
 	uint32_t part_publish_errors;
+	int deblock_model;
+	int deblock_segment_override;
+	int deblock_fail_at;
+	int deblock_fail_status;
+	int deblock_short_at;
+	int deblock_short_mode;
+	int deblock_corrupt_at;
+	int deblock_cancel_at;
+	uint32_t deblock_advance_ms;
+	int deblock_read_calls;
+	int deblock_adapter_calls;
+	int deblock_dma_errors;
+	int deblock_unaligned_bounce;
 };
 
 typedef void (*gta4l_test_partition_sample_fn)(uint32_t sample,
@@ -498,6 +511,11 @@ extern gta4l_test_state gta4l_test;
 typedef IOReturn (*gta4l_test_media_read_fn)(IOMedia *media, UInt64 byteStart,
     IOMemoryDescriptor *buffer, UInt64 *actualByteCount);
 extern gta4l_test_media_read_fn gta4l_test_media_read_hook;
+
+typedef void (*gta4l_test_deblock_sample_fn)(uint32_t call, uint32_t phase);
+extern gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;
+
+void gta4l_test_fill_sector(uint64_t block, void *buffer);
 
 extern IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 extern int gta4l_test_media_count;

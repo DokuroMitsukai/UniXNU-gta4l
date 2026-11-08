@@ -6,8 +6,8 @@ The tracked board.toml is never modified. A temporary copy is made, its
 [payload.adt] packed_data_ramdisk is forced to false because the RAM-root
 fixture is a raw N4KROOT image. The payload is built by the normal UniXNU
 payload step and checked by scripts/check-gta4l-payload.py before it is copied
-to --output or a manifest is written. The partobs, partcmp and partread
-personalities additionally require --data-ramdisk-manifest naming the
+to --output or a manifest is written. The partobs, partcmp, partread and
+deblock personalities additionally require --data-ramdisk-manifest naming the
 fs-timer-hold fixture, so the old early-success-panic RAM-root fixture cannot
 be repackaged for the observation.
 """
@@ -54,12 +54,16 @@ DIAGNOSTICS = {
     'emmc-block-3-partcmp': 'gta4l-emmc-block=3 gta4l-emmc-partcmp=1',
     'emmc-block-1-partread': 'gta4l-emmc-block=1 gta4l-emmc-partread=1',
     'emmc-block-3-partread': 'gta4l-emmc-block=3 gta4l-emmc-partread=1',
+    'emmc-block-1-deblock': 'gta4l-emmc-block=1 gta4l-emmc-deblock=1',
+    'emmc-block-3-deblock': 'gta4l-emmc-block=3 gta4l-emmc-deblock=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
 PARTREAD_DIAGNOSTICS = ('emmc-block-1-partread', 'emmc-block-3-partread')
+DEBLOCK_DIAGNOSTICS = ('emmc-block-1-deblock', 'emmc-block-3-deblock')
 PARTITION_DIAGNOSTICS = (PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS +
                          PARTREAD_DIAGNOSTICS)
+OBSERVATION_DIAGNOSTICS = PARTITION_DIAGNOSTICS + DEBLOCK_DIAGNOSTICS
 DATA_RAMDISK_DIAGNOSTICS = ('report', 'fs-timer', 'fs-timer-hold')
 
 
@@ -100,7 +104,7 @@ def main():
     parser.add_argument('--data-ramdisk', type=Path)
     parser.add_argument('--data-ramdisk-manifest', type=Path,
                         help='fixture.json describing the data-ramdisk '
-                             'diagnostic; required for the partobs '
+                             'diagnostic; required for the observation '
                              'personalities, which require fs-timer-hold')
     parser.add_argument('--trust-cache', type=Path)
     parser.add_argument('--owner-trust-cache', action='store_true',
@@ -196,16 +200,16 @@ def main():
                 f'{args.data_ramdisk_manifest}: hold_after_success disagrees '
                 'with the diagnostic')
         data_ramdisk_manifest_hash = sha(args.data_ramdisk_manifest)
-    if args.diagnostic in PARTITION_DIAGNOSTICS:
+    if args.diagnostic in OBSERVATION_DIAGNOSTICS:
         if data_ramdisk_diagnostic is None:
             raise SystemExit(
-                'the partition observation personalities require '
+                'the observation personalities require '
                 '--data-ramdisk-manifest naming the fs-timer-hold fixture; '
                 'the old fs-timer fixture panics after success and can '
                 'preempt the eMMC report')
         if not data_ramdisk_hold:
             raise SystemExit(
-                f'{args.data_ramdisk_manifest}: the partition observation '
+                f'{args.data_ramdisk_manifest}: the observation '
                 'personalities require the fs-timer-hold data ramdisk; got '
                 f'{data_ramdisk_diagnostic}')
 

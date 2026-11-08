@@ -132,6 +132,140 @@ gta4l_emmc_block_partread_select(int token_present, int token_value,
 	return GTA4L_EMMC_BLOCK_PARTREAD_ON;
 }
 
+int
+gta4l_emmc_block_deblock_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int partobs_selected,
+    int partcmp_selected, int partread_selected)
+{
+	if (token_present == 0) {
+		return GTA4L_EMMC_BLOCK_DEBLOCK_OFF;
+	}
+	if ((duplicate_tokens != 0) || (block_selected == 0) ||
+	    (partobs_selected != 0) || (partcmp_selected != 0) ||
+	    (partread_selected != 0)) {
+		return GTA4L_EMMC_BLOCK_DEBLOCK_REFUSED;
+	}
+	if (token_value != 1) {
+		return GTA4L_EMMC_BLOCK_DEBLOCK_REFUSED;
+	}
+	return GTA4L_EMMC_BLOCK_DEBLOCK_ON;
+}
+
+static struct gta4l_emmc_block_deblock_case gta4l_emmc_block_deblock_cases[] = {
+	/* Head-only: the first 100 bytes of the block are the deblocker's
+	 * excess-start scratch and are discarded. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_WHOLE, 924u, 100u,
+		{
+			0x5f, 0x4f, 0x36, 0x3c, 0xaf, 0xbe, 0xde, 0x86,
+			0xc6, 0x46, 0x43, 0xa6, 0xda, 0xa0, 0xb3, 0xdb,
+			0x7e, 0xdc, 0xcd, 0x83, 0xb0, 0x13, 0xeb, 0x62,
+			0x9f, 0x2f, 0x95, 0x6a, 0x30, 0x1d, 0x37, 0x19,
+		},
+	},
+	/* Tail-only: the aligned start takes the direct path. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_WHOLE, 600u, 0u,
+		{
+			0xe3, 0xef, 0x99, 0x6d, 0xf6, 0xc4, 0x22, 0x66,
+			0x79, 0x98, 0x86, 0xce, 0x59, 0x02, 0x87, 0x68,
+			0x71, 0x57, 0xc4, 0xc9, 0x20, 0x35, 0x7a, 0x0f,
+			0xb1, 0x15, 0x81, 0x0b, 0x07, 0xd5, 0x9d, 0x01,
+		},
+	},
+	/* Both ends inside one block: _requestIsOneBlock. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_WHOLE, 200u, 100u,
+		{
+			0x6d, 0x9c, 0x54, 0xde, 0xe5, 0x66, 0x0c, 0x46,
+			0x88, 0x6f, 0x32, 0xd8, 0x0e, 0x57, 0xe9, 0xdd,
+			0x0f, 0xfa, 0x57, 0xee, 0x0c, 0xd2, 0xa7, 0x62,
+			0xb0, 0x36, 0xd9, 0xc8, 0xe0, 0xc3, 0xa3, 0x3a,
+		},
+	},
+	/* Both ends across two blocks. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_WHOLE, 600u, 100u,
+		{
+			0x06, 0x2e, 0x84, 0xac, 0x7f, 0x7b, 0x5b, 0xcd,
+			0xfb, 0xbd, 0x30, 0xb5, 0x88, 0x3b, 0xfd, 0xf1,
+			0x88, 0xdb, 0xf2, 0x47, 0xab, 0xd7, 0x8e, 0xd9,
+			0xfd, 0xb5, 0xbf, 0xb8, 0xd9, 0x0d, 0xae, 0x55,
+		},
+	},
+	/* Both ends across a multi-page 32-block span. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_WHOLE, 16000u, 100u,
+		{
+			0x4f, 0x49, 0x9b, 0xf0, 0xf0, 0x58, 0x6d, 0x0b,
+			0x2b, 0x29, 0xf0, 0xdf, 0x7a, 0x64, 0xdd, 0x84,
+			0x98, 0x56, 0x69, 0x8b, 0xc7, 0x19, 0x4e, 0x93,
+			0xb8, 0x44, 0xbb, 0x3e, 0x19, 0xcd, 0x0f, 0xe2,
+		},
+	},
+	/* Aligned control: no deblocker is constructed. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_WHOLE, 1024u, 512u,
+		{
+			0x4e, 0x35, 0x75, 0xfe, 0xb7, 0x62, 0xc8, 0xfe,
+			0xce, 0x37, 0x0e, 0x60, 0x5a, 0x83, 0x34, 0xe8,
+			0xbf, 0xe1, 0xf8, 0x48, 0xf7, 0x2e, 0x73, 0xed,
+			0x54, 0xa4, 0xb2, 0xe1, 0x47, 0x4d, 0x1f, 0x70,
+		},
+	},
+	/* Boot base plus a head-only read. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_BOOT, 924u, 4196u,
+		{
+			0xff, 0x34, 0x6b, 0x8d, 0xdf, 0xd7, 0xc9, 0x82,
+			0xd4, 0x03, 0xc1, 0x28, 0x16, 0xaf, 0x31, 0x06,
+			0x4d, 0x8b, 0x80, 0x03, 0xd9, 0x89, 0x1c, 0x02,
+			0x93, 0xd4, 0xfd, 0x67, 0x3e, 0x36, 0xd7, 0xd1,
+		},
+	},
+	/* Boot base plus a same-block read. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_BOOT, 200u, 1048676u,
+		{
+			0xcd, 0xb2, 0xd0, 0xc4, 0x75, 0x5f, 0x34, 0x23,
+			0x93, 0x0b, 0x44, 0x25, 0x76, 0x53, 0xbc, 0x60,
+			0x12, 0x26, 0xb3, 0x47, 0x96, 0x66, 0x16, 0x6d,
+			0x66, 0xa0, 0x8b, 0x78, 0xf6, 0xb7, 0xbf, 0x53,
+		},
+	},
+	/* Boot base plus the retained 64-block tail; the last 100 bytes are
+	 * the deblocker's excess-final scratch and are discarded. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_BOOT, 32668u, 100630528u,
+		{
+			0x09, 0x5a, 0x65, 0x73, 0xcb, 0x4a, 0xe8, 0xd8,
+			0x55, 0x08, 0x0b, 0x4f, 0x46, 0xc1, 0xe7, 0xb1,
+			0x32, 0xbc, 0x3f, 0x9a, 0x69, 0x0b, 0xc1, 0x42,
+			0x89, 0x8f, 0x4a, 0x05, 0x5b, 0xf4, 0xcc, 0x63,
+		},
+	},
+	/* Boot base plus a same-block read at the media end. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_BOOT, 200u, 100662884u,
+		{
+			0x6d, 0x9c, 0x54, 0xde, 0xe5, 0x66, 0x0c, 0x46,
+			0x88, 0x6f, 0x32, 0xd8, 0x0e, 0x57, 0xe9, 0xdd,
+			0x0f, 0xfa, 0x57, 0xee, 0x0c, 0xd2, 0xa7, 0x62,
+			0xb0, 0x36, 0xd9, 0xc8, 0xe0, 0xc3, 0xa3, 0x3a,
+		},
+	},
+	/* Boot base plus an aligned control. */
+	{
+		GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_BOOT, 1024u, 4096u,
+		{
+			0xb5, 0x0a, 0xab, 0x9d, 0x52, 0xe4, 0xd1, 0xe3,
+			0x60, 0x78, 0xfa, 0x51, 0x20, 0xe3, 0xaa, 0x1c,
+			0xc5, 0x1e, 0xb4, 0x75, 0x45, 0x4b, 0xcc, 0x7f,
+			0x79, 0xec, 0xa1, 0xbd, 0xaa, 0x95, 0x97, 0x74,
+		},
+	},
+};
+
 static struct gta4l_emmc_block_partread_case gta4l_emmc_block_partread_cases[] = {
 	/* The GPT primary copy: PMBR, header and the 128-entry array. */
 	{
@@ -309,6 +443,33 @@ gta4l_emmc_block_partread_case_mutable(uint32_t index)
 		return 0;
 	}
 	return &gta4l_emmc_block_partread_cases[index];
+}
+#endif
+
+uint32_t
+gta4l_emmc_block_deblock_case_count(void)
+{
+	return (uint32_t)(sizeof(gta4l_emmc_block_deblock_cases) /
+	    sizeof(gta4l_emmc_block_deblock_cases[0]));
+}
+
+const struct gta4l_emmc_block_deblock_case *
+gta4l_emmc_block_deblock_case_at(uint32_t index)
+{
+	if (index >= gta4l_emmc_block_deblock_case_count()) {
+		return 0;
+	}
+	return &gta4l_emmc_block_deblock_cases[index];
+}
+
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+struct gta4l_emmc_block_deblock_case *
+gta4l_emmc_block_deblock_case_mutable(uint32_t index)
+{
+	if (index >= gta4l_emmc_block_deblock_case_count()) {
+		return 0;
+	}
+	return &gta4l_emmc_block_deblock_cases[index];
 }
 #endif
 
@@ -1371,6 +1532,95 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_digest(&writer,
 		    report->partread_fail_digest,
 		    sizeof(report->partread_fail_digest));
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
+
+	if (report->deblock != 0) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 DEBLOCK: ");
+		gta4l_emmc_block_put_key(&writer, "cases");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_cases);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "passed");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_passed);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "failed");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_failed);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reason");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_reason);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "complete");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_complete);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reads");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_reads);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "bytes");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_bytes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "span");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_span);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "blocks");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_blocks);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "fails");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_fails);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "cancel");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_cancel);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "budget");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_budget);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "media");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_media);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "part");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_part);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "seg");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_segments);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "cap");
+		gta4l_emmc_block_put_u64(&writer, report->deblock_capacity);
+		gta4l_emmc_block_put_char(&writer, '\n');
+
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 DEBLOCKREAD: ");
+		gta4l_emmc_block_put_key(&writer, "index");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->deblock_last_index);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "target");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->deblock_last_target);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "start");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->deblock_last_start);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "length");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->deblock_last_length);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "span");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->deblock_last_span);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "actual");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->deblock_last_actual);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "status");
+		gta4l_emmc_block_put_u64(&writer,
+		    (uint64_t)(uint32_t)report->deblock_last_status);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "digest");
+		gta4l_emmc_block_put_digest(&writer,
+		    report->deblock_last_digest,
+		    sizeof(report->deblock_last_digest));
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 

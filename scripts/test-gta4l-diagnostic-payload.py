@@ -471,6 +471,16 @@ def test_emmc_block_3_partread(base):
                                   'partread')
 
 
+def test_emmc_block_1_deblock(base):
+    check_observation_personality(base, 'emmc-block-1-deblock', 1,
+                                  'deblock')
+
+
+def test_emmc_block_3_deblock(base):
+    check_observation_personality(base, 'emmc-block-3-deblock', 3,
+                                  'deblock')
+
+
 def test_partcmp_rejects_early_panic_fixture(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
@@ -524,6 +534,34 @@ def test_partread_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS partread rejects the early-panic fs-timer fixture')
+
+
+def test_deblock_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-1-deblock'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for deblock')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS deblock rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -636,6 +674,39 @@ def test_diagnostic_contract(_base):
     missing_partread = checks('gta4l-emmc-block=1', 'emmc-block-1-partread')
     assert not missing_partread[
         'emmc-block-1-partread_diagnostic_selected']
+    deblocked = checks('rd=md0 gta4l-emmc-block=1 gta4l-emmc-deblock=1',
+                       'emmc-block-1-deblock')
+    assert all(deblocked.values()), deblocked
+    deblocked_chunked = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-deblock=1',
+        'emmc-block-3-deblock')
+    assert all(deblocked_chunked.values()), deblocked_chunked
+    orphan_deblock = checks('gta4l-emmc-probe=1 gta4l-emmc-deblock=1')
+    assert not orphan_deblock['no_deblock_token_outside_block_mode']
+    duplicate_deblock = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-deblock=1 gta4l-emmc-deblock=1',
+        'emmc-block-1-deblock')
+    assert not duplicate_deblock['at_most_one_deblock_token']
+    bad_deblock_value = checks('gta4l-emmc-block=1 gta4l-emmc-deblock=2',
+                               'emmc-block-1-deblock')
+    assert not bad_deblock_value['deblock_value_one']
+    assert not bad_deblock_value[
+        'emmc-block-1-deblock_diagnostic_selected']
+    deblock_partobs = checks('gta4l-emmc-block=1 gta4l-emmc-partobs=1 '
+                             'gta4l-emmc-deblock=1')
+    assert not deblock_partobs['deblock_partobs_exclusive']
+    deblock_partcmp = checks('gta4l-emmc-block=1 gta4l-emmc-partcmp=1 '
+                             'gta4l-emmc-deblock=1')
+    assert not deblock_partcmp['deblock_partcmp_exclusive']
+    deblock_partread = checks('gta4l-emmc-block=1 gta4l-emmc-partread=1 '
+                              'gta4l-emmc-deblock=1')
+    assert not deblock_partread['deblock_partread_exclusive']
+    plain_deblock_expected = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-deblock=1', 'emmc-block-1')
+    assert not plain_deblock_expected['emmc-block-1_diagnostic_selected']
+    missing_deblock = checks('gta4l-emmc-block=1', 'emmc-block-1-deblock')
+    assert not missing_deblock[
+        'emmc-block-1-deblock_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -652,9 +723,11 @@ def main():
              test_emmc_block_1_partobs, test_emmc_block_3_partobs,
              test_emmc_block_1_partcmp, test_emmc_block_3_partcmp,
              test_emmc_block_1_partread, test_emmc_block_3_partread,
+             test_emmc_block_1_deblock, test_emmc_block_3_deblock,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,
+             test_deblock_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)

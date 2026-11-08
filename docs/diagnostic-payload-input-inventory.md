@@ -296,7 +296,12 @@ N10.1 production rebuilt the `emmc-block-3-partread` payload (`e2dc899d…`)
 against the partread kernel with the unchanged `fs-timer-hold` fixture
 (`00363681…`). N10.2 rebuilt the same `emmc-block-3-partread` payload
 (`462870cd…`) against the fourteen-case partread kernel with the same fixture
-and mapping. The
+and mapping. The N10.4 unaligned deblock qualification adds
+`emmc-block-1-deblock` and `emmc-block-3-deblock`, which map to the same block
+token plus `gta4l-emmc-deblock=1`; both require the hold fixture, and the
+checker refuses an orphan, duplicate or non-1 deblock token, a mismatched
+personality, and any deblock+partobs, deblock+partcmp or deblock+partread
+combination. The host-only N10.4 batch rebuilt no payload. The
 stage-2
 image built on
 2026-10-31 is

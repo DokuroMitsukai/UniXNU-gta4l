@@ -113,7 +113,9 @@ def main():
                                  'emmc-block-1-partcmp',
                                  'emmc-block-3-partcmp',
                                  'emmc-block-1-partread',
-                                 'emmc-block-3-partread'),
+                                 'emmc-block-3-partread',
+                                 'emmc-block-1-deblock',
+                                 'emmc-block-3-deblock'),
                         default='any',
                         help='require this board diagnostic argument in the payload')
     parser.add_argument('--force', action='store_true')

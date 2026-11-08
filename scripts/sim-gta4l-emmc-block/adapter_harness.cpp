@@ -3256,6 +3256,642 @@ scenario_partread_cancel(void)
 	return 0;
 }
 
+static int g_deblock_fail_at = -1;
+static int g_deblock_short_at = -1;
+static int g_deblock_corrupt_at = -1;
+static int g_deblock_cancel_at = -1;
+static int g_deblock_watchdog_at = -1;
+static uint32_t g_deblock_advance_ms;
+static IOMedia *g_deblock_whole_media;
+static IOMedia *g_deblock_boot_media;
+
+static void
+deblock_fill_sector(uint64_t block, uint8_t *bytes)
+{
+	uint32_t index;
+
+	memset(bytes, 0, GTA4L_EMMC_BLOCK_BYTES);
+	if (block == GTA4L_EMMC_BLOCK_REPORT_LBA) {
+		memcpy(bytes, "EFI PART", 8);
+		bytes[0x50] = 84;
+		bytes[0x54] = 128;
+		return;
+	}
+	for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+		bytes[index] = (uint8_t)(block + index);
+	}
+}
+
+static void
+deblock_expected_for_case(
+    const struct gta4l_emmc_block_deblock_case *item, uint8_t digest[32])
+{
+	static uint8_t scratch[GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BYTES];
+	uint8_t sector[GTA4L_EMMC_BLOCK_BYTES];
+	uint64_t absolute;
+	uint64_t block;
+	uint64_t last_block = ~0ull;
+	uint64_t position;
+	uint32_t length;
+	uint32_t index;
+	uint32_t offset;
+
+	absolute = (item->target == GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_BOOT) ?
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES + item->start :
+	    item->start;
+	length = item->length;
+	for (index = 0; index < length; index++) {
+		position = absolute + index;
+		block = position / GTA4L_EMMC_BLOCK_BYTES;
+		offset = (uint32_t)(position % GTA4L_EMMC_BLOCK_BYTES);
+		if (block != last_block) {
+			deblock_fill_sector(block, sector);
+			last_block = block;
+		}
+		scratch[index] = sector[offset];
+	}
+	gta4l_emmc_block_sha256(scratch, length, digest);
+}
+
+static void
+deblock_hook(uint32_t call, uint32_t phase)
+{
+	if ((phase == 2u) && (g_deblock_cancel_at >= 0) &&
+	    (call == (uint32_t)g_deblock_cancel_at)) {
+		g_self->reportCancel = true;
+	}
+	if ((phase == 0u) && (g_deblock_watchdog_at >= 0) &&
+	    (call == (uint32_t)g_deblock_watchdog_at)) {
+		(void)invoke_thread(1);
+	}
+}
+
+static void
+deblock_reset_fixture(void)
+{
+	g_deblock_fail_at = -1;
+	g_deblock_short_at = -1;
+	g_deblock_corrupt_at = -1;
+	g_deblock_cancel_at = -1;
+	g_deblock_watchdog_at = -1;
+	g_deblock_advance_ms = 0u;
+	g_deblock_whole_media = 0;
+	g_deblock_boot_media = 0;
+}
+
+static void
+deblock_setup(bool withWhole, bool withBoot)
+{
+	uint32_t index;
+
+	deblock_reset_fixture();
+	gta4l_test.deblock_model = 1;
+	gta4l_test_deblock_hook = deblock_hook;
+	if (withWhole) {
+		g_deblock_whole_media = add_media(true, 0,
+		    (UInt64)gta4l_test.capacity_blocks *
+		    GTA4L_EMMC_BLOCK_BYTES, false,
+		    "GUID_partition_scheme", true);
+	}
+	if (withBoot) {
+		g_deblock_boot_media = add_media(false,
+		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+		    false, "Apple_Boot", true);
+	}
+	for (index = 0; index < gta4l_emmc_block_deblock_case_count();
+	    index++) {
+		struct gta4l_emmc_block_deblock_case *item =
+		    gta4l_emmc_block_deblock_case_mutable(index);
+
+		deblock_expected_for_case(item, item->expected);
+	}
+}
+
+static void
+deblock_apply_fixture(void)
+{
+	gta4l_test.deblock_fail_at = g_deblock_fail_at;
+	gta4l_test.deblock_short_at = g_deblock_short_at;
+	gta4l_test.deblock_corrupt_at = g_deblock_corrupt_at;
+	gta4l_test.deblock_cancel_at = g_deblock_cancel_at;
+	gta4l_test.deblock_advance_ms = g_deblock_advance_ms;
+}
+
+static int
+scenario_deblock_refused_orphan(void)
+{
+	begin("gta4l-emmc-deblock=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "gta4l-emmc-deblock requires") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_refused_value(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=2");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "malformed gta4l-emmc-deblock") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1 "
+	    "gta4l-emmc-deblock=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "duplicate gta4l-emmc-deblock") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_refused_partobs(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1 "
+	    "gta4l-emmc-deblock=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_refused_partcmp(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1 "
+	    "gta4l-emmc-deblock=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_refused_partread(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1 "
+	    "gta4l-emmc-deblock=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_segment_property(void)
+{
+	OSNumber *property;
+
+	begin("gta4l-emmc-block=1");
+	CHECK(g_started);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumSegmentCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() == 1);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1");
+	CHECK(g_started);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumSegmentCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() == 1);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumSegmentCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() ==
+	    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS);
+	return 0;
+}
+
+static int
+scenario_deblock_match(void)
+{
+	const struct gta4l_emmc_block_deblock_case *last;
+	char digest[33];
+	char expected[256];
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 DEBLOCK: cases=11 passed=11 failed=0 reason=0 "
+	    "complete=1 reads=11 bytes=54364 span=56832 blocks=111 fails=0 "
+	    "cancel=0 budget=0 media=0 part=0 seg=3 cap=61071360") != 0);
+	last = gta4l_emmc_block_deblock_case_at(10);
+	CHECK(last != 0);
+	partread_digest_hex(last->expected, digest);
+	snprintf(expected, sizeof(expected),
+	    "GTA4L-EMMC P5 DEBLOCKREAD: index=10 target=1 start=4096 "
+	    "length=1024 span=1024 actual=1024 status=0 digest=%s",
+	    digest);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "PARTREAD") == 0);
+	CHECK(gta4l_test.deblock_read_calls == 11);
+	CHECK(gta4l_test.deblock_adapter_calls == 11);
+	CHECK(gta4l_test.deblock_dma_errors == 0);
+	CHECK(gta4l_test.read_calls == 112);
+	CHECK(g_deblock_whole_media != 0);
+	CHECK(g_deblock_whole_media->open_calls == 1);
+	CHECK(g_deblock_whole_media->close_calls == 1);
+	CHECK(g_deblock_boot_media != 0);
+	CHECK(g_deblock_boot_media->open_calls == 1);
+	CHECK(g_deblock_boot_media->close_calls == 1);
+	return 0;
+}
+
+static int
+scenario_deblock_range_invalid(void)
+{
+	struct gta4l_emmc_block_deblock_case *first;
+	uint64_t saved_start;
+	uint64_t whole_size;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	first = gta4l_emmc_block_deblock_case_mutable(0);
+	CHECK(first != 0);
+	saved_start = first->start;
+	whole_size = (uint64_t)gta4l_test.capacity_blocks *
+	    GTA4L_EMMC_BLOCK_BYTES;
+	first->start = whole_size - 100u;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	first->start = saved_start;
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 DEBLOCK: cases=11 passed=10 failed=1 reason=10 "
+	    "complete=0 reads=10 bytes=53440 span=55808 blocks=109 fails=0 "
+	    "cancel=0 budget=0 media=0 part=0 seg=3 cap=61071360") != 0);
+	CHECK(g_self->report.deblock_fail_index == 0);
+	CHECK(g_self->report.deblock_fail_reason ==
+	    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_ARG);
+	return 0;
+}
+
+static int
+scenario_deblock_seg1(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	deblock_apply_fixture();
+	gta4l_test.deblock_segment_override = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 DEBLOCK: cases=11 passed=4 failed=7 reason=5 "
+	    "complete=0 reads=11 bytes=54364 span=56832 blocks=111 fails=7 "
+	    "cancel=0 budget=0 media=0 part=0 seg=3 cap=61071360") != 0);
+	CHECK(gta4l_test.deblock_dma_errors == 7);
+	CHECK(gta4l_test.deblock_adapter_calls == 6);
+	return 0;
+}
+
+static int
+scenario_deblock_unaligned_bounce(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	deblock_apply_fixture();
+	gta4l_test.deblock_unaligned_bounce = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 DEBLOCK: cases=11 passed=2 failed=9 reason=5 "
+	    "complete=0 reads=11 bytes=54364 span=56832 blocks=111 fails=9 "
+	    "cancel=0 budget=0 media=0 part=0 seg=3 cap=61071360") != 0);
+	CHECK(gta4l_test.deblock_dma_errors == 9);
+	CHECK(gta4l_test.deblock_adapter_calls == 2);
+	return 0;
+}
+
+static int
+scenario_deblock_hash_mismatch(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_corrupt_at = 0;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=10 failed=1 reason=7 complete=0 reads=11 "
+	    "bytes=54364 span=56832 blocks=111 fails=0") != 0);
+	CHECK(g_self->report.deblock_fail_index == 0);
+	CHECK(g_self->report.deblock_fail_reason ==
+	    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_HASH);
+	return 0;
+}
+
+static int
+scenario_deblock_read_failure(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_fail_at = 0;
+	deblock_apply_fixture();
+	gta4l_test.deblock_fail_status = kIOReturnIOError;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=10 failed=1 reason=5 complete=0 reads=11 "
+	    "bytes=54364 span=56832 blocks=111 fails=1") != 0);
+	CHECK(g_self->report.deblock_fail_index == 0);
+	CHECK(g_self->report.deblock_fail_status ==
+	    (int32_t)kIOReturnIOError);
+	return 0;
+}
+
+static int
+scenario_deblock_read_nomedia(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_fail_at = 6;
+	deblock_apply_fixture();
+	gta4l_test.deblock_fail_status = kIOReturnNoMedia;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=10 failed=1 reason=5 complete=0 reads=11") != 0);
+	CHECK(g_self->report.deblock_fail_index == 6);
+	CHECK(g_self->report.deblock_fail_status ==
+	    (int32_t)kIOReturnNoMedia);
+	return 0;
+}
+
+static int
+scenario_deblock_short_read(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_short_at = 0;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=10 failed=1 reason=6 complete=0 reads=11 "
+	    "bytes=54364 span=56832 blocks=111 fails=1") != 0);
+	CHECK(g_self->report.deblock_fail_actual == 923);
+	return 0;
+}
+
+static int
+scenario_deblock_short_zero(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_short_at = 0;
+	gta4l_test.deblock_short_mode = 1;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=10 failed=1 reason=6 complete=0") != 0);
+	CHECK(g_self->report.deblock_fail_actual == 0);
+	return 0;
+}
+
+static int
+scenario_deblock_short_over(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_short_at = 0;
+	gta4l_test.deblock_short_mode = 2;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=10 failed=1 reason=6 complete=0") != 0);
+	CHECK(g_self->report.deblock_fail_actual == 925);
+	return 0;
+}
+
+static int
+scenario_deblock_media_absent(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(false, false);
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=0 failed=0 reason=1 complete=0 reads=0 "
+	    "bytes=0 span=0 blocks=0 fails=0 cancel=0 budget=0 media=1 "
+	    "part=0 seg=3 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_two_whole(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	add_media(true, 0, (UInt64)gta4l_test.capacity_blocks *
+	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=0 failed=0 reason=1 complete=0 reads=0 "
+	    "bytes=0 span=0 blocks=0 fails=0 cancel=0 budget=0 media=1 "
+	    "part=0 seg=3 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_wrong_profile(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_whole_media->writable_value = true;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=0 failed=0 reason=1 complete=0 reads=0 "
+	    "bytes=0 span=0 blocks=0 fails=0 cancel=0 budget=0 media=1 "
+	    "part=0 seg=3 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_whole_no_base(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_whole_media->property_faults |=
+	    GTA4L_TEST_PROP_BASE_MISSING;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=11 failed=0 reason=0 complete=1") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_whole_base_invalid(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_whole_media->property_faults |=
+	    GTA4L_TEST_PROP_BASE_WRONG;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=0 failed=0 reason=1 complete=0 reads=0 "
+	    "bytes=0 span=0 blocks=0 fails=0 cancel=0 budget=0 media=1 "
+	    "part=0 seg=3 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_part_absent(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, false);
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=6 failed=0 reason=2 complete=0 reads=6 "
+	    "bytes=19348 span=20992 blocks=41 fails=0 cancel=0 budget=0 "
+	    "media=0 part=1 seg=3 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_part_ambiguous(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	add_media(false, GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES, false,
+	    "Apple_Boot", true);
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=6 failed=0 reason=2 complete=0 reads=6") != 0);
+	CHECK(strstr(gta4l_test.panic, "part=1") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_open_refused(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_whole_media->open_refuse = true;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=0 failed=0 reason=3 complete=0 reads=0 "
+	    "bytes=0 span=0 blocks=0 fails=0") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_descriptor_failure(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	gta4l_test.descriptor_alloc_fail = 1;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=0 failed=11 reason=4 complete=0 reads=0 "
+	    "bytes=0 span=0 blocks=0 fails=0") != 0);
+	CHECK(g_self->report.deblock_fail_index == 0);
+	CHECK(g_self->report.deblock_fail_reason ==
+	    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_DESC);
+	return 0;
+}
+
+static int
+scenario_deblock_budget(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_advance_ms = 5000u;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "cases=11 passed=1 failed=0 reason=8 complete=0 reads=1 "
+	    "bytes=924 span=1024 blocks=2 fails=0 cancel=0 budget=1 "
+	    "media=0 part=0 seg=3 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_deblock_cancel(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_cancel_at = 0;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(gta4l_test.panic[0] == 0);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(g_self->report.deblock_cancel == 1);
+	CHECK(g_self->report.deblock_reason ==
+	    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_CANCEL);
+	CHECK(g_self->report.deblock_complete == 0);
+	CHECK(g_self->report.deblock_reads == 1);
+	CHECK(g_deblock_whole_media->close_calls == 1);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	deblock_apply_fixture();
+	g_self->reportCancel = true;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(g_self->report.deblock_cancel == 1);
+	CHECK(g_self->report.deblock_reason ==
+	    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_CANCEL);
+	CHECK(g_self->report.deblock_reads == 0);
+	return 0;
+}
+
+static int
+scenario_deblock_watchdog(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1");
+	CHECK(g_started);
+	deblock_setup(true, true);
+	g_deblock_watchdog_at = 0;
+	deblock_apply_fixture();
+	CHECK(invoke_thread(0) == 0);
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic, "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 REPORT: rc=16 stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 DEBLOCK: ") != 0);
+	return 0;
+}
+
 static int
 scenario_policy(void)
 {
@@ -3578,6 +4214,57 @@ scenario_policy(void)
 	CHECK(strstr(buffer, "PARTREAD") == 0);
 	CHECK(strstr(buffer, "READTEST") == 0);
 	CHECK(strstr(buffer, "READFAIL") == 0);
+
+	memset(&report, 0, sizeof(report));
+	report.deblock = 1;
+	report.deblock_cases = 11;
+	report.deblock_passed = 11;
+	report.deblock_complete = 1;
+	report.deblock_reads = 11;
+	report.deblock_bytes = 54364;
+	report.deblock_span = 56832;
+	report.deblock_blocks = 111;
+	report.deblock_segments = 3;
+	report.deblock_capacity = 61071360;
+	report.deblock_last_index = 10;
+	report.deblock_last_target = 1;
+	report.deblock_last_start = 4096;
+	report.deblock_last_length = 1024;
+	report.deblock_last_span = 1024;
+	report.deblock_last_actual = 1024;
+	memset(report.deblock_last_digest, 0xab,
+	    sizeof(report.deblock_last_digest));
+	memset(report.deblock_fail_digest, 0xcd,
+	    sizeof(report.deblock_fail_digest));
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 DEBLOCK: cases=11 passed=11 "
+	    "failed=0 reason=0 complete=1 reads=11 bytes=54364 span=56832 "
+	    "blocks=111 fails=0 cancel=0 budget=0 media=0 part=0 seg=3 "
+	    "cap=61071360") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 DEBLOCKREAD: index=10 "
+	    "target=1 start=4096 length=1024 span=1024 actual=1024 "
+	    "status=0 digest=abababababababababababababababab") != 0);
+	line = strstr(buffer, "GTA4L-EMMC P5 DEBLOCK: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_DEBLOCK_LINE_BYTES);
+	line = strstr(buffer, "GTA4L-EMMC P5 DEBLOCKREAD: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_DEBLOCK_DETAIL_LINE_BYTES);
+	report.deblock = 0;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(strstr(buffer, "DEBLOCK") == 0);
+	report.deblock = 1;
 	CHECK(gta4l_emmc_block_report_format(small, sizeof(small),
 	    &report) == 0);
 	CHECK(small[0] == 0);
@@ -3715,6 +4402,36 @@ static const struct scenario_entry scenarios[] = {
 	{ "partread-descriptor-failure", scenario_partread_descriptor_failure },
 	{ "partread-budget", scenario_partread_budget },
 	{ "partread-cancel", scenario_partread_cancel },
+	{ "deblock-refused-orphan", scenario_deblock_refused_orphan },
+	{ "deblock-refused-value", scenario_deblock_refused_value },
+	{ "deblock-refused-duplicate", scenario_deblock_refused_duplicate },
+	{ "deblock-refused-partobs", scenario_deblock_refused_partobs },
+	{ "deblock-refused-partcmp", scenario_deblock_refused_partcmp },
+	{ "deblock-refused-partread", scenario_deblock_refused_partread },
+	{ "deblock-segment-property", scenario_deblock_segment_property },
+	{ "deblock-match", scenario_deblock_match },
+	{ "deblock-range-invalid", scenario_deblock_range_invalid },
+	{ "deblock-seg1", scenario_deblock_seg1 },
+	{ "deblock-unaligned-bounce", scenario_deblock_unaligned_bounce },
+	{ "deblock-hash-mismatch", scenario_deblock_hash_mismatch },
+	{ "deblock-read-failure", scenario_deblock_read_failure },
+	{ "deblock-read-nomedia", scenario_deblock_read_nomedia },
+	{ "deblock-short-read", scenario_deblock_short_read },
+	{ "deblock-short-zero", scenario_deblock_short_zero },
+	{ "deblock-short-over", scenario_deblock_short_over },
+	{ "deblock-media-absent", scenario_deblock_media_absent },
+	{ "deblock-two-whole", scenario_deblock_two_whole },
+	{ "deblock-wrong-profile", scenario_deblock_wrong_profile },
+	{ "deblock-whole-no-base", scenario_deblock_whole_no_base },
+	{ "deblock-whole-base-invalid", scenario_deblock_whole_base_invalid },
+	{ "deblock-part-absent", scenario_deblock_part_absent },
+	{ "deblock-part-ambiguous", scenario_deblock_part_ambiguous },
+	{ "deblock-open-refused", scenario_deblock_open_refused },
+	{ "deblock-descriptor-failure",
+	    scenario_deblock_descriptor_failure },
+	{ "deblock-budget", scenario_deblock_budget },
+	{ "deblock-cancel", scenario_deblock_cancel },
+	{ "deblock-watchdog", scenario_deblock_watchdog },
 	{ "policy", scenario_policy },
 };
 

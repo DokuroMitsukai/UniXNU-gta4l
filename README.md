@@ -752,7 +752,27 @@ partition layout, payload policy and packaging.
   comparison confirmed the stored BOOT, unchanged RECOVERY/EFS/sec_efs and
   both pulled-byte gates (18/18 each). This qualifies only the fourteen pinned
   ranges on that one boot; the boot budget is consumed and no retry, reflash
-  or repair is authorized. See
+  or repair is authorized. N10.4 then implemented the owner-approved host-only
+  unaligned deblock qualification: `gta4l-emmc-deblock=1` requires exactly one
+  block token 1/3 and refuses duplicates, orphans, non-1 values and every
+  partobs/partcmp/partread combination; the mode advertises three read
+  segments only for itself and performs eleven pinned unaligned reads
+  (head-only, tail-only, both ends in one block, both ends across two blocks
+  and a 32-block span, aligned controls, and boot-base
+  head-only/same-block/64-block-tail/same-block-at-media-end cases) through
+  the real `IOMedia::read()`/`IOBlockStorageDriver`/`IODeblocker` path with
+  one page-aligned 33,792-byte bounce buffer and first-16-byte SHA-256 digest
+  checks. The host model reconstructs the deblocker; it does not run the real
+  family code. The expected full-pass line is `cases=11 passed=11 failed=0
+  reason=0 complete=1 reads=11 bytes=54364 span=56832 blocks=111 fails=0
+  cancel=0 budget=0 media=0 part=0 seg=3 cap=61071360`, and the block suite
+  passes 48 core scenarios/38 mutation controls and 143 adapter scenarios
+  with 45 adapter, three support and eight policy mutation controls;
+  diagnostic payload 34 checks and packager self-test 13 checks also pass.
+  N10.4 performed no candidate build, ABI/QEMU audit, device access, flash or
+  boot; N10.5 and N10.6 remain separately gated and initialization
+  reliability remains `[U]`. See
+  [docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md](docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md),
   [docs/emmc-n10.2-partread-hardware-result-2026-11-08.md](docs/emmc-n10.2-partread-hardware-result-2026-11-08.md),
   [docs/emmc-n10.2-partread-candidate-2026-11-08.md](docs/emmc-n10.2-partread-candidate-2026-11-08.md),
   [docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md](docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md),
@@ -764,7 +784,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.78,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.79,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

@@ -21,6 +21,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTOBS_ARG "gta4l-emmc-partobs"
 #define GTA4L_EMMC_BLOCK_PARTCMP_ARG "gta4l-emmc-partcmp"
 #define GTA4L_EMMC_BLOCK_PARTREAD_ARG "gta4l-emmc-partread"
+#define GTA4L_EMMC_BLOCK_DEBLOCK_ARG "gta4l-emmc-deblock"
 
 #define GTA4L_EMMC_BLOCK_MODE_OFF 0
 #define GTA4L_EMMC_BLOCK_MODE_REPORT 1
@@ -45,6 +46,10 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTREAD_OFF 0
 #define GTA4L_EMMC_BLOCK_PARTREAD_ON 1
 #define GTA4L_EMMC_BLOCK_PARTREAD_REFUSED (-1)
+
+#define GTA4L_EMMC_BLOCK_DEBLOCK_OFF 0
+#define GTA4L_EMMC_BLOCK_DEBLOCK_ON 1
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REFUSED (-1)
 
 /* Bounded observation budgets. The media wait is the design's 20 s window;
  * the partition wait is an additional, non-fatal observation. The N8
@@ -117,6 +122,29 @@ extern "C" {
  * ranges lie inside the 1,798,052-byte section. */
 #define GTA4L_EMMC_BLOCK_PARTREAD_BOOT_KERNEL_OFFSET 4096u
 #define GTA4L_EMMC_BLOCK_PARTREAD_BOOT_KERNEL_MID_OFFSET (1024u * 1024u)
+
+/* N10.4 bounded read-only unaligned IOMedia qualification. Each case is a
+ * fixed byte range; the deblocker's aligned span is at most 64 media blocks.
+ * The bounce buffer covers the largest requested length and the aligned
+ * spans with one page-aligned allocation. The media wait, the read budget,
+ * one in-flight 1,000 ms read and the partition deadline stay below the 30 s
+ * watchdog. */
+#define GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BLOCKS 66u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_SECTOR_BYTES 512u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BYTES \
+	(GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BLOCKS * \
+	GTA4L_EMMC_BLOCK_DEBLOCK_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_DEBLOCK_DEADLINE_MS 2000u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_STEP_MS 50u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_STABLE_MS 250u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_READ_BUDGET_MS 4000u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_WORST_MS \
+	(GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS + \
+	GTA4L_EMMC_BLOCK_DEBLOCK_READ_BUDGET_MS + 1000u + \
+	GTA4L_EMMC_BLOCK_DEBLOCK_DEADLINE_MS)
+#define GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS 3u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_LINE_BYTES 384u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_DETAIL_LINE_BYTES 256u
 
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
@@ -278,6 +306,39 @@ struct gta4l_emmc_block_report {
 	int32_t partread_fail_status;
 	uint64_t partread_fail_actual;
 	uint8_t partread_fail_digest[16];
+	/* Opt-in bounded read-only unaligned IOMedia qualification. Each case
+	 * is a fixed byte range whose SHA-256 is pinned from retained
+	 * evidence; span is the deblocker's aligned byte count. */
+	uint32_t deblock;
+	uint32_t deblock_cases;
+	uint32_t deblock_passed;
+	uint32_t deblock_failed;
+	uint32_t deblock_reason;
+	uint32_t deblock_complete;
+	uint32_t deblock_reads;
+	uint32_t deblock_bytes;
+	uint32_t deblock_span;
+	uint32_t deblock_blocks;
+	uint32_t deblock_fails;
+	uint32_t deblock_cancel;
+	uint32_t deblock_budget;
+	uint32_t deblock_media;
+	uint32_t deblock_part;
+	uint32_t deblock_segments;
+	uint32_t deblock_capacity;
+	uint32_t deblock_last_index;
+	uint32_t deblock_last_target;
+	uint64_t deblock_last_start;
+	uint32_t deblock_last_length;
+	uint32_t deblock_last_span;
+	int32_t deblock_last_status;
+	uint64_t deblock_last_actual;
+	uint8_t deblock_last_digest[16];
+	uint32_t deblock_fail_index;
+	uint32_t deblock_fail_reason;
+	int32_t deblock_fail_status;
+	uint64_t deblock_fail_actual;
+	uint8_t deblock_fail_digest[16];
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -358,6 +419,14 @@ int gta4l_emmc_block_partread_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
     int partcmp_selected);
 
+/* Select the orthogonal read-only unaligned IOMedia qualification. The token
+ * is accepted only when exactly one block mode 1/3 token is selected, the
+ * value is exactly 1, the token is not duplicated and none of the other
+ * partition/read instruments is selected in the same boot. */
+int gta4l_emmc_block_deblock_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int partobs_selected,
+    int partcmp_selected, int partread_selected);
+
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_PMBR 1u
@@ -408,6 +477,41 @@ gta4l_emmc_block_partread_case_at(uint32_t index);
 #ifdef GTA4L_EMMC_BLOCK_HOST_TEST
 struct gta4l_emmc_block_partread_case *
 gta4l_emmc_block_partread_case_mutable(uint32_t index);
+#endif
+
+/* DEBLOCK reason codes. The first failing case latches the reason; the
+ * counters keep every case that ran. */
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_MEDIA 1u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_PART 2u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_OPEN 3u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_DESC 4u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_READ 5u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_SHORT 6u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_HASH 7u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_BUDGET 8u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_CANCEL 9u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_REASON_ARG 10u
+
+#define GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_WHOLE 0u
+#define GTA4L_EMMC_BLOCK_DEBLOCK_TARGET_BOOT 1u
+
+/* One pinned unaligned read. target selects the whole media or the boot
+ * partition media; start and length are byte quantities relative to that
+ * media. expected is the SHA-256 of the exact requested bytes. */
+struct gta4l_emmc_block_deblock_case {
+	uint32_t target;
+	uint32_t length;
+	uint64_t start;
+	uint8_t expected[32];
+};
+
+uint32_t gta4l_emmc_block_deblock_case_count(void);
+const struct gta4l_emmc_block_deblock_case *
+gta4l_emmc_block_deblock_case_at(uint32_t index);
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+struct gta4l_emmc_block_deblock_case *
+gta4l_emmc_block_deblock_case_mutable(uint32_t index);
 #endif
 
 /* PARTMAP comparator read-detail states. The detail records the most recent

@@ -504,8 +504,14 @@ ADAPTER_MUTATIONS = [
        '\tif ((partread == GTA4L_EMMC_BLOCK_PARTREAD_REFUSED) && 0) {\n')],
      'partread-refused-value'),
     ('partread-hash-skip',
-     [('\t\t\t\t\tif (memcmp(digest, item->expected,\n'
+     [('\t\t\t\t\tgta4l_emmc_block_sha256(\n'
+       '\t\t\t\t\t    partreadBuffer, expectedBytes,\n'
+       '\t\t\t\t\t    digest);\n'
+       '\t\t\t\t\tif (memcmp(digest, item->expected,\n'
        '\t\t\t\t\t    sizeof(digest)) != 0) {\n',
+       '\t\t\t\t\tgta4l_emmc_block_sha256(\n'
+       '\t\t\t\t\t    partreadBuffer, expectedBytes,\n'
+       '\t\t\t\t\t    digest);\n'
        '\t\t\t\t\tif ((memcmp(digest, item->expected,\n'
        '\t\t\t\t\t    sizeof(digest)) != 0) && 0) {\n')],
      'partread-hash-mismatch'),
@@ -514,8 +520,12 @@ ADAPTER_MUTATIONS = [
        '\t\t\t\t} else if ((actual != expectedBytes) && 0) {\n')],
      'partread-short-read'),
     ('partread-read-error-accept',
-     [('\t\t\t\tif (status != kIOReturnSuccess) {\n',
-       '\t\t\t\tif ((status != kIOReturnSuccess) && 0) {\n')],
+     [('\t\t\t\tif (status != kIOReturnSuccess) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_PARTREAD_REASON_READ;\n',
+       '\t\t\t\tif ((status != kIOReturnSuccess) && 0) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_PARTREAD_REASON_READ;\n')],
      'partread-read-failure'),
     ('partread-budget-skip',
      [('\t\tif (partreadElapsedMs() >=\n'
@@ -525,9 +535,11 @@ ADAPTER_MUTATIONS = [
      'partread-budget'),
     ('partread-cancel-skip',
      [('\t\tbzero(digest, sizeof(digest));\n'
-       '\t\tif (reportCancel) {\n',
+       '\t\tif (reportCancel) {\n'
+       '\t\t\tpartreadReportCancel();\n',
        '\t\tbzero(digest, sizeof(digest));\n'
-       '\t\tif (reportCancel && 0) {\n')],
+       '\t\tif (reportCancel && 0) {\n'
+       '\t\t\tpartreadReportCancel();\n')],
      'partread-cancel'),
     ('partread-complete-claim',
      [('\tcomplete = ((budget == 0) &&\n'
@@ -543,6 +555,96 @@ ADAPTER_MUTATIONS = [
      [('\t\t\t\t\tpartreadBootOpen = true;\n',
        '\t\t\t\t\tpartreadBootOpen = false;\n')],
      'partread-match'),
+    ('deblock-select-refused-accepted',
+     [('\tif (deblock == GTA4L_EMMC_BLOCK_DEBLOCK_REFUSED) {\n',
+       '\tif ((deblock == GTA4L_EMMC_BLOCK_DEBLOCK_REFUSED) && 0) {\n')],
+     'deblock-refused-value'),
+    ('deblock-hash-skip',
+     [('\t\t\t\t\tgta4l_emmc_block_sha256(\n'
+       '\t\t\t\t\t    deblockBuffer, length, digest);\n'
+       '\t\t\t\t\tif (memcmp(digest, item->expected,\n'
+       '\t\t\t\t\t    sizeof(digest)) != 0) {\n',
+       '\t\t\t\t\tgta4l_emmc_block_sha256(\n'
+       '\t\t\t\t\t    deblockBuffer, length, digest);\n'
+       '\t\t\t\t\tif ((memcmp(digest, item->expected,\n'
+       '\t\t\t\t\t    sizeof(digest)) != 0) && 0) {\n')],
+     'deblock-hash-mismatch'),
+    ('deblock-short-accept',
+     [('\t\t\t\t} else if (actual != length) {\n',
+       '\t\t\t\t} else if ((actual != length) && 0) {\n')],
+     'deblock-short-read'),
+    ('deblock-read-error-accept',
+     [('\t\t\t\tif (status != kIOReturnSuccess) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_READ;\n',
+       '\t\t\t\tif ((status != kIOReturnSuccess) && 0) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_READ;\n')],
+     'deblock-read-failure'),
+    ('deblock-budget-skip',
+     [('\t\tif (deblockElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_DEBLOCK_READ_BUDGET_MS) {\n',
+       '\t\tif ((deblockElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_DEBLOCK_READ_BUDGET_MS) && 0) {\n')],
+     'deblock-budget'),
+    ('deblock-cancel-skip',
+     [('\t\tbzero(digest, sizeof(digest));\n'
+       '\t\tif (reportCancel) {\n'
+       '\t\t\tdeblockReportCancel();\n',
+       '\t\tbzero(digest, sizeof(digest));\n'
+       '\t\tif (reportCancel && 0) {\n'
+       '\t\t\tdeblockReportCancel();\n')],
+     'deblock-cancel'),
+    ('deblock-complete-claim',
+     [('\treport.deblock_complete = complete;\n',
+       '\treport.deblock_complete = complete | 1u;\n')],
+     'deblock-hash-mismatch'),
+    ('deblock-segment-advertise-1',
+     [('\t    (unsigned long long)(deblockMode ?\n'
+       '\t    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : 1u), 32)) {\n',
+       '\t    (unsigned long long)(0 ?\n'
+       '\t    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : 1u), 32)) {\n')],
+     'deblock-segment-property'),
+    ('deblock-bounce-skip',
+     [('\t\t\tdescriptor = IOMemoryDescriptor::withAddress(\n'
+       '\t\t\t    deblockBuffer, length, kIODirectionIn);\n',
+       '\t\t\tdescriptor = IOMemoryDescriptor::withAddress(\n'
+       '\t\t\t    deblockBuffer + 8, length, kIODirectionIn);\n')],
+     'deblock-match'),
+    ('deblock-range-accept',
+     [('\t\t\tif ((start > limit) ||\n'
+       '\t\t\t    ((uint64_t)length > limit - start)) {\n',
+       '\t\t\tif (((start > limit) ||\n'
+       '\t\t\t    ((uint64_t)length > limit - start)) && 0) {\n')],
+     'deblock-range-invalid'),
+    ('deblock-whole-close-skip',
+     [('\tdeblockWholeOpen = true;\n',
+       '\tdeblockWholeOpen = false;\n')],
+     'deblock-match'),
+    ('deblock-boot-close-skip',
+     [('\t\t\t\t\tdeblockBootOpen = true;\n',
+       '\t\t\t\t\tdeblockBootOpen = false;\n')],
+     'deblock-match'),
+]
+
+SUPPORT_MUTATIONS = [
+    ('deblock-head-discard',
+     [('\tchunks[chunk_count].span_offset = head;\n',
+       '\tchunks[chunk_count].span_offset = 0;\n')],
+     'deblock-match'),
+    ('deblock-copy-shift',
+     [('\tchunks[chunk_count].span_offset = head;\n',
+       '\tchunks[chunk_count].span_offset = head + 8u;\n')],
+     'deblock-match'),
+    ('deblock-tail-into-request',
+     [('\t\tchunks[chunk_count].address = scratch;\n'
+       '\t\tchunks[chunk_count].physical_address = 0;\n'
+       '\t\tchunks[chunk_count].length = tail;\n',
+       '\t\tchunks[chunk_count].address =\n'
+       '\t\t    static_cast<uint8_t *>(buffer->address());\n'
+       '\t\tchunks[chunk_count].physical_address = 0;\n'
+       '\t\tchunks[chunk_count].length = tail;\n')],
+     'deblock-match'),
 ]
 
 POLICY_MUTATIONS = [
@@ -798,6 +900,29 @@ def check_adapter_source():
         'pinned-range worst case must stay below the watchdog'
     assert 'static_assert(GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES <=' in \
         adapter, 'pinned-range case must stay inside the request limit'
+    assert '#define GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BLOCKS 66u' in \
+        policy_header, 'deblocked reads must stay inside the request limit'
+    assert 'GTA4L_EMMC_BLOCK_DEBLOCK_REASON_HASH 7u' in policy_header, \
+        'deblocked digest mismatch must have a distinct reason'
+    assert 'GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS 3u' in policy_header, \
+        'deblocked reads must advertise the multi-segment path'
+    assert 'GTA4L_EMMC_BLOCK_DEBLOCK_ARG' in adapter, \
+        'adapter must parse the deblock token'
+    assert 'gta4l_emmc_block_deblock_select' in adapter, \
+        'adapter must use the shared deblock selector'
+    assert 'runDeblock' in adapter, \
+        'adapter must implement the deblock qualification'
+    assert 'deblockBuffer' in adapter and \
+        'IOFreeAligned(deblockBuffer' in adapter, \
+        'deblock scratch must be allocated and freed'
+    assert 'report.deblock_complete = 0' in adapter, \
+        'deblock qualification must start as an explicit non-claim'
+    assert 'deblockElapsedMs() >=' in adapter, \
+        'deblock qualification must enforce the read budget'
+    assert 'static_assert(GTA4L_EMMC_BLOCK_DEBLOCK_WORST_MS <' in adapter, \
+        'deblock worst case must stay below the watchdog'
+    assert 'static_assert(GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BYTES >=' in \
+        adapter, 'deblock bounce must cover the aligned span'
 
 
 def compile_adapter(compiler, temp):
@@ -837,7 +962,8 @@ def compile_adapter(compiler, temp):
             linked, policy_objects)
 
 
-def compile_adapter_mutation(cxx, temp, name, replacements, scenario, objects):
+def compile_adapter_mutation(cxx, temp, name, replacements, scenario, objects,
+                             support_replacements=None):
     mirror = temp / f'adapter-{name}'
     sim = mirror / 'scripts' / 'sim-gta4l-emmc-block'
     package = mirror / 'package'
@@ -849,8 +975,14 @@ def compile_adapter_mutation(cxx, temp, name, replacements, scenario, objects):
             f'adapter mutation {name}: anchor count {adapter.count(old)}'
         adapter = adapter.replace(old, new)
     (package / ADAPTER.name).write_text(adapter)
-    for source in (ADAPTER_SUPPORT, ADAPTER_HARNESS):
-        shutil.copy2(source, sim / source.name)
+    support = ADAPTER_SUPPORT.read_text()
+    for old, new in (support_replacements or []):
+        assert support.count(old) == 1, \
+            f'adapter mutation {name}: support anchor count ' \
+            f'{support.count(old)}'
+        support = support.replace(old, new)
+    (sim / ADAPTER_SUPPORT.name).write_text(support)
+    shutil.copy2(ADAPTER_HARNESS, sim / ADAPTER_HARNESS.name)
     shutil.copy2(SIM / 'Gta4lEmmcBlockTestSupport.h',
                  sim / 'Gta4lEmmcBlockTestSupport.h')
     cxx_common = ['-std=c++17', '-Wall', '-Wextra', '-Werror',
@@ -963,12 +1095,25 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 115, f'expected 115 adapter PASS lines, got {passes}'
-        print('PASS adapter: 114 scenarios against the host IOKit seam')
+        assert passes == 144, f'expected 144 adapter PASS lines, got {passes}'
+        print('PASS adapter: 143 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(
                 cxx, temp, name, replacements, scenario, policy_objects)
+            assert run is not None, \
+                f'adapter mutation {name}: compile failed:\n' + \
+                (built.stdout + built.stderr)
+            assert run.returncode != 0, \
+                f'adapter mutation {name} was accepted ({scenario})'
+            assert f'FAIL {scenario}' in run.stdout, \
+                f'adapter mutation {name} did not fail {scenario}:\n' + \
+                (run.stdout + run.stderr)
+            print(f'PASS adapter mutation {name} rejected ({scenario})')
+        for name, replacements, scenario in SUPPORT_MUTATIONS:
+            run, built = compile_adapter_mutation(
+                cxx, temp, name, [], scenario, policy_objects,
+                support_replacements=replacements)
             assert run is not None, \
                 f'adapter mutation {name}: compile failed:\n' + \
                 (built.stdout + built.stderr)

@@ -5522,6 +5522,70 @@ owner returned to TWRP; the one-boot budget is consumed and no retry, reflash,
 rollback, reset/repair, commit or push was performed. Findings:
 `docs/emmc-n10.2-partread-hardware-result-2026-11-08.md`.
 
+### 5.3.79 N10.4 unaligned deblocked read qualification (host-only, 2026-11-08)
+
+Follow-up to §5.3.74-§5.3.78 and the owner-approved
+`docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md`. N10.4 implements
+the opt-in `gta4l-emmc-deblock=1` mode: the token requires exactly one block
+token 1/3 and refuses a duplicate, orphan, non-1 value and every
+partobs/partcmp/partread combination, while the absent-token legacy, partobs,
+partcmp and partread reports stay byte-for-byte unchanged. The mode sets
+`kIOMaximumSegmentCountReadKey` to 3 only for itself (the other modes keep 1)
+and allocates one page-aligned 33,792-byte `IOMallocAligned` bounce buffer
+(66 blocks), freed with `IOFreeAligned()`.
+
+The eleven pinned cases read whole-media offsets 100/924, 0/600, 100/200,
+100/600, 100/16000 and 512/1024 (the aligned control), and boot offsets
+4196/924, 1048676/200, 100630528/32668, 100662884/200 and 4096/1024. Cases
+0-4 exercise head-only, tail-only, both ends inside one block, both ends
+across two blocks and both ends across a multi-page 32-block span; cases 6-9
+exercise the boot base with head-only, same-block, 64-block tail-only and
+same-block-at-media-end reads; cases 5 and 10 are aligned controls that
+construct no deblocker. Each case is one `IOMedia::read()` with a descriptor
+of exactly the requested length. The existing `doAsyncReadWrite()` issues the
+per-chunk read and `copyOutCallback()` writes the qualified bytes into the
+`IOBreaker`/`IODeblocker` descriptor, and the host seam models the head/tail
+chunks, the break-size computation, the three-segment descriptor and the
+deblocker's excess discard. The digest is the first 16 bytes of a portable
+SHA-256 over the exact requested bytes, compared to a pinned 32-byte digest
+derived from the retained GPT, BOOT-backup and v5 kernel-section evidence.
+
+The full-pass line is `GTA4L-EMMC P5 DEBLOCK: cases=11 passed=11 failed=0
+reason=0 complete=1 reads=11 bytes=54364 span=56832 blocks=111 fails=0
+cancel=0 budget=0 media=0 part=0 seg=3 cap=61071360`; the last case also emits
+`GTA4L-EMMC P5 DEBLOCKREAD: index=10 target=1 start=4096 length=1024
+span=1024 actual=1024 status=0 digest=...`. `reads`, `bytes`, `span` and
+`blocks` are the attempted cases' requested bytes, aligned deblocker bytes and
+`span / 512`; `seg=3` is the mode's advertised read segment count and
+`cap=61071360` is the capacity. `complete=1` requires the eleven-case table,
+all passes, `reason=0`, clear `cancel`/`budget`/`media`/`part` flags, `seg=3`
+and every status/actual/digest check. The first failure latches `reason` (1
+media, 2 partition, 3 open, 4 descriptor, 5 read, 6 short, 7 hash, 8 budget,
+9 cancel, 10 argument), and the remaining cases continue after
+read/short/hash/descriptor/argument failures. Cancellation sets `reason=9`
+and `cancel=1` and returns through the existing no-panic path. The host tests
+bound the `DEBLOCK` line at 384 bytes and `DEBLOCKREAD` at 256 bytes and
+assert the full report stays below 2,048 bytes; the formatter keeps its
+fail-closed behavior, and the report prints only bounded counts, offsets,
+lengths, statuses and a 16-byte digest prefix.
+
+The diagnostic payload builder, checker and packager carry the
+`emmc-block-1-deblock`/`emmc-block-3-deblock` personalities, mapping to
+`gta4l-emmc-block=1|3 gta4l-emmc-deblock=1`. The checker refuses an orphan,
+duplicate or non-1 deblock token and every partobs/partcmp/partread
+combination, and the builder requires the `fs-timer-hold` data-ramdisk
+fixture for the new personalities. Host suites pass: block 48 core
+scenarios/38 mutation controls and 143 adapter scenarios with 45 adapter,
+three support and eight policy mutation controls; diagnostic payload 34
+checks; packager self-test 13 checks; payload-checker self-test; and
+evidence-count core 187/115, probe 196/100. The host deblock model is a
+reconstruction: it does not run the real `IOBlockStorageDriver`/`IODeblocker`
+code, so the hardware run is the only qualification of those layers. N10.4
+performed no candidate build, ABI/QEMU audit, device access, flash or boot;
+N10.5 and N10.6 are separately gated, the N10.1/N10.2 hardware results are
+preserved, and initialization reliability remains `[U]`. Findings:
+`docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
