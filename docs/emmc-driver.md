@@ -4465,7 +4465,165 @@ suite passes 28 checks including both partcmp mappings, and the packager
 self-test passes 11 checks including the partcmp forwarding refusal. No
 candidate build, QEMU run, device access, flash or boot was performed. N9.3
 archive/ABI/kernel/payload/BOOT production and any N9.4 hardware run remain
-separately gated; N8.5's historical `complete=0` is not upgraded.
+separately gated; N8.5's historical `complete=0` is not upgraded. N9.3 later
+found that the embedded comparator scratch made the driver object exceed
+XNU's 16 KiB kalloc type limit; §5.3.58 moves it to one bounded allocation.
+
+### 5.3.58 N9.3 exact-comparator candidate production (host-only, 2026-11-07)
+
+Follow-up to §5.3.57 and the N9.1 design. N9.3 built the approved
+`gta4l-emmc-partcmp=1` candidate through the archive/prelink/audit/payload/
+BOOT flow. The storage-ABI audit is host/QEMU only. No flash, boot, device
+access, commit or push was performed; the host build is not permission to
+flash or boot. The detailed record is
+`docs/emmc-n9.3-partcmp-candidate-2026-11-07.md`.
+
+The real kernel build rejected the N9.2 object at XNU's 16 KiB kalloc type
+limit: the embedded comparator scratch is a 16,384-byte GPT array plus two
+2,112-byte validated GPT copies and two 2,048-byte media snapshots (24,704
+bytes), making `sizeof(Gta4lEmmcBlock)` 38,712 bytes. N9.3 moved that state to
+`struct gta4l_emmc_block_partmap_scratch`, allocated once with `IOMalloc` in
+`start()` when the comparator token selects the mode and released in `free()`;
+an allocation failure refuses `start()` with an `IOLog` and no partial claim.
+The object is now 14,016 bytes, and a
+`static_assert(sizeof(Gta4lEmmcBlock) <= 16 * 1024)` runs in both the host and
+target builds as a regression control. The host block suite still passes 48
+core scenarios/38 mutation controls and 85 adapter scenarios/16 adapter and
+eight policy mutation controls.
+
+The immutable chain is prelinked kernel `fd2c8c65…` (51,257,344 bytes; plan
+`374a9d74…`), kernel-build archive `408c0ce1…` (644,656 bytes), requalified
+archive `02cb5563…` (644,632 bytes; three byte-identical members plus one
+`__.SYMDEF` container member), candidate storage-ABI audit
+`out/gta4l/storage-abi-fd2c8c65` (`gdb-stop.json` `dd20cf0b…`,
+`interface-audit.json` `c5cad497…`, `provenance.json` `75bfc26f…`,
+`run.json` `22d4d85c…`; 190 slots, 181 bindings, 26 concrete overrides, 0
+unresolved original imports, `runtime_qualified=false`), packaged kernel
+`d5a98930…`, payload `fd73b37f…` (83,886,080 bytes, 14/14 contract,
+`emmc-block-3-partcmp` mapping to `gta4l-emmc-block=3 gta4l-emmc-partcmp=1`,
+hold root `327ac826…` and fixture `00363681…`) and BOOT image `fa55ef61…`
+(85,688,320 bytes, 18/18 gate, only the ramdisk differs from the
+`ce4d76e8…` v5 baseline). A token scan on the packaged kernel finds one
+`GTA4L-EMMC P5 PARTMAP` string, three `REPORT` strings, one legacy `PART:`
+string, five `gta4l-emmc-partcmp` strings and five `gta4l-emmc-partobs`
+strings; the binary carries both opt-in paths and the boot argument selects
+`partcmp`. There is no literal `complete=`, so the PARTMAP completion value
+stays runtime-formatted. N8.5's historical `complete=0` is not upgraded and
+N9.4 remains separately gated.
+
+### 5.3.59 N9.4 exact-comparator observation and whole-media Base root cause (2026-11-07)
+
+N9.4 flashed the N9.3 `emmc-block-3-partcmp` BOOT image to p69 only and
+consumed its one owner-controlled cold boot. The report reached the bounded
+diagnostic stop but failed closed at whole-media discovery, before any GPT
+validation or partition comparison. The owner returned the tablet to TWRP; no
+retry, reflash, rollback, reset/repair, commit or push was performed. The
+flash record is `flash-commands.log` `3b3f9065…` and `flash-record.json`
+`89c90441…`; the candidate chain is BOOT `fa55ef61…`, payload `fd73b37f…`,
+prelinked kernel `fd2c8c65…`, packaged kernel `d5a98930…` and source
+`Gta4lEmmcBlock.cpp` `062ee8fa…`, with the post-flash p69 readback
+`8d5042d3…` (candidate prefix plus unchanged tail `a28b4ea2…`). Raw evidence
+is in `out/gta4l/ram-root-emmc-n9-hardware-evidence/observation-1/` (raw
+`97cc0002…`, interpretation `75f7bb79…`, record `ac7dcfb3…`); the sanitized
+record is `docs/emmc-n9.4-partcmp-observation-2026-11-07.md`.
+
+The report was `rc=0 stop=0 mode=3 blocks=61071360 bs=512
+bytes=31268536320 wid=0 tim=0 clk=400000`, `PARTMAP: gpt=0 reason=10
+slots=0 used=0 … prop=0 samples=0 changes=0 stable=0 stable_ms=0
+deadline_ms=2000 timed_out=0 budget=0 reads=0 blocks=0 fails=0 cancel=0
+complete=0`, and `MEDIA: whole=0 base=0 size=0 content=other writable=0`.
+`reason=10` is `GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA`. The MEDIA fields are
+set only after exactly one qualifying whole medium is selected, so their zero
+values are consistent with a failure before selection; they do not prove that
+no whole media existed and the report does not distinguish zero from multiple
+matches. `gpt=0` is not evidence of a corrupt GPT, `media=0` is not a
+partition count, and `deadline_ms=2000`/`timed_out=0` belong to the later
+snapshot phase. The driver aggregate (`online=1 wp=1 reads=9 blocks=29
+fails=0 max=8`) and the consistent `XFER` counters describe incidental scan
+reads, not comparator reads. `SNAP locked=1` and the all-zero FAIL record are
+consistent with the intentional report stop. The owner's observation that the
+log took "a litte longer than usual … a couple of seconds more instead of
+instant" is preserved as subjective; it is consistent with the discovery
+loop's nominal 20,000 ms wait (`GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS`, 100 ms
+steps), which the report does not timestamp.
+
+The cause is a property-predicate mismatch, not a transport or GPT failure.
+`findExactWholeMedia()` requires `Whole` true, `Base` present as an `OSNumber`
+equal to 0, `Size` equal to `capacityBlocks * 512`, and `Content` equal to
+`GUID_partition_scheme`, all within the ancestry cap. In the pinned
+IOStorageFamily `67f9003c`, the whole media is created by
+`IOBlockStorageDriver::instantiateMediaObject()`, which calls `IOMedia::init()`
+with an empty content hint; `init()` publishes `Content`, `Content Hint`,
+`Preferred Block Size`, `Size`, `Whole` and `Writable`, but not `Base`.
+`kIOMediaBaseKey` is defined in `IOPartitionScheme.h` and is set by partition
+schemes only on partition media (`IOGUIDPartitionScheme.cpp`,
+`IOFDiskPartitionScheme.cpp`, `IOApplePartitionScheme.cpp`). The GUID scheme's
+personality supplies the `Content Mask` `GUID_partition_scheme`, which
+`IOMedia::attachToChild()` copies into the whole media's `Content` when the
+scheme attaches. The real whole media therefore has no `Base` property;
+`OSDynamicCast` yields null and the finder rejects it on every poll, so the
+discovery loop expires and reports reason 10 before any GPT read. The legacy
+`findWholeMedia()` already tests only `Whole` and ancestry and needs no change;
+partition media still require `Base`.
+
+The host seam masked the defect. `gta4l_test_media_configure()` sets `Base` on
+every media, including whole media, and the `partcmp-property` `BASE_MISSING`
+control faults a partition media, so the suite always exercised `Base=0` on
+the whole media. A new adapter scenario, `partcmp-whole-no-base`, applies the
+missing-Base fault to the whole media and pins the observed hardware signature
+(`gpt=0 reason=10`, `prop=0`, `samples=0`, `reads=0 blocks=0 fails=0 cancel=0
+complete=0`). At the observation the block suite passed 48 core
+scenarios/38 mutation controls and 86 adapter scenarios with 16 adapter and
+eight policy mutation controls. That scenario then pinned the defect; §5.3.60
+inverts it and treats the corrected behavior as desired.
+
+The owner-approved correction is recorded in §5.3.60. It accepts an absent
+`Base` on a whole media as the implied zero base, rejects a present nonzero
+`Base`, and keeps the `Whole`/`Size`/`Content`/ancestry checks and the
+exactly-one guard. This follows the family's construction: the whole media is
+created at base 0 and partition schemes publish `Base` explicitly on
+partitions. Candidate rebuild, ABI/QEMU audit, payload/BOOT production, flash
+and boot remain separate gates. No partition-completeness claim is made;
+N8/N8.5's historical `complete=0` is not upgraded, and no
+initialization-reliability, wider/faster mode, write, mount, DMA/CQE/ICE or
+arbitrary-I/O result is added.
+
+### 5.3.60 N9.4 whole-media Base correction (host-only, 2026-11-07)
+
+Follow-up to §5.3.59. The owner approved the host-only correction and this
+section records it. No candidate was rebuilt, no ABI/QEMU audit was run, and
+no device access, flash, boot, retry, reset/repair, commit or push was
+performed.
+
+`findExactWholeMedia()` now fetches the raw `Base` property before casting. An
+absent `Base` on a whole media is accepted as the implied zero; a present
+property that is not an `OSNumber` or that is nonzero is rejected. The
+`Whole`/`Size`/`Content`/ancestry predicates and the exactly-one guard are
+unchanged. `snapshotPartitionMedia()` still requires `Base` on partition
+media, and the legacy `findWholeMedia()` still tests only `Whole` and ancestry.
+The corrected adapter source is `Gta4lEmmcBlock.cpp` `b7aeff0a…`.
+
+The host seam now models both sides. `partcmp-whole-no-base` is inverted: a
+whole media without `Base` must be accepted and produce the full comparison
+(`whole=1 base=0`, `gpt=1 reason=0`, `media=80 match=1`, `complete=1`). The
+new `partcmp-whole-base-invalid` control rejects a present nonzero `Base` and
+a present wrong-type `Base` with `reason=10` before any read. The existing
+`partcmp-property` control still faults a partition media, so the
+partition-side `Base` requirement remains covered. The discovery wait,
+missing/ambiguous media, content timing, cancellation, exact GPT/range
+comparison, duplicate/missing/extra rejection, read-only behavior and report
+semantics are unchanged.
+
+The block suite passes 48 core scenarios/38 mutation controls and 87 adapter
+scenarios with 16 adapter and eight policy mutation controls. This is
+host-only evidence. N9.5 archive/prelink/ABI-QEMU/payload/BOOT production is
+separately gated, as are a fresh explicit BOOT-only approval, verified
+protected backups/readbacks and a new predeclared owner-controlled one-boot
+budget. No retry, reflash, rollback, reset/repair, mount/root switch,
+partition write, wider/faster mode, DMA/CQE/ICE or request-limit increase is
+authorized. No partition-completeness claim is made; N8/N8.5's historical
+`complete=0` is not upgraded, and no initialization-reliability, wider/faster
+mode, write, mount, DMA/CQE/ICE or arbitrary-I/O result is added.
 
 ## 6. Expected report
 

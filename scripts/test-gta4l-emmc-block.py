@@ -842,8 +842,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 86, f'expected 86 adapter PASS lines, got {passes}'
-        print('PASS adapter: 85 scenarios against the host IOKit seam')
+        assert passes == 88, f'expected 88 adapter PASS lines, got {passes}'
+        print('PASS adapter: 87 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

@@ -59,6 +59,20 @@ static_assert(GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS ==
     GTA4L_EMMC_BLOCK_CHUNK_BLOCKS,
     "PARTMAP chunk must match the core chunk");
 
+/* The exact comparator needs a 16 KiB GPT array plus both validated copies
+ * and two media snapshots. Keeping that state in the driver object would
+ * exceed the kalloc safe allocation size, so the report thread owns one
+ * bounded scratch allocation instead. */
+struct gta4l_emmc_block_partmap_scratch {
+	uint8_t array[GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES];
+	struct gta4l_emmc_block_gpt gpt;
+	struct gta4l_emmc_block_gpt backup;
+	struct gta4l_emmc_block_partmap_media
+	    media[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA];
+	struct gta4l_emmc_block_partmap_media
+	    previous[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA];
+};
+
 class Gta4lEmmcBlock : public IOBlockStorageDevice {
 	OSDeclareDefaultStructors(Gta4lEmmcBlock)
 
@@ -197,13 +211,7 @@ private:
 	uint64_t partmapReadStart = 0;
 	uint8_t partmapPmbr[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t partmapHeader[GTA4L_EMMC_BLOCK_BYTES];
-	uint8_t partmapArray[GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES];
-	struct gta4l_emmc_block_gpt partmapGpt;
-	struct gta4l_emmc_block_gpt partmapBackup;
-	struct gta4l_emmc_block_partmap_media
-	    partmapMedia[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA];
-	struct gta4l_emmc_block_partmap_media
-	    partmapPrevious[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA];
+	struct gta4l_emmc_block_partmap_scratch *partmapScratch = nullptr;
 	bool registered = false;
 	bool reportStarted = false;
 	thread_t reportThread = nullptr;
@@ -223,6 +231,9 @@ private:
 	char partContent[GTA4L_EMMC_BLOCK_PART_REPORT]
 	    [GTA4L_EMMC_BLOCK_CONTENT_BYTES];
 };
+
+static_assert(sizeof(Gta4lEmmcBlock) <= (16u * 1024u),
+    "Gta4lEmmcBlock must fit the kalloc safe allocation size");
 
 OSDefineMetaClassAndStructors(Gta4lEmmcBlock, IOBlockStorageDevice)
 
@@ -616,6 +627,18 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	partCmpMode = (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON);
+	if (partCmpMode) {
+		/* The exact comparator's array, GPT copies and media
+		 * snapshots are too large for the driver object. The
+		 * report thread owns one bounded scratch allocation. */
+		partmapScratch = (struct gta4l_emmc_block_partmap_scratch *)
+		    IOMalloc(sizeof(*partmapScratch));
+		if (partmapScratch == nullptr) {
+			IOLog("GTA4L-EMMC P5 FAILED: partmap scratch "
+			    "allocation\n");
+			return false;
+		}
+	}
 
 	if (!IOBlockStorageDevice::start(provider)) {
 		return false;
@@ -730,6 +753,10 @@ Gta4lEmmcBlock::stop(IOService *provider)
 void
 Gta4lEmmcBlock::free()
 {
+	if (partmapScratch != nullptr) {
+		IOFree(partmapScratch, sizeof(*partmapScratch));
+		partmapScratch = nullptr;
+	}
 	if (reportLock != nullptr) {
 		IOLockFree(reportLock);
 		reportLock = nullptr;
@@ -1373,6 +1400,8 @@ Gta4lEmmcBlock::releasePartmapMedia()
 void
 Gta4lEmmcBlock::partmapPublishGpt()
 {
+	struct gta4l_emmc_block_gpt &partmapGpt = partmapScratch->gpt;
+
 	IOLockLock(reportLock);
 	report.partmap_slots = partmapGpt.slots;
 	report.partmap_used = partmapGpt.used;
@@ -1449,6 +1478,7 @@ Gta4lEmmcBlock::findExactWholeMedia(uint32_t *count)
 		IOMedia *media = (service != nullptr) ?
 		    static_cast<IOMedia *>(service) : nullptr;
 		OSBoolean *whole;
+		OSObject *baseProperty;
 		OSNumber *base;
 		OSNumber *size;
 		OSString *content;
@@ -1458,8 +1488,8 @@ Gta4lEmmcBlock::findExactWholeMedia(uint32_t *count)
 		}
 		whole = OSDynamicCast(OSBoolean,
 		    media->getProperty(kIOMediaWholeKey));
-		base = OSDynamicCast(OSNumber,
-		    media->getProperty(kIOMediaBaseKey));
+		baseProperty = media->getProperty(kIOMediaBaseKey);
+		base = OSDynamicCast(OSNumber, baseProperty);
 		size = OSDynamicCast(OSNumber,
 		    media->getProperty(kIOMediaSizeKey));
 		content = OSDynamicCast(OSString,
@@ -1467,7 +1497,15 @@ Gta4lEmmcBlock::findExactWholeMedia(uint32_t *count)
 		if ((whole == nullptr) || !whole->getValue()) {
 			continue;
 		}
-		if ((base == nullptr) || (base->unsigned64BitValue() != 0)) {
+		/*
+		 * The whole media created by IOBlockStorageDriver publishes no
+		 * Base property; kIOMediaBaseKey is set only by partition
+		 * schemes on partition media. An absent Base on a whole media
+		 * is the implied zero. A present Base must still be a zero
+		 * OSNumber, so a nonzero or wrong-typed property is rejected.
+		 */
+		if ((baseProperty != nullptr) &&
+		    ((base == nullptr) || (base->unsigned64BitValue() != 0))) {
 			continue;
 		}
 		if ((size == nullptr) || (size->unsigned64BitValue() !=
@@ -1549,6 +1587,9 @@ Gta4lEmmcBlock::snapshotPartitionMedia(IOService *scheme, IOMedia *whole,
 	uint32_t count = 0;
 	uint64_t wholeSize =
 	    (uint64_t)capacityBlocks * GTA4L_EMMC_BLOCK_BYTES;
+	struct gta4l_emmc_block_partmap_media
+	    (&partmapMedia)[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA] =
+	    partmapScratch->media;
 
 	if ((propErrors == nullptr) || (nested == nullptr)) {
 		return 0;
@@ -1660,6 +1701,15 @@ Gta4lEmmcBlock::runPartitionComparison()
 	uint64_t wholeSize;
 	OSBoolean *writableProperty;
 	OSString *contentProperty;
+	uint8_t *const partmapArray = partmapScratch->array;
+	struct gta4l_emmc_block_gpt &partmapGpt = partmapScratch->gpt;
+	struct gta4l_emmc_block_gpt &partmapBackup = partmapScratch->backup;
+	struct gta4l_emmc_block_partmap_media
+	    (&partmapMedia)[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA] =
+	    partmapScratch->media;
+	struct gta4l_emmc_block_partmap_media
+	    (&partmapPrevious)[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA] =
+	    partmapScratch->previous;
 
 	bzero(&partmapGpt, sizeof(partmapGpt));
 	bzero(&partmapBackup, sizeof(partmapBackup));

@@ -1055,8 +1055,13 @@ N8's `complete=0` and does not silently upgrade it. N9.2 then implemented
 `(base, size)` multiset comparison against the direct GUID-scheme children,
 bounded snapshots, cancellation and the `PARTMAP` line, plus the
 `emmc-block-1-partcmp`/`emmc-block-3-partcmp` payload personalities and the
-partobs+partcmp refusal. No candidate build, QEMU run, device access, flash or
-boot was performed; N9.3/N9.4 remain separately gated.
+partobs+partcmp refusal. N9.2 performed no candidate build, QEMU run, device
+access, flash or boot. N9.3 then produced the host-only `emmc-block-3-partcmp`
+candidate (kernel `fd2c8c65…`, requalified archive `02cb5563…`, payload
+`fd73b37f…` with a 14/14 contract and BOOT image `fa55ef61…` with an 18/18
+gate) and moved the comparator scratch to one bounded allocation after the
+real kernel build rejected the N9.2 object at the 16 KiB kalloc type limit.
+No device access, flash or boot; N9.4 remains separately gated.
 
 ## 10. What this design does not do
 

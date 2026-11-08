@@ -575,8 +575,34 @@ partition layout, payload policy and packaging.
   partobs+partcmp refusal. Host suites pass (core 48 scenarios/38 mutation
   controls; adapter 85 scenarios/16 adapter and eight policy mutation
   controls; diagnostic payload 28 checks; packager self-test 11 checks). No
-  candidate build, device access, flash or boot was performed, and N9.3/N9.4
-  remain separately gated.
+  candidate build, device access, flash or boot was performed in N9.2, and
+  N9.3/N9.4 remain separately gated. N9.3 then built the host-only
+  `emmc-block-3-partcmp` candidate: prelinked kernel `fd2c8c65…`, requalified
+  archive `02cb5563…`, payload `fd73b37f…` (14/14 contract) and BOOT image
+  `fa55ef61…` (18/18 gate), after moving the comparator scratch to one
+  bounded allocation to keep `Gta4lEmmcBlock` under XNU's 16 KiB kalloc type
+  limit (object 14,016 bytes). No flash, boot or device access was performed;
+  N9.4 remains separately gated. N9.4 then flashed that image BOOT-only to p69
+  and consumed one owner-controlled cold boot: the report reached the bounded
+  stop but failed at whole-media discovery with `gpt=0 reason=10 prop=0
+  samples=0 complete=0`, before any GPT validation or comparison, and the
+  owner returned to TWRP. The cause is source-grounded: the real whole
+  `IOMedia` carries `Whole`, `Size`, `Content` and `Writable` but no `Base`,
+  while `findExactWholeMedia()` required `Base=0`; the host seam had always
+  set `Base` on whole media and so masked the defect. The host seam now pins
+  the hardware signature with a `partcmp-whole-no-base` scenario, and the
+  owner-approved host-only correction changed `findExactWholeMedia()` to
+  accept an absent `Base` as the implied zero while still rejecting a present
+  nonzero or wrong-typed `Base`; partition media still require `Base`. The
+  scenario is inverted to require the full comparison and the new
+  `partcmp-whole-base-invalid` control rejects the present nonzero and
+  wrong-type cases before any read. The block suite passes 48 core
+  scenarios/38 mutation controls and 87 adapter scenarios/16 adapter and
+  eight policy mutation controls. No candidate rebuild, ABI/QEMU audit, flash,
+  boot or retry was performed, and no partition-completeness or reliability
+  claim is made. N9.5 remains separately gated; see
+  [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md)
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.59-§5.3.60.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/gta4l-storage-publication-design.md](docs/gta4l-storage-publication-design.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),

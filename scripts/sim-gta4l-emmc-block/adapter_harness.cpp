@@ -891,6 +891,54 @@ scenario_partcmp_property(void)
 	return 0;
 }
 
+static int
+scenario_partcmp_whole_no_base(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_whole->property_faults = GTA4L_TEST_PROP_BASE_MISSING;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 MEDIA: whole=1 base=0 ") != 0);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=0 slots=84 used=80 "
+	    "pmbr=1 hdr=1 arr=1 bak=1 xcheck=1 media=80 match=1 "
+	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=6 changes=0 "
+	    "stable=1 stable_ms=250 deadline_ms=2000 timed_out=0 "
+	    "budget=0 reads=25 blocks=45 fails=0 cancel=0 "
+	    "complete=1") != 0);
+	CHECK(g_self->report.partmap_complete == 1);
+	CHECK(gta4l_test.sleep_with_lock == 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_whole_base_invalid(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_whole->base_value = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=0 reason=10 slots=0 used=0 "
+	    "pmbr=0 hdr=0 arr=0 bak=0 xcheck=0 media=0 match=0 "
+	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=0 changes=0 "
+	    "stable=0 stable_ms=0 deadline_ms=2000 timed_out=0 budget=0 "
+	    "reads=0 blocks=0 fails=0 cancel=0 complete=0") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_whole->property_faults = GTA4L_TEST_PROP_BASE_WRONG;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=0 reason=10 slots=0 used=0 "
+	    "pmbr=0 hdr=0 arr=0 bak=0 xcheck=0 media=0 match=0 "
+	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=0 changes=0 "
+	    "stable=0 stable_ms=0 deadline_ms=2000 timed_out=0 budget=0 "
+	    "reads=0 blocks=0 fails=0 cancel=0 complete=0") != 0);
+	return 0;
+}
+
 struct partcmp_invalid_case {
 	uint32_t kind;
 	uint32_t reason;
@@ -2832,6 +2880,8 @@ static const struct scenario_entry scenarios[] = {
 	{ "partcmp-late-growth", scenario_partcmp_late_growth },
 	{ "partcmp-changing", scenario_partcmp_changing },
 	{ "partcmp-property", scenario_partcmp_property },
+	{ "partcmp-whole-no-base", scenario_partcmp_whole_no_base },
+	{ "partcmp-whole-base-invalid", scenario_partcmp_whole_base_invalid },
 	{ "partcmp-gpt-invalid", scenario_partcmp_gpt_invalid },
 	{ "partcmp-entry-variants", scenario_partcmp_entry_variants },
 	{ "partcmp-geometry", scenario_partcmp_geometry },

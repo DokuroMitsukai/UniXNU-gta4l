@@ -488,6 +488,17 @@ void IOLockLock(IOLock *lock);
 bool IOLockTryLock(IOLock *lock);
 void IOLockUnlock(IOLock *lock);
 
+static inline void *IOMalloc(size_t size)
+{
+	return malloc(size);
+}
+
+static inline void IOFree(void *address, size_t size)
+{
+	(void)size;
+	free(address);
+}
+
 void IOLog(const char *format, ...);
 void IOSleep(unsigned milliseconds);
 void panic(const char *format, ...) __attribute__((noreturn));
