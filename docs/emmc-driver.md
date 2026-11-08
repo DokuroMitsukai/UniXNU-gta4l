@@ -65,7 +65,11 @@ The core is
 opt-in. The runs were made under the owner's approval for each exact procedure,
 with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
 `sdhc-bus-power-activation` NO-GO still applies to any operation not separately
-approved.
+approved. The 2026-11-08 N10.1 read-only content qualification then completed
+six pinned range reads on one owner-reported cold boot with `complete=1`, plus
+an independent read-only post-boot content and protected-partition comparison
+(§5.3.75) `[C]`; it qualifies only those ranges, not arbitrary I/O, mount,
+writes, wider/faster modes, DMA/CQE/ICE or initialization reliability.
 
 This document records the native eMMC implementation. It is deliberately small:
 one-bit bus, legacy timing, polling, single 512-byte PIO reads and no card
@@ -5272,6 +5276,112 @@ modes. N9.6/N9.7/N9.8 `complete=0` are preserved and initialization reliability
 remains `[U]`. No further boot is needed; any stronger claim needs a separately
 approved read-only re-verification and/or captured-boot protocol. Findings:
 `docs/emmc-n9.11-reliability-observation-2026-11-08.md`.
+
+### 5.3.74 N10.1 read-only IOMedia content qualification candidate production (host-only, 2026-11-08)
+
+Follow-up to §5.3.71. N10.1 adds an orthogonal read-only content
+qualification selected by `gta4l-emmc-partread=1`. The selector accepts the
+token only with exactly one `gta4l-emmc-block=1` or `=3` token, value exactly
+`1`, no duplicate, and no `gta4l-emmc-partobs=1` or `gta4l-emmc-partcmp=1` in
+the same boot; an orphan, duplicate, wrong value or combination is a refusal
+with the existing `IOLog` wording rather than an inert fallback, and the
+legacy report is unchanged when the token is absent.
+
+The mode waits for exactly one whole-media `IOMedia`, validates the read-only
+whole-media profile (absent `Base` accepted as zero, nonzero or wrong-typed
+`Base` refused), opens it as a reader, resolves the boot partition by the
+pinned base `2,255,360 × 512` and size `196,608 × 512`, and performs six
+fixed-range reads: whole LBA 0/34 blocks, whole last 34 blocks, boot 64 blocks
+at `BOOT_SIZE - 32768`, and boot 3/2/1-block tails. Each read goes through one
+page-aligned 32 KiB `IOMallocAligned` bounce buffer, copies only after a full
+successful transfer, and compares the first 16 bytes of a portable SHA-256
+against a digest pinned from retained evidence. The first failing case latches
+the reason; the counters keep every case that ran; `complete=1` requires all
+six cases to pass with no cancellation, budget stop, media/partition/open
+failure, short transfer or hash mismatch. The worst case
+`MEDIA_WAIT + READ_BUDGET + 1000 + DEADLINE` stays below the 30,000 ms
+watchdog, and the object stays below the 16 KiB `static_assert`.
+
+The candidate chain: prelinked kernel `12e00d9f…` (51,277,824 bytes; plan
+`83a8b81b…`); kernel-build archive `b137c2e4…` with `Gta4lEmmcBlock.c`
+`9dad3d79…` compiled to `Gta4lEmmcBlock.o` `2402c895…` and
+`Gta4lEmmcBlock.cpp` `6a11aa76…` compiled to `Gta4lEmmcBlockCpp.o`
+`5f72925e…`; candidate storage-ABI audit `out/gta4l/storage-abi-12e00d9f`
+(`gdb-stop.json` `275d693e…`, `interface-audit.json` `48d8d4a7…`,
+`provenance.json` `99c15186…`, `run.json` `b9888e50…`; 190 slots, 181 kernel
+bindings, 26 concrete overrides, 0 unresolved original imports, vtable
+`0xfffffff005cb44c0`, service metaclass `0xfffffff007af75b8`,
+`runtime_qualified=false`); requalified archive `5a59d055…` with
+byte-identical members; packaged kernel `05fde642…`; payload `e2dc899d…`
+(83,886,080 bytes, manifest `08ff16bf…`, 18/18 contract,
+`emmc-block-3-partread` mapping to `gta4l-emmc-block=3
+gta4l-emmc-partread=1` with the `fs-timer-hold` fixture) and BOOT image
+`0cee22c9…` (85,688,320 bytes, manifest `31ce0993…`, 18/18 gate, only the
+ramdisk differs from the `ce4d76e8…` v5 baseline).
+
+The six pinned digests were re-verified before the build against
+`lbas-0-33.bin`/`lbas-61071326-61071359.bin`, the retained `primary-gpt.bin`
+and `backup-gpt.bin` prefixes and the boot-tail ranges of
+`boot-backup-20261027-pmgr.img`; the retained GPT parses as 128 entries of
+84 bytes with backup LBA 61,071,359, usable bounds 34/61,071,326 and the boot
+entry at LBA 2,255,360 with 196,608 sectors. The packaged kernel carries one
+`GTA4L-EMMC P5 PARTREAD`, one `READTEST`, one `READFAIL`, one `PARTMAP`, three
+`REPORT`, one `READDETAIL`, one `PARTOBS`, one legacy `PART:` and six
+`gta4l-emmc-partread` strings and no literal `complete=`. Host suites pass:
+block 48 core scenarios/38 mutation controls and 114 adapter scenarios with
+33 adapter and eight policy mutation controls; payload 18 contract checks;
+packager, boot-image, storage-ABI, evidence-count (core 187/115, probe
+196/100), fixture recipe and board checks. No flash, boot, device access,
+commit or push was part of the production step; the separately approved
+BOOT-only flash and one owner-reported cold boot were executed later and are
+recorded in §5.3.75. They qualify only the six pinned ranges on that boot, not
+arbitrary I/O, mount, writes, wider/faster modes or initialization
+reliability. Findings:
+`docs/emmc-n10.1-partread-candidate-2026-11-08.md`.
+
+### 5.3.75 N10.1 read-only IOMedia content qualification hardware result (2026-11-08)
+
+Follow-up to §5.3.74. The owner-approved BOOT-only flash wrote the N10.1 BOOT
+image `0cee22c9…` (85,688,320 bytes) to p69 only; the post-flash full readback
+`cc3c8492…` matched the candidate prefix `0cee22c9…` plus the preserved tail
+`a28b4ea2…`, and RECOVERY/EFS/sec_efs were unchanged. One owner-reported cold
+boot then returned the read-only whole-media profile (`whole=1 base=0
+size=31268536320 content=GUID_partition_scheme writable=0`) and:
+
+```
+GTA4L-EMMC P5 PARTREAD: cases=6 passed=6 failed=0 reason=0 complete=1 reads=6 blocks=138 bytes=70656 fails=0 cancel=0 budget=0 media=0 part=0 cap=61071360
+```
+
+The six pinned cases are whole LBA 0/34 blocks, whole last 34 blocks, and boot
+64/3/2/1-block tails. `passed=6 failed=0 reason=0 complete=1` means all six
+digests matched under the guard at `package/Gta4lEmmcBlock.cpp:2297-2299`;
+`reads=6 blocks=138 bytes=70656` is exactly 34+34+64+3+2+1 blocks and
+138 x 512 bytes. `READTEST index=5 … off=100662784 … digest=400039fd…` is the
+final singleton boot-tail case, not an aggregate. `media=0 part=0` are failure
+flags: the source sets `partread_media=1` only for a media reason and
+`partread_part=1` only for a partition reason
+(`package/Gta4lEmmcBlock.cpp:1969-1974`), so both zero means neither failure
+occurred. `DRV reads=31 blocks=167` and `XFER req=167 c17=9 c18=79 c18b=158
+stops=79` are whole-boot aggregates that include the six partread reads and
+are not additive with the partread counters. The zero `READFAIL`, `PART`,
+`READ`, `QUAL` and `QUAL3` lines are inactive legacy paths, and `SNAP
+locked=1`/`FAIL valid=0` are unchanged. The supplied suffix
+`@Gta41EmmcBlock.cpp:2642` preserves the supplied spelling; current source
+line 2642 is the intentional terminal `panic("%s", reportBuffer)` in
+`panicWithReport()`, not a fault.
+
+An independent read-only post-boot collection then matched the stored BOOT
+full/prefix/tail hashes, found RECOVERY/EFS/sec_efs unchanged, and passed
+18/18 boot-image and 18/18 payload checks on the pulled prefix and extracted
+payload. This confirms the stored content and protected-partition
+preservation; it is not a second boot. The result is one same-boot
+qualification of six pinned ranges and does not establish arbitrary I/O,
+mount, writes, wider/faster modes, DMA/CQE/ICE or initialization reliability.
+N8.5/N9.6/N9.7/N9.8 `complete=0`, the N9.10 comparator result and the N9.11
+owner-reported repeatability series are preserved. The owner returned to
+TWRP; the one-boot budget is consumed and no retry, reflash, rollback,
+reset/repair, commit or push was performed. Findings:
+`docs/emmc-n10.1-partread-hardware-result-2026-11-08.md`.
 
 ## 6. Expected report
 

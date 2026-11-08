@@ -707,15 +707,38 @@ partition layout, payload policy and packaging.
   `docs/emmc-n9.11-reliability-observation-2026-11-08.md`. The host-only
   protocol proposal is
   [docs/emmc-n9.11-reliability-protocol-2026-11-08.md](docs/emmc-n9.11-reliability-protocol-2026-11-08.md)
-  (not fully followed).
+  (not fully followed). N10.1 then added the orthogonal host-only read-only
+  content qualification: `gta4l-emmc-partread=1` requires exactly one block
+  token 1/3 with value 1 and refuses duplicates, orphans, wrong values and
+  partobs/partcmp combinations; the mode opens the whole media and the pinned
+  boot partition, performs six fixed-range reads (whole LBA 0/34 blocks, whole
+  last 34 blocks, boot 64/3/2/1-block tails) through one page-aligned 32 KiB
+  `IOMallocAligned` bounce buffer, and compares the first 16 bytes of a
+  portable SHA-256 against digests pinned from retained evidence, latching the
+  first failure and reporting `complete=1` only when all six cases pass. The
+  candidate chain built prelinked kernel `12e00d9f…`, candidate audit
+  `out/gta4l/storage-abi-12e00d9f`, requalified archive `5a59d055…`, packaged
+  kernel `05fde642…`, payload `e2dc899d…` (18/18 contract) and BOOT image
+  `0cee22c9…` (18/18 gate, only the ramdisk differs from the `ce4d76e8…`
+  baseline); the block suite passes 48 core scenarios/38 mutation controls and
+  114 adapter scenarios with 33 adapter and eight policy mutation controls. The
+  separately approved BOOT-only flash and one owner-reported cold boot then
+  completed all six pinned reads (`cases=6 passed=6 failed=0 reason=0
+  complete=1 reads=6 blocks=138 bytes=70656 media=0 part=0`), and an
+  independent read-only post-boot comparison confirmed the stored BOOT,
+  unchanged RECOVERY/EFS/sec_efs and both pulled-byte gates (18/18 each). This
+  qualifies only the six pinned ranges on that one boot; the boot budget is
+  consumed and no retry, reflash or repair is authorized.
   See
+  [docs/emmc-n10.1-partread-hardware-result-2026-11-08.md](docs/emmc-n10.1-partread-hardware-result-2026-11-08.md),
+  [docs/emmc-n10.1-partread-candidate-2026-11-08.md](docs/emmc-n10.1-partread-candidate-2026-11-08.md),
   [docs/emmc-n9.11-reliability-observation-2026-11-08.md](docs/emmc-n9.11-reliability-observation-2026-11-08.md),
   [docs/emmc-n9.10-partcmp-observation-2026-11-08.md](docs/emmc-n9.10-partcmp-observation-2026-11-08.md),
   [docs/emmc-n9.10-partcmp-page-aligned-candidate-2026-11-08.md](docs/emmc-n9.10-partcmp-page-aligned-candidate-2026-11-08.md),
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.72,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.74,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

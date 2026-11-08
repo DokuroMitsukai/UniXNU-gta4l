@@ -286,7 +286,15 @@ personality: the block payloads keep the `emmc-block-3-partcmp` mapping, and
 the N9.7 read-detail capture only extends the in-kernel `PARTMAP` report with
 a bounded `READDETAIL` line. The N9.8 production rebuilt that same
 `emmc-block-3-partcmp` payload (`8d57eb3d…`) against the read-detail kernel
-with the unchanged `fs-timer-hold` fixture (`00363681…`). The
+with the unchanged `fs-timer-hold` fixture (`00363681…`). The N10.1 read-only
+content qualification adds `emmc-block-1-partread` and
+`emmc-block-3-partread`, which map to the same block token plus
+`gta4l-emmc-partread=1`; both require the hold fixture, and the checker
+refuses an orphan, duplicate or non-1 partread token, a mismatched
+personality, and any partread+partobs or partread+partcmp combination. The
+N10.1 production rebuilt the `emmc-block-3-partread` payload (`e2dc899d…`)
+against the partread kernel with the unchanged `fs-timer-hold` fixture
+(`00363681…`). The
 stage-2
 image built on
 2026-10-31 is
