@@ -86,7 +86,7 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 55 adapter scenarios and 3 adapter-source mutations against the host IOKit seam |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 97 adapter scenarios and 23 adapter plus eight policy mutation controls against the host IOKit seam |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `configs/gta4l_defconfig` | Force-loads the SDHCI snapshot and both eMMC archives into the kernel |
@@ -4796,31 +4796,41 @@ and any new hardware run remain later, separately approved gates.
 ### 5.3.64 N9.7 GUID-scheme lookup correction (host-only, 2026-11-07)
 
 Owner-approved follow-up to §5.3.63. This section records the host-only
-correction and its seam extension. No candidate was built, no ABI/QEMU audit
-was run, and no device access, flash, boot, commit or push was performed.
+correction and its seam extension; the candidate production that followed is
+recorded in §5.3.65. No device access, flash, boot, commit or push was
+performed.
 
 `findGuidScheme()` now enumerates the selected whole media's direct
 service-plane children with `whole->getChildIterator(gIOServicePlane)`. The
 lookup no longer calls `IOService::getMatchingServices()`; the four remaining
 matching walks in the adapter are the whole-media and partition-media `IOMedia`
-walks. The class guard (`OSDynamicCast(IOGUIDPartitionScheme, object)`), the
-direct-provider guard, the `UUID`-string guard and the exactly-one guard are
-unchanged, as is the existing media discovery wait. In the pinned headers
-`getChildIterator()` returns `OSPtr<OSIterator>`; the build does not define
-`IOKIT_ENABLE_SHARED_PTR`, so `OSPtr<T>` is `T *` and the iterator is released
-exactly once. A failed iterator allocation still returns `nullptr` and reports
-the existing media reason without a read.
+walks. The direct-provider guard, the `UUID`-string guard, the exactly-one
+guard and the existing media discovery wait are unchanged. In the pinned
+headers `getChildIterator()` returns `OSPtr<OSIterator>`; the build does not
+define `IOKIT_ENABLE_SHARED_PTR`, so `OSPtr<T>` is `T *` and the iterator is
+released exactly once. A failed iterator allocation still returns `nullptr` and
+reports the existing media reason without a read.
+
+The class guard had to change. A direct
+`OSDynamicCast(IOGUIDPartitionScheme, object)` compiles but fails the kernel
+link with an undefined `__ZN21IOGUIDPartitionScheme9metaClassE`: the pinned
+class lives in the prelinked storage kext and its metaclass is not exported to
+the kernel link. The guard is now the name-based
+`object->metaCast("IOGUIDPartitionScheme")`, following the existing
+`ShengPlatformPower.cpp` precedent (`provider->metaCast("ApplePMGR")`). The
+direct-provider, `UUID` and exactly-one guards still constrain the result, so a
+same-named foreign object is rejected by them.
 
 The host seam now models direct service-plane children. `IOService` carries a
 bounded child list and `getChildIterator(gIOServicePlane)` returns only those
-children; `gta4l_test_add_child()` attaches a child, and the seam defines an
-`IOGUIDPartitionScheme` class so the production class guard is exercised by
-the same `OSDynamicCast` expression used on target. `partcmp_setup()` gained a
-registration flag. The unregistered fixture attaches the scheme as a child of
-the whole media and configures its provider and `UUID` but never calls
-`registerService()`; the registered fixture does both. `getMatchingServices()`
-still hides unregistered schemes, so the two visibility models remain
-distinct.
+children; `gta4l_test_add_child()` attaches a child. The seam defines an
+`IOGUIDPartitionScheme` class and a `metaCast` test double keyed on the class
+name, so the production name-based class guard is exercised by the same
+expression used on target. `partcmp_setup()` gained a registration flag. The
+unregistered fixture attaches the scheme as a child of the whole media and
+configures its provider and `UUID` but never calls `registerService()`; the
+registered fixture does both. `getMatchingServices()` still hides unregistered
+schemes, so the two visibility models remain distinct.
 
 `partcmp-scheme-unregistered` is inverted: it now requires the full successful
 comparison (`gpt=1 reason=0 slots=84 used=80 pmbr=1 hdr=1 arr=1 bak=1
@@ -4835,10 +4845,9 @@ was never registered (only the adapter's own registration is counted). The new
 `partcmp-open-refused` controls are retained.
 
 The adapter mutation set grows to 18: `partcmp-scheme-class-guard` replaces the
-`IOGUIDPartitionScheme` cast with `IOService` and must fail
-`partcmp-scheme-wrong-class`; `partcmp-scheme-exactly-one` accepts zero or many
-children and must fail `partcmp-scheme-duplicate`. The policy mutation set is
-unchanged at eight.
+name check with `if (false)` and must fail `partcmp-scheme-wrong-class`;
+`partcmp-scheme-exactly-one` accepts zero or many children and must fail
+`partcmp-scheme-duplicate`. The policy mutation set is unchanged at eight.
 
 The block suite passes 48 core scenarios/38 mutation controls and 94 adapter
 scenarios with 18 adapter and eight policy mutation controls. The diagnostic
@@ -4846,8 +4855,156 @@ payload (28), packager (11), evidence-count (core 187/115, probe 196/100),
 RAM-root fixture recipe and board checks pass unchanged. This is host-only
 evidence: the correction is not hardware-verified, N9.6's `complete=0` is not
 upgraded, and no partition-completeness or initialization-reliability claim is
-made. Candidate production, the ABI/QEMU audit, a BOOT-only flash and any new
-boot remain later, separately approved gates.
+made. The corrected candidate production is recorded in §5.3.65; a BOOT-only
+flash and any new boot remain later, separately approved gates.
+
+### 5.3.65 N9.7 corrected candidate production (host-only, 2026-11-07)
+
+Follow-up to §5.3.64. This section records the host-only production chain for
+the corrected GUID-scheme lookup and stops at the production record. No flash,
+boot, device access, retry, reset/repair, commit or push was performed.
+
+The prelinked kernel is `06826fc5…` (51,257,344 bytes; plan `c9a11f43…`). The
+kernel-build archive `d8234e69…` records `Gta4lEmmcBlock.cpp` `0bc83206…`
+compiled to `Gta4lEmmcBlockCpp.o` `19f0ba8b…`; the policy object is unchanged
+at `fb94f96f…`. A fresh candidate-matched Linux/QEMU audit in
+`out/gta4l/storage-abi-06826fc5` (`gdb-stop.json` `0c1f6e34…`,
+`interface-audit.json` `e70c0503…`, `provenance.json` `1ad75463…`,
+`run.json` `56e469d4…`) binds 190 slots, 181 kernel bindings (167 inherited
++ 14 pure virtual), 26 concrete overrides and 0 unresolved original imports,
+with live sizes 0x90/0x88, native 4K and `runtime_qualified=false`.
+Requalifying the archive in the build tree against that audit produced
+`6a6af596…`; all three members are byte-identical to the kernel-build archive
+and the container differs only in its index.
+
+The packaged kernel is `61b9cea0…`. The payload is `79c83d67…` (83,886,080
+bytes; manifest `1bdd7051…`; 14/14 contract; diagnostic
+`emmc-block-3-partcmp`; kernel arguments ending
+`gta4l-emmc-block=3 gta4l-emmc-partcmp=1`; hold root `327ac826…`, fixture
+`00363681…`, trust cache `30a72f78…`). The BOOT image is `74a4c687…`
+(85,688,320 bytes; manifest `788d5008…`; gate `bc2c0281…`, 18/18, only the
+ramdisk differs from the hardware-tested `ce4d76e8…` baseline; baseline
+kernel section `a4b054e0…`, firmware `1e8a3132…` and DTB `dc4c719d…`
+unchanged).
+
+The block suite passes 48 core scenarios/38 mutation controls and 94 adapter
+scenarios with 18 adapter and eight policy mutation controls; the payload
+suite passes 28 checks, the packager self-test 11 checks, and the storage-ABI
+positive/negative checks, evidence counts, fixture recipe and board check
+pass. This is host-only production. N9.6's `complete=0` is not upgraded and no
+partition-completeness or initialization-reliability claim is made. A fresh
+explicit BOOT-only approval, verified protected backups/readbacks and a new
+predeclared owner-controlled one-boot budget remain separately gated. No
+retry, reflash, rollback, reset/repair, mount/root switch, partition write,
+wider/faster mode, DMA/CQE/ICE or request-limit increase is authorized by this
+record. No commit or push. The private evidence directory is
+`out/gta4l/ram-root-emmc-n9.7-candidate-evidence/`.
+
+### 5.3.66 N9.7 corrected-candidate observation and page-straddle analysis (2026-11-07)
+
+Follow-up to §5.3.65. N9.7 flashed the corrected image BOOT-only to p69 and
+consumed one owner-controlled cold boot. The flash record is
+`ecf652c9…` with the unchanged manifest `c35f25d3…`; BOOT `74a4c687…`
+(85,688,320 bytes), payload `79c83d67…`, prelinked kernel `06826fc5…` and
+packaged kernel `61b9cea0…` match §5.3.65. The full p69 readback is
+`aaaf8f03…` (candidate prefix `74a4c687…` plus unchanged tail `a28b4ea2…`);
+RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` were unchanged,
+and rollback `boot-before-n9.7.img.xz` `f7e5ac3c…` preserves raw `9c5bcf2c…`.
+
+The report selected the real whole media (`whole=1 base=0 size=31268536320
+content=GUID_partition_scheme writable=0`), so the §5.3.64 correction works on
+hardware: the service-plane child lookup, class match and reader open passed.
+The first comparator LBA 0/512-byte read then failed with `gpt=0 reason=8
+reads=1 blocks=1 fails=1 samples=0 complete=0`. Reason 8 is
+`GTA4L_EMMC_BLOCK_PARTMAP_REASON_READ`; `readPartmapSectors()` returns it when
+`media->read` is non-success or `actual != 512`, and the report discards both
+details. `reads=1 blocks=1` confirms one attempted sector; `fails=1` is the
+reporter, not a transport measurement. DRV online=1/wp=1/9 requests/29
+blocks/fails=0/max=8 and XFER req=29/c17=7/c18=11/c18b=22/cfail=0/stops=11/
+sfail=0 are incidental scan requests. GPT validation and comparison did not
+begin. The supplied panic suffix `@Gta41EmmcBlock.cpp:2000` is the intentional
+report stop in the `0bc83206…` source.
+
+Host-only analysis points to the driver breakup stage, not the adapter. The
+flashed DWARF gives `Gta4lEmmcBlock` byte size `0x3658` with `partmapPmbr` at
+`0x0e18`; the object's 13,912 bytes land in the page-multiple 16 KiB kalloc
+class, whose element base is page-aligned, and KASAN is disabled. The buffer
+therefore starts at page offset 3,608; `getPhysicalSegment(…,
+kIOMemoryMapperNone)` yields a 488-byte first segment and a 24-byte second
+segment. The advertised `kIOMaximumSegmentCountReadKey=1` stops
+`IOBreaker::getBreakSize()` before folding the second page unless it is
+physically contiguous or a system mapper exists; this platform has none, so
+`breakSize=488`, `IOTrunc(488, 512)=0`, and `breakUpRequest()` completes with
+`kIOReturnDMAError` before `executeRequest()`/`doAsyncReadWrite`. That path
+leaves the adapter counters untouched, matching the report. Physical
+adjacency of the two pages is not host-observable, and
+`prepareRequest`/`IOBreaker` allocation failure remains the main unselected
+alternative early exit. The host seam calls `doAsyncReadWrite` directly and
+does not qualify the real context/deblock/breakup layers.
+
+This is a bounded observation, not a root-cause proof. N9.6's `complete=0` is
+not upgraded and no partition-completeness or initialization-reliability claim
+is made. The next host-only batch should distinguish the page-straddle path
+from allocation failure and preserve raw `IOReturn`/actual bytes in the
+report. Candidate corrections for owner approval, smallest first: stage the
+reads through a page-aligned bounce buffer; raise/remove the segment-count
+limit; or page-align the member buffers within the 16 KiB typed-allocator
+limit. No driver correction, candidate build, ABI/QEMU audit, device access,
+flash, boot, retry, reset/repair, commit or push is authorized or performed by
+this record. Private evidence is in
+`out/gta4l/ram-root-emmc-n9.7-hardware-evidence/`.
+
+### 5.3.67 N9.7 comparator read-detail host batch (2026-11-07)
+
+Follow-up to §5.3.66. This section records a host-only diagnostic capture; no
+driver correction, candidate build, ABI/QEMU audit, device access, flash, boot,
+retry, reset/repair, commit or push was performed. The N9.7 boot budget stays
+consumed and the N9.6/N9.7 `complete=0` verdicts are not upgraded.
+
+The N9.7 report could not distinguish a media read that returned an error from
+one that returned fewer bytes, and it discarded the raw `IOReturn` and actual
+count. `struct gta4l_emmc_block_report` now carries a bounded read-detail
+record: `partmap_read_state` (`GTA4L_EMMC_BLOCK_PARTMAP_READ_NONE` 0 not
+attempted, `READ_FLIGHT` 1 in flight, `READ_ERROR` 2 returned error,
+`READ_SHORT` 3 short transfer, `READ_FULL` 4 full completion),
+`partmap_read_lba`, `partmap_read_blocks`, `partmap_read_bytes`, the raw
+signed 32-bit `partmap_read_status`, the returned `UInt64`
+`partmap_read_actual`, and the `IOMemoryDescriptor` `getLength()`/
+`getDirection()` pair in `partmap_read_desc_len`/`partmap_read_desc_dir`.
+`readPartmapSectors()` publishes the request under `reportLock` before
+`media->read`, records the outcome only when the state is still `FLIGHT` for
+the same LBA/block pair, and preserves the first `ERROR` or `SHORT` state
+across later reads. A descriptor-allocation refusal or a refused media open
+leaves the record at `NONE`; neither path starts a read.
+
+The new `GTA4L-EMMC P5 READDETAIL:` line follows every `PARTMAP` line and
+emits `state`, `lba`, `blocks`, `bytes`, `status`, `actual`, `desc_len` and
+`desc_dir`. It is bounded by
+`GTA4L_EMMC_BLOCK_PARTMAP_DETAIL_LINE_BYTES` (256) and keeps the whole report
+inside the 2048-byte buffer. The fields are all zero in a report that never
+attempted a comparator read.
+
+The host seam covers the capture: `partcmp-read-failure` injects a
+`kIOReturnDMAError` (`0xe00002ca`, printed as `3758097098`) at each of the 25
+read positions and asserts `state=2`, `actual=0`, the LBA/block/byte and
+descriptor fields, `reason=8`, `fails=1`, `samples=0` and `complete=0`;
+`partcmp-read-short` covers `actual=0` and `actual=511` for a 512-byte request
+and a 512-of-1024-byte short transfer after earlier successes (`state=3`);
+`partcmp-read-inflight` pins the watchdog `state=1` snapshot; the success path
+asserts `state=4`; and `partcmp-open-refused` plus the new
+`partcmp-descriptor-failure` control pin the all-zero `state=0` line with
+`reason=10`. Five adapter mutation controls reject a discarded status, actual,
+descriptor length, short state or in-flight state. The formatter fixture also
+checks the default and maximum field widths and the 256-byte detail-line cap.
+The block suite passes 48 core scenarios/38 mutation controls and 97 adapter
+scenarios with 23 adapter and eight policy mutation controls.
+
+This is a diagnostic capture, not a root-cause proof. The host seam calls
+`doAsyncReadWrite` directly and does not qualify the real context, deblock or
+breakup layers; physical adjacency, `IOBreaker` allocation failure and the
+page-straddle hypothesis all remain unselected inputs. The next gated boot must
+read the `READDETAIL` fields before any candidate correction is selected, and
+no buffer, segment-limit or request-limit change is authorized by this record.
 
 ## 6. Expected report
 

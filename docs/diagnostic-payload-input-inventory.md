@@ -280,7 +280,11 @@ use is limited to that one boot. The N9.2 exact comparison adds
 `emmc-block-1-partcmp` and `emmc-block-3-partcmp`, which map to the same block
 token plus `gta4l-emmc-partcmp=1`; both require the hold fixture, and the
 checker refuses an orphan, duplicate or non-1 partcmp token, a mismatched
-personality and any partobs+partcmp combination. The
+personality and any partobs+partcmp combination. The N9.3-N9.7 candidate,
+observation and read-detail host batches add no payload input or personality:
+the block payloads keep the `emmc-block-3-partcmp` mapping, and the N9.7
+read-detail capture only extends the in-kernel `PARTMAP` report with a bounded
+`READDETAIL` line. The
 stage-2
 image built on
 2026-10-31 is

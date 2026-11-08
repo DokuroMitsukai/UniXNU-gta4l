@@ -1063,6 +1063,31 @@ gate) and moved the comparator scratch to one bounded allocation after the
 real kernel build rejected the N9.2 object at the 16 KiB kalloc type limit.
 No device access, flash or boot; N9.4 remains separately gated.
 
+N9.4 then flashed that candidate BOOT-only and one owner-controlled cold boot
+failed whole-media discovery with `reason=10` before any GPT read, so the
+report could not distinguish an absent media from a selection defect. N9.5
+built the corrected whole-media `Base` candidate (prelinked kernel `a610e9d1…`,
+payload `79ac3a10…`, BOOT image `45f3bb81…`, 18/18 gate). N9.6 flashed it and
+the report selected the real media (`whole=1 base=0 size=31268536320
+content=GUID_partition_scheme writable=0`), confirming that correction, but
+the GUID-scheme lookup stopped with `reason=10` before the first GPT read.
+N9.7 replaced the registration-only lookup with direct service-plane
+enumeration of the selected media's children, keeping the class, provider,
+UUID and exactly-one guards; its candidate (prelinked kernel `06826fc5…`,
+payload `79c83d67…`, BOOT image `74a4c687…`, 18/18 gate) selected the media
+and found the scheme on one owner-controlled cold boot, but the first
+comparator LBA 0/512-byte read failed with `gpt=0 reason=8 reads=1 blocks=1
+fails=1 samples=0 complete=0`. The report discarded the raw `IOReturn` and
+actual bytes, so the cause remains unresolved: host analysis grounds a
+page-straddle/one-segment breakup exit (`kIOReturnDMAError` before the
+adapter) but physical adjacency and allocation failure stay unselected. A
+host-only read-detail batch then added `partmap_read_state`/`lba`/`blocks`/
+`bytes`/`status`/`actual`/`desc_len`/`desc_dir` and the bounded `READDETAIL`
+line to every `PARTMAP` report without changing transport policy; it performed
+no candidate build, flash or boot. N9.6/N9.7 `complete=0` are preserved, and a
+separately gated BOOT-only candidate and one owner-approved boot are required
+to read the new line.
+
 ## 10. What this design does not do
 
 - The first rung is measured for one reported boot at 1-bit SDR, 400 kHz:
@@ -1073,6 +1098,12 @@ No device access, flash or boot; N9.4 remains separately gated.
 - N6 measured a second clean CMD3 control on the unchanged stage-9 candidate;
   it does not add a second mode-3 publication boot, a partition-completeness
   result or a reliability rate.
+- The exact GPT-to-`IOMedia` comparator has not completed on hardware. N9.4
+  and N9.6 stopped before the first GPT read (`reason=10`); N9.7 passed
+  whole-media selection, GUID-scheme lookup and reader open, but its first
+  LBA 0/512-byte read failed (`reason=8`). N9.7's `complete=0` is not
+  upgraded, the cause is unresolved, and the read-detail capture is host-only
+  until a separately gated boot.
 - The measured p5b publication rung does not use CMD18/CMD12, DMA, CQE, ICE,
   interrupts, DDR, HS200/HS400 or 8-bit; those remain separate rungs. The
   host-only N3 mode-3 path does use two-sector CMD18 chunks, and N5 measured

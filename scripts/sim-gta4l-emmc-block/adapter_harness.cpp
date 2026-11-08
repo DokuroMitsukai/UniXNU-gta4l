@@ -204,7 +204,9 @@ static uint8_t
 static int g_partcmp_read_calls;
 static int g_partcmp_fail_at;
 static int g_partcmp_short_at;
+static int g_partcmp_short_bytes;
 static int g_partcmp_cancel_at;
+static int g_partcmp_watchdog_at;
 static uint32_t g_partcmp_advance_ms;
 static IOMedia *g_partcmp_whole;
 static IOService *g_partcmp_scheme;
@@ -500,6 +502,10 @@ partcmp_read_hook(IOMedia *media, UInt64 byteStart,
 	if (g_partcmp_advance_ms != 0u) {
 		gta4l_test.now_ms += g_partcmp_advance_ms;
 	}
+	if ((g_partcmp_watchdog_at >= 0) &&
+	    (call == (uint32_t)g_partcmp_watchdog_at)) {
+		(void)invoke_thread(1);
+	}
 	if ((g_partcmp_fail_at >= 0) &&
 	    (call == (uint32_t)g_partcmp_fail_at)) {
 		return kIOReturnIOError;
@@ -544,10 +550,14 @@ partcmp_read_hook(IOMedia *media, UInt64 byteStart,
 	}
 	memcpy(buffer->address(), source + offset, length);
 	if (actualByteCount != 0) {
-		*actualByteCount = ((g_partcmp_short_at >= 0) &&
-		    (call == (uint32_t)g_partcmp_short_at)) ?
-		    (UInt64)(length - GTA4L_EMMC_BLOCK_BYTES) :
-		    (UInt64)length;
+		if ((g_partcmp_short_at >= 0) &&
+		    (call == (uint32_t)g_partcmp_short_at)) {
+			*actualByteCount = (g_partcmp_short_bytes >= 0) ?
+			    (UInt64)g_partcmp_short_bytes :
+			    (UInt64)(length - GTA4L_EMMC_BLOCK_BYTES);
+		} else {
+			*actualByteCount = (UInt64)length;
+		}
 	}
 	return kIOReturnSuccess;
 }
@@ -563,7 +573,9 @@ partcmp_reset_fixture(void)
 	g_partcmp_read_calls = 0;
 	g_partcmp_fail_at = -1;
 	g_partcmp_short_at = -1;
+	g_partcmp_short_bytes = -1;
 	g_partcmp_cancel_at = -1;
+	g_partcmp_watchdog_at = -1;
 	g_partcmp_advance_ms = 0u;
 	memset(g_partcmp_pmbr, 0, sizeof(g_partcmp_pmbr));
 	memset(g_partcmp_primary, 0, sizeof(g_partcmp_primary));
@@ -1084,7 +1096,27 @@ scenario_partcmp_open_refused(void)
 	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=0 changes=0 "
 	    "stable=0 stable_ms=0 deadline_ms=2000 timed_out=0 budget=0 "
 	    "reads=0 blocks=0 fails=0 cancel=0 complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READDETAIL: state=0 lba=0 blocks=0 bytes=0 "
+	    "status=0 actual=0 desc_len=0 desc_dir=0") != 0);
 	CHECK(g_partcmp_whole->open_calls == 1);
+	return 0;
+}
+
+static int
+scenario_partcmp_descriptor_failure(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	gta4l_test.descriptor_alloc_fail = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=0 reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "reads=0 blocks=0 fails=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READDETAIL: state=0 lba=0 blocks=0 bytes=0 "
+	    "status=0 actual=0 desc_len=0 desc_dir=0") != 0);
 	return 0;
 }
 
@@ -1351,7 +1383,78 @@ scenario_partcmp_read_failure(void)
 		CHECK(strstr(gta4l_test.panic, expected) != 0);
 		CHECK(strstr(gta4l_test.panic, "samples=0") != 0);
 		CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+		CHECK(strstr(gta4l_test.panic, "state=2") != 0);
+		CHECK(strstr(gta4l_test.panic, "status=3758097098") != 0);
+		CHECK(strstr(gta4l_test.panic, "actual=0") != 0);
+		CHECK(strstr(gta4l_test.panic, "desc_dir=1") != 0);
+		if (index == 0u) {
+			CHECK(strstr(gta4l_test.panic,
+			    "GTA4L-EMMC P5 READDETAIL: state=2 lba=0 "
+			    "blocks=1 bytes=512 status=3758097098 actual=0 "
+			    "desc_len=512 desc_dir=1") != 0);
+		}
 	}
+	return 0;
+}
+
+static int
+scenario_partcmp_read_short(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_short_at = 0;
+	g_partcmp_short_bytes = 0;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=8") != 0);
+	CHECK(strstr(gta4l_test.panic, "reads=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "fails=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "samples=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READDETAIL: state=3 lba=0 blocks=1 bytes=512 "
+	    "status=0 actual=0 desc_len=512 desc_dir=1") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_short_at = 0;
+	g_partcmp_short_bytes = 511;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=8") != 0);
+	CHECK(strstr(gta4l_test.panic, "state=3") != 0);
+	CHECK(strstr(gta4l_test.panic, "status=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "actual=511") != 0);
+	CHECK(strstr(gta4l_test.panic, "bytes=512") != 0);
+	CHECK(strstr(gta4l_test.panic, "desc_len=512") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_short_at = 2;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=8") != 0);
+	CHECK(strstr(gta4l_test.panic, "reads=3") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READDETAIL: state=3 lba=2 blocks=2 bytes=1024 "
+	    "status=0 actual=512 desc_len=1024 desc_dir=1") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_read_inflight(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_watchdog_at = 0;
+	(void)invoke_thread(0);
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic, "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READDETAIL: state=1 lba=0 blocks=1 bytes=512 "
+	    "status=0 actual=0 desc_len=512 desc_dir=1") != 0);
 	return 0;
 }
 
@@ -1428,6 +1531,8 @@ scenario_partcmp_watchdog(void)
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 REPORT: rc=16 "
 	    "stop=16") != 0);
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PARTMAP: ") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 READDETAIL: state=4") != 0);
 	return 0;
 }
 
@@ -2930,6 +3035,31 @@ scenario_policy(void)
 	    GTA4L_EMMC_BLOCK_PARTMAP_LINE_BYTES);
 	CHECK(strstr(buffer, "GUID") == 0);
 	CHECK(strstr(buffer, "label") == 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 READDETAIL: state=0 lba=0 "
+	    "blocks=0 bytes=0 status=0 actual=0 desc_len=0 "
+	    "desc_dir=0") != 0);
+	report.partmap_read_state = 2u;
+	report.partmap_read_lba = 0xffffffffffffffffull;
+	report.partmap_read_blocks = 0xffffffffu;
+	report.partmap_read_bytes = 0xffffffffu;
+	report.partmap_read_status = (int32_t)0xe00002cau;
+	report.partmap_read_actual = 0xffffffffffffffffull;
+	report.partmap_read_desc_len = 0xffffffffu;
+	report.partmap_read_desc_dir = 0xffffffffu;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	line = strstr(buffer, "GTA4L-EMMC P5 READDETAIL: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_PARTMAP_DETAIL_LINE_BYTES);
+	CHECK(strstr(line, "state=2 lba=18446744073709551615 "
+	    "blocks=4294967295 bytes=4294967295 status=3758097098 "
+	    "actual=18446744073709551615 desc_len=4294967295 "
+	    "desc_dir=4294967295") != 0);
 	CHECK(gta4l_emmc_block_report_format(small, sizeof(small),
 	    &report) == 0);
 	CHECK(small[0] == 0);
@@ -3039,11 +3169,14 @@ static const struct scenario_entry scenarios[] = {
 	    scenario_partcmp_scheme_wrong_provider },
 	{ "partcmp-scheme-duplicate", scenario_partcmp_scheme_duplicate },
 	{ "partcmp-open-refused", scenario_partcmp_open_refused },
+	{ "partcmp-descriptor-failure", scenario_partcmp_descriptor_failure },
 	{ "partcmp-gpt-invalid", scenario_partcmp_gpt_invalid },
 	{ "partcmp-entry-variants", scenario_partcmp_entry_variants },
 	{ "partcmp-geometry", scenario_partcmp_geometry },
 	{ "partcmp-media-invalid", scenario_partcmp_media_invalid },
 	{ "partcmp-read-failure", scenario_partcmp_read_failure },
+	{ "partcmp-read-short", scenario_partcmp_read_short },
+	{ "partcmp-read-inflight", scenario_partcmp_read_inflight },
 	{ "partcmp-budget", scenario_partcmp_budget },
 	{ "partcmp-cancel", scenario_partcmp_cancel },
 	{ "partcmp-watchdog", scenario_partcmp_watchdog },

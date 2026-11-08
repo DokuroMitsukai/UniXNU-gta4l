@@ -1021,6 +1021,40 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_key(&writer, "complete");
 		gta4l_emmc_block_put_u64(&writer, report->partmap_complete);
 		gta4l_emmc_block_put_char(&writer, '\n');
+
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 READDETAIL: ");
+		gta4l_emmc_block_put_key(&writer, "state");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->partmap_read_state);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "lba");
+		gta4l_emmc_block_put_u64(&writer, report->partmap_read_lba);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "blocks");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->partmap_read_blocks);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "bytes");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->partmap_read_bytes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "status");
+		gta4l_emmc_block_put_u64(&writer,
+		    (uint64_t)(uint32_t)report->partmap_read_status);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "actual");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->partmap_read_actual);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "desc_len");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->partmap_read_desc_len);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "desc_dir");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->partmap_read_desc_dir);
+		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
 	if (report->part_obs != 0) {

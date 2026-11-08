@@ -631,18 +631,60 @@ partition layout, payload policy and packaging.
   performed. The owner then approved the host-only correction: `findGuidScheme()`
   now enumerates the selected whole media's direct service-plane children
   (`whole->getChildIterator(gIOServicePlane)`) instead of matched services,
-  keeping the class, direct-provider, `UUID` and exactly-one guards and the
-  discovery wait. The seam now tracks children and an attached-but-unregistered
-  `IOGUIDPartitionScheme`; `partcmp-scheme-unregistered` is inverted to require
-  the full successful comparison, a new `partcmp-scheme-wrong-class` control
-  keeps the class guard, and the class-guard and exactly-one mutation controls
-  reject their targeted regressions. The block suite passes 48 core
-  scenarios/38 mutation controls and 94 adapter scenarios/18 adapter and eight
-  policy mutation controls. No candidate build, ABI/QEMU audit, flash, boot,
-  retry, reset/repair, commit or push was performed for the correction; the
-  fix is not hardware-verified and N9.6's `complete=0` is not upgraded. See
+  keeping the direct-provider, `UUID` and exactly-one guards and the discovery
+  wait. The class guard now matches the registered class by name with
+  `metaCast("IOGUIDPartitionScheme")`; a direct `OSDynamicCast` failed the
+  kernel link because the pinned metaclass is not exported. The seam now
+  tracks children and an attached-but-unregistered `IOGUIDPartitionScheme`;
+  `partcmp-scheme-unregistered` is inverted to require the full successful
+  comparison, a new `partcmp-scheme-wrong-class` control keeps the class guard,
+  and the class-guard and exactly-one mutation controls reject their targeted
+  regressions. The block suite passes 48 core scenarios/38 mutation controls
+  and 94 adapter scenarios/18 adapter and eight policy mutation controls.
+  The host-only production chain then built prelinked kernel `06826fc5…`,
+  candidate audit `out/gta4l/storage-abi-06826fc5`, requalified archive
+  `6a6af596…`, packaged kernel `61b9cea0…`, payload `79c83d67…` (14/14
+  contract) and BOOT image `74a4c687…` (18/18 gate, only the ramdisk differs
+  from the hardware-tested `ce4d76e8…` baseline); that production batch
+  performed no flash, boot or device access. N9.7 then flashed the corrected
+  image BOOT-only to p69 with verified protected backups and full readback
+  `aaaf8f03…` (candidate prefix `74a4c687…` plus unchanged tail `a28b4ea2…`;
+  RECOVERY/EFS/sec_efs unchanged), and consumed one owner-controlled cold
+  boot. Whole-media selection and the GUID-scheme lookup succeeded (`whole=1
+  base=0 size=31268536320 content=GUID_partition_scheme writable=0`),
+  confirming the correction on hardware, but the first comparator LBA
+  0/512-byte read failed (`gpt=0 reason=8 reads=1 blocks=1 fails=1 samples=0
+  complete=0`). The report discards the raw `IOReturn` and actual byte count,
+  so the cause is unresolved. The owner returned to TWRP and the boot budget
+  is consumed; no partition-completeness or reliability claim is made and
+  N9.6's `complete=0` is not upgraded. Host-only analysis points to a
+  deterministic driver-pipeline exit: the flashed object's `partmapPmbr` sits
+  at page offset 3,608 in a page-aligned 16 KiB kalloc element, so the
+  advertised `kIOMaximumSegmentCountReadKey=1` lets
+  `IOBreaker::getBreakSize()` compute 488 bytes and `breakUpRequest()` fail
+  with `kIOReturnDMAError` before the adapter is entered; physical adjacency
+  of the two pages is not host-observable and allocation failure remains an
+  unselected alternative. No retry, reset/repair, commit or push was
+  performed. The follow-up host-only read-detail batch then added bounded
+  capture of the comparator read outcome without changing transport policy:
+  the report now carries the attempted LBA/blocks/bytes, the raw signed
+  `IOReturn`, the returned byte count and the descriptor length/direction,
+  and every `PARTMAP` report gains a `GTA4L-EMMC P5 READDETAIL:` line. Host
+  scenarios pin descriptor-allocation and open refusal (`state=0`), error
+  (`state=2`), short (`state=3`), in-flight (`state=1`) and full (`state=4`)
+  outcomes, and five adapter mutation controls reject dropped detail. The
+  block suite passes 48 core scenarios/38 mutation controls and 97 adapter
+  scenarios with 23 adapter and eight policy mutation controls. No candidate,
+  ABI/QEMU audit, device access, flash, boot, retry, reset/repair, commit or
+  push was performed; the hardware `reason=8` cause remains unresolved, the
+  page-straddle hypothesis and allocation failure stay unselected, and
+  N9.6/N9.7 `complete=0` are not upgraded. A separately gated BOOT-only
+  candidate and one owner-approved boot are required to read the new line.
+  See
+  [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.67,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.64,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),
   [docs/emmc-n9.5-partcmp-candidate-2026-11-07.md](docs/emmc-n9.5-partcmp-candidate-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.59-§5.3.61.

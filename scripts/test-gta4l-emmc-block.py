@@ -456,14 +456,45 @@ ADAPTER_MUTATIONS = [
        '\t\t}\n')],
      'partcmp-cancel'),
     ('partcmp-scheme-class-guard',
-     [('\t\tIOGUIDPartitionScheme *scheme =\n'
-       '\t\t    OSDynamicCast(IOGUIDPartitionScheme, object);\n',
-       '\t\tIOService *scheme = OSDynamicCast(IOService, object);\n')],
+     [('\t\tif (object->metaCast("IOGUIDPartitionScheme") == nullptr) {\n'
+       '\t\t\tcontinue;\n'
+       '\t\t}\n',
+       '\t\tif (false) {\n'
+       '\t\t\tcontinue;\n'
+       '\t\t}\n')],
      'partcmp-scheme-wrong-class'),
     ('partcmp-scheme-exactly-one',
      [('\tif (count != 1u) {\n',
        '\tif (count == 0u) {\n')],
      'partcmp-scheme-duplicate'),
+    ('partcmp-read-detail-status',
+     [('\t\treport.partmap_read_status = (int32_t)status;\n',
+       '\t\treport.partmap_read_status = 0;\n')],
+     'partcmp-read-failure'),
+    ('partcmp-read-detail-actual',
+     [('\t\treport.partmap_read_actual = (uint64_t)actual;\n',
+       '\t\treport.partmap_read_actual = 0;\n')],
+     'partcmp-read-short'),
+    ('partcmp-read-detail-desc-len',
+     [('\t\treport.partmap_read_desc_len =\n'
+       '\t\t    (uint32_t)descriptor->getLength();\n',
+       '\t\treport.partmap_read_desc_len =\n'
+       '\t\t    0;\n')],
+     'partcmp-read-failure'),
+    ('partcmp-read-detail-short',
+     [('\t\t} else if (actual != requested) {\n'
+       '\t\t\treport.partmap_read_state =\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_PARTMAP_READ_SHORT;\n',
+       '\t\t} else if (0) {\n'
+       '\t\t\treport.partmap_read_state =\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_PARTMAP_READ_SHORT;\n')],
+     'partcmp-read-short'),
+    ('partcmp-read-detail-flight',
+     [('\t\treport.partmap_read_state =\n'
+       '\t\t    GTA4L_EMMC_BLOCK_PARTMAP_READ_FLIGHT;\n',
+       '\t\treport.partmap_read_state =\n'
+       '\t\t    GTA4L_EMMC_BLOCK_PARTMAP_READ_NONE;\n')],
+     'partcmp-read-inflight'),
 ]
 
 POLICY_MUTATIONS = [
@@ -690,7 +721,7 @@ def check_adapter_source():
         'observation must keep cancellation and the registry walk'
     assert 'whole->getChildIterator(gIOServicePlane)' in adapter, \
         'scheme lookup must enumerate attached service-plane children'
-    assert 'OSDynamicCast(IOGUIDPartitionScheme, object)' in adapter, \
+    assert 'object->metaCast("IOGUIDPartitionScheme")' in adapter, \
         'scheme lookup must keep the partition-scheme class guard'
     assert adapter.count('getMatchingServices(matching)') == 4, \
         'only whole-media and partition-media walks may use matching'
@@ -857,8 +888,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 95, f'expected 95 adapter PASS lines, got {passes}'
-        print('PASS adapter: 94 scenarios against the host IOKit seam')
+        assert passes == 98, f'expected 98 adapter PASS lines, got {passes}'
+        print('PASS adapter: 97 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

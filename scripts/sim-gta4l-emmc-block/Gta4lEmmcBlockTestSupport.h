@@ -92,12 +92,16 @@ typedef uint32_t IOStorageUnmapOptions;
 typedef uint32_t IOStorageSynchronizeOptions;
 typedef uint32_t IOStorageGetProvisionStatusOptions;
 
+class OSObject;
+OSObject *gta4l_test_meta_cast(OSObject *object, const char *name);
+
 class OSObject {
 public:
 	virtual ~OSObject() {}
 	virtual const void *typeTag() const = 0;
 	virtual void retain() {}
 	virtual void release() {}
+	OSObject *metaCast(const char *name) const;
 };
 
 template <typename T>
@@ -241,6 +245,25 @@ public:
 	inline static const int test_tag = 0;
 	const void *typeTag() const override { return &test_tag; }
 };
+
+inline OSObject *
+gta4l_test_meta_cast(OSObject *object, const char *name)
+{
+	if (object == nullptr) {
+		return nullptr;
+	}
+	if (strcmp(name, "IOGUIDPartitionScheme") == 0) {
+		return dynamic_cast<IOGUIDPartitionScheme *>(object) != nullptr ?
+		    object : nullptr;
+	}
+	return nullptr;
+}
+
+inline OSObject *
+OSObject::metaCast(const char *name) const
+{
+	return gta4l_test_meta_cast(const_cast<OSObject *>(this), name);
+}
 
 class IOBlockStorageDevice : public IOService {
 public:

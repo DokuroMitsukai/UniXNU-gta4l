@@ -68,6 +68,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES \
 	(GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS * 128u)
 #define GTA4L_EMMC_BLOCK_PARTMAP_LINE_BYTES 384u
+#define GTA4L_EMMC_BLOCK_PARTMAP_DETAIL_LINE_BYTES 256u
 #define GTA4L_EMMC_BLOCK_PARTMAP_WORST_MS \
 	(GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS + \
 	GTA4L_EMMC_BLOCK_PARTMAP_READ_BUDGET_MS + 1000u + \
@@ -192,6 +193,17 @@ struct gta4l_emmc_block_report {
 	uint32_t partmap_fails;
 	uint32_t partmap_cancel;
 	uint32_t partmap_complete;
+	/* Bounded comparator read detail. state is one of the
+	 * GTA4L_EMMC_BLOCK_PARTMAP_READ_* values; status is the raw 32-bit
+	 * IOReturn and actual is the returned UInt64 byte count. */
+	uint32_t partmap_read_state;
+	uint32_t partmap_read_blocks;
+	uint32_t partmap_read_bytes;
+	uint32_t partmap_read_desc_len;
+	uint32_t partmap_read_desc_dir;
+	int32_t partmap_read_status;
+	uint64_t partmap_read_lba;
+	uint64_t partmap_read_actual;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -279,6 +291,15 @@ int gta4l_emmc_block_partcmp_select(int token_present, int token_value,
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_MISMATCH 11u
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_CHANGING 12u
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_CANCELLED 13u
+
+/* PARTMAP comparator read-detail states. The detail records the most recent
+ * comparator media read while no failure has been observed; the first error
+ * or short transfer freezes the fields on that request. */
+#define GTA4L_EMMC_BLOCK_PARTMAP_READ_NONE 0u
+#define GTA4L_EMMC_BLOCK_PARTMAP_READ_FLIGHT 1u
+#define GTA4L_EMMC_BLOCK_PARTMAP_READ_ERROR 2u
+#define GTA4L_EMMC_BLOCK_PARTMAP_READ_SHORT 3u
+#define GTA4L_EMMC_BLOCK_PARTMAP_READ_FULL 4u
 
 struct gta4l_emmc_block_partmap_media {
 	uint64_t base;

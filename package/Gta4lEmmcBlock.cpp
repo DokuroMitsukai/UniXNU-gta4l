@@ -1195,6 +1195,16 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		target->partmap_fails = report.partmap_fails;
 		target->partmap_cancel = report.partmap_cancel;
 		target->partmap_complete = report.partmap_complete;
+		target->partmap_read_state = report.partmap_read_state;
+		target->partmap_read_blocks = report.partmap_read_blocks;
+		target->partmap_read_bytes = report.partmap_read_bytes;
+		target->partmap_read_desc_len =
+		    report.partmap_read_desc_len;
+		target->partmap_read_desc_dir =
+		    report.partmap_read_desc_dir;
+		target->partmap_read_status = report.partmap_read_status;
+		target->partmap_read_lba = report.partmap_read_lba;
+		target->partmap_read_actual = report.partmap_read_actual;
 		IOLockUnlock(reportLock);
 	}
 	return locked;
@@ -1347,7 +1357,9 @@ Gta4lEmmcBlock::readPartmapSectors(IOMedia *media, uint64_t lba,
 {
 	IOMemoryDescriptor *descriptor;
 	UInt64 actual = 0;
+	UInt64 requested = (UInt64)blocks * GTA4L_EMMC_BLOCK_BYTES;
 	IOReturn status;
+	uint32_t state;
 
 	if (reportCancel) {
 		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_CANCELLED;
@@ -1356,19 +1368,52 @@ Gta4lEmmcBlock::readPartmapSectors(IOMedia *media, uint64_t lba,
 		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_BUDGET;
 	}
 	descriptor = IOMemoryDescriptor::withAddress(buffer,
-	    (UInt64)blocks * GTA4L_EMMC_BLOCK_BYTES, kIODirectionIn);
+	    requested, kIODirectionIn);
 	if (descriptor == nullptr) {
 		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA;
 	}
+	IOLockLock(reportLock);
+	state = report.partmap_read_state;
+	if ((state != GTA4L_EMMC_BLOCK_PARTMAP_READ_ERROR) &&
+	    (state != GTA4L_EMMC_BLOCK_PARTMAP_READ_SHORT)) {
+		report.partmap_read_state =
+		    GTA4L_EMMC_BLOCK_PARTMAP_READ_FLIGHT;
+		report.partmap_read_lba = lba;
+		report.partmap_read_blocks = blocks;
+		report.partmap_read_bytes = (uint32_t)requested;
+		report.partmap_read_desc_len =
+		    (uint32_t)descriptor->getLength();
+		report.partmap_read_desc_dir =
+		    (uint32_t)descriptor->getDirection();
+		report.partmap_read_status = 0;
+		report.partmap_read_actual = 0;
+	}
+	IOLockUnlock(reportLock);
 	status = media->read(this,
 	    lba * GTA4L_EMMC_BLOCK_BYTES, descriptor, nullptr, &actual);
 	descriptor->release();
 	IOLockLock(reportLock);
 	report.partmap_reads++;
 	report.partmap_blocks += blocks;
+	state = report.partmap_read_state;
+	if ((state == GTA4L_EMMC_BLOCK_PARTMAP_READ_FLIGHT) &&
+	    (report.partmap_read_lba == lba) &&
+	    (report.partmap_read_blocks == blocks)) {
+		report.partmap_read_status = (int32_t)status;
+		report.partmap_read_actual = (uint64_t)actual;
+		if (status != kIOReturnSuccess) {
+			report.partmap_read_state =
+			    GTA4L_EMMC_BLOCK_PARTMAP_READ_ERROR;
+		} else if (actual != requested) {
+			report.partmap_read_state =
+			    GTA4L_EMMC_BLOCK_PARTMAP_READ_SHORT;
+		} else {
+			report.partmap_read_state =
+			    GTA4L_EMMC_BLOCK_PARTMAP_READ_FULL;
+		}
+	}
 	IOLockUnlock(reportLock);
-	if ((status != kIOReturnSuccess) ||
-	    (actual != (UInt64)blocks * GTA4L_EMMC_BLOCK_BYTES)) {
+	if ((status != kIOReturnSuccess) || (actual != requested)) {
 		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_READ;
 	}
 	return 0;
@@ -1549,13 +1594,20 @@ Gta4lEmmcBlock::findGuidScheme(IOMedia *whole)
 		return nullptr;
 	}
 	while (OSObject *object = iterator->getNextObject()) {
-		IOGUIDPartitionScheme *scheme =
-		    OSDynamicCast(IOGUIDPartitionScheme, object);
+		IOService *scheme;
 		OSString *uuid;
 
-		if (scheme == nullptr) {
+		/*
+		 * The pinned scheme class lives in the prelinked storage
+		 * kext and its metaClass is not exported to the kernel
+		 * link, so OSDynamicCast cannot reference it. Match the
+		 * registered class by name; the provider, UUID and
+		 * exactly-one guards still constrain the result.
+		 */
+		if (object->metaCast("IOGUIDPartitionScheme") == nullptr) {
 			continue;
 		}
+		scheme = static_cast<IOService *>(object);
 		if (scheme->getProvider() != whole) {
 			continue;
 		}
