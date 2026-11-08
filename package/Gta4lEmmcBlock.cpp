@@ -58,6 +58,12 @@ static_assert(GTA4L_EMMC_BLOCK_PARTMAP_WORST_MS <
 static_assert(GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS ==
     GTA4L_EMMC_BLOCK_CHUNK_BLOCKS,
     "PARTMAP chunk must match the core chunk");
+static_assert(GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES >=
+    GTA4L_EMMC_BLOCK_BYTES,
+    "PARTMAP bounce must hold at least one block");
+static_assert(GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES <=
+    GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES,
+    "PARTMAP bounce must not exceed the GPT array");
 
 /* The exact comparator needs a 16 KiB GPT array plus both validated copies
  * and two media snapshots. Keeping that state in the driver object would
@@ -212,6 +218,7 @@ private:
 	uint8_t partmapPmbr[GTA4L_EMMC_BLOCK_BYTES];
 	uint8_t partmapHeader[GTA4L_EMMC_BLOCK_BYTES];
 	struct gta4l_emmc_block_partmap_scratch *partmapScratch = nullptr;
+	uint8_t *partmapDma = nullptr;
 	bool registered = false;
 	bool reportStarted = false;
 	thread_t reportThread = nullptr;
@@ -638,6 +645,18 @@ Gta4lEmmcBlock::start(IOService *provider)
 			    "allocation\n");
 			return false;
 		}
+		/* The comparator's reads are copied through this buffer so
+		 * every descriptor starts on a kernel page boundary. The
+		 * class members are not page-contained, and a sub-block
+		 * first segment is truncated to zero by the storage
+		 * driver before the adapter is called. */
+		partmapDma = (uint8_t *)IOMallocAligned(
+		    GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES, PAGE_SIZE);
+		if (partmapDma == nullptr) {
+			IOLog("GTA4L-EMMC P5 FAILED: partmap DMA "
+			    "allocation\n");
+			return false;
+		}
 	}
 
 	if (!IOBlockStorageDevice::start(provider)) {
@@ -753,6 +772,11 @@ Gta4lEmmcBlock::stop(IOService *provider)
 void
 Gta4lEmmcBlock::free()
 {
+	if (partmapDma != nullptr) {
+		IOFreeAligned(partmapDma,
+		    GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES);
+		partmapDma = nullptr;
+	}
 	if (partmapScratch != nullptr) {
 		IOFree(partmapScratch, sizeof(*partmapScratch));
 		partmapScratch = nullptr;
@@ -1356,6 +1380,7 @@ Gta4lEmmcBlock::readPartmapSectors(IOMedia *media, uint64_t lba,
     uint32_t blocks, uint8_t *buffer)
 {
 	IOMemoryDescriptor *descriptor;
+	uint8_t *destination = buffer;
 	UInt64 actual = 0;
 	UInt64 requested = (UInt64)blocks * GTA4L_EMMC_BLOCK_BYTES;
 	IOReturn status;
@@ -1367,7 +1392,11 @@ Gta4lEmmcBlock::readPartmapSectors(IOMedia *media, uint64_t lba,
 	if (partmapElapsedMs() >= GTA4L_EMMC_BLOCK_PARTMAP_READ_BUDGET_MS) {
 		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_BUDGET;
 	}
-	descriptor = IOMemoryDescriptor::withAddress(buffer,
+	if ((partmapDma != nullptr) &&
+	    (requested <= GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES)) {
+		destination = partmapDma;
+	}
+	descriptor = IOMemoryDescriptor::withAddress(destination,
 	    requested, kIODirectionIn);
 	if (descriptor == nullptr) {
 		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA;
@@ -1413,6 +1442,10 @@ Gta4lEmmcBlock::readPartmapSectors(IOMedia *media, uint64_t lba,
 		}
 	}
 	IOLockUnlock(reportLock);
+	if ((status == kIOReturnSuccess) && (actual == requested) &&
+	    (destination != buffer)) {
+		memcpy(buffer, destination, (size_t)requested);
+	}
 	if ((status != kIOReturnSuccess) || (actual != requested)) {
 		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_READ;
 	}

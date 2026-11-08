@@ -674,15 +674,22 @@ partition layout, payload policy and packaging.
   (`state=2`), short (`state=3`), in-flight (`state=1`) and full (`state=4`)
   outcomes, and five adapter mutation controls reject dropped detail. The
   block suite passes 48 core scenarios/38 mutation controls and 97 adapter
-  scenarios with 23 adapter and eight policy mutation controls. No candidate,
-  ABI/QEMU audit, device access, flash, boot, retry, reset/repair, commit or
-  push was performed; the hardware `reason=8` cause remains unresolved, the
-  page-straddle hypothesis and allocation failure stay unselected, and
-  N9.6/N9.7 `complete=0` are not upgraded. A separately gated BOOT-only
-  candidate and one owner-approved boot are required to read the new line.
+  scenarios with 23 adapter and eight policy mutation controls. N9.8 then
+  produced the host-only read-detail candidate through the
+  archive/prelink/audit/payload/BOOT flow: prelinked kernel `2777bfce…`,
+  candidate audit `out/gta4l/storage-abi-2777bfce`, requalified archive
+  `4a811585…`, packaged kernel `525fdaa4…`, payload `8d57eb3d…` (14/14
+  contract) and BOOT image `1e767155…` (18/18 gate, only the ramdisk differs
+  from the hardware-tested `ce4d76e8…` baseline); that production batch
+  performed no flash, boot or device access. The hardware `reason=8` cause
+  remains unresolved, the page-straddle hypothesis and allocation failure
+  stay unselected, and N9.6/N9.7 `complete=0` are not upgraded. A separately
+  gated BOOT-only candidate and one owner-approved boot are required to read
+  the new line.
   See
+  [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.67,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.68,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

@@ -495,6 +495,10 @@ ADAPTER_MUTATIONS = [
        '\t\treport.partmap_read_state =\n'
        '\t\t    GTA4L_EMMC_BLOCK_PARTMAP_READ_NONE;\n')],
      'partcmp-read-inflight'),
+    ('partcmp-bounce-skip',
+     [('\t\tdestination = partmapDma;\n',
+       '\t\tdestination = buffer;\n')],
+     'partcmp-page-split'),
 ]
 
 POLICY_MUTATIONS = [
@@ -888,8 +892,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 98, f'expected 98 adapter PASS lines, got {passes}'
-        print('PASS adapter: 97 scenarios against the host IOKit seam')
+        assert passes == 100, f'expected 100 adapter PASS lines, got {passes}'
+        print('PASS adapter: 99 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

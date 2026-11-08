@@ -207,9 +207,42 @@ static int g_partcmp_short_at;
 static int g_partcmp_short_bytes;
 static int g_partcmp_cancel_at;
 static int g_partcmp_watchdog_at;
+static int g_partcmp_enforce_breakup;
+static int g_partcmp_breakup_rejects;
+static int g_partcmp_unaligned_reads;
 static uint32_t g_partcmp_advance_ms;
 static IOMedia *g_partcmp_whole;
 static IOService *g_partcmp_scheme;
+
+/* Worst-case model of IOBlockStorageDriver::breakUpRequest() under the
+ * advertised one-segment read limit: each virtual page is a separate
+ * physical segment, only the first segment is taken, and the break size is
+ * truncated to the 512-byte request block size. A zero break size returns
+ * kIOReturnDMAError before the adapter sees the request. */
+static bool
+partcmp_breakup_rejects(IOMemoryDescriptor *buffer)
+{
+	uintptr_t address = (uintptr_t)buffer->address();
+	uint32_t length = (uint32_t)buffer->getLength();
+	uint32_t offset = 0;
+
+	while (offset < length) {
+		uint32_t segment = (uint32_t)(PAGE_SIZE -
+		    ((address + offset) & (PAGE_SIZE - 1u)));
+		uint32_t break_size;
+
+		if (segment > (length - offset)) {
+			segment = length - offset;
+		}
+		break_size = segment &
+		    ~(uint32_t)(GTA4L_EMMC_BLOCK_BYTES - 1u);
+		if (break_size == 0u) {
+			return true;
+		}
+		offset += break_size;
+	}
+	return false;
+}
 
 static void
 partcmp_put32(uint8_t *target, uint32_t value)
@@ -508,11 +541,18 @@ partcmp_read_hook(IOMedia *media, UInt64 byteStart,
 	}
 	if ((g_partcmp_fail_at >= 0) &&
 	    (call == (uint32_t)g_partcmp_fail_at)) {
-		return kIOReturnIOError;
+		return kIOReturnDMAError;
 	}
 	if ((g_partcmp_cancel_at >= 0) &&
 	    (call == (uint32_t)g_partcmp_cancel_at)) {
 		g_self->reportCancel = true;
+	}
+	if ((((uintptr_t)buffer->address()) & (PAGE_SIZE - 1u)) != 0u) {
+		g_partcmp_unaligned_reads++;
+	}
+	if (g_partcmp_enforce_breakup && partcmp_breakup_rejects(buffer)) {
+		g_partcmp_breakup_rejects++;
+		return kIOReturnDMAError;
 	}
 	if (lba == 0u) {
 		source = g_partcmp_pmbr;
@@ -576,6 +616,9 @@ partcmp_reset_fixture(void)
 	g_partcmp_short_bytes = -1;
 	g_partcmp_cancel_at = -1;
 	g_partcmp_watchdog_at = -1;
+	g_partcmp_enforce_breakup = 0;
+	g_partcmp_breakup_rejects = 0;
+	g_partcmp_unaligned_reads = 0;
 	g_partcmp_advance_ms = 0u;
 	memset(g_partcmp_pmbr, 0, sizeof(g_partcmp_pmbr));
 	memset(g_partcmp_primary, 0, sizeof(g_partcmp_primary));
@@ -1384,13 +1427,13 @@ scenario_partcmp_read_failure(void)
 		CHECK(strstr(gta4l_test.panic, "samples=0") != 0);
 		CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
 		CHECK(strstr(gta4l_test.panic, "state=2") != 0);
-		CHECK(strstr(gta4l_test.panic, "status=3758097098") != 0);
+		CHECK(strstr(gta4l_test.panic, "status=3758097108") != 0);
 		CHECK(strstr(gta4l_test.panic, "actual=0") != 0);
 		CHECK(strstr(gta4l_test.panic, "desc_dir=1") != 0);
 		if (index == 0u) {
 			CHECK(strstr(gta4l_test.panic,
 			    "GTA4L-EMMC P5 READDETAIL: state=2 lba=0 "
-			    "blocks=1 bytes=512 status=3758097098 actual=0 "
+			    "blocks=1 bytes=512 status=3758097108 actual=0 "
 			    "desc_len=512 desc_dir=1") != 0);
 		}
 	}
@@ -1455,6 +1498,45 @@ scenario_partcmp_read_inflight(void)
 	CHECK(strstr(gta4l_test.panic,
 	    "GTA4L-EMMC P5 READDETAIL: state=1 lba=0 blocks=1 bytes=512 "
 	    "status=0 actual=0 desc_len=512 desc_dir=1") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_page_aligned(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 1);
+	g_partcmp_enforce_breakup = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(g_partcmp_breakup_rejects == 0);
+	CHECK(g_partcmp_unaligned_reads == 0);
+	CHECK(g_partcmp_read_calls == 25);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "reads=25 blocks=45 fails=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=1") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_page_split(void)
+{
+	static uint8_t page[PAGE_SIZE * 2u] __attribute__((aligned(PAGE_SIZE)));
+	uint8_t *straddle = page + 3608u;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 1);
+	g_partcmp_enforce_breakup = 1;
+	g_self->partmapReadStart = gta4l_emmc_platform_counter();
+	CHECK(g_partcmp_whole->open(g_self, 0, kIOStorageAccessReader));
+	memset(straddle, 0, GTA4L_EMMC_BLOCK_BYTES);
+	CHECK(g_self->readPartmapSectors(g_partcmp_whole, 0, 1,
+	    straddle) == 0);
+	g_partcmp_whole->close(g_self, 0);
+	CHECK(g_partcmp_breakup_rejects == 0);
+	CHECK(g_partcmp_unaligned_reads == 0);
+	CHECK(memcmp(straddle, g_partcmp_pmbr, GTA4L_EMMC_BLOCK_BYTES) == 0);
 	return 0;
 }
 
@@ -3177,6 +3259,8 @@ static const struct scenario_entry scenarios[] = {
 	{ "partcmp-read-failure", scenario_partcmp_read_failure },
 	{ "partcmp-read-short", scenario_partcmp_read_short },
 	{ "partcmp-read-inflight", scenario_partcmp_read_inflight },
+	{ "partcmp-page-aligned", scenario_partcmp_page_aligned },
+	{ "partcmp-page-split", scenario_partcmp_page_split },
 	{ "partcmp-budget", scenario_partcmp_budget },
 	{ "partcmp-cancel", scenario_partcmp_cancel },
 	{ "partcmp-watchdog", scenario_partcmp_watchdog },

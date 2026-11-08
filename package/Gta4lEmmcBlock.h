@@ -67,6 +67,12 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS 2u
 #define GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES \
 	(GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS * 128u)
+/* Every comparator read is copied through one page-aligned bounce buffer.
+ * A sub-page first segment is truncated to the request block size by
+ * IOBlockStorageDriver; a first segment shorter than one block truncates
+ * to zero and returns kIOReturnDMAError before the adapter sees it. */
+#define GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES \
+	(GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS * GTA4L_EMMC_BLOCK_BYTES)
 #define GTA4L_EMMC_BLOCK_PARTMAP_LINE_BYTES 384u
 #define GTA4L_EMMC_BLOCK_PARTMAP_DETAIL_LINE_BYTES 256u
 #define GTA4L_EMMC_BLOCK_PARTMAP_WORST_MS \

@@ -25,6 +25,10 @@
 typedef uint64_t UInt64;
 typedef uint32_t UInt32;
 typedef uint64_t IOByteCount;
+
+#ifndef PAGE_SIZE
+#define PAGE_SIZE 4096u
+#endif
 typedef uint32_t IOOptionBits;
 typedef int IOStorageAccess;
 typedef int IOReturn;
@@ -47,6 +51,7 @@ typedef void *thread_t;
 #define kIOReturnNoMedia ((IOReturn)0xe00002e4u)
 #define kIOReturnNoMemory ((IOReturn)0xe00002bdu)
 #define kIOReturnIOError ((IOReturn)0xe00002cau)
+#define kIOReturnDMAError ((IOReturn)0xe00002d4u)
 #define kIOReturnUnsupported ((IOReturn)0xe00002c7u)
 #define kIOReturnTimeout ((IOReturn)0xe00002d6u)
 
@@ -535,6 +540,22 @@ static inline void *IOMalloc(size_t size)
 }
 
 static inline void IOFree(void *address, size_t size)
+{
+	(void)size;
+	free(address);
+}
+
+static inline void *IOMallocAligned(size_t size, size_t alignment)
+{
+	void *address = nullptr;
+
+	if (posix_memalign(&address, alignment, size) != 0) {
+		return nullptr;
+	}
+	return address;
+}
+
+static inline void IOFreeAligned(void *address, size_t size)
 {
 	(void)size;
 	free(address);

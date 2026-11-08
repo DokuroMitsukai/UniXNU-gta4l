@@ -1084,9 +1084,12 @@ adapter) but physical adjacency and allocation failure stay unselected. A
 host-only read-detail batch then added `partmap_read_state`/`lba`/`blocks`/
 `bytes`/`status`/`actual`/`desc_len`/`desc_dir` and the bounded `READDETAIL`
 line to every `PARTMAP` report without changing transport policy; it performed
-no candidate build, flash or boot. N9.6/N9.7 `complete=0` are preserved, and a
-separately gated BOOT-only candidate and one owner-approved boot are required
-to read the new line.
+no candidate build, flash or boot. N9.8 then built the read-detail candidate
+(prelinked kernel `2777bfce…`, candidate audit
+`out/gta4l/storage-abi-2777bfce`, payload `8d57eb3d…`, BOOT image `1e767155…`,
+18/18 gate) and stopped at the production record. N9.6/N9.7 `complete=0` are
+preserved, and a separately gated BOOT-only candidate and one owner-approved
+boot are required to read the new line.
 
 ## 10. What this design does not do
 

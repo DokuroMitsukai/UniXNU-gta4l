@@ -4999,12 +4999,181 @@ checks the default and maximum field widths and the 256-byte detail-line cap.
 The block suite passes 48 core scenarios/38 mutation controls and 97 adapter
 scenarios with 23 adapter and eight policy mutation controls.
 
+Constant note (2026-11-08): this batch originally injected and expected
+`0xe00002ca`/`3758097098` under the `kIOReturnDMAError` name. That value is
+actually `kIOReturnIOError`; `kIOReturnDMAError` is `0xe00002d4`/`3758097108`
+(`IOReturn.h:167`). The N9.8 closeout corrected the fixture and the current
+records (§5.3.69); this historical paragraph is retained as recorded.
+
 This is a diagnostic capture, not a root-cause proof. The host seam calls
 `doAsyncReadWrite` directly and does not qualify the real context, deblock or
 breakup layers; physical adjacency, `IOBreaker` allocation failure and the
 page-straddle hypothesis all remain unselected inputs. The next gated boot must
 read the `READDETAIL` fields before any candidate correction is selected, and
 no buffer, segment-limit or request-limit change is authorized by this record.
+
+### 5.3.68 N9.8 read-detail candidate production (host-only, 2026-11-08)
+
+Follow-up to §5.3.67. N9.8 built the read-detail-instrumented
+`emmc-block-3-partcmp` candidate through the archive/prelink/audit/payload/
+BOOT flow and stopped at the production record. No flash, boot, device access,
+retry, reset/repair, commit or push was performed; the N9.7 boot budget stays
+consumed and the N9.6/N9.7 `complete=0` verdicts are not upgraded.
+
+The prelinked kernel is `2777bfce…` (51,257,344 bytes; plan `c85c3abd…`). The
+kernel-build archive `176b533b…` records `Gta4lEmmcBlock.c` `f84d1bd2…`
+compiled to `Gta4lEmmcBlock.o` `0c76b09e…` and `Gta4lEmmcBlock.cpp`
+`440279b2…` compiled to `Gta4lEmmcBlockCpp.o` `db6d2b74…`; the bindings
+object is unchanged at `3e53b66d…`. A fresh candidate-matched Linux/QEMU
+audit in `out/gta4l/storage-abi-2777bfce` (`gdb-stop.json` `8a3feec1…`,
+`interface-audit.json` `9a7845cf…`, `provenance.json` `c89275ad…`,
+`run.json` `f4430cf1…`) binds 190 slots, 181 kernel bindings (167 inherited
++ 14 pure virtual), 26 concrete overrides and 0 unresolved original imports,
+with live sizes 0x90/0x88, native 4K and `runtime_qualified=false`.
+Requalifying the archive against that audit produced `4a811585…`; all three
+members are byte-identical to the kernel-build archive and the container
+differs only in its index.
+
+The packaged kernel is `525fdaa4…`. The payload is `8d57eb3d…` (83,886,080
+bytes; manifest `86e6c447…`; 14/14 contract; diagnostic
+`emmc-block-3-partcmp` mapping to `gta4l-emmc-block=3 gta4l-emmc-partcmp=1`;
+hold root `327ac826…`, hold `fixture.json` `00363681…` with
+`diagnostic=fs-timer-hold` and `hold_after_success=true`, trust cache
+`30a72f78…`). The BOOT image is `1e767155…` (85,688,320 bytes; manifest
+`969683cd…`; `boot-image-gate.json` `cfa4227f…`, 18/18, only the ramdisk
+differs from the hardware-tested `ce4d76e8…` v5 baseline; the baseline kernel
+section `a4b054e0…`, firmware `1e8a3132…` and boot DTB `dc4c719d…` are
+unchanged).
+
+The packaged kernel carries one `GTA4L-EMMC P5 PARTMAP` string, three
+`GTA4L-EMMC P5 REPORT` strings, one `GTA4L-EMMC P5 READDETAIL` string, one
+`GTA4L-EMMC P5 PARTOBS` string, one legacy `PART:` string, five
+`gta4l-emmc-partcmp` strings and five `gta4l-emmc-partobs` strings, matching
+the N9.7 packaged kernel plus the new detail line; there is no literal
+`complete=`. The block suite passes 48 core scenarios/38 mutation controls
+and 97 adapter scenarios with 23 adapter and eight policy mutation controls;
+the payload suite passes 28 checks, the packager 11, and the boot-image,
+storage-ABI, evidence-count, fixture-recipe and board checks pass.
+
+The hardware `reason=8` cause remains unresolved; the read-detail capture is
+host-only until a separately gated boot, and no buffer, segment-limit or
+request-limit change is authorized. Findings:
+`docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md`.
+
+### 5.3.69 N9.8 read-detail observation and DMA-error exit trace (2026-11-08)
+
+Follow-up to §5.3.68. The owner approved the BOOT-only write of the N9.8
+read-detail candidate and supplied the single authorized cold-boot report; the
+owner confirms return to TWRP. The boot budget is consumed; no retry, reflash,
+rollback, reset/repair, host reboot, commit or push was performed, and no
+buffer, segment-limit or request-limit change is authorized.
+
+Flash association: BOOT `1e767155…` (85,688,320 bytes), payload `8d57eb3d…`,
+prelinked kernel `2777bfce…`, packaged kernel `525fdaa4…`, source
+`Gta4lEmmcBlock.cpp` `440279b2…`, policy `Gta4lEmmcBlock.c` `f84d1bd2…`,
+header `6cb1f7cd…` and requalified archive `4a811585…`. The post-flash p69
+readback is `cf13acfc…` (candidate prefix `1e767155…` plus unchanged tail
+`a28b4ea2…`); the pre-flash p69 `aaaf8f03…` is saved as
+`boot-before-n9.8.img.xz` (`19ab50d7…`, decompressed `aaaf8f03…`). RECOVERY
+`14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` are unchanged. The flash
+manifest verifies 5/5.
+
+The report returned `rc=0 stop=0 mode=3` with the real whole media selected
+(`whole=1 base=0 size=31268536320 content=GUID_partition_scheme writable=0`)
+and the attached GUID scheme found. `PARTMAP` remains `gpt=0 reason=8 reads=1
+blocks=1 fails=1 samples=0 cancel=0 complete=0`, and the new line reports
+`READDETAIL: state=2 lba=0 blocks=1 bytes=512 status=3758097108 actual=0
+desc_len=512 desc_dir=1`. `3758097108` is `0xe00002d4`, the actual
+`kIOReturnDMAError` (`IOReturn.h:167`), not the `0xe00002ca`/`3758097098`
+(`kIOReturnIOError`) used earlier under that name. DRV `online=1 wp=1 reads=10
+blocks=29 fails=0 max=8` and XFER `req=29 c17=7 c18=11 c18b=22 cfail=0
+stops=11 sfail=0 last_stop=0` are incidental scan requests; the comparator
+request never reached the adapter; the adapter maps its own failures to
+`kIOReturnIOError` and the request-check results to other codes, and never
+returns `kIOReturnDMAError` (`package/Gta4lEmmcBlock.cpp:814-825,891-892`).
+The driver `fails=0` is the adapter/core counter, not the
+`IOBlockStorageDriver` error statistic.
+
+Exit trace (host-only, pinned IOStorageFamily `67f9003c`): the only
+`kIOReturnDMAError` completion of an `IOMedia` read before provider dispatch is
+`IOBlockStorageDriver::breakUpRequest()` at `IOBlockStorageDriver.cpp:3272-3275`
+when `IOBreaker::getBreakSize()` returns 0; `executeRequest()`/`doAsyncReadWrite`
+are only reached later (`:3283`, `:3421`, `:1178`). `getBreakSize()` truncates
+the accumulated size to the request block size (`:2988`). With
+`kIOMaximumSegmentCountReadKey=1` (`package/Gta4lEmmcBlock.cpp:694`), a 512-byte
+buffer whose physical segments are not foldable stops at the segment-count
+check (`:2975-2980`) after counting only the first partial segment; a 488-byte
+first segment then truncates to 0. `IOMapper::gSystem` is null on this
+platform, so the second segment is not folded. The DWARF of the flashed object
+`db6d2b74…` gives `sizeof(Gta4lEmmcBlock)=0x36a8` (13,992) with `partmapPmbr`
+at `0x0e18` (3,608) in the page-multiple 16 KiB kalloc class, so the two
+segments are 488 and 24 bytes. Allocation failures in `prepareRequest` or
+`IOBreaker` return `kIOReturnNoMemory` (`:2584`, `:3326`, `:3474`), and the
+pinned `IOMemoryDescriptor`/`IOMapper` paths produce no `kIOReturnDMAError`, so
+the observed status selects the `breakSize==0` path rather than allocation
+failure. `actual=0` is the default completion count and the adapter counters do
+not move because dispatch is never reached.
+
+Residual uncertainty: the host cannot observe whether the two page segments are
+physically adjacent. If they were contiguous, the fold would produce 512 bytes
+and the read would proceed; the trace selects the DMA-error exit but does not
+measure that input. No driver correction is selected or authorized.
+
+Host correction: `partcmp-read-failure` now injects `0xe00002d4` and expects
+`status=3758097108`; the historical §5.3.67 paragraph and the N9.7 baseline row
+keep their recorded `0xe00002ca` with an explicit correction note. The block
+suite passes 48 core scenarios/38 mutation controls and 97 adapter scenarios
+with 23 adapter and eight policy mutation controls. Findings:
+`out/gta4l/ram-root-emmc-n9.8-hardware-evidence/observation-1/` (private,
+gitignored). N9.6/N9.7/N9.8 `complete=0` are preserved and initialization
+reliability remains `[U]`.
+
+### 5.3.70 N9.9 page-aligned comparator read buffer (host-only, 2026-11-08)
+
+Follow-up to §5.3.69. The owner approved the host-only correction selected by
+the DMA-error trace: the comparator's read descriptors now always start on a
+kernel page boundary. The advertised one-segment read limit, the request block
+size and the `READDETAIL` line are unchanged; no segment-limit or
+request-limit change is part of this batch.
+
+Correction: `GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES` is two blocks (1,024 bytes,
+`package/Gta4lEmmcBlock.h:74`). In comparator mode `start()` allocates one
+page-aligned buffer with `IOMallocAligned(size, PAGE_SIZE)`
+(`package/Gta4lEmmcBlock.cpp:653-654`) and `free()` releases it with
+`IOFreeAligned` (`:775-778`). `readPartmapSectors()` issues every comparator
+read of at most 1,024 bytes from that buffer (`:1395-1397`) and copies the
+bytes to the caller only after a full successful transfer (`:1444-1447`); a
+short or failed transfer leaves the destination untouched. The bounce removes
+the caller-layout dependency: the class members are not page-contained, and
+the target `partmapPmbr` at `0x0e18` (3,608) previously produced the 488+24
+page split. The bounce is allocated only for `gta4l-emmc-partcmp=1`; the
+legacy and partobs paths are unchanged.
+
+Host qualification: the seam now models the worst-case
+`IOBlockStorageDriver::breakUpRequest()` constraint reconstructed in §5.3.69:
+each virtual page is a separate physical segment, only the first segment is
+taken, the break size is truncated to the 512-byte request block size, and a
+zero break size returns `kIOReturnDMAError` before the adapter
+(`scripts/sim-gta4l-emmc-block/adapter_harness.cpp:217-245`). The model is
+opt-in per scenario. `partcmp-page-aligned` runs the full 25-read comparator
+with the model enabled and requires zero rejected requests, zero unaligned
+descriptors, `gpt=1 reason=0 media=80 match=1 complete=1` (`:1505-1519`).
+`partcmp-page-split` calls `readPartmapSectors()` directly with a destination
+at page offset 3,608 and requires the exact PMBR copy (`:1522-1540`); the new
+`partcmp-bounce-skip` mutation restores the caller buffer and is rejected by
+that scenario (`scripts/test-gta4l-emmc-block.py:498-501`). The block suite
+passes 48 core scenarios/38 mutation controls and 99 adapter scenarios with
+24 adapter and eight policy mutation controls; the evidence-count guard
+passes (core 187/115, probe 196/100).
+
+Limits: the host seam still calls `doAsyncReadWrite` directly, so the breakup
+model is a host reconstruction rather than a qualified run of the real
+context/deblock/breakup layers. Physical adjacency of the two page segments
+remains unmeasured, and the correction is not hardware-verified. No candidate
+build, storage-ABI/QEMU audit, device access, flash, boot, retry, reset/repair,
+commit or push; N9.6/N9.7/N9.8 `complete=0` are preserved and initialization
+reliability remains `[U]`. Findings:
+`docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md`.
 
 ## 6. Expected report
 
