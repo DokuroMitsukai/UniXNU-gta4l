@@ -9,6 +9,8 @@ gta4l_test_media_read_fn gta4l_test_media_read_hook;
 gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 int gta4l_test_media_count;
+IOService *gta4l_test_schemes[GTA4L_TEST_MAX_SCHEMES];
+int gta4l_test_scheme_count;
 
 void
 gta4l_test_reset(void)
@@ -39,6 +41,7 @@ gta4l_test_reset(void)
 	gta4l_test_media_read_hook = 0;
 	gta4l_test_partition_sample_hook = 0;
 	gta4l_test_media_count = 0;
+	gta4l_test_scheme_count = 0;
 }
 
 void
@@ -91,6 +94,26 @@ gta4l_test_media_chain(IOMedia *media, IOService *driver, IOService *root)
 	if (driver != 0) {
 		driver->provider_ = root;
 	}
+}
+
+void
+gta4l_test_add_scheme(IOService *scheme)
+{
+	if ((scheme != 0) &&
+	    (gta4l_test_scheme_count < GTA4L_TEST_MAX_SCHEMES)) {
+		gta4l_test_schemes[gta4l_test_scheme_count++] = scheme;
+	}
+}
+
+void
+gta4l_test_scheme_configure(IOService *scheme, IOService *provider,
+    const char *uuid)
+{
+	if (scheme == 0) {
+		return;
+	}
+	scheme->provider_ = provider;
+	scheme->uuid_value_ = uuid;
 }
 
 void
@@ -575,15 +598,20 @@ IOService::setProperty(const char *key, unsigned long long value,
 OSObject *
 IOService::getProperty(const char *key) const
 {
-	(void)key;
+	if ((key != 0) &&
+	    (strcmp(key, kIOGUIDPartitionSchemeUUIDKey) == 0) &&
+	    (uuid_value_ != 0)) {
+		const_cast<IOService *>(this)->uuid_object_.setValue(
+		    uuid_value_);
+		return const_cast<OSString *>(&uuid_object_);
+	}
 	return 0;
 }
 
 OSDictionary *
 IOService::serviceMatching(const char *className)
 {
-	(void)className;
-	return new OSDictionary();
+	return new OSDictionary(className);
 }
 
 OSIterator *
@@ -595,8 +623,19 @@ IOService::getMatchingServices(OSDictionary *matching)
 	int nonWhole = 0;
 	uint32_t published;
 	uint32_t call;
+	const char *className;
 
-	(void)matching;
+	className = (matching != 0) ? matching->className() : 0;
+	if ((className != 0) &&
+	    (strcmp(className, "IOGUIDPartitionScheme") == 0)) {
+		for (index = 0; index < gta4l_test_scheme_count; index++) {
+			items[index] = gta4l_test_schemes[index];
+		}
+		return new OSIterator(items, gta4l_test_scheme_count);
+	}
+	if ((className != 0) && (strcmp(className, "IOMedia") != 0)) {
+		return new OSIterator(items, 0);
+	}
 	if ((gta4l_test.part_publish_active != 0) &&
 	    (gta4l_test.part_publish_count > 0)) {
 		call = gta4l_test.part_publish_calls++;
@@ -647,6 +686,7 @@ IOMedia::IOMedia()
       size_value(0),
       writable_value(false),
       content_value(0),
+      property_faults(0),
       open_value(false),
       open_refuse(false),
       open_calls(0),
@@ -688,18 +728,44 @@ IOMedia::getProperty(const char *key) const
 		return 0;
 	}
 	if (strcmp(key, kIOMediaWholeKey) == 0) {
+		if ((property_faults & GTA4L_TEST_PROP_WHOLE_MISSING) != 0) {
+			return 0;
+		}
+		if ((property_faults & GTA4L_TEST_PROP_WHOLE_WRONG) != 0) {
+			return const_cast<OSNumber *>(&base_object);
+		}
 		const_cast<IOMedia *>(this)->whole_object.setValue(whole_value);
 		return const_cast<OSBoolean *>(&whole_object);
 	}
 	if (strcmp(key, kIOMediaBaseKey) == 0) {
+		if ((property_faults & GTA4L_TEST_PROP_BASE_MISSING) != 0) {
+			return 0;
+		}
+		if ((property_faults & GTA4L_TEST_PROP_BASE_WRONG) != 0) {
+			return const_cast<OSBoolean *>(&whole_object);
+		}
 		const_cast<IOMedia *>(this)->base_object.setValue(base_value);
 		return const_cast<OSNumber *>(&base_object);
 	}
 	if (strcmp(key, kIOMediaSizeKey) == 0) {
+		if ((property_faults & GTA4L_TEST_PROP_SIZE_MISSING) != 0) {
+			return 0;
+		}
+		if ((property_faults & GTA4L_TEST_PROP_SIZE_WRONG) != 0) {
+			return const_cast<OSString *>(&content_object);
+		}
 		const_cast<IOMedia *>(this)->size_object.setValue(size_value);
 		return const_cast<OSNumber *>(&size_object);
 	}
 	if (strcmp(key, kIOMediaContentKey) == 0) {
+		if ((property_faults &
+		    GTA4L_TEST_PROP_CONTENT_MISSING) != 0) {
+			return 0;
+		}
+		if ((property_faults &
+		    GTA4L_TEST_PROP_CONTENT_WRONG) != 0) {
+			return const_cast<OSNumber *>(&base_object);
+		}
 		const_cast<IOMedia *>(this)->content_object.setValue(
 		    content_value);
 		return const_cast<OSString *>(&content_object);

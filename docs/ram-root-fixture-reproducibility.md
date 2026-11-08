@@ -71,8 +71,9 @@ is checked against.
 
 | Input | SHA-256 |
 | --- | --- |
-| `scripts/build-ram-root-report-fixture.py` | `3dd4fa08576a20021569b0e1afc66e264f422827e33a25fe36d5e85cbd1c3c64` |
+| `scripts/build-ram-root-report-fixture.py` | `1df33865b50e9e2b5e9cc587e03cb1609525aea2e399cc709690e1f95414fd91` |
 | `scripts/qemu-entry/native-user.S` | `1e29e9405c670a7a65a222cf48a590497b10ba7f106b202909c2b99e179fe76f` |
+| `scripts/qemu-entry/native-ram-root-fs-timer.inc` | `b05e88ca57e0009624f896aa4859a3827ea13f0cda957761c3c2aea2e331163e` |
 | `scripts/unixnu/kernel.py` | `2f07043b319767db67a8bd67a0515f5620fb036aa9453a160a3de1829d38ab4c` |
 | `scripts/linux/setup-toolchain.py` | `9334e7994a64a0a5f59b40b8f36e08fd9eac08684c7ae8bce8d4afedd279c963` |
 | `scripts/linux/xcrun` | `8da8a494abd47a6d484c217ac074c1759792732f048ffce3f65c114c5d641576` |
@@ -103,8 +104,8 @@ import hashlib, pathlib, re, sys
 doc = pathlib.Path(sys.argv[1])
 root = pathlib.Path(sys.argv[2])
 rows = re.findall(r'^\| `(scripts/[^`]+)` \| `([0-9a-f]{64})` \|$', doc.read_text(), re.M)
-if len(rows) != 5:
-    raise SystemExit(f'expected 5 pinned inputs, found {len(rows)}')
+if len(rows) != 6:
+    raise SystemExit(f'expected 6 pinned inputs, found {len(rows)}')
 if len({path for path, _ in rows}) != len(rows):
     raise SystemExit('duplicate pinned input paths')
 bad = []
@@ -251,6 +252,44 @@ The builder prints benign warnings for the unknown Apple-only
 `-F/System/Library/Frameworks/` directory and the 4-byte alignment of `_start`
 and `_checkpoint`; the recorded bytes include their effect and still match.
 
+### 4.1 `fs-timer-hold` diagnostic variant
+
+The additive `fs-timer-hold` diagnostic runs the same checks and then holds in
+a one-second `poll(NULL, 0, 1000)` loop instead of panicking. It exists for
+kernel-side observers that must terminate the boot, such as the N8 partition
+observation; failure paths keep their immediate panic. The original `fs-timer`
+compile is unchanged: `user.o` is still `6984333d…` and the recorded full
+outputs still match byte-for-byte.
+
+Build the hold variant with the same recipe, replacing the last argument:
+
+```sh
+python3.11 -B scripts/build-ram-root-report-fixture.py \
+  --output "$REPLAY/fixture-hold" \
+  --tree "$SRC/out/gta4l/ipados-17.7.11-21H461/gta4l/tree" \
+  --toolchain "$TC" \
+  --rcodesign "$REPLAY/rcodesign-linux/apple-codesign-0.29.0-x86_64-unknown-linux-musl/rcodesign" \
+  --diagnostic fs-timer-hold
+```
+
+Recorded host build on 2026-11-07: `user.o` `54d771ac…`, static Mach-O
+`b679b571…`, signed Mach-O `e6546715…`, CDHash `71f32329…`, trust cache
+`30a72f78…`, root image `327ac826…`, nine signed pages verified.
+`fixture.json` records `diagnostic=fs-timer-hold`, `hold_after_success=true`
+and the same PASS message. The object disassembly shows the stage-7 store,
+the zero-argument 1000 ms `poll` and a backward branch to that poll; the
+failure block still issues `reboot(RB_PANIC | RB_NOSYNC)`.
+
+`scripts/test-gta4l-ram-root-fixture-recipe.py` compiles both variants on the
+host, requires the original object hash above, requires the hold object to
+differ, and checks the hold loop and the retained failure panic. The gta4l
+payload builder additionally refuses a `*-partobs` payload unless
+`--data-ramdisk-manifest` names the `fs-timer-hold` fixture, so the old
+early-panic fixture cannot be repackaged for the observation. N8.5 used this
+hold variant in its payload and BOOT image, and the one owner-classified cold
+boot returned the eMMC report before the hold ended; that is one hardware use
+of the fixture, not a reliability result.
+
 ## 5. Mac cross-check
 
 The same source was also built on a macOS 27.0.1 arm64 host with the Command
@@ -263,8 +302,10 @@ reproduction path.
 
 ## 6. Limits
 
-- Only the `fs-timer` fixture is covered. The `report` diagnostic is a
-  different source configuration and was not re-verified.
+- The original `fs-timer` fixture is covered by the byte-identical replay; the
+  additive `fs-timer-hold` variant is covered by the object-level and recorded
+  full-build checks in §4.1. The `report` diagnostic is a different source
+  configuration and was not re-verified.
 - The boot image `c12e601e…`, the kernel `dc8184da…` and the hardware run are
   recorded results, not products of this recipe.
 - The signature is ad-hoc (`apple_trust_chain_verified=false`); the trust

@@ -425,11 +425,47 @@ ADAPTER_MUTATIONS = [
        '\t\tcount = report.part_reported;\n'
        '\t\tsamples++;\n')],
      'partobs-incremental'),
+    ('partcmp-stability-skip',
+     [('\t\tstableMs = elapsed - lastChangeMs;\n'
+       '\t\tstable = (stableMs >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_PARTMAP_STABLE_MS) ? 1u : 0u;\n',
+       '\t\tstableMs = elapsed - lastChangeMs;\n'
+       '\t\tstable = 1u;\n')],
+     'partcmp-match'),
+    ('partcmp-deadline-ignore',
+     [('\t\tif (elapsed >= GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS) {\n',
+       '\t\tif (samples >= 100u) {\n')],
+     'partcmp-zero'),
+    ('partcmp-compare-skip',
+     [('\t\tmatch = gta4l_emmc_block_partmap_compare(&partmapGpt,\n'
+       '\t\t    partmapMedia, count, &missing, &extra, &dup);\n',
+       '\t\tmatch = gta4l_emmc_block_partmap_compare(&partmapGpt,\n'
+       '\t\t    partmapMedia, count, &missing, &extra, &dup);\n'
+       '\t\tmatch = 1;\n')],
+     'partcmp-zero'),
+    ('partcmp-cancel-skip',
+     [('\tfor (;;) {\n'
+       '\t\tif (reportCancel) {\n'
+       '\t\t\tpartmapReportCancel();\n'
+       '\t\t\treturn;\n'
+       '\t\t}\n',
+       '\tfor (;;) {\n'
+       '\t\tif (0) {\n'
+       '\t\t\tpartmapReportCancel();\n'
+       '\t\t\treturn;\n'
+       '\t\t}\n')],
+     'partcmp-cancel'),
 ]
 
 POLICY_MUTATIONS = [
     ('partobs-value-accepted',
-     [('\tif (token_value != 1) {\n',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_PARTOBS_REFUSED;\n'
+       '\t}\n'
+       '\tif (token_value != 1) {\n',
+       '\tif ((duplicate_tokens != 0) || (block_selected == 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_PARTOBS_REFUSED;\n'
+       '\t}\n'
        '\tif ((token_value != 1) && 0) {\n')],
      'policy'),
     ('partobs-block-required',
@@ -442,6 +478,42 @@ POLICY_MUTATIONS = [
        '\t\tgta4l_emmc_block_put_string(&writer,\n'
        '\t\t    "' + 'P' * 2100 + '");\n')],
      'policy'),
+    ('partcmp-value-accepted',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (partobs_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_PARTCMP_REFUSED;\n'
+       '\t}\n'
+       '\tif (token_value != 1) {\n',
+       '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (partobs_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_PARTCMP_REFUSED;\n'
+       '\t}\n'
+       '\tif ((token_value != 1) && 0) {\n')],
+     'partcmp-refused-value'),
+    ('partcmp-partobs-exclusive',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (partobs_selected != 0)) {\n',
+       '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    ((partobs_selected != 0) && 0)) {\n')],
+     'partcmp-refused-partobs'),
+    ('partcmp-pmbr-skip',
+     [('\tif (gta4l_emmc_block_pmbr_valid(pmbr, capacity_blocks) == 0) {\n',
+       '\tif ((gta4l_emmc_block_pmbr_valid(pmbr, capacity_blocks) == 0) '
+       '&& 0) {\n')],
+     'partcmp-gpt-invalid'),
+    ('partcmp-array-crc-skip',
+     [('\tif (gta4l_emmc_block_crc32(array, header->slots * 128u) !=\n'
+       '\t    header->entry_crc) {\n',
+       '\tif ((gta4l_emmc_block_crc32(array, header->slots * 128u) !=\n'
+       '\t    header->entry_crc) && 0) {\n')],
+     'partcmp-gpt-invalid'),
+    ('partcmp-slots-cap-skip',
+     [('\tif ((out->slots == 0u) ||\n'
+       '\t    (out->slots > GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS)) {\n',
+       '\tif ((out->slots == 0u) ||\n'
+       '\t    ((out->slots > GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS) && 0)) '
+       '{\n')],
+     'partcmp-geometry'),
 ]
 
 
@@ -770,8 +842,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 65, f'expected 65 adapter PASS lines, got {passes}'
-        print('PASS adapter: 64 scenarios against the host IOKit seam')
+        assert passes == 86, f'expected 86 adapter PASS lines, got {passes}'
+        print('PASS adapter: 85 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

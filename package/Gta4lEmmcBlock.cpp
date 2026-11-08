@@ -18,6 +18,7 @@
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/storage/IOBlockStorageDevice.h>
 #include <IOKit/storage/IOBlockStorageDriver.h>
+#include <IOKit/storage/IOGUIDPartitionScheme.h>
 #include <IOKit/storage/IOMedia.h>
 #include <IOKit/storage/IOPartitionScheme.h>
 #include <IOKit/storage/IOStorage.h>
@@ -50,6 +51,13 @@ extern "C" kern_return_t thread_terminate(thread_t);
 #define GTA4L_EMMC_BLOCK_ANCESTRY_DEPTH 4u
 #define GTA4L_EMMC_BLOCK_CLOCK_HZ 400000u
 #define GTA4L_EMMC_BLOCK_WATCHDOG_MS 30000u
+
+static_assert(GTA4L_EMMC_BLOCK_PARTMAP_WORST_MS <
+    GTA4L_EMMC_BLOCK_WATCHDOG_MS,
+    "PARTMAP worst case must stay below the watchdog");
+static_assert(GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS ==
+    GTA4L_EMMC_BLOCK_CHUNK_BLOCKS,
+    "PARTMAP chunk must match the core chunk");
 
 class Gta4lEmmcBlock : public IOBlockStorageDevice {
 	OSDeclareDefaultStructors(Gta4lEmmcBlock)
@@ -147,6 +155,20 @@ private:
 	    struct qual_result *out);
 	void runReport(void);
 	void runPartitionObservation(void);
+	void runPartitionComparison(void);
+	void partmapReportFailure(uint32_t reason);
+	void partmapReportCancel(void);
+	void partmapHandleRead(uint32_t status);
+	void partmapPublishGpt(void);
+	void releasePartmapMedia(void);
+	void closePartmapWhole(void);
+	uint64_t partmapElapsedMs(void);
+	uint32_t readPartmapSectors(IOMedia *media, uint64_t lba,
+	    uint32_t blocks, uint8_t *buffer);
+	IOMedia *findExactWholeMedia(uint32_t *count);
+	IOService *findGuidScheme(IOMedia *whole);
+	uint32_t snapshotPartitionMedia(IOService *scheme, IOMedia *whole,
+	    uint32_t *propErrors, uint32_t *nested);
 	IOMedia *findWholeMedia(void);
 	uint32_t countPartitions(void);
 	bool ancestryContains(IOService *service) const;
@@ -168,6 +190,20 @@ private:
 	bool terminalClaimed = false;
 	bool reportMode = false;
 	bool partObsMode = false;
+	bool partCmpMode = false;
+	bool partmapWholeOpen = false;
+	IOMedia *partmapWhole = nullptr;
+	IOService *partmapScheme = nullptr;
+	uint64_t partmapReadStart = 0;
+	uint8_t partmapPmbr[GTA4L_EMMC_BLOCK_BYTES];
+	uint8_t partmapHeader[GTA4L_EMMC_BLOCK_BYTES];
+	uint8_t partmapArray[GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES];
+	struct gta4l_emmc_block_gpt partmapGpt;
+	struct gta4l_emmc_block_gpt partmapBackup;
+	struct gta4l_emmc_block_partmap_media
+	    partmapMedia[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA];
+	struct gta4l_emmc_block_partmap_media
+	    partmapPrevious[GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA];
 	bool registered = false;
 	bool reportStarted = false;
 	thread_t reportThread = nullptr;
@@ -473,12 +509,16 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t probeTokens;
 	uint32_t conflictTokens;
 	uint32_t partobsTokens;
+	uint32_t partcmpTokens;
 	int value = 0;
 	int partValue = 0;
+	int partcmpValue = 0;
 	int parsed;
 	int partobsParsed;
+	int partcmpParsed;
 	int mode;
 	int partobs;
+	int partcmp;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -488,6 +528,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_PROBE_ARG);
 	partobsTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_PARTOBS_ARG);
+	partcmpTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_PARTCMP_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -503,12 +545,22 @@ Gta4lEmmcBlock::start(IOService *provider)
 	if ((partobsParsed == 0) && (partobsTokens != 0)) {
 		partValue = -1;
 	}
+	partcmpParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_PARTCMP_ARG,
+	    &partcmpValue, sizeof(partcmpValue));
+	if ((partcmpParsed == 0) && (partcmpTokens != 0)) {
+		partcmpValue = -1;
+	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
 	if (mode == GTA4L_EMMC_BLOCK_SELECT_INERT) {
 		if (partobsTokens != 0) {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-partobs requires "
+			    "gta4l-emmc-block=1 or 3\n");
+		}
+		if (partcmpTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-partcmp requires "
 			    "gta4l-emmc-block=1 or 3\n");
 		}
 		return false;
@@ -546,6 +598,24 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	partObsMode = (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON);
+	partcmp = gta4l_emmc_block_partcmp_select(partcmpTokens != 0,
+	    partcmpValue, partcmpTokens > 1u, 1,
+	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON);
+	if (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_REFUSED) {
+		if (partcmpTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-partcmp token\n");
+		} else if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partobs "
+			    "and gta4l-emmc-partcmp are mutually "
+			    "exclusive\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
+			    "gta4l-emmc-partcmp value\n");
+		}
+		return false;
+	}
+	partCmpMode = (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON);
 
 	if (!IOBlockStorageDevice::start(provider)) {
 		return false;
@@ -1069,6 +1139,35 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		target->part_obs_slots = report.part_obs_slots;
 		target->part_obs_reported = report.part_obs_reported;
 		target->part_obs_complete = report.part_obs_complete;
+		target->partmap = report.partmap;
+		target->partmap_gpt = report.partmap_gpt;
+		target->partmap_reason = report.partmap_reason;
+		target->partmap_slots = report.partmap_slots;
+		target->partmap_used = report.partmap_used;
+		target->partmap_pmbr = report.partmap_pmbr;
+		target->partmap_hdr = report.partmap_hdr;
+		target->partmap_arr = report.partmap_arr;
+		target->partmap_bak = report.partmap_bak;
+		target->partmap_xcheck = report.partmap_xcheck;
+		target->partmap_media = report.partmap_media;
+		target->partmap_match = report.partmap_match;
+		target->partmap_missing = report.partmap_missing;
+		target->partmap_extra = report.partmap_extra;
+		target->partmap_dup = report.partmap_dup;
+		target->partmap_nested = report.partmap_nested;
+		target->partmap_prop = report.partmap_prop;
+		target->partmap_samples = report.partmap_samples;
+		target->partmap_changes = report.partmap_changes;
+		target->partmap_stable = report.partmap_stable;
+		target->partmap_stable_ms = report.partmap_stable_ms;
+		target->partmap_deadline_ms = report.partmap_deadline_ms;
+		target->partmap_timed_out = report.partmap_timed_out;
+		target->partmap_budget = report.partmap_budget;
+		target->partmap_reads = report.partmap_reads;
+		target->partmap_blocks = report.partmap_blocks;
+		target->partmap_fails = report.partmap_fails;
+		target->partmap_cancel = report.partmap_cancel;
+		target->partmap_complete = report.partmap_complete;
 		IOLockUnlock(reportLock);
 	}
 	return locked;
@@ -1182,6 +1281,643 @@ Gta4lEmmcBlock::countPartitions()
 	iterator->release();
 	report.part_reported = reported;
 	return count;
+}
+
+static bool
+gta4l_emmc_block_text_equal(const char *left, const char *right)
+{
+	uint32_t index = 0;
+
+	if ((left == nullptr) || (right == nullptr)) {
+		return false;
+	}
+	while ((left[index] != 0) && (left[index] == right[index])) {
+		index++;
+	}
+	return (left[index] == 0) && (right[index] == 0);
+}
+
+uint64_t
+Gta4lEmmcBlock::partmapElapsedMs()
+{
+	uint64_t now = gta4l_emmc_platform_counter();
+	uint64_t hz = gta4l_emmc_platform_counter_hz();
+	uint64_t ticks_per_ms;
+
+	if (hz == 0) {
+		return 0;
+	}
+	ticks_per_ms = hz / 1000u;
+	if (ticks_per_ms == 0) {
+		ticks_per_ms = 1;
+	}
+	return (now - partmapReadStart) / ticks_per_ms;
+}
+
+uint32_t
+Gta4lEmmcBlock::readPartmapSectors(IOMedia *media, uint64_t lba,
+    uint32_t blocks, uint8_t *buffer)
+{
+	IOMemoryDescriptor *descriptor;
+	UInt64 actual = 0;
+	IOReturn status;
+
+	if (reportCancel) {
+		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_CANCELLED;
+	}
+	if (partmapElapsedMs() >= GTA4L_EMMC_BLOCK_PARTMAP_READ_BUDGET_MS) {
+		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_BUDGET;
+	}
+	descriptor = IOMemoryDescriptor::withAddress(buffer,
+	    (UInt64)blocks * GTA4L_EMMC_BLOCK_BYTES, kIODirectionIn);
+	if (descriptor == nullptr) {
+		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA;
+	}
+	status = media->read(this,
+	    lba * GTA4L_EMMC_BLOCK_BYTES, descriptor, nullptr, &actual);
+	descriptor->release();
+	IOLockLock(reportLock);
+	report.partmap_reads++;
+	report.partmap_blocks += blocks;
+	IOLockUnlock(reportLock);
+	if ((status != kIOReturnSuccess) ||
+	    (actual != (UInt64)blocks * GTA4L_EMMC_BLOCK_BYTES)) {
+		return GTA4L_EMMC_BLOCK_PARTMAP_REASON_READ;
+	}
+	return 0;
+}
+
+void
+Gta4lEmmcBlock::closePartmapWhole()
+{
+	if (partmapWholeOpen && (partmapWhole != nullptr)) {
+		partmapWhole->close(this, 0);
+		partmapWholeOpen = false;
+	}
+}
+
+void
+Gta4lEmmcBlock::releasePartmapMedia()
+{
+	closePartmapWhole();
+	if (partmapScheme != nullptr) {
+		partmapScheme->release();
+		partmapScheme = nullptr;
+	}
+	if (partmapWhole != nullptr) {
+		partmapWhole->release();
+		partmapWhole = nullptr;
+	}
+}
+
+void
+Gta4lEmmcBlock::partmapPublishGpt()
+{
+	IOLockLock(reportLock);
+	report.partmap_slots = partmapGpt.slots;
+	report.partmap_used = partmapGpt.used;
+	report.partmap_pmbr = partmapGpt.pmbr;
+	report.partmap_hdr = partmapGpt.hdr;
+	report.partmap_arr = partmapGpt.arr;
+	report.partmap_bak = partmapGpt.bak;
+	report.partmap_xcheck = partmapGpt.xcheck;
+	IOLockUnlock(reportLock);
+}
+
+void
+Gta4lEmmcBlock::partmapReportFailure(uint32_t reason)
+{
+	IOLockLock(reportLock);
+	report.partmap_reason = reason;
+	report.partmap_complete = 0;
+	if (reason == GTA4L_EMMC_BLOCK_PARTMAP_REASON_BUDGET) {
+		report.partmap_budget = 1;
+	}
+	if (reason == GTA4L_EMMC_BLOCK_PARTMAP_REASON_READ) {
+		report.partmap_fails = 1;
+	}
+	IOLockUnlock(reportLock);
+	closePartmapWhole();
+	releasePartmapMedia();
+	panicWithReport();
+}
+
+void
+Gta4lEmmcBlock::partmapReportCancel()
+{
+	IOLockLock(reportLock);
+	report.partmap_cancel = 1;
+	report.partmap_complete = 0;
+	IOLockUnlock(reportLock);
+	closePartmapWhole();
+	releasePartmapMedia();
+	reportDone = true;
+}
+
+void
+Gta4lEmmcBlock::partmapHandleRead(uint32_t status)
+{
+	if (status == GTA4L_EMMC_BLOCK_PARTMAP_REASON_CANCELLED) {
+		partmapReportCancel();
+		return;
+	}
+	partmapReportFailure(status);
+}
+
+IOMedia *
+Gta4lEmmcBlock::findExactWholeMedia(uint32_t *count)
+{
+	OSDictionary *matching;
+	OSIterator *iterator;
+	IOMedia *found = nullptr;
+
+	if (count == nullptr) {
+		return nullptr;
+	}
+	*count = 0;
+	matching = IOService::serviceMatching("IOMedia");
+	if (matching == nullptr) {
+		return nullptr;
+	}
+	iterator = IOService::getMatchingServices(matching);
+	matching->release();
+	if (iterator == nullptr) {
+		return nullptr;
+	}
+	while (OSObject *object = iterator->getNextObject()) {
+		IOService *service = OSDynamicCast(IOService, object);
+		IOMedia *media = (service != nullptr) ?
+		    static_cast<IOMedia *>(service) : nullptr;
+		OSBoolean *whole;
+		OSNumber *base;
+		OSNumber *size;
+		OSString *content;
+
+		if ((media == nullptr) || !ancestryContains(media)) {
+			continue;
+		}
+		whole = OSDynamicCast(OSBoolean,
+		    media->getProperty(kIOMediaWholeKey));
+		base = OSDynamicCast(OSNumber,
+		    media->getProperty(kIOMediaBaseKey));
+		size = OSDynamicCast(OSNumber,
+		    media->getProperty(kIOMediaSizeKey));
+		content = OSDynamicCast(OSString,
+		    media->getProperty(kIOMediaContentKey));
+		if ((whole == nullptr) || !whole->getValue()) {
+			continue;
+		}
+		if ((base == nullptr) || (base->unsigned64BitValue() != 0)) {
+			continue;
+		}
+		if ((size == nullptr) || (size->unsigned64BitValue() !=
+		    (uint64_t)capacityBlocks * GTA4L_EMMC_BLOCK_BYTES)) {
+			continue;
+		}
+		if ((content == nullptr) ||
+		    !gta4l_emmc_block_text_equal(
+		    content->getCStringNoCopy(), "GUID_partition_scheme")) {
+			continue;
+		}
+		(*count)++;
+		if (found == nullptr) {
+			found = media;
+			found->retain();
+		}
+	}
+	iterator->release();
+	return found;
+}
+
+IOService *
+Gta4lEmmcBlock::findGuidScheme(IOMedia *whole)
+{
+	OSDictionary *matching;
+	OSIterator *iterator;
+	IOService *found = nullptr;
+	uint32_t count = 0;
+
+	if (whole == nullptr) {
+		return nullptr;
+	}
+	matching = IOService::serviceMatching("IOGUIDPartitionScheme");
+	if (matching == nullptr) {
+		return nullptr;
+	}
+	iterator = IOService::getMatchingServices(matching);
+	matching->release();
+	if (iterator == nullptr) {
+		return nullptr;
+	}
+	while (OSObject *object = iterator->getNextObject()) {
+		IOService *service = OSDynamicCast(IOService, object);
+		OSString *uuid;
+
+		if (service == nullptr) {
+			continue;
+		}
+		if (service->getProvider() != whole) {
+			continue;
+		}
+		uuid = OSDynamicCast(OSString,
+		    service->getProperty(kIOGUIDPartitionSchemeUUIDKey));
+		if (uuid == nullptr) {
+			continue;
+		}
+		count++;
+		if (found == nullptr) {
+			found = service;
+			found->retain();
+		}
+	}
+	iterator->release();
+	if (count != 1u) {
+		if (found != nullptr) {
+			found->release();
+		}
+		return nullptr;
+	}
+	return found;
+}
+
+uint32_t
+Gta4lEmmcBlock::snapshotPartitionMedia(IOService *scheme, IOMedia *whole,
+    uint32_t *propErrors, uint32_t *nested)
+{
+	OSDictionary *matching;
+	OSIterator *iterator;
+	uint32_t count = 0;
+	uint64_t wholeSize =
+	    (uint64_t)capacityBlocks * GTA4L_EMMC_BLOCK_BYTES;
+
+	if ((propErrors == nullptr) || (nested == nullptr)) {
+		return 0;
+	}
+	*propErrors = 0;
+	*nested = 0;
+	matching = IOService::serviceMatching("IOMedia");
+	if (matching == nullptr) {
+		*propErrors = 1;
+		return 0;
+	}
+	iterator = IOService::getMatchingServices(matching);
+	matching->release();
+	if (iterator == nullptr) {
+		*propErrors = 1;
+		return 0;
+	}
+	while (OSObject *object = iterator->getNextObject()) {
+		IOService *service = OSDynamicCast(IOService, object);
+		IOMedia *media = (service != nullptr) ?
+		    static_cast<IOMedia *>(service) : nullptr;
+		OSBoolean *wholeProperty;
+		OSNumber *baseProperty;
+		OSNumber *sizeProperty;
+		OSString *contentProperty;
+		uint64_t baseValue;
+		uint64_t sizeValue;
+
+		if ((media == nullptr) || !ancestryContains(media)) {
+			continue;
+		}
+		if (media == whole) {
+			continue;
+		}
+		if (media->getProvider() != scheme) {
+			(*nested)++;
+			continue;
+		}
+		wholeProperty = OSDynamicCast(OSBoolean,
+		    media->getProperty(kIOMediaWholeKey));
+		baseProperty = OSDynamicCast(OSNumber,
+		    media->getProperty(kIOMediaBaseKey));
+		sizeProperty = OSDynamicCast(OSNumber,
+		    media->getProperty(kIOMediaSizeKey));
+		contentProperty = OSDynamicCast(OSString,
+		    media->getProperty(kIOMediaContentKey));
+		if ((wholeProperty == nullptr) || wholeProperty->getValue() ||
+		    (baseProperty == nullptr) || (sizeProperty == nullptr) ||
+		    (contentProperty == nullptr)) {
+			if (*propErrors < 255u) {
+				(*propErrors)++;
+			}
+			continue;
+		}
+		baseValue = baseProperty->unsigned64BitValue();
+		sizeValue = sizeProperty->unsigned64BitValue();
+		if (gta4l_emmc_block_partmap_media_check(baseValue, sizeValue,
+		    wholeSize) != 0) {
+			if (*propErrors < 255u) {
+				(*propErrors)++;
+			}
+			continue;
+		}
+		if (count >= GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA) {
+			if (*propErrors < 255u) {
+				(*propErrors)++;
+			}
+			continue;
+		}
+		partmapMedia[count].base = baseValue;
+		partmapMedia[count].size = sizeValue;
+		count++;
+	}
+	iterator->release();
+	return count;
+}
+
+void
+Gta4lEmmcBlock::runPartitionComparison()
+{
+	uint32_t wholeCount = 0;
+	uint32_t waited = 0;
+	uint32_t status;
+	uint64_t entryLba;
+	uint32_t slots;
+	uint32_t arrayBlocks;
+	uint32_t offset;
+	uint32_t chunk;
+	uint32_t prop;
+	uint32_t nested;
+	uint32_t nestedSeen = 0;
+	uint32_t propSeen = 0;
+	uint32_t count = 0;
+	uint32_t previousCount = 0;
+	uint32_t samples = 0;
+	uint32_t changes = 0;
+	uint32_t stable = 0;
+	uint32_t stableMs = 0;
+	uint32_t lastChangeMs = 0;
+	uint32_t elapsed = 0;
+	uint32_t timedOut = 0;
+	uint32_t match = 0;
+	uint32_t missing = 0;
+	uint32_t extra = 0;
+	uint32_t dup = 0;
+	uint32_t changed;
+	uint32_t complete;
+	uint32_t reason;
+	uint64_t wholeSize;
+	OSBoolean *writableProperty;
+	OSString *contentProperty;
+
+	bzero(&partmapGpt, sizeof(partmapGpt));
+	bzero(&partmapBackup, sizeof(partmapBackup));
+	bzero(partmapMedia, sizeof(partmapMedia));
+	bzero(partmapPrevious, sizeof(partmapPrevious));
+	bzero(partmapPmbr, sizeof(partmapPmbr));
+	bzero(partmapHeader, sizeof(partmapHeader));
+	partmapWhole = nullptr;
+	partmapScheme = nullptr;
+	partmapWholeOpen = false;
+
+	report.partmap = 1;
+	report.partmap_deadline_ms = GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS;
+	report.partmap_complete = 0;
+	report.partmap_reason = GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA;
+
+	while (waited < GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS) {
+		if (reportCancel) {
+			partmapReportCancel();
+			return;
+		}
+		partmapWhole = findExactWholeMedia(&wholeCount);
+		if (wholeCount > 1u) {
+			partmapReportFailure(
+			    GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA);
+			return;
+		}
+		if ((partmapWhole != nullptr) && (wholeCount == 1u)) {
+			break;
+		}
+		if (partmapWhole != nullptr) {
+			partmapWhole->release();
+			partmapWhole = nullptr;
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_MEDIA_STEP_MS);
+		waited += GTA4L_EMMC_BLOCK_MEDIA_STEP_MS;
+	}
+	if (partmapWhole == nullptr) {
+		partmapReportFailure(GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA);
+		return;
+	}
+
+	wholeSize = (uint64_t)capacityBlocks * GTA4L_EMMC_BLOCK_BYTES;
+	writableProperty = OSDynamicCast(OSBoolean,
+	    partmapWhole->getProperty(kIOMediaWritableKey));
+	contentProperty = OSDynamicCast(OSString,
+	    partmapWhole->getProperty(kIOMediaContentKey));
+	report.media_valid = 1;
+	report.whole = 1;
+	report.base = 0;
+	report.size = wholeSize;
+	report.writable = ((writableProperty != nullptr) &&
+	    writableProperty->getValue()) ? 1u : 0u;
+	copyContent(mediaContent, (contentProperty != nullptr) ?
+	    contentProperty->getCStringNoCopy() : nullptr);
+	report.content = mediaContent;
+
+	partmapScheme = findGuidScheme(partmapWhole);
+	if (partmapScheme == nullptr) {
+		partmapReportFailure(GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA);
+		return;
+	}
+	if (!partmapWhole->open(this, 0, kIOStorageAccessReader)) {
+		partmapReportFailure(GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA);
+		return;
+	}
+	partmapWholeOpen = true;
+
+	partmapReadStart = gta4l_emmc_platform_counter();
+	status = readPartmapSectors(partmapWhole, 0, 1, partmapPmbr);
+	if (status != 0) {
+		partmapHandleRead(status);
+		return;
+	}
+	status = readPartmapSectors(partmapWhole, 1, 1, partmapHeader);
+	if (status != 0) {
+		partmapHandleRead(status);
+		return;
+	}
+	if (gta4l_emmc_block_gpt_geometry(partmapHeader, capacityBlocks, 1,
+	    &entryLba, &slots) == 0) {
+		partmapReportFailure(
+		    GTA4L_EMMC_BLOCK_PARTMAP_REASON_HEADER);
+		return;
+	}
+	arrayBlocks = ((slots * 128u) + 511u) / 512u;
+	for (offset = 0; offset < arrayBlocks;
+	    offset += GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS) {
+		chunk = arrayBlocks - offset;
+		if (chunk > GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS) {
+			chunk = GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS;
+		}
+		status = readPartmapSectors(partmapWhole,
+		    (uint64_t)entryLba + offset, chunk,
+		    partmapArray + (offset * GTA4L_EMMC_BLOCK_BYTES));
+		if (status != 0) {
+			partmapHandleRead(status);
+			return;
+		}
+	}
+	if (gta4l_emmc_block_gpt_primary(partmapPmbr, partmapHeader,
+	    partmapArray, capacityBlocks, &partmapGpt) == 0) {
+		partmapPublishGpt();
+		partmapReportFailure(partmapGpt.reason);
+		return;
+	}
+	partmapPublishGpt();
+
+	status = readPartmapSectors(partmapWhole,
+	    (uint64_t)capacityBlocks - 1u, 1, partmapHeader);
+	if (status != 0) {
+		partmapHandleRead(status);
+		return;
+	}
+	if (gta4l_emmc_block_gpt_geometry(partmapHeader, capacityBlocks, 0,
+	    &entryLba, &slots) == 0) {
+		partmapReportFailure(
+		    GTA4L_EMMC_BLOCK_PARTMAP_REASON_BACKUP_HEADER);
+		return;
+	}
+	arrayBlocks = ((slots * 128u) + 511u) / 512u;
+	for (offset = 0; offset < arrayBlocks;
+	    offset += GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS) {
+		chunk = arrayBlocks - offset;
+		if (chunk > GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS) {
+			chunk = GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS;
+		}
+		status = readPartmapSectors(partmapWhole,
+		    (uint64_t)entryLba + offset, chunk,
+		    partmapArray + (offset * GTA4L_EMMC_BLOCK_BYTES));
+		if (status != 0) {
+			partmapHandleRead(status);
+			return;
+		}
+	}
+	if (gta4l_emmc_block_gpt_backup(partmapHeader, partmapArray,
+	    capacityBlocks, &partmapGpt, &partmapBackup) == 0) {
+		partmapPublishGpt();
+		partmapReportFailure(partmapGpt.reason);
+		return;
+	}
+	partmapPublishGpt();
+	closePartmapWhole();
+	IOLockLock(reportLock);
+	report.partmap_gpt = 1;
+	report.partmap_reason = GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE;
+	IOLockUnlock(reportLock);
+
+	for (;;) {
+		if (reportCancel) {
+			partmapReportCancel();
+			return;
+		}
+		prop = 0;
+		nested = 0;
+		count = snapshotPartitionMedia(partmapScheme, partmapWhole,
+		    &prop, &nested);
+		samples++;
+		if (nested != 0) {
+			nestedSeen = 1;
+		}
+		if (prop != 0) {
+			propSeen = prop;
+			IOLockLock(reportLock);
+			report.partmap_prop = propSeen;
+			report.partmap_nested = nestedSeen;
+			report.partmap_media = count;
+			report.partmap_samples = samples;
+			IOLockUnlock(reportLock);
+			partmapReportFailure(
+			    GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA);
+			return;
+		}
+		match = gta4l_emmc_block_partmap_compare(&partmapGpt,
+		    partmapMedia, count, &missing, &extra, &dup);
+		changed = (samples == 1u) ||
+		    (count != previousCount) ||
+		    (memcmp(partmapMedia, partmapPrevious,
+		    (size_t)count *
+		    sizeof(struct gta4l_emmc_block_partmap_media)) != 0);
+		if (changed != 0) {
+			if (samples > 1u) {
+				changes++;
+			}
+			lastChangeMs = elapsed;
+			previousCount = count;
+			if (count != 0) {
+				memcpy(partmapPrevious, partmapMedia,
+				    (size_t)count *
+				    sizeof(struct
+				    gta4l_emmc_block_partmap_media));
+			}
+		}
+		stableMs = elapsed - lastChangeMs;
+		stable = (stableMs >=
+		    GTA4L_EMMC_BLOCK_PARTMAP_STABLE_MS) ? 1u : 0u;
+		IOLockLock(reportLock);
+		report.partmap_media = count;
+		report.partmap_match = match;
+		report.partmap_missing = missing;
+		report.partmap_extra = extra;
+		report.partmap_dup = dup;
+		report.partmap_nested = nestedSeen;
+		report.partmap_prop = propSeen;
+		report.partmap_samples = samples;
+		report.partmap_changes = changes;
+		report.partmap_stable = stable;
+		report.partmap_stable_ms = stableMs;
+		report.partmap_timed_out = 0;
+		IOLockUnlock(reportLock);
+		if ((stable != 0) && (match != 0)) {
+			break;
+		}
+		if (elapsed >= GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS) {
+			if (stable == 0) {
+				timedOut = 1;
+				match = 0;
+			}
+			break;
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_PARTMAP_STEP_MS);
+		elapsed += GTA4L_EMMC_BLOCK_PARTMAP_STEP_MS;
+		if (elapsed > GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS) {
+			elapsed = GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS;
+		}
+	}
+
+	if (timedOut != 0) {
+		reason = GTA4L_EMMC_BLOCK_PARTMAP_REASON_CHANGING;
+	} else if (match != 0) {
+		reason = GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE;
+	} else {
+		reason = GTA4L_EMMC_BLOCK_PARTMAP_REASON_MISMATCH;
+	}
+	complete = ((report.partmap_gpt != 0) && (match != 0) &&
+	    (stable != 0) && (timedOut == 0) &&
+	    (report.partmap_budget == 0) && (report.partmap_cancel == 0) &&
+	    (report.partmap_fails == 0) && (propSeen == 0) &&
+	    (dup == 0) && (missing == 0) && (extra == 0) &&
+	    (count == partmapGpt.used)) ? 1u : 0u;
+	IOLockLock(reportLock);
+	report.partmap_reason = reason;
+	report.partmap_media = count;
+	report.partmap_match = match;
+	report.partmap_missing = missing;
+	report.partmap_extra = extra;
+	report.partmap_dup = dup;
+	report.partmap_nested = nestedSeen;
+	report.partmap_prop = propSeen;
+	report.partmap_samples = samples;
+	report.partmap_changes = changes;
+	report.partmap_stable = stable;
+	report.partmap_stable_ms = stableMs;
+	report.partmap_timed_out = timedOut;
+	report.partmap_complete = complete;
+	IOLockUnlock(reportLock);
+	releasePartmapMedia();
+	panicWithReport();
 }
 
 void
@@ -1457,6 +2193,13 @@ Gta4lEmmcBlock::runReport()
 	report.part_obs = partObsMode ? 1u : 0u;
 	report.part_obs_deadline_ms = GTA4L_EMMC_BLOCK_PART_OBSERVE_MS;
 	report.part_obs_complete = 0;
+	report.partmap = partCmpMode ? 1u : 0u;
+	report.partmap_deadline_ms = GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS;
+	report.partmap_complete = 0;
+	if (partCmpMode) {
+		runPartitionComparison();
+		return;
+	}
 	report.qual_ref_lba = GTA4L_EMMC_BLOCK_QUAL_LBA;
 	report.qual_ref_blocks = GTA4L_EMMC_BLOCK_QUAL_REF_BLOCKS;
 	media = nullptr;

@@ -156,6 +156,1084 @@ publish_profile(const uint32_t *counts, uint32_t count)
 	gta4l_test.part_publish_count = (int)count;
 }
 
+#define PARTCMP_FIRST_USABLE 34u
+#define PARTCMP_PARTITION_SECTORS 2048u
+#define PARTCMP_SLOTS 84u
+
+enum partcmp_corrupt {
+	PARTCMP_CORRUPT_NONE = 0,
+	PARTCMP_CORRUPT_PMBR_SIG,
+	PARTCMP_CORRUPT_PMBR_NONE,
+	PARTCMP_CORRUPT_PMBR_TWO_EE,
+	PARTCMP_CORRUPT_PMBR_START,
+	PARTCMP_CORRUPT_PMBR_HYBRID,
+	PARTCMP_CORRUPT_HDR_SIG,
+	PARTCMP_CORRUPT_HDR_SIZE,
+	PARTCMP_CORRUPT_HDR_REVISION,
+	PARTCMP_CORRUPT_HDR_RESERVED,
+	PARTCMP_CORRUPT_HDR_CRC,
+	PARTCMP_CORRUPT_HDR_MY_LBA,
+	PARTCMP_CORRUPT_HDR_ALT_LBA,
+	PARTCMP_CORRUPT_HDR_USABLE,
+	PARTCMP_CORRUPT_HDR_SPAN,
+	PARTCMP_CORRUPT_ARR_CRC,
+	PARTCMP_CORRUPT_BAK_SIG,
+	PARTCMP_CORRUPT_BAK_ARR_CRC,
+	PARTCMP_CORRUPT_DISAGREE_GUID,
+	PARTCMP_CORRUPT_DISAGREE_ENTRY,
+	PARTCMP_CORRUPT_ENTRY_REVERSED,
+	PARTCMP_CORRUPT_ENTRY_OUTSIDE,
+	PARTCMP_CORRUPT_ENTRY_OVERLAP,
+	PARTCMP_CORRUPT_ENTRY_DUPLICATE,
+	PARTCMP_CORRUPT_ENTRY_NULL_RANGE,
+	PARTCMP_CORRUPT_EMPTY_STALE,
+	PARTCMP_CORRUPT_SINGLE_SECTOR
+};
+
+static uint32_t g_partcmp_capacity;
+static uint32_t g_partcmp_slots;
+static uint32_t g_partcmp_entry_lba;
+static uint32_t g_partcmp_backup_entry_lba;
+static uint32_t g_partcmp_array_blocks;
+static uint8_t g_partcmp_pmbr[GTA4L_EMMC_BLOCK_BYTES];
+static uint8_t g_partcmp_primary[GTA4L_EMMC_BLOCK_BYTES];
+static uint8_t g_partcmp_backup[GTA4L_EMMC_BLOCK_BYTES];
+static uint8_t g_partcmp_array[GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES];
+static uint8_t
+    g_partcmp_backup_array[GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES];
+static int g_partcmp_read_calls;
+static int g_partcmp_fail_at;
+static int g_partcmp_short_at;
+static int g_partcmp_cancel_at;
+static uint32_t g_partcmp_advance_ms;
+static IOMedia *g_partcmp_whole;
+static IOService *g_partcmp_scheme;
+
+static void
+partcmp_put32(uint8_t *target, uint32_t value)
+{
+	target[0] = (uint8_t)value;
+	target[1] = (uint8_t)(value >> 8);
+	target[2] = (uint8_t)(value >> 16);
+	target[3] = (uint8_t)(value >> 24);
+}
+
+static void
+partcmp_put64(uint8_t *target, uint64_t value)
+{
+	uint32_t index;
+
+	for (index = 0; index < 8u; index++) {
+		target[index] = (uint8_t)(value >> (index * 8u));
+	}
+}
+
+static uint32_t
+partcmp_crc32(const uint8_t *data, uint32_t length)
+{
+	uint32_t crc = 0xffffffffu;
+	uint32_t index;
+	uint32_t bit;
+
+	for (index = 0; index < length; index++) {
+		crc ^= data[index];
+		for (bit = 0; bit < 8u; bit++) {
+			if ((crc & 1u) != 0u) {
+				crc = (crc >> 1) ^ 0xedb88320u;
+			} else {
+				crc >>= 1;
+			}
+		}
+	}
+	return crc ^ 0xffffffffu;
+}
+
+static uint64_t
+partcmp_first(uint32_t index)
+{
+	return (uint64_t)PARTCMP_FIRST_USABLE +
+	    (uint64_t)index * PARTCMP_PARTITION_SECTORS;
+}
+
+static uint64_t
+partcmp_last(uint32_t index)
+{
+	return partcmp_first(index) + PARTCMP_PARTITION_SECTORS - 1u;
+}
+
+static void
+partcmp_build_header(uint8_t *header, uint64_t my_lba,
+    uint64_t alternate_lba, uint64_t entry_lba, uint32_t entry_crc)
+{
+	memset(header, 0, GTA4L_EMMC_BLOCK_BYTES);
+	memcpy(header, "EFI PART", 8);
+	partcmp_put32(header + 8u, 0x00010000u);
+	partcmp_put32(header + 12u, 92u);
+	partcmp_put32(header + 20u, 0u);
+	partcmp_put64(header + 24u, my_lba);
+	partcmp_put64(header + 32u, alternate_lba);
+	partcmp_put64(header + 40u, PARTCMP_FIRST_USABLE);
+	partcmp_put64(header + 48u, (uint64_t)g_partcmp_capacity - 34u);
+	partcmp_put64(header + 56u, 0x0123456789abcdefull);
+	partcmp_put64(header + 64u, 0xfedcba9876543210ull);
+	partcmp_put64(header + 72u, entry_lba);
+	partcmp_put32(header + 80u, g_partcmp_slots);
+	partcmp_put32(header + 84u, 128u);
+	partcmp_put32(header + 88u, entry_crc);
+	partcmp_put32(header + 16u, partcmp_crc32(header, 92u));
+}
+
+static void
+partcmp_fix_primary_header(void)
+{
+	partcmp_put32(g_partcmp_primary + 16u, 0u);
+	partcmp_put32(g_partcmp_primary + 16u,
+	    partcmp_crc32(g_partcmp_primary, 92u));
+}
+
+static void
+partcmp_fix_backup_header(void)
+{
+	partcmp_put32(g_partcmp_backup + 16u, 0u);
+	partcmp_put32(g_partcmp_backup + 16u,
+	    partcmp_crc32(g_partcmp_backup, 92u));
+}
+
+static void
+partcmp_fix_header_crc(uint8_t *header)
+{
+	partcmp_put32(header + 16u, 0u);
+	partcmp_put32(header + 16u, partcmp_crc32(header, 92u));
+}
+
+static void
+partcmp_build_fixture(uint32_t used)
+{
+	uint32_t index;
+	uint32_t crc;
+
+	g_partcmp_capacity = g_self->capacityBlocks;
+	g_partcmp_slots = PARTCMP_SLOTS;
+	g_partcmp_entry_lba = 2u;
+	g_partcmp_array_blocks =
+	    (g_partcmp_slots * 128u + 511u) / 512u;
+	g_partcmp_backup_entry_lba =
+	    g_partcmp_capacity - 1u - g_partcmp_array_blocks;
+	memset(g_partcmp_pmbr, 0, sizeof(g_partcmp_pmbr));
+	g_partcmp_pmbr[446u + 4u] = 0xeeu;
+	partcmp_put32(g_partcmp_pmbr + 446u + 8u, 1u);
+	partcmp_put32(g_partcmp_pmbr + 446u + 12u,
+	    g_partcmp_capacity - 1u);
+	g_partcmp_pmbr[510] = 0x55u;
+	g_partcmp_pmbr[511] = 0xaau;
+	memset(g_partcmp_array, 0, sizeof(g_partcmp_array));
+	for (index = 0; index < used; index++) {
+		uint8_t *entry = g_partcmp_array + (index * 128u);
+		uint32_t at;
+
+		for (at = 0; at < 16u; at++) {
+			entry[at] = (uint8_t)(0xa0u + at + index);
+		}
+		entry[0] = 0xa5u;
+		for (at = 0; at < 16u; at++) {
+			entry[16u + at] =
+			    (uint8_t)(0x10u + at + (index * 3u));
+		}
+		partcmp_put64(entry + 32u, partcmp_first(index));
+		partcmp_put64(entry + 40u, partcmp_last(index));
+	}
+	crc = partcmp_crc32(g_partcmp_array, g_partcmp_slots * 128u);
+	partcmp_build_header(g_partcmp_primary, 1u,
+	    (uint64_t)g_partcmp_capacity - 1u, 2u, crc);
+	partcmp_build_header(g_partcmp_backup,
+	    (uint64_t)g_partcmp_capacity - 1u, 1u,
+	    (uint64_t)g_partcmp_backup_entry_lba, crc);
+	memcpy(g_partcmp_backup_array, g_partcmp_array,
+	    g_partcmp_slots * 128u);
+}
+
+static void
+partcmp_rebuild_arrays(void)
+{
+	uint32_t crc;
+
+	crc = partcmp_crc32(g_partcmp_array, g_partcmp_slots * 128u);
+	memcpy(g_partcmp_backup_array, g_partcmp_array,
+	    g_partcmp_slots * 128u);
+	partcmp_put32(g_partcmp_primary + 88u, crc);
+	partcmp_fix_primary_header();
+	partcmp_put32(g_partcmp_backup + 88u, crc);
+	partcmp_fix_backup_header();
+}
+
+static void
+partcmp_corrupt(uint32_t kind)
+{
+	uint32_t crc;
+
+	switch (kind) {
+	case PARTCMP_CORRUPT_NONE:
+		break;
+	case PARTCMP_CORRUPT_PMBR_SIG:
+		g_partcmp_pmbr[511] = 0u;
+		break;
+	case PARTCMP_CORRUPT_PMBR_NONE:
+		g_partcmp_pmbr[446u + 4u] = 0u;
+		break;
+	case PARTCMP_CORRUPT_PMBR_TWO_EE:
+		g_partcmp_pmbr[446u + 16u + 4u] = 0xeeu;
+		partcmp_put32(g_partcmp_pmbr + 446u + 16u + 8u, 1u);
+		partcmp_put32(g_partcmp_pmbr + 446u + 16u + 12u, 1u);
+		break;
+	case PARTCMP_CORRUPT_PMBR_START:
+		partcmp_put32(g_partcmp_pmbr + 446u + 8u, 2u);
+		break;
+	case PARTCMP_CORRUPT_PMBR_HYBRID:
+		g_partcmp_pmbr[446u + 16u + 4u] = 0x83u;
+		break;
+	case PARTCMP_CORRUPT_HDR_SIG:
+		g_partcmp_primary[0] = 'X';
+		break;
+	case PARTCMP_CORRUPT_HDR_SIZE:
+		partcmp_put32(g_partcmp_primary + 12u, 91u);
+		break;
+	case PARTCMP_CORRUPT_HDR_REVISION:
+		partcmp_put32(g_partcmp_primary + 8u, 0x00020000u);
+		break;
+	case PARTCMP_CORRUPT_HDR_RESERVED:
+		partcmp_put32(g_partcmp_primary + 20u, 1u);
+		break;
+	case PARTCMP_CORRUPT_HDR_CRC:
+		g_partcmp_primary[16] ^= 0x5au;
+		break;
+	case PARTCMP_CORRUPT_HDR_MY_LBA:
+		partcmp_put64(g_partcmp_primary + 24u, 2u);
+		partcmp_fix_primary_header();
+		break;
+	case PARTCMP_CORRUPT_HDR_ALT_LBA:
+		partcmp_put64(g_partcmp_primary + 32u, 5u);
+		partcmp_fix_primary_header();
+		break;
+	case PARTCMP_CORRUPT_HDR_USABLE:
+		partcmp_put64(g_partcmp_primary + 40u, 100u);
+		partcmp_put64(g_partcmp_primary + 48u, 50u);
+		partcmp_fix_primary_header();
+		break;
+	case PARTCMP_CORRUPT_HDR_SPAN:
+		partcmp_put64(g_partcmp_primary + 72u, 33u);
+		partcmp_fix_primary_header();
+		break;
+	case PARTCMP_CORRUPT_ARR_CRC:
+		g_partcmp_array[128u + 32u] ^= 0x5au;
+		break;
+	case PARTCMP_CORRUPT_BAK_SIG:
+		g_partcmp_backup[0] = 'X';
+		break;
+	case PARTCMP_CORRUPT_BAK_ARR_CRC:
+		g_partcmp_backup_array[128u + 32u] ^= 0x5au;
+		break;
+	case PARTCMP_CORRUPT_DISAGREE_GUID:
+		partcmp_put64(g_partcmp_backup + 56u,
+		    0x1111111111111111ull);
+		partcmp_fix_backup_header();
+		break;
+	case PARTCMP_CORRUPT_DISAGREE_ENTRY:
+		partcmp_put64(g_partcmp_backup_array + 32u,
+		    partcmp_first(0));
+		partcmp_put64(g_partcmp_backup_array + 40u,
+		    partcmp_first(0));
+		crc = partcmp_crc32(g_partcmp_backup_array,
+		    g_partcmp_slots * 128u);
+		partcmp_put32(g_partcmp_backup + 88u, crc);
+		partcmp_fix_backup_header();
+		break;
+	case PARTCMP_CORRUPT_ENTRY_REVERSED:
+		partcmp_put64(g_partcmp_array + 32u, partcmp_last(0));
+		partcmp_put64(g_partcmp_array + 40u, partcmp_first(0));
+		partcmp_rebuild_arrays();
+		break;
+	case PARTCMP_CORRUPT_ENTRY_OUTSIDE:
+		partcmp_put64(g_partcmp_array + 40u,
+		    (uint64_t)g_partcmp_capacity - 33u);
+		partcmp_rebuild_arrays();
+		break;
+	case PARTCMP_CORRUPT_ENTRY_OVERLAP:
+		partcmp_put64(g_partcmp_array + 128u + 32u,
+		    partcmp_first(0));
+		partcmp_rebuild_arrays();
+		break;
+	case PARTCMP_CORRUPT_ENTRY_DUPLICATE:
+		memcpy(g_partcmp_array + 128u, g_partcmp_array, 128u);
+		partcmp_rebuild_arrays();
+		break;
+	case PARTCMP_CORRUPT_ENTRY_NULL_RANGE:
+		partcmp_put64(g_partcmp_array + 32u, 0u);
+		partcmp_put64(g_partcmp_array + 40u, 0u);
+		partcmp_rebuild_arrays();
+		break;
+	case PARTCMP_CORRUPT_EMPTY_STALE:
+		memset(g_partcmp_array + (79u * 128u), 0, 16u);
+		partcmp_rebuild_arrays();
+		break;
+	case PARTCMP_CORRUPT_SINGLE_SECTOR:
+		partcmp_put64(g_partcmp_array + (79u * 128u) + 40u,
+		    partcmp_first(79));
+		partcmp_rebuild_arrays();
+		break;
+	default:
+		break;
+	}
+}
+
+static IOReturn
+partcmp_read_hook(IOMedia *media, UInt64 byteStart,
+    IOMemoryDescriptor *buffer, UInt64 *actualByteCount)
+{
+	uint64_t lba = byteStart / GTA4L_EMMC_BLOCK_BYTES;
+	uint32_t length = (uint32_t)buffer->getLength();
+	const uint8_t *source = 0;
+	uint32_t source_bytes = 0;
+	uint32_t offset = 0;
+	uint32_t call = (uint32_t)g_partcmp_read_calls++;
+
+	(void)media;
+	if (g_partcmp_advance_ms != 0u) {
+		gta4l_test.now_ms += g_partcmp_advance_ms;
+	}
+	if ((g_partcmp_fail_at >= 0) &&
+	    (call == (uint32_t)g_partcmp_fail_at)) {
+		return kIOReturnIOError;
+	}
+	if ((g_partcmp_cancel_at >= 0) &&
+	    (call == (uint32_t)g_partcmp_cancel_at)) {
+		g_self->reportCancel = true;
+	}
+	if (lba == 0u) {
+		source = g_partcmp_pmbr;
+		source_bytes = GTA4L_EMMC_BLOCK_BYTES;
+	} else if (lba == 1u) {
+		source = g_partcmp_primary;
+		source_bytes = GTA4L_EMMC_BLOCK_BYTES;
+		if (gta4l_test.part_publish_count > 0) {
+			gta4l_test.part_publish_active = 1;
+		}
+	} else if ((lba >= g_partcmp_entry_lba) &&
+	    (lba < (uint64_t)g_partcmp_entry_lba +
+	    g_partcmp_array_blocks)) {
+		source = g_partcmp_array;
+		source_bytes = g_partcmp_array_blocks *
+		    GTA4L_EMMC_BLOCK_BYTES;
+		offset = (uint32_t)(lba - g_partcmp_entry_lba) *
+		    GTA4L_EMMC_BLOCK_BYTES;
+	} else if (lba == (uint64_t)g_partcmp_capacity - 1u) {
+		source = g_partcmp_backup;
+		source_bytes = GTA4L_EMMC_BLOCK_BYTES;
+	} else if ((lba >= g_partcmp_backup_entry_lba) &&
+	    (lba < (uint64_t)g_partcmp_backup_entry_lba +
+	    g_partcmp_array_blocks)) {
+		source = g_partcmp_backup_array;
+		source_bytes = g_partcmp_array_blocks *
+		    GTA4L_EMMC_BLOCK_BYTES;
+		offset = (uint32_t)(lba - g_partcmp_backup_entry_lba) *
+		    GTA4L_EMMC_BLOCK_BYTES;
+	} else {
+		return kIOReturnIOError;
+	}
+	if ((offset + length) > source_bytes) {
+		return kIOReturnBadArgument;
+	}
+	memcpy(buffer->address(), source + offset, length);
+	if (actualByteCount != 0) {
+		*actualByteCount = ((g_partcmp_short_at >= 0) &&
+		    (call == (uint32_t)g_partcmp_short_at)) ?
+		    (UInt64)(length - GTA4L_EMMC_BLOCK_BYTES) :
+		    (UInt64)length;
+	}
+	return kIOReturnSuccess;
+}
+
+static void
+partcmp_reset_fixture(void)
+{
+	g_partcmp_capacity = 0;
+	g_partcmp_slots = PARTCMP_SLOTS;
+	g_partcmp_entry_lba = 2u;
+	g_partcmp_backup_entry_lba = 0;
+	g_partcmp_array_blocks = 0;
+	g_partcmp_read_calls = 0;
+	g_partcmp_fail_at = -1;
+	g_partcmp_short_at = -1;
+	g_partcmp_cancel_at = -1;
+	g_partcmp_advance_ms = 0u;
+	memset(g_partcmp_pmbr, 0, sizeof(g_partcmp_pmbr));
+	memset(g_partcmp_primary, 0, sizeof(g_partcmp_primary));
+	memset(g_partcmp_backup, 0, sizeof(g_partcmp_backup));
+	memset(g_partcmp_array, 0, sizeof(g_partcmp_array));
+	memset(g_partcmp_backup_array, 0, sizeof(g_partcmp_backup_array));
+}
+
+static IOMedia *
+partcmp_add_whole(void)
+{
+	return add_media(true, 0,
+	    (UInt64)g_self->capacityBlocks * GTA4L_EMMC_BLOCK_BYTES,
+	    false, "GUID_partition_scheme", true);
+}
+
+static IOService *
+partcmp_add_scheme(IOMedia *whole, const char *uuid)
+{
+	IOService *scheme = new IOService();
+
+	gta4l_test_scheme_configure(scheme, whole, uuid);
+	gta4l_test_add_scheme(scheme);
+	return scheme;
+}
+
+static void
+partcmp_setup(uint32_t gpt_used, uint32_t media_count, int reverse)
+{
+	uint32_t index;
+
+	partcmp_reset_fixture();
+	partcmp_build_fixture(gpt_used);
+	g_partcmp_whole = partcmp_add_whole();
+	g_partcmp_scheme = partcmp_add_scheme(g_partcmp_whole,
+	    "GTA4L-TEST-SCHEME");
+	for (index = 0; index < media_count; index++) {
+		uint32_t at = (reverse != 0) ?
+		    (media_count - 1u - index) : index;
+		IOMedia *media = add_media(false,
+		    partcmp_first(at) * GTA4L_EMMC_BLOCK_BYTES,
+		    PARTCMP_PARTITION_SECTORS * GTA4L_EMMC_BLOCK_BYTES,
+		    false, "EFI", true);
+
+		media->provider_ = g_partcmp_scheme;
+	}
+	gta4l_test_media_read_hook = partcmp_read_hook;
+}
+
+static void
+partcmp_cancel_sample_hook(uint32_t sample, uint32_t visible)
+{
+	(void)visible;
+	if (sample == 1u) {
+		g_self->reportCancel = true;
+	}
+}
+
+static void
+partcmp_watchdog_hook(uint32_t sample, uint32_t visible)
+{
+	(void)visible;
+	if (sample == 1u) {
+		(void)invoke_thread(1);
+	}
+}
+
+static int
+scenario_partcmp_refused_partobs(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1 "
+	    "gta4l-emmc-partcmp=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1 "
+	    "gta4l-emmc-partcmp=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "duplicate gta4l-emmc-partcmp") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_refused_value(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=2");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "malformed gta4l-emmc-partcmp") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_refused_orphan(void)
+{
+	begin("gta4l-emmc-partcmp=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "gta4l-emmc-partcmp requires") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_match(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 1);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PARTMAP: ") != 0);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=0 slots=84 used=80 "
+	    "pmbr=1 hdr=1 arr=1 bak=1 xcheck=1 media=80 match=1 "
+	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=6 changes=0 "
+	    "stable=1 stable_ms=250 deadline_ms=2000 timed_out=0 "
+	    "budget=0 reads=25 blocks=45 fails=0 cancel=0 "
+	    "complete=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "PARTOBS") == 0);
+	CHECK(g_self->report.partmap_complete == 1);
+	CHECK(gta4l_test.sleep_with_lock == 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_wrong_range(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	gta4l_test_media[gta4l_test_media_count - 1]->base_value +=
+	    PARTCMP_PARTITION_SECTORS * GTA4L_EMMC_BLOCK_BYTES;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=11") != 0);
+	CHECK(strstr(gta4l_test.panic, "media=80 match=0 missing=1 "
+	    "extra=1 dup=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "stable=1 stable_ms=2000") != 0);
+	CHECK(strstr(gta4l_test.panic, "timed_out=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_duplicate(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	gta4l_test_media[gta4l_test_media_count - 1]->base_value =
+	    gta4l_test_media[1]->base_value;
+	gta4l_test_media[gta4l_test_media_count - 1]->size_value =
+	    gta4l_test_media[1]->size_value;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=11") != 0);
+	CHECK(strstr(gta4l_test.panic, "media=80 match=0 missing=1 "
+	    "extra=0 dup=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_nested(void)
+{
+	IOMedia *child;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	child = add_media(false, gta4l_test_media[1]->base_value,
+	    gta4l_test_media[1]->size_value, false, "EFI", false);
+	child->provider_ = g_partcmp_whole;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "media=80 match=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "nested=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=1") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_zero(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 0, 0);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=11") != 0);
+	CHECK(strstr(gta4l_test.panic, "media=0 match=0 missing=80 "
+	    "extra=0 dup=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "samples=41 changes=0 stable=1 "
+	    "stable_ms=2000") != 0);
+	CHECK(strstr(gta4l_test.panic, "timed_out=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_partial(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 39, 0);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=11") != 0);
+	CHECK(strstr(gta4l_test.panic, "media=39 match=0 missing=41 "
+	    "extra=0 dup=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "stable=1 stable_ms=2000") != 0);
+	CHECK(strstr(gta4l_test.panic, "timed_out=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_late_growth(void)
+{
+	static const uint32_t profile[] = {
+		0, 0, 0, 80, 80, 80, 80, 80, 80
+	};
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	publish_profile(profile, 9);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "media=80 match=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "samples=9 changes=1 stable=1 "
+	    "stable_ms=250") != 0);
+	CHECK(strstr(gta4l_test.panic, "timed_out=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=1") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_changing(void)
+{
+	uint32_t profile[41];
+	uint32_t index;
+
+	for (index = 0; index < 41u; index++) {
+		profile[index] = ((index % 2u) == 0u) ? 80u : 79u;
+	}
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	publish_profile(profile, 41);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=12") != 0);
+	CHECK(strstr(gta4l_test.panic, "match=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "samples=41 changes=40 stable=0 "
+	    "stable_ms=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "timed_out=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_property(void)
+{
+	static const uint32_t faults[] = {
+		GTA4L_TEST_PROP_WHOLE_MISSING,
+		GTA4L_TEST_PROP_BASE_MISSING,
+		GTA4L_TEST_PROP_SIZE_MISSING,
+		GTA4L_TEST_PROP_CONTENT_MISSING,
+		GTA4L_TEST_PROP_WHOLE_WRONG,
+		GTA4L_TEST_PROP_BASE_WRONG,
+		GTA4L_TEST_PROP_SIZE_WRONG,
+		GTA4L_TEST_PROP_CONTENT_WRONG
+	};
+	uint32_t index;
+
+	for (index = 0; index < sizeof(faults) / sizeof(faults[0]);
+	    index++) {
+		begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+		CHECK(g_started);
+		partcmp_setup(80, 80, 0);
+		gta4l_test_media[1]->property_faults = faults[index];
+		CHECK(invoke_thread(0) == 1);
+		CHECK(strstr(gta4l_test.panic, "gpt=1 reason=10") != 0);
+		CHECK(strstr(gta4l_test.panic, "prop=1") != 0);
+		CHECK(strstr(gta4l_test.panic, "samples=1") != 0);
+		CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	}
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	gta4l_test_media[1]->size_value = 0;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "prop=1") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	gta4l_test_media[1]->base_value += 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "prop=1") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	gta4l_test_media[1]->size_value += 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "prop=1") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	gta4l_test_media[1]->base_value =
+	    (UInt64)g_self->capacityBlocks * GTA4L_EMMC_BLOCK_BYTES -
+	    GTA4L_EMMC_BLOCK_BYTES;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "prop=1") != 0);
+	return 0;
+}
+
+struct partcmp_invalid_case {
+	uint32_t kind;
+	uint32_t reason;
+};
+
+static int
+scenario_partcmp_gpt_invalid(void)
+{
+	static const struct partcmp_invalid_case cases[] = {
+		{ PARTCMP_CORRUPT_PMBR_SIG, 1u },
+		{ PARTCMP_CORRUPT_PMBR_NONE, 1u },
+		{ PARTCMP_CORRUPT_PMBR_TWO_EE, 1u },
+		{ PARTCMP_CORRUPT_PMBR_START, 1u },
+		{ PARTCMP_CORRUPT_PMBR_HYBRID, 1u },
+		{ PARTCMP_CORRUPT_HDR_SIG, 2u },
+		{ PARTCMP_CORRUPT_HDR_SIZE, 2u },
+		{ PARTCMP_CORRUPT_HDR_REVISION, 2u },
+		{ PARTCMP_CORRUPT_HDR_RESERVED, 2u },
+		{ PARTCMP_CORRUPT_HDR_CRC, 2u },
+		{ PARTCMP_CORRUPT_HDR_MY_LBA, 2u },
+		{ PARTCMP_CORRUPT_HDR_ALT_LBA, 2u },
+		{ PARTCMP_CORRUPT_HDR_USABLE, 2u },
+		{ PARTCMP_CORRUPT_HDR_SPAN, 2u },
+		{ PARTCMP_CORRUPT_ARR_CRC, 3u },
+		{ PARTCMP_CORRUPT_BAK_SIG, 4u },
+		{ PARTCMP_CORRUPT_BAK_ARR_CRC, 5u },
+		{ PARTCMP_CORRUPT_DISAGREE_GUID, 6u },
+		{ PARTCMP_CORRUPT_DISAGREE_ENTRY, 6u },
+		{ PARTCMP_CORRUPT_ENTRY_REVERSED, 7u },
+		{ PARTCMP_CORRUPT_ENTRY_OUTSIDE, 7u },
+		{ PARTCMP_CORRUPT_ENTRY_OVERLAP, 7u },
+		{ PARTCMP_CORRUPT_ENTRY_DUPLICATE, 7u },
+		{ PARTCMP_CORRUPT_ENTRY_NULL_RANGE, 7u }
+	};
+	char expected[32];
+	uint32_t index;
+
+	for (index = 0; index < sizeof(cases) / sizeof(cases[0]);
+	    index++) {
+		begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+		CHECK(g_started);
+		partcmp_setup(80, 80, 0);
+		partcmp_corrupt(cases[index].kind);
+		CHECK(invoke_thread(0) == 1);
+		snprintf(expected, sizeof(expected), "gpt=0 reason=%u",
+		    cases[index].reason);
+		CHECK(strstr(gta4l_test.panic, expected) != 0);
+		CHECK(strstr(gta4l_test.panic, "samples=0") != 0);
+		CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	}
+	return 0;
+}
+
+static int
+scenario_partcmp_entry_variants(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 79, 0);
+	partcmp_corrupt(PARTCMP_CORRUPT_EMPTY_STALE);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "slots=84 used=79") != 0);
+	CHECK(strstr(gta4l_test.panic, "media=79 match=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=1") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 79, 0);
+	partcmp_corrupt(PARTCMP_CORRUPT_SINGLE_SECTOR);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "slots=84 used=80") != 0);
+	CHECK(strstr(gta4l_test.panic, "media=79 match=0 missing=1 "
+	    "extra=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_geometry(void)
+{
+	static const uint32_t slot_cases[] = { 0u, 1u, 84u, 128u, 129u,
+	    4096u, 0x02000000u };
+	static const uint32_t slot_expected[] = { 0u, 1u, 1u, 1u, 0u, 0u,
+	    0u };
+	static const uint32_t size_cases[] = { 127u, 128u, 129u };
+	static const uint32_t size_expected[] = { 0u, 1u, 0u };
+	static const uint32_t header_cases[] = { 91u, 92u, 93u };
+	static const uint32_t header_expected[] = { 0u, 1u, 0u };
+	uint8_t header[GTA4L_EMMC_BLOCK_BYTES];
+	uint64_t entry_lba;
+	uint32_t slots;
+	uint32_t capacity;
+	uint32_t array_blocks;
+	uint32_t index;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	capacity = g_partcmp_capacity;
+	array_blocks = (PARTCMP_SLOTS * 128u + 511u) / 512u;
+
+	partcmp_build_header(header, 1u, (uint64_t)capacity - 1u, 2u, 0u);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, capacity, 1, &entry_lba,
+	    &slots) == 1);
+	CHECK(entry_lba == 2u);
+	CHECK(slots == PARTCMP_SLOTS);
+
+	partcmp_build_header(header, (uint64_t)capacity - 1u, 1u,
+	    (uint64_t)capacity - 1u - array_blocks, 0u);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, capacity, 0, &entry_lba,
+	    &slots) == 1);
+	CHECK(entry_lba == (uint64_t)capacity - 1u - array_blocks);
+	CHECK(slots == PARTCMP_SLOTS);
+
+	for (index = 0; index < sizeof(slot_cases) / sizeof(slot_cases[0]);
+	    index++) {
+		partcmp_build_header(header, 1u, (uint64_t)capacity - 1u,
+		    2u, 0u);
+		partcmp_put32(header + 80u, slot_cases[index]);
+		partcmp_fix_header_crc(header);
+		CHECK((uint32_t)gta4l_emmc_block_gpt_geometry(header,
+		    capacity, 1, &entry_lba, &slots) == slot_expected[index]);
+	}
+	for (index = 0; index < sizeof(size_cases) / sizeof(size_cases[0]);
+	    index++) {
+		partcmp_build_header(header, 1u, (uint64_t)capacity - 1u,
+		    2u, 0u);
+		partcmp_put32(header + 84u, size_cases[index]);
+		partcmp_fix_header_crc(header);
+		CHECK((uint32_t)gta4l_emmc_block_gpt_geometry(header,
+		    capacity, 1, &entry_lba, &slots) == size_expected[index]);
+	}
+	for (index = 0;
+	    index < sizeof(header_cases) / sizeof(header_cases[0]);
+	    index++) {
+		partcmp_build_header(header, 1u, (uint64_t)capacity - 1u,
+		    2u, 0u);
+		partcmp_put32(header + 12u, header_cases[index]);
+		partcmp_fix_header_crc(header);
+		CHECK((uint32_t)gta4l_emmc_block_gpt_geometry(header,
+		    capacity, 1, &entry_lba, &slots) == header_expected[index]);
+	}
+
+	partcmp_build_header(header, 1u, (uint64_t)capacity - 1u, 2u, 0u);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, 0, 1, &entry_lba,
+	    &slots) == 0);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, 1, 1, &entry_lba,
+	    &slots) == 0);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, 2, 1, &entry_lba,
+	    &slots) == 0);
+
+	partcmp_build_header(header, (uint64_t)capacity - 1u, 1u,
+	    (uint64_t)capacity - 1u - array_blocks, 0u);
+	partcmp_put64(header + 72u, (uint64_t)capacity);
+	partcmp_fix_header_crc(header);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, capacity, 0, &entry_lba,
+	    &slots) == 0);
+	partcmp_build_header(header, (uint64_t)capacity - 1u, 1u,
+	    (uint64_t)capacity - 1u - array_blocks, 0u);
+	partcmp_put64(header + 72u, (uint64_t)capacity - 1u);
+	partcmp_fix_header_crc(header);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, capacity, 0, &entry_lba,
+	    &slots) == 0);
+
+	partcmp_build_header(header, 1u, (uint64_t)capacity - 1u, 2u, 0u);
+	partcmp_put64(header + 72u, PARTCMP_FIRST_USABLE - array_blocks + 1u);
+	partcmp_fix_header_crc(header);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, capacity, 1, &entry_lba,
+	    &slots) == 0);
+	partcmp_build_header(header, 1u, (uint64_t)capacity - 1u, 2u, 0u);
+	partcmp_put64(header + 72u, 0u);
+	partcmp_fix_header_crc(header);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, capacity, 1, &entry_lba,
+	    &slots) == 0);
+	partcmp_build_header(header, 1u, (uint64_t)capacity - 1u, 2u, 0u);
+	partcmp_put64(header + 72u, 1u);
+	partcmp_fix_header_crc(header);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, capacity, 1, &entry_lba,
+	    &slots) == 0);
+
+	partcmp_build_header(header, (uint64_t)capacity - 1u, 1u,
+	    (uint64_t)capacity - 1u - array_blocks, 0u);
+	partcmp_put64(header + 72u, (uint64_t)capacity - 34u);
+	partcmp_fix_header_crc(header);
+	CHECK(gta4l_emmc_block_gpt_geometry(header, capacity, 0, &entry_lba,
+	    &slots) == 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_media_invalid(void)
+{
+	uint32_t index;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	for (index = 0; index < 80u; index++) {
+		add_media(false,
+		    partcmp_first(index) * GTA4L_EMMC_BLOCK_BYTES,
+		    PARTCMP_PARTITION_SECTORS * GTA4L_EMMC_BLOCK_BYTES,
+		    false, "EFI", true);
+	}
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	(void)partcmp_add_whole();
+	(void)partcmp_add_whole();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	g_partcmp_whole = partcmp_add_whole();
+	for (index = 0; index < 80u; index++) {
+		IOMedia *media = add_media(false,
+		    partcmp_first(index) * GTA4L_EMMC_BLOCK_BYTES,
+		    PARTCMP_PARTITION_SECTORS * GTA4L_EMMC_BLOCK_BYTES,
+		    false, "EFI", true);
+
+		media->provider_ = g_partcmp_whole;
+	}
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	g_partcmp_whole = partcmp_add_whole();
+	(void)partcmp_add_scheme(g_partcmp_whole, "GTA4L-TEST-A");
+	(void)partcmp_add_scheme(g_partcmp_whole, "GTA4L-TEST-B");
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_read_failure(void)
+{
+	char expected[32];
+	uint32_t index;
+
+	for (index = 0; index < 25u; index++) {
+		begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+		CHECK(g_started);
+		partcmp_setup(80, 80, 0);
+		g_partcmp_fail_at = (int)index;
+		CHECK(invoke_thread(0) == 1);
+		CHECK(strstr(gta4l_test.panic, "reason=8") != 0);
+		CHECK(strstr(gta4l_test.panic, "fails=1") != 0);
+		snprintf(expected, sizeof(expected), "reads=%u", index + 1u);
+		CHECK(strstr(gta4l_test.panic, expected) != 0);
+		CHECK(strstr(gta4l_test.panic, "samples=0") != 0);
+		CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	}
+	return 0;
+}
+
+static int
+scenario_partcmp_budget(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_advance_ms = 1000u;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "gpt=0 reason=9") != 0);
+	CHECK(strstr(gta4l_test.panic, "budget=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "reads=4") != 0);
+	CHECK(strstr(gta4l_test.panic, "fails=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_cancel(void)
+{
+	static const uint32_t profile[] = { 80 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_self->reportCancel = true;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(gta4l_test.panic[0] == 0);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(g_self->report.partmap_cancel == 1);
+	CHECK(g_self->report.partmap_complete == 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_cancel_at = 5;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(g_self->reportDone);
+	CHECK(g_self->report.partmap_cancel == 1);
+	CHECK(g_self->report.partmap_reads == 6);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	publish_profile(profile, 1);
+	gta4l_test_partition_sample_hook = partcmp_cancel_sample_hook;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(g_self->reportDone);
+	CHECK(g_self->report.partmap_cancel == 1);
+	CHECK(g_self->report.partmap_samples == 2);
+	return 0;
+}
+
+static int
+scenario_partcmp_watchdog(void)
+{
+	static const uint32_t profile[] = { 80 };
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	publish_profile(profile, 1);
+	gta4l_test_partition_sample_hook = partcmp_watchdog_hook;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic, "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 REPORT: rc=16 "
+	    "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PARTMAP: ") != 0);
+	return 0;
+}
+
 static int
 scenario_disabled(void)
 {
@@ -1416,7 +2494,11 @@ static int
 scenario_policy(void)
 {
 	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	char legacy[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	char small[64];
 	struct gta4l_emmc_block_report report;
+	const char *line;
+	const char *end;
 	uint32_t length;
 	uint32_t index;
 
@@ -1458,6 +2540,18 @@ scenario_policy(void)
 	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
 	CHECK(gta4l_emmc_block_partobs_select(1, 1, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
+	CHECK(gta4l_emmc_block_partcmp_select(0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTCMP_OFF);
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 1, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTCMP_ON);
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 1, 1, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
+	CHECK(gta4l_emmc_block_partcmp_select(1, 2, 0, 1, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 1, 1) ==
+	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
 	CHECK(gta4l_emmc_block_request_check(10, 0, 1, 512,
 	    GTA4L_EMMC_BLOCK_DIRECTION_READ, 1) ==
 	    GTA4L_EMMC_BLOCK_REQUEST_OK);
@@ -1557,6 +2651,91 @@ scenario_policy(void)
 	CHECK(strstr(buffer, "GTA4L-EMMC P5 PARTOBS: ") != 0);
 	CHECK(strstr(buffer, "GTA4L-EMMC P5 PART: ") == 0);
 	CHECK(strstr(buffer, "complete=0") != 0);
+
+	report.part_obs = 0;
+	report.partmap = 0;
+	report.partmap_gpt = 0;
+	report.partmap_reason = 0;
+	report.partmap_slots = 0;
+	report.partmap_used = 0;
+	report.partmap_pmbr = 0;
+	report.partmap_hdr = 0;
+	report.partmap_arr = 0;
+	report.partmap_bak = 0;
+	report.partmap_xcheck = 0;
+	report.partmap_media = 0;
+	report.partmap_match = 0;
+	report.partmap_missing = 0;
+	report.partmap_extra = 0;
+	report.partmap_dup = 0;
+	report.partmap_nested = 0;
+	report.partmap_prop = 0;
+	report.partmap_samples = 0;
+	report.partmap_changes = 0;
+	report.partmap_stable = 0;
+	report.partmap_stable_ms = 0;
+	report.partmap_deadline_ms = 0;
+	report.partmap_timed_out = 0;
+	report.partmap_budget = 0;
+	report.partmap_reads = 0;
+	report.partmap_blocks = 0;
+	report.partmap_fails = 0;
+	report.partmap_cancel = 0;
+	report.partmap_complete = 0;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	memcpy(legacy, buffer, (size_t)length + 1u);
+	report.partmap_gpt = 1u;
+	report.partmap_reason = 13u;
+	report.partmap_slots = 128u;
+	report.partmap_used = 128u;
+	report.partmap_pmbr = 1u;
+	report.partmap_hdr = 1u;
+	report.partmap_arr = 1u;
+	report.partmap_bak = 1u;
+	report.partmap_xcheck = 1u;
+	report.partmap_media = 128u;
+	report.partmap_match = 1u;
+	report.partmap_missing = 128u;
+	report.partmap_extra = 128u;
+	report.partmap_dup = 128u;
+	report.partmap_nested = 1u;
+	report.partmap_prop = 255u;
+	report.partmap_samples = 41u;
+	report.partmap_changes = 41u;
+	report.partmap_stable = 1u;
+	report.partmap_stable_ms = 2000u;
+	report.partmap_deadline_ms = 2000u;
+	report.partmap_timed_out = 1u;
+	report.partmap_budget = 1u;
+	report.partmap_reads = 25u;
+	report.partmap_blocks = 45u;
+	report.partmap_fails = 1u;
+	report.partmap_cancel = 1u;
+	report.partmap_complete = 1u;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(strcmp(legacy, buffer) == 0);
+	CHECK(strstr(buffer, "PARTMAP") == 0);
+
+	report.partmap = 1;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	line = strstr(buffer, "GTA4L-EMMC P5 PARTMAP: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_PARTMAP_LINE_BYTES);
+	CHECK(strstr(buffer, "GUID") == 0);
+	CHECK(strstr(buffer, "label") == 0);
+	CHECK(gta4l_emmc_block_report_format(small, sizeof(small),
+	    &report) == 0);
+	CHECK(small[0] == 0);
 	return 0;
 }
 
@@ -1640,6 +2819,27 @@ static const struct scenario_entry scenarios[] = {
 	{ "partobs-error", scenario_partobs_error },
 	{ "partobs-cancel", scenario_partobs_cancel },
 	{ "partobs-watchdog", scenario_partobs_watchdog },
+	{ "partcmp-refused-partobs", scenario_partcmp_refused_partobs },
+	{ "partcmp-refused-duplicate", scenario_partcmp_refused_duplicate },
+	{ "partcmp-refused-value", scenario_partcmp_refused_value },
+	{ "partcmp-refused-orphan", scenario_partcmp_refused_orphan },
+	{ "partcmp-match", scenario_partcmp_match },
+	{ "partcmp-wrong-range", scenario_partcmp_wrong_range },
+	{ "partcmp-duplicate", scenario_partcmp_duplicate },
+	{ "partcmp-nested", scenario_partcmp_nested },
+	{ "partcmp-zero", scenario_partcmp_zero },
+	{ "partcmp-partial", scenario_partcmp_partial },
+	{ "partcmp-late-growth", scenario_partcmp_late_growth },
+	{ "partcmp-changing", scenario_partcmp_changing },
+	{ "partcmp-property", scenario_partcmp_property },
+	{ "partcmp-gpt-invalid", scenario_partcmp_gpt_invalid },
+	{ "partcmp-entry-variants", scenario_partcmp_entry_variants },
+	{ "partcmp-geometry", scenario_partcmp_geometry },
+	{ "partcmp-media-invalid", scenario_partcmp_media_invalid },
+	{ "partcmp-read-failure", scenario_partcmp_read_failure },
+	{ "partcmp-budget", scenario_partcmp_budget },
+	{ "partcmp-cancel", scenario_partcmp_cancel },
+	{ "partcmp-watchdog", scenario_partcmp_watchdog },
 	{ "policy", scenario_policy },
 };
 

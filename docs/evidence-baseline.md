@@ -824,6 +824,142 @@ hash-table row, and keeps the hash table at 45 rows. N8.3 candidate production
 and N8.4 hardware observation remain separate approvals; initialization
 reliability remains `[U]`.
 
+A 2026-11-07 host-only N8.3 batch produced and gated the candidate for that
+observation without device access, flash, boot, QEMU device run, commit or
+push. The immutable chain is prelinked kernel `4dcbf24d…` (51,224,576 bytes;
+`kernel.json` `0481cbab…`), linked archive `f9f83526…` (512,896 bytes, 190
+method slots, 181 kernel bindings, 26 concrete overrides, 0 unresolved
+original imports, `runtime_qualified=false`, `personality_enabled=true`),
+candidate storage-ABI audit `out/gta4l/storage-abi-4dcbf24d` (interface audit
+`a30cfcde…`, provenance `a806c6cf…`, snapshot `222f6322…`, run `85307464…`,
+candidate plan `0481cbab…`), packaged kernel `023c8ff8…` (51,224,576 bytes),
+payload `5f6759f2…` (83,886,080 bytes, 11/11 contract, diagnostic
+`emmc-block-3-partobs` mapping to `gta4l-emmc-block=3 gta4l-emmc-partobs=1`)
+and BOOT image `3d7e71af…` (85,688,320 bytes, 18/18 gate, only the ramdisk
+differs from the `ce4d76e8…` v5 baseline). The kernel-build archive step
+produced the `3e76771d…` container variant; the requalified `f9f83526…`
+archive has byte-identical members. The block suite passes 48 core
+scenarios/38 mutation controls and 64 adapter scenarios with 12 adapter
+mutation controls plus three policy mutation controls; the storage-ABI
+positive and negative checks pass. A token scan on the extracted payload
+kernel finds one `PARTOBS` string, three `REPORT` strings, one legacy `PART:`
+string, four `gta4l-emmc-partobs` strings and no literal `complete=`; the
+runtime `PARTOBS` line still formats `complete=0`, so the count-only non-claim
+is preserved. This refresh updates `README.md`, `porting.toml`,
+`docs/emmc-driver.md`, `docs/gta4l-storage-publication-design.md` and this
+document, refreshes the `README.md`, `porting.toml` and `docs/emmc-driver.md`
+hash rows without adding a hash-table row, adds the N8.3 row below and keeps
+the hash table at 45 rows. N8.4 hardware observation remains a separate
+BOOT-only approval; initialization reliability remains `[U]`.
+
+A 2026-11-07 N8.4 batch flashed the N8.3 candidate BOOT-only to p69 and
+performed one owner-controlled first cold boot. The pre-flash p69
+`b19c59b8…` was backed up and verified as `boot-before-n8.img.xz`
+(`8b37f41c…`); the full p69 readback `7c22e499…` matched the candidate prefix
+`3d7e71af…` plus the unchanged tail `a28b4ea2…`, and RECOVERY `14e11370…`,
+EFS `51fa824c…` and sec_efs `3a265d58…` stayed unchanged. The host did not
+reboot. The boot returned the userspace `RAMROOT-FST PASS: pid=1 page=4096
+fs=read+seek+eof timer=poll` panic and no eMMC report. The fixture deliberately
+panics after its checks and a 50 ms poll, while the eMMC reporter independently
+waits for media (up to 20,000 ms), performs the controlled reads and observes
+the partition count for up to 4,000 ms; the fixture can therefore win the
+terminal before the report exists. The observation is **inconclusive**: no
+`PARTOBS`, controlled-read or count line was captured, and the transcript
+cannot distinguish a reporter that had not started, one still waiting for
+media, and one that lost the terminal race. The boot budget is consumed; no
+retry or reflash was performed. The host-only correction adds an additive
+`fs-timer-hold` fixture variant that runs the same checks and then blocks in a
+one-second poll instead of panicking, leaving termination to the eMMC report
+thread or its watchdog; failure paths still panic immediately, and the
+original `fs-timer` fixture is byte-identical (`user.o` `6984333d…`, signed
+`b316e44f…`, trust cache `e146717a…`, root `77d5eba0…`, `fixture.json`
+`37cbdd0b…`). The hold variant
+builds and signs as `e6546715…` (root `327ac826…`, trust cache `30a72f78…`,
+nine verified pages). The diagnostic payload builder now refuses
+`emmc-block-1-partobs`/`emmc-block-3-partobs` unless
+`--data-ramdisk-manifest` names the hold fixture (and any declared
+`hold_after_success` agrees), records the fixture path/hash/diagnostic/hold
+state in the payload manifest, and thereby rejects the old early-panic fixture.
+Host tests cover the original object hash, the hold loop, the retained failure
+panic, the missing-manifest rejection, the early-panic rejection and the
+hold/diagnostic mismatch. This refresh updates `README.md`, `porting.toml`,
+`docs/emmc-driver.md`, `docs/ram-root-fixture-reproducibility.md`,
+`docs/diagnostic-payload-input-inventory.md`,
+`docs/gta4l-storage-publication-design.md`,
+`docs/emmc-n8-partition-observation-design-2026-11-07.md`,
+`docs/emmc-n8.4-partobs-observation-2026-11-07.md`,
+`scripts/test-gta4l-diagnostic-payload.py`,
+`scripts/test-gta4l-ram-root-fixture-recipe.py` and this document, refreshes
+the `README.md`, `porting.toml`, `docs/emmc-driver.md`,
+`docs/ram-root-fixture-reproducibility.md`,
+`docs/diagnostic-payload-input-inventory.md`,
+`scripts/test-gta4l-diagnostic-payload.py` and
+`scripts/test-gta4l-ram-root-fixture-recipe.py` hash rows without adding a
+hash-table row, adds the N8.4 row below and keeps the hash table at 45 rows.
+A new candidate build, a new BOOT-only flash and one new owner-controlled boot
+remain separately gated; initialization reliability remains `[U]`.
+
+A 2026-11-07 N8.5 batch rebuilt the observation payload and BOOT image with
+the additive `fs-timer-hold` fixture and flashed BOOT-only to p69. The
+unchanged N8.3 kernel `4dcbf24d…` and archive `f9f83526…` were reused; the
+hold root is `327ac826…`, the hold trust cache `30a72f78…`, the signed fixture
+`e6546715…` (nine verified pages) and `fixture.json` `00363681…`
+(`diagnostic=fs-timer-hold`, `hold_after_success=true`). The original
+`fs-timer` fixture remains byte-identical (`user.o` `6984333d…`, signed
+`b316e44f…`, root `77d5eba0…`, `fixture.json` `37cbdd0b…`). The new payload is
+`28eafd24…` (83,886,080 bytes, 11/11 contract, `emmc-block-3-partobs`) and the
+BOOT image is `b4f4f1ea…` (85,688,320 bytes, 18/18 gate, only the ramdisk
+differs from the `ce4d76e8…` v5 baseline); the packaged kernel is `023c8ff8…`.
+The payload manifest records the hold fixture path/hash, diagnostic and hold
+state, and the builder rejects the old early-panic fixture for both partobs
+personalities. The pre-flash p69 `7c22e499…` (the N8.3 candidate) was backed
+up and verified as `boot-before-n8.5.img.xz` (`e5b43228…`); the full p69
+readback `9d51fe80…` matches the candidate prefix `b4f4f1ea…` plus the
+unchanged tail `a28b4ea2…`, and RECOVERY/EFS/sec_efs are unchanged. The device
+disconnected once after the backup and before any write; adb was restarted,
+p69 was re-read unchanged, and the candidate was then written once. The host
+did not reboot; one owner-controlled boot remains, with a stable count still
+not a completeness claim and a watchdog report an observer result rather than
+a card verdict. This refresh updates `README.md`, `porting.toml`,
+`docs/emmc-driver.md`, `docs/emmc-n8-partition-observation-design-2026-11-07.md`,
+`docs/emmc-n8.4-partobs-observation-2026-11-07.md`,
+`docs/gta4l-storage-publication-design.md`, adds
+`docs/emmc-n8.5-hold-fixture-candidate-2026-11-07.md` and this document,
+refreshes the `README.md`, `porting.toml` and `docs/emmc-driver.md` hash rows
+without adding a hash-table row, adds the N8.5 row below and keeps the hash
+table at 45 rows. The subsequent N8.5 observation is recorded below. The boot
+budget is one; no retry or reflash follows, and initialization reliability
+remains `[U]`.
+
+A 2026-11-07 N8.5 observation closeout records the one owner-classified first
+cold boot of that image. The report returned `rc=0 stop=0 mode=3` with the
+whole read-only media (base 0, size 31,268,536,320, `GUID_partition_scheme`,
+`writable=0`), an LBA 1 baseline match (`sum=2228245566 same=1`), exact two-
+and three-block reads through two-sector CMD18 chunks with clean CMD12 stops
+and a CMD17 odd tail, and `PARTOBS samples=8 first=39 final=80 final_ms=350
+changes=2 stable=1 stable_ms=250 deadline_ms=4000 timed_out=0 none=0 error=0
+slots=84 reported=3 complete=0`. The first sample was already 39, so the
+initial transition was not observed; the intermediate count is unknown.
+`stable=1` is a count-held window, not a completeness claim; `final=80` is
+consistent with the validated GPT's 80 populated entries among 84 slots, but a
+count is not an exact GPT-to-`IOMedia` comparison and `complete=0` remains
+explicit. The boot budget is consumed, no driver fix is indicated, and
+initialization reliability remains `[U]`. The raw transcript `240ab0dd…`,
+interpretation `0bea53a6…` and observation record `92852a40…` are in
+`out/gta4l/ram-root-emmc-n8.5-hardware-evidence/observation-1/`, with a
+separate non-self-hashing manifest; the original flash record and
+`evidence-sha256.txt` are unchanged. The same host-only batch produced the
+N9.1 design (`docs/emmc-n9.1-gpt-iomedia-comparison-design-2026-11-07.md`)
+for an opt-in, bounded, read-only exact GPT-to-`IOMedia` comparison that
+preserves N8's `complete=0`. This refresh updates `README.md`, `porting.toml`,
+`docs/emmc-driver.md`, `docs/gta4l-storage-publication-design.md`,
+`docs/ram-root-fixture-reproducibility.md`,
+`docs/diagnostic-payload-input-inventory.md` and this document, adds the N8.5
+finding and N9.1 design documents, refreshes the affected hash rows without
+adding a hash-table row, and keeps the hash table at 45 rows. N9.2
+implementation, N9.3 production and any N9.4 hardware run remain separately
+gated.
+
 ## 1. Repository state
 
 | Item | Value |
@@ -1325,25 +1461,25 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `c6cc87f6e3ea29cf77ddf5e12c564b64fc1f6294394bd8491b76e79086a0f6de` |
+| Repository README | `README.md` | `938ea18102ae2027a62a09a4db6073ad45dfc5785e727edf6321764788197c80` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `7df8dfe23f10e791f5de03d13c7346fc0f2f025af4bbcf5aa22e485a1dcce43e` |
+| Porting record | `porting.toml` | `755ec24a833c416ef92c0b915639cc9057b69347b474034d50f5acb3fffaa738` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `a8a7f25419cacb2a441c01e45e106d5a412be4fb27d5d4c46d717837cd8477cd` |
+| eMMC driver record | `docs/emmc-driver.md` | `57d0578d84323c5d4acf2020e2eca1f1e9e3405359ffbbd4274817740d6d8c96` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
 | eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `744330d9a5ed8684dabb2f60171eb695311fe9c6c587c29ccc7ec5383f52ec43` |
 | eMMC host test | `scripts/test-gta4l-emmc.py` | `a851d113da952d87aebf4776d819b213afaa580ab6a597e8407e0c3463d57bf8` |
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `272db9f0fd02fe9f6960f647e017f4e7cc156f6cc53010bb8ec8d6a1c6137d7f` |
-| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `f2004be7bb0a804b946d7ed97b79d8b24d4b644e104b44275aeae7812d944faa` |
-| RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `4366ea84438e84ee70d2c0ee9b911d0b5d58817352d27e0076829eedffdc1f8b` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `c1005dfc656c5068ffd10fb3a3eb2dcecda6aedb069a1235c2e5edceb9b493a7` |
+| RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `73ca21a8bebf91354be878f8aff6b912fca3e03dee7e7ac1e2c55525381adf9e` |
+| RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `ebe98274007c554c3bb69293eefc1a606d68dddb3ce401efb57d0b3409ed891f` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `78b88b3c3b6840cbff23f73182247f190a99c5349c45f57cca9feb63a3763552` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
-| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `e7c176c9e768fcfcc241df1417f3bb8ee2d4e2de0c94c6daa2c24b281f17e72a` |
+| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `7a2eb006f393fd418b1172d71456e3377ed28d89de90e989da94f7e641b05802` |
 
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
@@ -1455,6 +1591,36 @@ listed. The N8.2 implementation refreshed the `README.md`, `porting.toml`,
 `docs/emmc-driver.md`, `docs/diagnostic-payload-input-inventory.md` and
 `scripts/test-gta4l-diagnostic-payload.py` rows without adding a row; the N8.2
 design-document section, the block package/simulator files and the diagnostic
+builder/checker/packager scripts are outside the table or not listed.
+The N8.3 candidate production refreshed the `README.md`, `porting.toml` and
+`docs/emmc-driver.md` rows without adding a hash-table row; the N8.3
+design-document sections, `docs/gta4l-storage-publication-design.md` and the
+private evidence directory are outside the table or not listed.
+The N8.4 batch refreshed the `README.md`, `porting.toml`, `docs/emmc-driver.md`,
+`docs/ram-root-fixture-reproducibility.md`,
+`docs/diagnostic-payload-input-inventory.md`,
+`scripts/test-gta4l-diagnostic-payload.py` and
+`scripts/test-gta4l-ram-root-fixture-recipe.py` rows without adding a
+hash-table row; the N8.4 finding document, the design-document section,
+`docs/gta4l-storage-publication-design.md`, the shared UniXNU fixture
+builder/include and the private evidence directory are outside the table or
+not listed.
+The N8.5 batch refreshed the `README.md`, `porting.toml` and
+`docs/emmc-driver.md` rows without adding a hash-table row; the new N8.5
+finding document, the design-document sections,
+`docs/gta4l-storage-publication-design.md`, the shared UniXNU fixture
+builder/include and the private evidence directories are outside the table or
+not listed.
+The N8.5 observation closeout refreshed the `README.md`, `porting.toml`,
+`docs/emmc-driver.md`, `docs/ram-root-fixture-reproducibility.md` and
+`docs/diagnostic-payload-input-inventory.md` rows without adding a hash-table
+row; the N8.5 finding, the N9.1 design document, the design-document sections
+and the private evidence directories are outside the table or not listed.
+The N9.2 host implementation refreshed the `README.md`,
+`docs/emmc-driver.md`, `docs/diagnostic-payload-input-inventory.md`,
+`scripts/test-gta4l-diagnostic-payload.py` and `porting.toml` rows without
+adding a hash-table row; the N9.1 design document, the design-document
+section, the block package/simulator files and the diagnostic
 builder/checker/packager scripts are outside the table or not listed.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
@@ -1761,6 +1927,9 @@ terminal-read observation-boundary edits), run from
 | eMMC N6 reliability observation (2026-11-07) | RECORDED: the unchanged D12.6 stage-9 BOOT image `7c76c7eb…` (85,688,320 bytes, 18/18 gate, payload `e384cc06…`, packaged kernel `12385bc7…`) was re-flashed BOOT only to p69 after backing up the N5 image `22bea393…` as `boot-before-n6.img.xz` (`5eaaa423…`); post-flash full `b19c59b8…`, prefix `7c76c7eb…`, tail `a28b4ea2…`, protected partitions unchanged. One owner-classified cold boot returned `rc=0 stop=0 sub=1 att=1 tr=0 r1=0 retry=0/0` with a 25-iteration CMD3 poll, terminal iteration 24, kind `C`, NORMAL `0001`, ERROR `0000`, RESPONSE0 `00000500`, ticks `0x14f2`, no timeout capture and an all-zero failure record. The typed C3L poll ticks are normalized to `0x14e4` (about 278.54 us) from the source format and the prior D12.6 report; poll and terminal timings are distinct sequential measurements. Classified as a clean control/non-reproduction: a second clean cold-boot control of the same candidate, not a continuous two-boot trial, failure-rate estimate, fix or proof of reliable initialization. Initialization reliability remains `[U]`; F2, p5b/F5 and N5 are unchanged; the N6 boot budget is consumed. Evidence: `docs/emmc-n6-reliability-observation-2026-11-07.md` and `out/gta4l/ram-root-emmc-n6-reliability-evidence/`. |
 | eMMC N8 partition-observation design (2026-11-07) | HOST-ONLY DESIGN: `docs/emmc-n8-partition-observation-design-2026-11-07.md` records that N5's `count=22 expected=84 waited_ms=0` is an unsynchronized mid-publication snapshot because `countPartitions()` stops at the first nonzero count and immediately re-samples, and `expected` is the 84-slot GPT header count, not the 80 populated entries. It chooses an opt-in `gta4l-emmc-partobs=1` token orthogonal to `gta4l-emmc-block=1|3`; the legacy mode-1 and mode-3 reporter is unchanged when the token is absent. It proposes a 4,000 ms deadline, a 50 ms interval and a 250 ms count-unchanged window in the report thread only, and a `PARTOBS` line with first/final counts, nominal times, changes, stability, timeout, none, error, slots and an explicit `complete=0`. A stable count is not completeness; no completeness claim is made without an independent validated GPT-to-`IOMedia` range/count comparison. Iterator failure keeps `stop=15`; deadline and zero count are not failures; the worst-case path is 24 s against the 30 s watchdog. Host scenarios and mutation controls are specified. No code, build, QEMU, device access, flash, boot, commit or push; F2, p5b/F5, N5 and N6 are unchanged and initialization reliability remains `[U]`. |
 | eMMC N8.2 host implementation (2026-11-07) | HOST-ONLY: implements the opt-in bounded partition-publication observation. `gta4l_emmc_block_partobs_select()` accepts `gta4l-emmc-partobs=1` only with exactly one block-mode 1/3 token and refuses an orphan, duplicate or non-1 value; the legacy `PART` path is byte-for-byte unchanged when the token is absent. The bounded `PARTOBS` line reports samples, first/first-nonzero/final counts and nominal times, changes, stability, timeout, none, error, the 84 GPT slot count and an explicit `complete=0`; a stable partial count is not presented as complete, and the first registry-walk failure latches `stop=15`. Sampling runs in the report thread with 4,000 ms/50 ms/250 ms budgets, never under the controller gate, and the 30,000 ms watchdog stays above the 24,000 ms worst case. The diagnostic payload builder maps `emmc-block-1-partobs` and `emmc-block-3-partobs` to two kernel arguments; the payload checker refuses an orphan, duplicate or non-1 partobs token and a mismatched personality, and the packager accepts both names. Host results: core 48 scenarios/38 mutation controls (unchanged), adapter 64 scenarios (nine partobs) with 12 adapter mutation controls (nine partobs), three policy mutation controls and 22 diagnostic payload checks, all passing; the packager and payload-checker self-tests also pass. No candidate build, QEMU run, device access, flash or boot; N8.3 candidate production and N8.4 hardware observation need separate approvals, and initialization reliability remains `[U]`. |
+| eMMC N8.3 candidate production (2026-11-07) | HOST-ONLY: builds and gates the opt-in `gta4l-emmc-partobs=1` candidate without device access, flash, boot, QEMU device run, commit or push. Prelinked kernel `4dcbf24d…` (51,224,576 bytes; `kernel.json` `0481cbab…`), linked archive `f9f83526…` (512,896 bytes, 190 method slots, 181 kernel bindings, 26 concrete overrides, 0 unresolved original imports, `runtime_qualified=false`, `personality_enabled=true`), candidate storage-ABI audit `out/gta4l/storage-abi-4dcbf24d` (`a30cfcde…`, provenance `a806c6cf…`, snapshot `222f6322…`, run `85307464…`), packaged kernel `023c8ff8…`, payload `5f6759f2…` (83,886,080 bytes, 11/11 contract, `emmc-block-3-partobs` mapping to `gta4l-emmc-block=3 gta4l-emmc-partobs=1`) and BOOT image `3d7e71af…` (85,688,320 bytes, 18/18 gate, only the ramdisk differs from the `ce4d76e8…` v5 baseline). The kernel-build archive step produced the `3e76771d…` container variant; the requalified `f9f83526…` archive has byte-identical members. Block suite 48 core scenarios/38 mutation controls and 64 adapter scenarios with 12 adapter mutation controls plus three policy mutation controls; storage-ABI positive and negative checks PASS; the token scan preserves the `complete=0` non-claim. The closeout is `n8-closeout.txt` and the read-only proposal is `n8-hardware-proposal.txt` in `out/gta4l/ram-root-emmc-n8-candidate-evidence/`. N8.4 is a separate BOOT-only approval; initialization reliability remains `[U]`. |
+| eMMC N8.4 first boot and hold-fixture correction (2026-11-07) | RECORDED + HOST-ONLY FIX: the N8.3 BOOT image `3d7e71af…` was flashed to p69 only after the pre-flash p69 `b19c59b8…` was backed up and verified as `boot-before-n8.img.xz` (`8b37f41c…`); the full p69 readback `7c22e499…` matched candidate prefix + unchanged tail `a28b4ea2…`, and RECOVERY/EFS/sec_efs were unchanged. One owner-controlled first cold boot returned the userspace `RAMROOT-FST PASS` panic and no eMMC report, so the partition observation is inconclusive and the boot budget is consumed; the fixture's intentional early panic can preempt the independent eMMC report thread. The additive `fs-timer-hold` fixture runs the same checks and holds in a one-second poll instead of panicking, with failure paths still panicking; the original `fs-timer` is byte-identical (`user.o` `6984333d…`, signed `b316e44f…`, root `77d5eba0…`) and the hold build is `e6546715…` (root `327ac826…`, trust cache `30a72f78…`, nine verified pages). The payload builder now requires `--data-ramdisk-manifest` naming `fs-timer-hold` for both partobs personalities, records the fixture diagnostic/hold state, and rejects the old early-panic fixture; host tests cover the original hash, hold loop, retained failure panic and packaging rejections. No new candidate build, flash or boot; a new candidate, BOOT-only flash and one boot remain separately gated, and initialization reliability remains `[U]`. |
+| eMMC N8.5 hold-fixture candidate, flash and observation (2026-11-07) | RECORDED + HOST-ONLY BUILD: rebuilt the partobs payload/BOOT with the additive `fs-timer-hold` fixture and flashed BOOT-only to p69. The unchanged N8.3 kernel `4dcbf24d…` and archive `f9f83526…` were reused; hold root `327ac826…`, hold trust cache `30a72f78…`, signed fixture `e6546715…` (nine verified pages) and `fixture.json` `00363681…` (`diagnostic=fs-timer-hold`, `hold_after_success=true`); the original `fs-timer` is byte-identical (`user.o` `6984333d…`, signed `b316e44f…`, root `77d5eba0…`, `fixture.json` `37cbdd0b…`). New payload `28eafd24…` (11/11 contract) and BOOT image `b4f4f1ea…` (18/18 gate, only ramdisk differs from `ce4d76e8…`); packaged kernel `023c8ff8…`. The payload manifest records the hold fixture path/hash/diagnostic/hold state. Pre-flash p69 `7c22e499…` was backed up and verified as `boot-before-n8.5.img.xz` (`e5b43228…`); full p69 readback `9d51fe80…` matches candidate prefix + unchanged tail `a28b4ea2…`, and RECOVERY/EFS/sec_efs are unchanged. A device disconnect after the backup and before any write was handled by restarting adb, re-reading p69 unchanged and writing once. One owner-classified first cold boot then returned the clean mode-3 report and TWRP: whole read-only media (base 0, size 31,268,536,320, `GUID_partition_scheme`, `writable=0`), LBA 1 baseline match (`sum=2228245566 same=1`), exact two- and three-block reads through two-sector CMD18 chunks with clean CMD12 stops and a CMD17 odd tail, and `PARTOBS samples=8 first=39 final=80 final_ms=350 changes=2 stable=1 stable_ms=250 deadline_ms=4000 timed_out=0 none=0 error=0 slots=84 reported=3 complete=0`. The first sample was already 39; the intermediate count is unknown. `stable=1` is a count-held window, not completeness; `final=80` is consistent with the validated GPT's 80 populated entries among 84 slots, but a count is not an exact GPT-to-`IOMedia` comparison and `complete=0` remains explicit. The boot budget is consumed, no driver fix is indicated, and initialization reliability remains `[U]`. Raw evidence is in `out/gta4l/ram-root-emmc-n8.5-hardware-evidence/observation-1/` (raw transcript `240ab0dd…`, interpretation `0bea53a6…`, observation record `92852a40…`) with a separate non-self-hashing manifest; the original flash record and manifest are unchanged. The N9.1 design is `docs/emmc-n9.1-gpt-iomedia-comparison-design-2026-11-07.md`. |
 | `scripts/test-gta4l-emmc-evidence-counts.py` | PASS: documented counts match sources |
 | `scripts/test-gta4l-sdhci-evidence-counts.py` | PASS: 33 scenarios, 10 mutations, 41 synthetic controls |
 | Hash-table self-check in §6 | `rows=45 mismatches=0` |

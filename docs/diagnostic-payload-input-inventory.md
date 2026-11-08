@@ -267,7 +267,20 @@ refuses an orphan, duplicate or non-1 partobs token and a mismatched
 personality, and the packager accepts both names. The block family is mutually
 exclusive with every probe token: the contract refuses a mixed selection, a
 duplicate block token, a malformed probe token in block mode and the deferred
-`gta4l-emmc-block=2`. The
+`gta4l-emmc-block=2`. The N8.4 first boot then showed that the original
+`fs-timer` RAM-root fixture can panic after its success checks before the
+eMMC report thread runs. The builder now accepts `--data-ramdisk-manifest`
+and requires a `fixture.json` naming the additive `fs-timer-hold` variant for
+both partobs personalities; the payload manifest records the fixture path,
+hash, diagnostic and hold state. The old early-panic fixture is rejected for
+the observation instead of being silently repackaged. N8.5 then built the
+`emmc-block-3-partobs` payload with this hold fixture and the one
+owner-classified cold boot returned the mode-3/`PARTOBS` report; the hardware
+use is limited to that one boot. The N9.2 exact comparison adds
+`emmc-block-1-partcmp` and `emmc-block-3-partcmp`, which map to the same block
+token plus `gta4l-emmc-partcmp=1`; both require the hold fixture, and the
+checker refuses an orphan, duplicate or non-1 partcmp token, a mismatched
+personality and any partobs+partcmp combination. The
 stage-2
 image built on
 2026-10-31 is

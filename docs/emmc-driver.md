@@ -4283,6 +4283,190 @@ three policy mutation controls, all rejected for the intended reason; the
 diagnostic payload suite passes 22 checks including both partobs mappings. No
 candidate build, QEMU run, device access, flash or boot was performed.
 
+### 5.3.53 N8.3 partition-observation candidate production (host-only, 2026-11-07)
+
+Follow-up to §5.3.52. N8.3 built the approved opt-in `gta4l-emmc-partobs=1`
+observation candidate through the archive/prelink/payload/BOOT flow. No flash,
+boot, device access, QEMU device run, commit or push was performed; the
+storage-ABI audit is host/QEMU only.
+
+The immutable chain is prelinked kernel `4dcbf24d…` (51,224,576 bytes;
+`kernel.json` `0481cbab…`), linked block archive `f9f83526…` (512,896 bytes,
+190 method slots, 181 kernel bindings, 26 concrete overrides, 0 unresolved
+original imports, `runtime_qualified=false`, `personality_enabled=true`),
+candidate storage-ABI audit `out/gta4l/storage-abi-4dcbf24d` (interface audit
+`a30cfcde…`, provenance `a806c6cf…`, snapshot `222f6322…`, run `85307464…`,
+candidate plan `0481cbab…`), packaged kernel `023c8ff8…` (51,224,576 bytes),
+payload `5f6759f2…` (83,886,080 bytes, 11/11 contract, diagnostic
+`emmc-block-3-partobs` mapping to `gta4l-emmc-block=3 gta4l-emmc-partobs=1`)
+and BOOT image `3d7e71af…` (85,688,320 bytes, 18/18 gate, only the ramdisk
+differs from the `ce4d76e8…` v5 baseline). The kernel-build archive step
+produced the `3e76771d…` container variant; the requalified `f9f83526…`
+archive has byte-identical members. The block suite passes 48 core
+scenarios/38 mutation controls and 64 adapter scenarios with 12 adapter
+mutation controls plus three policy mutation controls; the storage-ABI
+positive and negative checks pass. A token scan on the extracted payload
+kernel finds one `GTA4L-EMMC P5 PARTOBS` string, three `REPORT` strings, one
+legacy `PART:` string, four `gta4l-emmc-partobs` strings and no literal
+`complete=`; the PARTOBS line is formatted with `complete=0` at runtime, so
+the count-only non-claim is preserved.
+
+The N8.3 record is `n8-closeout.txt` and the read-only hardware proposal is
+`n8-hardware-proposal.txt` in
+`out/gta4l/ram-root-emmc-n8-candidate-evidence/`. N8.4 is a separate
+BOOT-only owner decision for one boot with verified EFS/CPEFS backups; it is
+not authorized by this record. Initialization reliability remains unresolved
+`[U]`, and F2, p5b/F5, N5 and N6 verdicts are unchanged. A stable `PARTOBS`
+count is not a completeness claim.
+
+### 5.3.54 N8.4 first boot and the hold-fixture correction (2026-11-07)
+
+Follow-up to §5.3.53. N8.4 was approved separately and the N8.3 candidate was
+flashed BOOT-only to p69. The pre-flash p69 `b19c59b8…` was backed up and
+verified as `boot-before-n8.img.xz` (`8b37f41c…`); the write copied 85,688,320
+bytes and the full p69 readback `7c22e499…` matched the candidate prefix
+`3d7e71af…` plus the unchanged tail `a28b4ea2…`. RECOVERY `14e11370…`, EFS
+`51fa824c…` and sec_efs `3a265d58…` were unchanged; the host did not reboot.
+
+The one owner-controlled first cold boot returned the userspace
+`RAMROOT-FST PASS: pid=1 page=4096 fs=read+seek+eof timer=poll` panic and no
+eMMC report. The RAM-root fixture deliberately panics after its checks and a
+50 ms poll, while the eMMC reporter independently waits for media, performs
+the controlled reads and observes the partition count for up to 4,000 ms. The
+fixture therefore won the terminal before the eMMC report existed. The result
+is **inconclusive**: no `PARTOBS`, controlled-read or count line was captured,
+and the transcript cannot distinguish a reporter that had not started, one
+still waiting for media, and one that lost the terminal race. The boot budget
+is consumed; no retry or reflash was performed.
+
+The host-only correction adds an additive `fs-timer-hold` fixture variant. It
+runs the same fs/timer checks, records stage 7 and blocks in a one-second
+`poll(NULL, 0, 1000)` loop instead of panicking, so the eMMC report thread or
+its watchdog owns termination; every failure path keeps its immediate panic.
+The original `fs-timer` fixture is byte-identical (`user.o` `6984333d…`, signed
+`b316e44f…`, trust cache `e146717a…`, root `77d5eba0…`). The hold variant
+builds and signs as `e6546715…` (root `327ac826…`, trust cache `30a72f78…`,
+nine verified pages). The diagnostic payload builder now refuses
+`emmc-block-1-partobs`/`emmc-block-3-partobs` unless
+`--data-ramdisk-manifest` names the `fs-timer-hold` fixture and any declared
+`hold_after_success` agrees; the old early-panic fixture is rejected instead
+of being silently repackaged. Host tests cover the original object hash, the
+hold loop, the retained failure panic, the missing-manifest rejection, the
+early-panic rejection and the hold/diagnostic mismatch. The N8.4 closeout is
+`docs/emmc-n8.4-partobs-observation-2026-11-07.md`. A new candidate build, a
+new BOOT-only flash and one new owner-controlled boot remain separately gated;
+no eMMC, partition-completeness or reliability result follows.
+
+### 5.3.55 N8.5 hold-fixture candidate and BOOT-only flash (2026-11-07)
+
+Follow-up to §5.3.54. N8.5 rebuilt the observation payload and BOOT image with
+the additive `fs-timer-hold` fixture, reusing the unchanged N8.3 kernel
+`4dcbf24d…` and archive `f9f83526…` (190 slots, 181 bindings,
+`runtime_qualified=false`; storage-ABI audit `out/gta4l/storage-abi-4dcbf24d`).
+The hold root image is `327ac826…`, the hold trust cache `30a72f78…`, the
+signed fixture `e6546715…` (nine verified pages) and `fixture.json`
+`00363681…` (`diagnostic=fs-timer-hold`, `hold_after_success=true`). The
+original `fs-timer` fixture remains byte-identical (`user.o` `6984333d…`,
+signed `b316e44f…`, root `77d5eba0…`, `fixture.json` `37cbdd0b…`).
+
+The new payload is `28eafd24…` (83,886,080 bytes; 11/11 contract; diagnostic
+`emmc-block-3-partobs` mapping to `gta4l-emmc-block=3 gta4l-emmc-partobs=1`)
+and the packaged kernel is `023c8ff8…`. The payload manifest records the hold
+fixture path/hash, diagnostic and hold state. The BOOT image is
+`b4f4f1ea…` (85,688,320 bytes; 18/18 gate; only the ramdisk differs from the
+`ce4d76e8…` v5 baseline). The token scan still finds one `PARTOBS` string,
+three `REPORT` strings, one legacy `PART:` string, four
+`gta4l-emmc-partobs` strings and no literal `complete=`.
+
+The image was flashed to p69 only. The pre-flash p69 `7c22e499…` (the N8.3
+candidate) was backed up and verified as `boot-before-n8.5.img.xz`
+(`e5b43228…`); the full p69 readback `9d51fe80…` matches the candidate prefix
+`b4f4f1ea…` plus the unchanged tail `a28b4ea2…`, and RECOVERY/EFS/sec_efs are
+unchanged. The device disconnected once after the backup and before any
+write; adb was restarted, p69 was re-read unchanged, and the candidate was
+then written once. The host did not reboot; the subsequent boot observation is
+§5.3.56. A stable count is not a completeness claim, a watchdog report is an
+observer result rather than a card verdict, and initialization reliability
+remains `[U]`. The N8.5 record is
+`docs/emmc-n8.5-hold-fixture-candidate-2026-11-07.md`; the flash record is
+`out/gta4l/ram-root-emmc-n8.5-hardware-evidence/`.
+
+### 5.3.56 N8.5 first cold-boot observation (2026-11-07)
+
+Follow-up to §5.3.55. One owner-classified first cold boot of the N8.5
+hold-fixture image returned the clean mode-3 report and TWRP. The report
+carried `rc=0 stop=0 mode=3 blocks=61071360 bs=512 bytes=31268536320 wid=0
+tim=0 clk=400000`; the read-only whole `IOMedia` (base 0, size 31,268,536,320,
+`GUID_partition_scheme`, `writable=0`) and the LBA 1 baseline match
+(`sum=2228245566 same=1`). The two-block and three-block controlled reads
+delivered 1,024 and 1,536 exact bytes through one two-sector CMD18 chunk each,
+clean CMD12 stops and a CMD17 odd tail for the three-block request. The
+aggregate `XFER` counters (`req=35 c17=9 c18=13 c18b=26 cfail=0 stops=13
+sfail=0`) include incidental reads and are not attributed entirely to those
+requests.
+
+`PARTOBS` reported `samples=8 first=39 final=80 final_ms=350 changes=2 stable=1
+stable_ms=250 deadline_ms=4000 timed_out=0 none=0 error=0 slots=84 reported=3
+complete=0`. The first sample was already 39, so the initial transition was not
+observed; `changes=2` and `stable_ms=250` imply the last observed change at
+nominal t = 100 ms, and the intermediate count is unknown. `stable=1` means the
+count held for the window, not that publication is complete. `final=80` is
+consistent with the validated GPT's 80 populated entries among 84 slots, but a
+count is not an exact GPT-to-`IOMedia` comparison; `complete=0` remains
+explicit. `PART1..3` are the final enumeration sample at 4 MiB bases and sizes,
+not a stable GPT-index identity. Timing fields accumulate requested sleeps, not
+measured wall time. `SNAP locked=1`; `FAIL valid=0` with an all-zero record.
+
+The bounded observation succeeded on this one cold boot and no driver fix is
+indicated. Partition completeness and initialization reliability remain `[U]`;
+F2, p5b/F5, N5 and N6 are unchanged. The raw transcript and observation record
+are in `out/gta4l/ram-root-emmc-n8.5-hardware-evidence/observation-1/` (raw
+`240ab0dd…`, interpretation `0bea53a6…`, record `92852a40…`), with a separate
+non-self-hashing manifest; the original flash record and manifest are
+unchanged. The N9.1 host-only exact-comparison design is
+`docs/emmc-n9.1-gpt-iomedia-comparison-design-2026-11-07.md`.
+
+### 5.3.57 N9.2 exact GPT-to-IOMedia comparator implementation (host-only, 2026-11-07)
+
+Follow-up to §5.3.56 and the N9.1 design. N9.2 implemented the opt-in
+`gta4l-emmc-partcmp=1` comparator on the host. The selector accepts the token
+only with exactly one block token 1/3, value exactly 1, no duplicate and no
+`gta4l-emmc-partobs=1` in the same boot; an orphan, duplicate, wrong value or
+partobs combination is a refusal with the existing `IOLog` wording rather than
+an inert fallback. The legacy mode-1/mode-3 report is unchanged when the token
+is absent.
+
+The comparator validates the protective MBR, primary header and entry array,
+then the backup header and array, including CRC, geometry, reciprocal
+locations, usable bounds, populated-entry semantics, overlap and duplicate
+rules, and cross-copy agreement. It normalizes populated entries to sorted
+`(base_bytes, size_bytes)` tuples and compares the exact multiset with only the
+direct children of the selected whole-media `IOGUIDPartitionScheme`, excluding
+nested containers. Sampling is bounded by the 2,000 ms deadline, 50 ms step,
+250 ms unchanged window, 4,000 ms read budget and a 25-read/45-block
+worst-case; cancellation, terminal ownership and the no-gate sleep rule are
+preserved. The `PARTMAP` line emits only bounded counts, stage flags and
+reason codes (`complete=1` only for the exact same-boot equality); it prints
+no ranges, GUIDs or labels. The worst-case device-bounded line is 288 bytes
+against the 384-byte cap and the full report is 1,088 bytes against 2,048;
+the writer still fails closed and returns 0 rather than truncating. The
+absence of a token leaves the pre-existing report byte-identical, including
+when the new fields are populated.
+
+The diagnostic payload builder now exposes `emmc-block-1-partcmp` and
+`emmc-block-3-partcmp` (block token plus `gta4l-emmc-partcmp=1`), requires the
+same `fs-timer-hold` manifest as the partobs personalities, and refuses a
+partobs+partcmp combination; the payload checker enforces the token rules and
+the packager accepts both names. Effective host results: core 48 scenarios/38
+mutation controls (unchanged), adapter 85 scenarios (21 partcmp) with 16
+adapter mutation controls (four partcmp) and eight policy mutation controls
+(five partcmp), all rejected for the intended reason; the diagnostic payload
+suite passes 28 checks including both partcmp mappings, and the packager
+self-test passes 11 checks including the partcmp forwarding refusal. No
+candidate build, QEMU run, device access, flash or boot was performed. N9.3
+archive/ABI/kernel/payload/BOOT production and any N9.4 hardware run remain
+separately gated; N8.5's historical `complete=0` is not upgraded.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

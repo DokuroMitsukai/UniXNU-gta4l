@@ -542,9 +542,41 @@ partition layout, payload policy and packaging.
   `gta4l-emmc-partobs=1` deadline and count-unchanged window, and keeps
   `complete=0` explicit; a stable count is not a completeness claim. N8.2
   host implementation and tests are complete (including the
-  `emmc-block-1-partobs`/`emmc-block-3-partobs` payload personalities); no
-  candidate build, QEMU run, device access, flash or boot was performed, and
-  a hardware observation remains a separate approval.
+  `emmc-block-1-partobs`/`emmc-block-3-partobs` payload personalities). N8.3
+  then produced the host-only candidate: prelinked kernel `4dcbf24d…`, linked
+  archive `f9f83526…`, storage-ABI audit `a30cfcde…`, packaged kernel
+  `023c8ff8…`, payload `5f6759f2…` (11/11 contract) and BOOT image
+  `3d7e71af…` (18/18 gate, only the ramdisk differs from the `ce4d76e8…`
+  baseline). N8.4 flashed that image to p69 only and performed one
+  owner-controlled first cold boot; the RAM-root fixture passed but its
+  intentional panic won before the eMMC report, so the observation is
+  inconclusive and the boot budget is consumed
+  ([docs/emmc-n8.4-partobs-observation-2026-11-07.md](docs/emmc-n8.4-partobs-observation-2026-11-07.md)).
+  The host-only correction adds an additive `fs-timer-hold` fixture (original
+  `fs-timer` unchanged) and makes both partobs personalities require a
+  `--data-ramdisk-manifest` naming that hold fixture. N8.5 then built payload
+  `28eafd24…` (11/11) and BOOT image `b4f4f1ea…` (18/18) with the hold
+  fixture and flashed p69 only; full p69 readback is `9d51fe80…`, the
+  pre-flash N8.3 candidate is saved as `boot-before-n8.5.img.xz`
+  (`e5b43228…`), and RECOVERY/EFS/sec_efs are unchanged. One owner-classified
+  first cold boot then returned the clean mode-3 report (`rc=0 stop=0 mode=3`)
+  with the read-only whole media, an LBA 1 baseline match, exact two- and
+  three-block reads, and `PARTOBS final=80 stable=1 complete=0`: publication
+  grew from 39 to 80 across eight nominal samples and held for 250 ms, but a
+  count is not an exact partition-set comparison. The boot budget is consumed;
+  no retry or reflash is authorized. The host-only N9.1 design for an opt-in,
+  bounded, read-only exact GPT-to-`IOMedia` range comparison is in
+  [docs/emmc-n9.1-gpt-iomedia-comparison-design-2026-11-07.md](docs/emmc-n9.1-gpt-iomedia-comparison-design-2026-11-07.md);
+  it preserves N8's `complete=0` and does not silently upgrade it. N9.2 then
+  implemented `gta4l-emmc-partcmp=1` on the host: validated primary/backup
+  GPT, exact sorted-range comparison against direct GUID-scheme children,
+  bounded snapshots and the `PARTMAP` line, with
+  `emmc-block-1-partcmp`/`emmc-block-3-partcmp` payload personalities and the
+  partobs+partcmp refusal. Host suites pass (core 48 scenarios/38 mutation
+  controls; adapter 85 scenarios/16 adapter and eight policy mutation
+  controls; diagnostic payload 28 checks; packager self-test 11 checks). No
+  candidate build, device access, flash or boot was performed, and N9.3/N9.4
+  remain separately gated.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/gta4l-storage-publication-design.md](docs/gta4l-storage-publication-design.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),

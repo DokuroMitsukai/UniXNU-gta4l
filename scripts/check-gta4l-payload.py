@@ -54,13 +54,18 @@ DIAGNOSTICS = tuple(DIAGNOSTIC_NAMES.values())
 PROBE_PREFIX = 'gta4l-emmc-probe='
 BLOCK_PREFIX = 'gta4l-emmc-block='
 PARTOBS_PREFIX = 'gta4l-emmc-partobs='
+PARTCMP_PREFIX = 'gta4l-emmc-partcmp='
 BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
-# The partobs token is a modifier, not an independent diagnostic: it is only
-# valid with exactly one block token. Each personality names the block
-# personality it extends.
+# The partobs and partcmp tokens are modifiers, not independent diagnostics:
+# each is only valid with exactly one block token. Each personality names the
+# block personality it extends.
 PARTOBS_DIAGNOSTICS = {
     'emmc-block-1-partobs': 'emmc-block-1',
     'emmc-block-3-partobs': 'emmc-block-3',
+}
+PARTCMP_DIAGNOSTICS = {
+    'emmc-block-1-partcmp': 'emmc-block-1',
+    'emmc-block-3-partcmp': 'emmc-block-3',
 }
 
 
@@ -174,6 +179,8 @@ def diagnostic_contract(args, expected='any'):
     probe_tokens = [item for item in tokens if item.startswith(PROBE_PREFIX)]
     partobs_tokens = [item for item in tokens
                       if item.startswith(PARTOBS_PREFIX)]
+    partcmp_tokens = [item for item in tokens
+                      if item.startswith(PARTCMP_PREFIX)]
     checks = {'exactly_one_diagnostic_argument': len(found) == 1}
     block_selected = [DIAGNOSTIC_NAMES[name] for name in BLOCK_DIAGNOSTICS
                       if DIAGNOSTIC_NAMES[name] in found]
@@ -184,19 +191,32 @@ def diagnostic_contract(args, expected='any'):
         checks['at_most_one_partobs_token'] = len(partobs_tokens) <= 1
         checks['partobs_value_one'] = all(
             item == PARTOBS_PREFIX + '1' for item in partobs_tokens)
+        checks['at_most_one_partcmp_token'] = len(partcmp_tokens) <= 1
+        checks['partcmp_value_one'] = all(
+            item == PARTCMP_PREFIX + '1' for item in partcmp_tokens)
+        checks['partobs_partcmp_exclusive'] = not (
+            partobs_tokens and partcmp_tokens)
     else:
         checks['no_block_token_outside_block_mode'] = not block_tokens
         checks['no_partobs_token_outside_block_mode'] = not partobs_tokens
+        checks['no_partcmp_token_outside_block_mode'] = not partcmp_tokens
     if expected != 'any':
         if expected in PARTOBS_DIAGNOSTICS:
             base = PARTOBS_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[base]] and
-                partobs_tokens == [PARTOBS_PREFIX + '1'])
+                partobs_tokens == [PARTOBS_PREFIX + '1'] and
+                not partcmp_tokens)
+        elif expected in PARTCMP_DIAGNOSTICS:
+            base = PARTCMP_DIAGNOSTICS[expected]
+            checks[f'{expected}_diagnostic_selected'] = (
+                found == [DIAGNOSTIC_NAMES[base]] and
+                partcmp_tokens == [PARTCMP_PREFIX + '1'] and
+                not partobs_tokens)
         else:
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[expected]] and
-                not partobs_tokens)
+                not partobs_tokens and not partcmp_tokens)
     checks['unixnu_toml_has_xnu_args'] = bool(args)
     return checks
 
@@ -257,7 +277,8 @@ def main():
     parser.add_argument('--payload')
     parser.add_argument('--expect-diagnostic',
                         choices=('any', *DIAGNOSTIC_NAMES,
-                                 *PARTOBS_DIAGNOSTICS),
+                                 *PARTOBS_DIAGNOSTICS,
+                                 *PARTCMP_DIAGNOSTICS),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

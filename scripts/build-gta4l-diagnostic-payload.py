@@ -6,7 +6,10 @@ The tracked board.toml is never modified. A temporary copy is made, its
 [payload.adt] packed_data_ramdisk is forced to false because the RAM-root
 fixture is a raw N4KROOT image. The payload is built by the normal UniXNU
 payload step and checked by scripts/check-gta4l-payload.py before it is copied
-to --output or a manifest is written.
+to --output or a manifest is written. The partobs and partcmp personalities
+additionally require --data-ramdisk-manifest naming the fs-timer-hold fixture,
+so the old early-success-panic RAM-root fixture cannot be repackaged for the
+observation.
 """
 import argparse
 import datetime
@@ -47,7 +50,13 @@ DIAGNOSTICS = {
     'emmc-block-3': 'gta4l-emmc-block=3',
     'emmc-block-1-partobs': 'gta4l-emmc-block=1 gta4l-emmc-partobs=1',
     'emmc-block-3-partobs': 'gta4l-emmc-block=3 gta4l-emmc-partobs=1',
+    'emmc-block-1-partcmp': 'gta4l-emmc-block=1 gta4l-emmc-partcmp=1',
+    'emmc-block-3-partcmp': 'gta4l-emmc-block=3 gta4l-emmc-partcmp=1',
 }
+PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
+PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
+PARTITION_DIAGNOSTICS = PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS
+DATA_RAMDISK_DIAGNOSTICS = ('report', 'fs-timer', 'fs-timer-hold')
 
 
 def sha(path):
@@ -85,6 +94,10 @@ def main():
                         help='Mu-Silicium checkout for the panic screen '
                              '(default: sibling Mu-Silicium)')
     parser.add_argument('--data-ramdisk', type=Path)
+    parser.add_argument('--data-ramdisk-manifest', type=Path,
+                        help='fixture.json describing the data-ramdisk '
+                             'diagnostic; required for the partobs '
+                             'personalities, which require fs-timer-hold')
     parser.add_argument('--trust-cache', type=Path)
     parser.add_argument('--owner-trust-cache', action='store_true',
                         help='use --owner-trust-cache instead of --trust-cache')
@@ -151,6 +164,46 @@ def main():
     board_hash = sha(device / 'board.toml')
     data_hash = sha(args.data_ramdisk)
     trust_hash = sha(args.trust_cache)
+
+    data_ramdisk_manifest = None
+    data_ramdisk_diagnostic = None
+    data_ramdisk_hold = None
+    data_ramdisk_manifest_hash = None
+    if args.data_ramdisk_manifest is not None:
+        if not args.data_ramdisk_manifest.is_file():
+            raise SystemExit(
+                f'{args.data_ramdisk_manifest}: data-ramdisk manifest not found')
+        try:
+            data_ramdisk_manifest = json.loads(
+                args.data_ramdisk_manifest.read_text())
+        except json.JSONDecodeError as error:
+            raise SystemExit(
+                f'{args.data_ramdisk_manifest}: invalid JSON: {error}')
+        data_ramdisk_diagnostic = data_ramdisk_manifest.get('diagnostic')
+        if data_ramdisk_diagnostic not in DATA_RAMDISK_DIAGNOSTICS:
+            raise SystemExit(
+                f'{args.data_ramdisk_manifest}: unknown or missing '
+                'data-ramdisk diagnostic; expected one of ' +
+                ', '.join(DATA_RAMDISK_DIAGNOSTICS))
+        data_ramdisk_hold = data_ramdisk_diagnostic == 'fs-timer-hold'
+        declared_hold = data_ramdisk_manifest.get('hold_after_success')
+        if declared_hold is not None and declared_hold != data_ramdisk_hold:
+            raise SystemExit(
+                f'{args.data_ramdisk_manifest}: hold_after_success disagrees '
+                'with the diagnostic')
+        data_ramdisk_manifest_hash = sha(args.data_ramdisk_manifest)
+    if args.diagnostic in PARTITION_DIAGNOSTICS:
+        if data_ramdisk_diagnostic is None:
+            raise SystemExit(
+                'the partition observation personalities require '
+                '--data-ramdisk-manifest naming the fs-timer-hold fixture; '
+                'the old fs-timer fixture panics after success and can '
+                'preempt the eMMC report')
+        if not data_ramdisk_hold:
+            raise SystemExit(
+                f'{args.data_ramdisk_manifest}: the partition observation '
+                'personalities require the fs-timer-hold data ramdisk; got '
+                f'{data_ramdisk_diagnostic}')
 
     workdir = Path(tempfile.mkdtemp(prefix='gta4l-diagnostic-payload-'))
     try:
@@ -224,6 +277,11 @@ def main():
                 'path': str(args.data_ramdisk.resolve()),
                 'bytes': args.data_ramdisk.stat().st_size,
                 'sha256': data_hash,
+                'manifest': (str(args.data_ramdisk_manifest.resolve())
+                             if args.data_ramdisk_manifest else None),
+                'manifest_sha256': data_ramdisk_manifest_hash,
+                'diagnostic': data_ramdisk_diagnostic,
+                'hold_after_success': data_ramdisk_hold,
             },
             'trust_cache': {
                 'path': str(args.trust_cache.resolve()),

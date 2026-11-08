@@ -107,6 +107,17 @@ def common_arguments(unixnu, uefi, device, data, trust):
     ]
 
 
+def write_fixture_manifest(base, diagnostic='fs-timer-hold', hold=None):
+    fixture = base / 'fixture.json'
+    record = {'diagnostic': diagnostic}
+    if hold is not None:
+        record['hold_after_success'] = hold
+    elif diagnostic == 'fs-timer-hold':
+        record['hold_after_success'] = True
+    fixture.write_text(json.dumps(record) + '\n')
+    return fixture
+
+
 def test_explicit_kernel(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     record = base / 'argv.json'
@@ -324,18 +335,21 @@ def test_emmc_block_3(base):
     print('PASS emmc-block-3 maps to gta4l-emmc-block=3')
 
 
-def check_partobs_personality(base, personality, block_mode):
+def check_observation_personality(base, personality, block_mode,
+                                  modifier='partobs'):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     record = base / 'argv.json'
     os.environ['FAKE_UNIXNU_RECORD'] = str(record)
     os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
     output = base / 'payload.img'
     manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base)
     module = load_builder(checker)
     args = common_arguments(unixnu, uefi, device, data, trust)
     args[args.index('--diagnostic') + 1] = personality
     code = run(module, [
         *args,
+        '--data-ramdisk-manifest', str(fixture),
         '--kernel', str(kernel),
         '--output', str(output),
         '--manifest', str(manifest),
@@ -345,18 +359,133 @@ def check_partobs_personality(base, personality, block_mode):
     kernel_args = [argv[index + 1] for index, value in enumerate(argv)
                    if value == '--kernel-arg']
     assert kernel_args[-2:] == [f'gta4l-emmc-block={block_mode}',
-                                'gta4l-emmc-partobs=1'], kernel_args
-    argument = f'gta4l-emmc-block={block_mode} gta4l-emmc-partobs=1'
-    assert json.loads(manifest.read_text())['diagnostic_argument'] == argument
-    print(f'PASS {personality} maps to {argument}')
+                                f'gta4l-emmc-{modifier}=1'], kernel_args
+    argument = f'gta4l-emmc-block={block_mode} gta4l-emmc-{modifier}=1'
+    manifest_record = json.loads(manifest.read_text())
+    assert manifest_record['diagnostic_argument'] == argument
+    assert manifest_record['data_ramdisk']['diagnostic'] == 'fs-timer-hold'
+    assert manifest_record['data_ramdisk']['hold_after_success'] is True
+    print(f'PASS {personality} maps to {argument} with the hold fixture')
+
+
+def test_partobs_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-partobs'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError('the early-panic fixture was accepted for partobs')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS partobs rejects the early-panic fs-timer fixture')
+
+
+def test_partobs_rejects_missing_fixture_manifest(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-1-partobs'
+    try:
+        run(module, [
+            *args,
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert '--data-ramdisk-manifest' in str(error), error
+    else:
+        raise AssertionError('partobs was accepted without a fixture manifest')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS partobs rejects a missing fixture manifest')
+
+
+def test_fixture_manifest_hold_mismatch(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    fixture = write_fixture_manifest(base, 'fs-timer-hold', hold=False)
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-partobs'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(base / 'payload.img'),
+            '--manifest', str(base / 'payload.manifest.json'),
+        ])
+    except SystemExit as error:
+        assert 'disagrees' in str(error), error
+    else:
+        raise AssertionError('a conflicting hold flag was accepted')
+    print('PASS fixture manifest hold/diagnostic mismatch is rejected')
 
 
 def test_emmc_block_1_partobs(base):
-    check_partobs_personality(base, 'emmc-block-1-partobs', 1)
+    check_observation_personality(base, 'emmc-block-1-partobs', 1)
 
 
 def test_emmc_block_3_partobs(base):
-    check_partobs_personality(base, 'emmc-block-3-partobs', 3)
+    check_observation_personality(base, 'emmc-block-3-partobs', 3)
+
+
+def test_emmc_block_1_partcmp(base):
+    check_observation_personality(base, 'emmc-block-1-partcmp', 1,
+                                  'partcmp')
+
+
+def test_emmc_block_3_partcmp(base):
+    check_observation_personality(base, 'emmc-block-3-partcmp', 3,
+                                  'partcmp')
+
+
+def test_partcmp_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-1-partcmp'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError('the early-panic fixture was accepted for partcmp')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS partcmp rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -414,6 +543,31 @@ def test_diagnostic_contract(_base):
     assert not plain_expected['emmc-block-1_diagnostic_selected']
     missing_partobs = checks('gta4l-emmc-block=1', 'emmc-block-1-partobs')
     assert not missing_partobs['emmc-block-1-partobs_diagnostic_selected']
+    compared = checks('rd=md0 gta4l-emmc-block=1 gta4l-emmc-partcmp=1',
+                      'emmc-block-1-partcmp')
+    assert all(compared.values()), compared
+    compared_chunked = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-partcmp=1', 'emmc-block-3-partcmp')
+    assert all(compared_chunked.values()), compared_chunked
+    orphan_partcmp = checks('gta4l-emmc-probe=1 gta4l-emmc-partcmp=1')
+    assert not orphan_partcmp['no_partcmp_token_outside_block_mode']
+    duplicate_partcmp = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-partcmp=1 gta4l-emmc-partcmp=1',
+        'emmc-block-1-partcmp')
+    assert not duplicate_partcmp['at_most_one_partcmp_token']
+    bad_partcmp_value = checks('gta4l-emmc-block=1 gta4l-emmc-partcmp=2',
+                               'emmc-block-1-partcmp')
+    assert not bad_partcmp_value['partcmp_value_one']
+    assert not bad_partcmp_value[
+        'emmc-block-1-partcmp_diagnostic_selected']
+    both_modifiers = checks('gta4l-emmc-block=1 gta4l-emmc-partobs=1 '
+                            'gta4l-emmc-partcmp=1')
+    assert not both_modifiers['partobs_partcmp_exclusive']
+    plain_partcmp_expected = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-partcmp=1', 'emmc-block-1')
+    assert not plain_partcmp_expected['emmc-block-1_diagnostic_selected']
+    missing_partcmp = checks('gta4l-emmc-block=1', 'emmc-block-1-partcmp')
+    assert not missing_partcmp['emmc-block-1-partcmp_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -428,6 +582,11 @@ def main():
              test_emmc_probe_13, test_emmc_probe_14, test_emmc_probe_15,
              test_emmc_probe_16, test_emmc_block_1, test_emmc_block_3,
              test_emmc_block_1_partobs, test_emmc_block_3_partobs,
+             test_emmc_block_1_partcmp, test_emmc_block_3_partcmp,
+             test_partobs_rejects_early_panic_fixture,
+             test_partcmp_rejects_early_panic_fixture,
+             test_partobs_rejects_missing_fixture_manifest,
+             test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)
     for test in tests:
         with tempfile.TemporaryDirectory(prefix='gta4l-payload-test-') as tmp:

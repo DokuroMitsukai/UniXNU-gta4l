@@ -7,6 +7,7 @@ replay directory differs. This test extracts the documented blocks and runs
 their success and failure paths with temporary fixtures, so the recipe cannot
 regress to a display-only checklist.
 """
+import hashlib
 import os
 import re
 import shutil
@@ -76,8 +77,8 @@ def fake_compiler(path, output=None):
 
 def check_source_pins(text, work):
     pins = re.findall(r'^\| `(scripts/[^`]+)` \| `([0-9a-f]{64})` \|$', text, re.M)
-    assert len(pins) == 5, f'expected 5 source pins, found {len(pins)}'
-    assert len({path for path, _ in pins}) == 5, 'duplicate source pins'
+    assert len(pins) == 6, f'expected 6 source pins, found {len(pins)}'
+    assert len({path for path, _ in pins}) == 6, 'duplicate source pins'
     assert SHARED.is_dir(), f'shared checkout is missing: {SHARED}'
     verifier = source_verifier(text)
     script = f'''python3.11 - "$DOC" "$SRC" <<'PY'
@@ -85,7 +86,7 @@ def check_source_pins(text, work):
 PY
 '''
     expect('source pins accept the shared checkout', script, True,
-           'source inputs: 5 match',
+           'source inputs: 6 match',
            env={**os.environ, 'DOC': str(DOC), 'SRC': str(SHARED)})
     bad = work / 'bad-hash.md'
     bad.write_text(text.replace(pins[0][1], '0' * 64, 1))
@@ -96,7 +97,7 @@ PY
     missing.write_text(text.replace(
         f'| `{pins[0][0]}` | `{pins[0][1]}` |\n', '', 1))
     expect('missing source pin is rejected', script, False,
-           'expected 5 pinned inputs',
+           'expected 6 pinned inputs',
            env={**os.environ, 'DOC': str(missing), 'SRC': str(SHARED)})
     duplicate = work / 'duplicate-row.md'
     duplicate.write_text(text.replace(
@@ -238,6 +239,84 @@ def check_baseline(text, work):
            cwd=case)
 
 
+def check_hold_fixture(text, work):
+    builder = (SHARED / 'scripts/build-ram-root-report-fixture.py').read_text()
+    inc = (SHARED / 'scripts/qemu-entry/native-ram-root-fs-timer.inc').read_text()
+    assert 'fs-timer-hold' in builder, 'hold diagnostic is missing from the builder'
+    assert 'NATIVE_RAM_ROOT_FS_TIMER_HOLD' in builder, \
+        'hold define is missing from the builder'
+    hold_at = inc.index('#ifdef NATIVE_RAM_ROOT_FS_TIMER_HOLD')
+    else_at = inc.index('#else', hold_at)
+    endif_at = inc.index('#endif', else_at)
+    hold_block = inc[hold_at:else_at]
+    plain_block = inc[else_at:endif_at]
+    assert 'Ldiag_hold' in hold_block
+    assert 'mov x2, #1000' in hold_block
+    assert 'mov x16, #230' in hold_block
+    assert 'b Ldiag_hold' in hold_block
+    assert 'adrp x1, Ldiag_pass_message@PAGE' in plain_block
+    assert 'b Ldiag_panic' in plain_block
+
+    tc = make_tc(work / 'hold-tc', CLANG)
+    env = {**os.environ,
+           'PATH': f'{tc}/CommandLineTools/usr/bin:{tc}/bin:' + os.environ['PATH'],
+           'XNU_TOOLCHAIN_BIN': (
+               f'{tc}/CommandLineTools/usr/bin '
+               f'{tc}/XcodeDefault.xctoolchain/usr/bin')}
+    source = SHARED / 'scripts/qemu-entry/native-user.S'
+
+    def compile_object(defines, output):
+        command = [str(tc / 'bin/xcrun'), 'clang', '-target',
+                   'arm64-apple-ios17.0', '-isysroot', 'iphoneos',
+                   *defines, '-c', str(source), '-o', str(output)]
+        subprocess.run(command, check=True, env=env, capture_output=True)
+        return hashlib.sha256(output.read_bytes()).hexdigest()
+
+    original = work / 'hold-original.o'
+    held = work / 'hold-held.o'
+    original_sha = compile_object(['-DNATIVE_RAM_ROOT_FS_TIMER=1'], original)
+    held_sha = compile_object(
+        ['-DNATIVE_RAM_ROOT_FS_TIMER=1', '-DNATIVE_RAM_ROOT_FS_TIMER_HOLD=1'],
+        held)
+    assert original_sha == \
+        '6984333d83feb8e02ee71c98f3ccf90cd75766814f270a597f859ad8c6152490', \
+        'the original fs-timer object changed'
+    assert original_sha != held_sha, 'the hold define did not change the object'
+
+    objdump = shutil.which('llvm-objdump') or shutil.which('objdump')
+    if objdump is None:
+        print('SKIP: no objdump for the hold-fixture instruction check')
+        return
+    disassembly = subprocess.run(
+        [objdump, '-d', '--no-show-raw-insn', str(held)],
+        check=True, text=True, capture_output=True).stdout
+    instructions = []
+    for address, body in re.findall(r'^\s*([0-9a-f]+):\s+(.*)$',
+                                    disassembly, re.M):
+        instructions.append((int(address, 16),
+                             re.sub(r'\s+', ' ', body.split(';')[0]).strip()))
+    sequence = ['mov x8, #0x7', 'str x8, [x20]', 'mov x0, #0x0',
+                'mov x1, #0x0', 'mov x2, #0x3e8', 'mov x16, #0xe6',
+                'svc #0x80']
+    start = None
+    for index in range(len(instructions) - len(sequence)):
+        if [body for _, body in
+                instructions[index:index + len(sequence)]] == sequence:
+            start = index
+            break
+    assert start is not None, 'the hold sequence is missing'
+    hold_address = instructions[start + 2][0]
+    branch = instructions[start + len(sequence)]
+    match = re.match(r'b 0x([0-9a-f]+)', branch[1])
+    assert match is not None, f'expected the hold branch, got {branch[1]}'
+    assert int(match.group(1), 16) == hold_address, \
+        'the hold loop does not branch back to its poll'
+    assert any(body == 'mov x0, #0x804' for _, body in instructions)
+    assert any(body == 'mov x16, #0x37' for _, body in instructions)
+    print('ok: original fixture is byte-identical and the hold fixture '
+          'polls without panicking; failure paths still panic')
+
+
 def main():
     text = DOC.read_text()
     baseline = BASELINE.read_text()
@@ -249,6 +328,7 @@ def main():
         check_dependencies(text, work)
         check_isolation(text, work)
         check_compare(text, work)
+        check_hold_fixture(text, work)
         check_baseline(baseline, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)

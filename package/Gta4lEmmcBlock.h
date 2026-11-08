@@ -19,6 +19,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_BOOT_ARG "gta4l-emmc-block"
 #define GTA4L_EMMC_BLOCK_PROBE_ARG "gta4l-emmc-probe"
 #define GTA4L_EMMC_BLOCK_PARTOBS_ARG "gta4l-emmc-partobs"
+#define GTA4L_EMMC_BLOCK_PARTCMP_ARG "gta4l-emmc-partcmp"
 
 #define GTA4L_EMMC_BLOCK_MODE_OFF 0
 #define GTA4L_EMMC_BLOCK_MODE_REPORT 1
@@ -36,6 +37,10 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTOBS_ON 1
 #define GTA4L_EMMC_BLOCK_PARTOBS_REFUSED (-1)
 
+#define GTA4L_EMMC_BLOCK_PARTCMP_OFF 0
+#define GTA4L_EMMC_BLOCK_PARTCMP_ON 1
+#define GTA4L_EMMC_BLOCK_PARTCMP_REFUSED (-1)
+
 /* Bounded observation budgets. The media wait is the design's 20 s window;
  * the partition wait is an additional, non-fatal observation. The N8
  * partition-publication observation is opt-in and orthogonal to the read
@@ -48,6 +53,25 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PART_OBSERVE_MS 4000u
 #define GTA4L_EMMC_BLOCK_PART_OBSERVE_STEP_MS 50u
 #define GTA4L_EMMC_BLOCK_PART_STABLE_MS 250u
+
+/* N9.2 exact GPT-to-IOMedia comparator. The read budget covers every GPT
+ * read; the snapshot deadline is separate. 20,000 ms media wait + 4,000 ms
+ * read budget + one in-flight 1,000 ms read + 2,000 ms snapshot deadline
+ * stays below the 30,000 ms watchdog. */
+#define GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS 2000u
+#define GTA4L_EMMC_BLOCK_PARTMAP_STEP_MS 50u
+#define GTA4L_EMMC_BLOCK_PARTMAP_STABLE_MS 250u
+#define GTA4L_EMMC_BLOCK_PARTMAP_READ_BUDGET_MS 4000u
+#define GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS 128u
+#define GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA 128u
+#define GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS 2u
+#define GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES \
+	(GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS * 128u)
+#define GTA4L_EMMC_BLOCK_PARTMAP_LINE_BYTES 384u
+#define GTA4L_EMMC_BLOCK_PARTMAP_WORST_MS \
+	(GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS + \
+	GTA4L_EMMC_BLOCK_PARTMAP_READ_BUDGET_MS + 1000u + \
+	GTA4L_EMMC_BLOCK_PARTMAP_DEADLINE_MS)
 #define GTA4L_EMMC_BLOCK_READ_WAIT_MS 5000u
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
@@ -137,6 +161,37 @@ struct gta4l_emmc_block_report {
 	uint32_t part_obs_slots;
 	uint32_t part_obs_reported;
 	uint32_t part_obs_complete;
+	/* Opt-in exact GPT-to-IOMedia comparator. partmap selects the PARTMAP
+	 * report form; every field is a bounded count or a boolean. */
+	uint32_t partmap;
+	uint32_t partmap_gpt;
+	uint32_t partmap_reason;
+	uint32_t partmap_slots;
+	uint32_t partmap_used;
+	uint32_t partmap_pmbr;
+	uint32_t partmap_hdr;
+	uint32_t partmap_arr;
+	uint32_t partmap_bak;
+	uint32_t partmap_xcheck;
+	uint32_t partmap_media;
+	uint32_t partmap_match;
+	uint32_t partmap_missing;
+	uint32_t partmap_extra;
+	uint32_t partmap_dup;
+	uint32_t partmap_nested;
+	uint32_t partmap_prop;
+	uint32_t partmap_samples;
+	uint32_t partmap_changes;
+	uint32_t partmap_stable;
+	uint32_t partmap_stable_ms;
+	uint32_t partmap_deadline_ms;
+	uint32_t partmap_timed_out;
+	uint32_t partmap_budget;
+	uint32_t partmap_reads;
+	uint32_t partmap_blocks;
+	uint32_t partmap_fails;
+	uint32_t partmap_cancel;
+	uint32_t partmap_complete;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -201,6 +256,94 @@ int gta4l_emmc_block_mode_select(int arg_present, int arg_value,
  * fall back to the legacy reporter. */
 int gta4l_emmc_block_partobs_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected);
+
+/* Select the orthogonal GPT-to-IOMedia comparator. The token is accepted
+ * only when exactly one block mode 1/3 token is selected, the token value is
+ * exactly 1, the token is not duplicated and the N8 count observation is not
+ * selected in the same boot. */
+int gta4l_emmc_block_partcmp_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int partobs_selected);
+
+/* PARTMAP reason codes (section 4.6 of the N9.1 design). */
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_PMBR 1u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_HEADER 2u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_ARRAY 3u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_BACKUP_HEADER 4u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_BACKUP_ARRAY 5u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_DISAGREE 6u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_ENTRY 7u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_READ 8u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_BUDGET 9u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA 10u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_MISMATCH 11u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_CHANGING 12u
+#define GTA4L_EMMC_BLOCK_PARTMAP_REASON_CANCELLED 13u
+
+struct gta4l_emmc_block_partmap_media {
+	uint64_t base;
+	uint64_t size;
+};
+
+struct gta4l_emmc_block_gpt {
+	uint32_t slots;
+	uint32_t used;
+	uint32_t first_usable;
+	uint32_t last_usable;
+	uint32_t pmbr;
+	uint32_t hdr;
+	uint32_t arr;
+	uint32_t bak;
+	uint32_t xcheck;
+	uint32_t reason;
+	uint32_t entry_size;
+	uint32_t entry_crc;
+	uint64_t disk_guid_low;
+	uint64_t disk_guid_high;
+	struct gta4l_emmc_block_partmap_media
+	    entry[GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS];
+};
+
+/* EFI-style reflected CRC32 (polynomial 0xEDB88320, seed and final xor
+ * 0xFFFFFFFF), independent of the Linux reference implementation. */
+uint32_t gta4l_emmc_block_crc32(const uint8_t *data, uint32_t length);
+
+/* Validate one header for the expected copy and return the bounded
+ * entry-array location and slot count. Returns 1 on success. */
+int gta4l_emmc_block_gpt_geometry(const uint8_t *header,
+    uint32_t capacity_blocks, int primary, uint64_t *entry_lba,
+    uint32_t *slots);
+
+/* Validate the protective MBR, the primary header and the primary entry
+ * array. Returns 1 when all three pass, 0 on the first failure with
+ * gpt->reason set and the stage flags updated. The populated entries are
+ * normalized to (base_bytes, size_bytes) and sorted by (base, size). */
+int gta4l_emmc_block_gpt_primary(const uint8_t *pmbr,
+    const uint8_t *header, const uint8_t *array, uint32_t capacity_blocks,
+    struct gta4l_emmc_block_gpt *gpt);
+
+/* Validate the backup header and array with the same rules, then require the
+ * header fields and the normalized populated set to equal the primary's.
+ * `backup` is scratch space; the stage flags and reason are updated on
+ * `gpt`. Returns 1 only when both copies are valid and agree. */
+int gta4l_emmc_block_gpt_backup(const uint8_t *header,
+    const uint8_t *array, uint32_t capacity_blocks,
+    struct gta4l_emmc_block_gpt *gpt,
+    struct gta4l_emmc_block_gpt *backup);
+
+/* Normalized media tuple check: nonzero size, sector alignment and a range
+ * inside the whole media. Returns 0 when valid. */
+int gta4l_emmc_block_partmap_media_check(uint64_t base, uint64_t size,
+    uint64_t whole_size);
+
+/* Sort the media tuples by (base, size) and compare them with the sorted
+ * validated GPT set as exact multisets. Returns 1 on equality. missing and
+ * extra count tuples without a counterpart; dup counts duplicate media
+ * tuples beyond the first occurrence. */
+int gta4l_emmc_block_partmap_compare(
+    const struct gta4l_emmc_block_gpt *gpt,
+    struct gta4l_emmc_block_partmap_media *media, uint32_t media_count,
+    uint32_t *missing, uint32_t *extra, uint32_t *dup);
 
 /* Pre-validate a request before the adapter takes the controller lock. The
  * request helper repeats the checks; this mapping is what gives the caller

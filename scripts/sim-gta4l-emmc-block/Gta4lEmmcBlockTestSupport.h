@@ -58,6 +58,7 @@ typedef void *thread_t;
 #define kIOMediaSizeKey "Size"
 #define kIOMediaContentKey "Content"
 #define kIOMediaWritableKey "Writable"
+#define kIOGUIDPartitionSchemeUUIDKey "UUID"
 #define kIOMessageMediaStateHasChanged 0xe0000001u
 #define kIOMediaStateOffline 0
 
@@ -147,7 +148,12 @@ private:
 class OSDictionary : public OSObject {
 public:
 	inline static const int test_tag = 0;
+	explicit OSDictionary(const char *className = 0)
+	    : class_name_(className) {}
 	const void *typeTag() const override { return &test_tag; }
+	const char *className() const { return class_name_; }
+private:
+	const char *class_name_;
 };
 
 class OSIterator : public OSObject {
@@ -189,7 +195,8 @@ private:
 class IOService : public OSObject {
 public:
 	inline static const int test_tag = 0;
-	IOService() : property_count_(0), provider_(0), registered_(false) {}
+	IOService() : property_count_(0), provider_(0), registered_(false),
+	    uuid_value_(0) {}
 	const void *typeTag() const override { return &test_tag; }
 	virtual bool start(IOService *provider) { provider_ = provider; return true; }
 	virtual void stop(IOService *provider) { (void)provider; }
@@ -214,6 +221,8 @@ public:
 	int property_count_;
 	IOService *provider_;
 	bool registered_;
+	const char *uuid_value_;
+	OSString uuid_object_;
 };
 
 class IOBlockStorageDevice : public IOService {
@@ -347,6 +356,7 @@ public:
 	UInt64 size_value;
 	bool writable_value;
 	const char *content_value;
+	uint32_t property_faults;
 	bool open_value;
 	bool open_refuse;
 	int open_calls;
@@ -447,6 +457,19 @@ extern gta4l_test_media_read_fn gta4l_test_media_read_hook;
 extern IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 extern int gta4l_test_media_count;
 
+#define GTA4L_TEST_MAX_SCHEMES 4
+extern IOService *gta4l_test_schemes[GTA4L_TEST_MAX_SCHEMES];
+extern int gta4l_test_scheme_count;
+
+#define GTA4L_TEST_PROP_WHOLE_MISSING 0x01u
+#define GTA4L_TEST_PROP_BASE_MISSING 0x02u
+#define GTA4L_TEST_PROP_SIZE_MISSING 0x04u
+#define GTA4L_TEST_PROP_CONTENT_MISSING 0x08u
+#define GTA4L_TEST_PROP_WHOLE_WRONG 0x10u
+#define GTA4L_TEST_PROP_BASE_WRONG 0x20u
+#define GTA4L_TEST_PROP_SIZE_WRONG 0x40u
+#define GTA4L_TEST_PROP_CONTENT_WRONG 0x80u
+
 void gta4l_test_reset(void);
 void gta4l_test_media_reset(void);
 void gta4l_test_add_media(IOMedia *media);
@@ -454,6 +477,9 @@ void gta4l_test_media_configure(IOMedia *media, bool whole, UInt64 base,
     UInt64 size, bool writable, const char *content);
 void gta4l_test_media_chain(IOMedia *media, IOService *driver,
     IOService *root);
+void gta4l_test_add_scheme(IOService *scheme);
+void gta4l_test_scheme_configure(IOService *scheme, IOService *provider,
+    const char *uuid);
 void gta4l_test_fill_sector(uint64_t block, void *buffer);
 
 IOLock *IOLockAlloc(void);
