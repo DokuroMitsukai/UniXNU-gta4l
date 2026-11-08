@@ -175,6 +175,14 @@ private:
 	int at_;
 };
 
+class IORegistryPlane {
+public:
+	IORegistryPlane() : unused(0) {}
+	int unused;
+};
+
+extern const IORegistryPlane *gIOServicePlane;
+
 class IOMemoryDescriptor : public OSObject {
 public:
 	inline static const int test_tag = 0;
@@ -196,7 +204,7 @@ class IOService : public OSObject {
 public:
 	inline static const int test_tag = 0;
 	IOService() : property_count_(0), provider_(0), registered_(false),
-	    uuid_value_(0) {}
+	    uuid_value_(0), child_count_(0) {}
 	const void *typeTag() const override { return &test_tag; }
 	virtual bool start(IOService *provider) { provider_ = provider; return true; }
 	virtual void stop(IOService *provider) { (void)provider; }
@@ -209,6 +217,7 @@ public:
 	virtual bool setProperty(const char *key, unsigned long long value,
 	    unsigned int bits);
 	virtual OSObject *getProperty(const char *key) const;
+	virtual OSIterator *getChildIterator(const IORegistryPlane *plane) const;
 	static OSDictionary *serviceMatching(const char *className);
 	static OSIterator *getMatchingServices(OSDictionary *matching);
 
@@ -223,6 +232,14 @@ public:
 	bool registered_;
 	const char *uuid_value_;
 	OSString uuid_object_;
+	IOService *children_[8];
+	int child_count_;
+};
+
+class IOGUIDPartitionScheme : public IOService {
+public:
+	inline static const int test_tag = 0;
+	const void *typeTag() const override { return &test_tag; }
 };
 
 class IOBlockStorageDevice : public IOService {
@@ -477,6 +494,7 @@ void gta4l_test_media_configure(IOMedia *media, bool whole, UInt64 base,
     UInt64 size, bool writable, const char *content);
 void gta4l_test_media_chain(IOMedia *media, IOService *driver,
     IOService *root);
+void gta4l_test_add_child(IOService *parent, IOService *child);
 void gta4l_test_add_scheme(IOService *scheme);
 void gta4l_test_scheme_configure(IOService *scheme, IOService *provider,
     const char *uuid);

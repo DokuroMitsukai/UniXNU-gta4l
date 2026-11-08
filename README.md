@@ -599,10 +599,53 @@ partition layout, payload policy and packaging.
   wrong-type cases before any read. The block suite passes 48 core
   scenarios/38 mutation controls and 87 adapter scenarios/16 adapter and
   eight policy mutation controls. No candidate rebuild, ABI/QEMU audit, flash,
-  boot or retry was performed, and no partition-completeness or reliability
-  claim is made. N9.5 remains separately gated; see
-  [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.59-§5.3.60.
+  boot or retry was performed in the correction batch, and no
+  partition-completeness or reliability claim is made. N9.5 then built the
+  corrected host-only candidate: prelinked kernel `a610e9d1…`, candidate
+  audit `out/gta4l/storage-abi-a610e9d1` (190 slots, 181 bindings, 26
+  overrides, 0 unresolved), requalified archive `bd394f12…`, packaged kernel
+  `a17c71dd…`, payload `79ac3a10…` (14/14 contract) and BOOT image
+  `45f3bb81…` (18/18 gate, only the ramdisk differs from the hardware-tested
+  `ce4d76e8…` baseline). No flash, boot or device access was performed; a
+  fresh BOOT-only approval, verified protected backups/readbacks and a new
+  one-boot budget remain separately gated. N9.6 then flashed that image
+  BOOT-only to p69 with verified protected backups and full readback
+  `9c5bcf2c…`, and consumed one owner-controlled cold boot. Whole-media
+  discovery succeeded (`whole=1 base=0 size=31268536320
+  content=GUID_partition_scheme writable=0`), confirming the Base correction
+  on hardware, but the comparator stopped at the GUID-scheme lookup before any
+  GPT read (`gpt=0 reason=10 reads=0 samples=0 complete=0`). The owner returned
+  to TWRP and the boot budget is consumed; no partition-completeness or
+  reliability claim is made. The N9.7 host-only analysis traced the cause to
+  registration visibility: the pinned `IOGUIDPartitionScheme` is attached to
+  the whole media with its `UUID` property but never calls
+  `registerService()`, so `getMatchingServices(kIOServiceMatchedState)`
+  cannot see it. The pinned `IOMedia::handleOpen()` admits a second reader, so
+  the alternative whole-media open refusal is not supported. The host seam now
+  models registration state and pins the hardware signature with
+  `partcmp-scheme-unregistered` plus absent/missing-`UUID`/wrong-provider/
+  duplicate and reader-open-refusal controls; the block suite passes 48 core
+  scenarios/38 mutation controls and 93 adapter scenarios/16 adapter and
+  eight policy mutation controls. No driver correction, candidate build,
+  ABI/QEMU audit, flash, boot, retry, reset/repair, commit or push was
+  performed. The owner then approved the host-only correction: `findGuidScheme()`
+  now enumerates the selected whole media's direct service-plane children
+  (`whole->getChildIterator(gIOServicePlane)`) instead of matched services,
+  keeping the class, direct-provider, `UUID` and exactly-one guards and the
+  discovery wait. The seam now tracks children and an attached-but-unregistered
+  `IOGUIDPartitionScheme`; `partcmp-scheme-unregistered` is inverted to require
+  the full successful comparison, a new `partcmp-scheme-wrong-class` control
+  keeps the class guard, and the class-guard and exactly-one mutation controls
+  reject their targeted regressions. The block suite passes 48 core
+  scenarios/38 mutation controls and 94 adapter scenarios/18 adapter and eight
+  policy mutation controls. No candidate build, ABI/QEMU audit, flash, boot,
+  retry, reset/repair, commit or push was performed for the correction; the
+  fix is not hardware-verified and N9.6's `complete=0` is not upgraded. See
+  [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.64,
+  [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),
+  [docs/emmc-n9.5-partcmp-candidate-2026-11-07.md](docs/emmc-n9.5-partcmp-candidate-2026-11-07.md)
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.59-§5.3.61.
   See [docs/emmc-driver.md](docs/emmc-driver.md),
   [docs/gta4l-storage-publication-design.md](docs/gta4l-storage-publication-design.md),
   [docs/emmc-cmd2-crc-audit.md](docs/emmc-cmd2-crc-audit.md),

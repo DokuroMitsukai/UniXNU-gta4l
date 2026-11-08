@@ -1530,7 +1530,6 @@ Gta4lEmmcBlock::findExactWholeMedia(uint32_t *count)
 IOService *
 Gta4lEmmcBlock::findGuidScheme(IOMedia *whole)
 {
-	OSDictionary *matching;
 	OSIterator *iterator;
 	IOService *found = nullptr;
 	uint32_t count = 0;
@@ -1538,33 +1537,36 @@ Gta4lEmmcBlock::findGuidScheme(IOMedia *whole)
 	if (whole == nullptr) {
 		return nullptr;
 	}
-	matching = IOService::serviceMatching("IOGUIDPartitionScheme");
-	if (matching == nullptr) {
-		return nullptr;
-	}
-	iterator = IOService::getMatchingServices(matching);
-	matching->release();
+	/*
+	 * The partition scheme is attached to the whole media as a direct
+	 * service-plane child before it is probed. The pinned scheme does not
+	 * register itself, so a matched-state walk cannot see it. Enumerate
+	 * the selected media's own children instead; the matched-state walk
+	 * would only find schemes that registered, which is not required.
+	 */
+	iterator = whole->getChildIterator(gIOServicePlane);
 	if (iterator == nullptr) {
 		return nullptr;
 	}
 	while (OSObject *object = iterator->getNextObject()) {
-		IOService *service = OSDynamicCast(IOService, object);
+		IOGUIDPartitionScheme *scheme =
+		    OSDynamicCast(IOGUIDPartitionScheme, object);
 		OSString *uuid;
 
-		if (service == nullptr) {
+		if (scheme == nullptr) {
 			continue;
 		}
-		if (service->getProvider() != whole) {
+		if (scheme->getProvider() != whole) {
 			continue;
 		}
 		uuid = OSDynamicCast(OSString,
-		    service->getProperty(kIOGUIDPartitionSchemeUUIDKey));
+		    scheme->getProperty(kIOGUIDPartitionSchemeUUIDKey));
 		if (uuid == nullptr) {
 			continue;
 		}
 		count++;
 		if (found == nullptr) {
-			found = service;
+			found = scheme;
 			found->retain();
 		}
 	}

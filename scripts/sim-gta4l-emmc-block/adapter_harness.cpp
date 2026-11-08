@@ -581,24 +581,37 @@ partcmp_add_whole(void)
 }
 
 static IOService *
-partcmp_add_scheme(IOMedia *whole, const char *uuid)
+partcmp_add_scheme_unregistered(IOMedia *whole, const char *uuid)
 {
-	IOService *scheme = new IOService();
+	IOGUIDPartitionScheme *scheme = new IOGUIDPartitionScheme();
 
 	gta4l_test_scheme_configure(scheme, whole, uuid);
+	gta4l_test_add_child(whole, scheme);
 	gta4l_test_add_scheme(scheme);
 	return scheme;
 }
 
+static IOService *
+partcmp_add_scheme(IOMedia *whole, const char *uuid)
+{
+	IOService *scheme = partcmp_add_scheme_unregistered(whole, uuid);
+
+	scheme->registerService();
+	return scheme;
+}
+
 static void
-partcmp_setup(uint32_t gpt_used, uint32_t media_count, int reverse)
+partcmp_setup(uint32_t gpt_used, uint32_t media_count, int reverse,
+    bool registered = true)
 {
 	uint32_t index;
 
 	partcmp_reset_fixture();
 	partcmp_build_fixture(gpt_used);
 	g_partcmp_whole = partcmp_add_whole();
-	g_partcmp_scheme = partcmp_add_scheme(g_partcmp_whole,
+	g_partcmp_scheme = registered ?
+	    partcmp_add_scheme(g_partcmp_whole, "GTA4L-TEST-SCHEME") :
+	    partcmp_add_scheme_unregistered(g_partcmp_whole,
 	    "GTA4L-TEST-SCHEME");
 	for (index = 0; index < media_count; index++) {
 		uint32_t at = (reverse != 0) ?
@@ -936,6 +949,142 @@ scenario_partcmp_whole_base_invalid(void)
 	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=0 changes=0 "
 	    "stable=0 stable_ms=0 deadline_ms=2000 timed_out=0 budget=0 "
 	    "reads=0 blocks=0 fails=0 cancel=0 complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_scheme_absent(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	g_partcmp_whole = partcmp_add_whole();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 MEDIA: whole=1 base=0 ") != 0);
+	CHECK(strstr(gta4l_test.panic, "gpt=0 reason=10 slots=0 used=0 "
+	    "pmbr=0 hdr=0 arr=0 bak=0 xcheck=0 media=0 match=0 "
+	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=0 changes=0 "
+	    "stable=0 stable_ms=0 deadline_ms=2000 timed_out=0 budget=0 "
+	    "reads=0 blocks=0 fails=0 cancel=0 complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_scheme_unregistered(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 1, false);
+	CHECK(gta4l_test.registered == 1);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PARTMAP: ") != 0);
+	CHECK(strstr(gta4l_test.panic, "gpt=1 reason=0 slots=84 used=80 "
+	    "pmbr=1 hdr=1 arr=1 bak=1 xcheck=1 media=80 match=1 "
+	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=6 changes=0 "
+	    "stable=1 stable_ms=250 deadline_ms=2000 timed_out=0 "
+	    "budget=0 reads=25 blocks=45 fails=0 cancel=0 "
+	    "complete=1") != 0);
+	CHECK(g_self->report.partmap_complete == 1);
+	CHECK(gta4l_test.sleep_with_lock == 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_scheme_wrong_class(void)
+{
+	IOService *decoy;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	g_partcmp_whole = partcmp_add_whole();
+	decoy = new IOService();
+	gta4l_test_scheme_configure(decoy, g_partcmp_whole,
+	    "GTA4L-TEST-DECOY");
+	gta4l_test_add_child(g_partcmp_whole, decoy);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 MEDIA: whole=1 base=0 size=31268536320 "
+	    "content=GUID_partition_scheme writable=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "gpt=0 reason=10 slots=0 used=0 "
+	    "pmbr=0 hdr=0 arr=0 bak=0 xcheck=0 media=0 match=0 "
+	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=0 changes=0 "
+	    "stable=0 stable_ms=0 deadline_ms=2000 timed_out=0 budget=0 "
+	    "reads=0 blocks=0 fails=0 cancel=0 complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_scheme_no_uuid(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	g_partcmp_whole = partcmp_add_whole();
+	(void)partcmp_add_scheme(g_partcmp_whole, 0);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "reads=0 blocks=0 fails=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_scheme_wrong_provider(void)
+{
+	IOMedia *other;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	g_partcmp_whole = partcmp_add_whole();
+	other = add_media(false, 0, 4096, false, "EFI", true);
+	(void)partcmp_add_scheme(other, "GTA4L-TEST-SCHEME");
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "reads=0 blocks=0 fails=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_scheme_duplicate(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_reset_fixture();
+	partcmp_build_fixture(80);
+	g_partcmp_whole = partcmp_add_whole();
+	(void)partcmp_add_scheme(g_partcmp_whole, "GTA4L-TEST-A");
+	(void)partcmp_add_scheme(g_partcmp_whole, "GTA4L-TEST-B");
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "reason=10") != 0);
+	CHECK(strstr(gta4l_test.panic, "reads=0 blocks=0 fails=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "complete=0") != 0);
+	return 0;
+}
+
+static int
+scenario_partcmp_open_refused(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1");
+	CHECK(g_started);
+	partcmp_setup(80, 80, 0);
+	g_partcmp_whole->open_refuse = true;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 MEDIA: whole=1 base=0 ") != 0);
+	CHECK(strstr(gta4l_test.panic, "gpt=0 reason=10 slots=0 used=0 "
+	    "pmbr=0 hdr=0 arr=0 bak=0 xcheck=0 media=0 match=0 "
+	    "missing=0 extra=0 dup=0 nested=0 prop=0 samples=0 changes=0 "
+	    "stable=0 stable_ms=0 deadline_ms=2000 timed_out=0 budget=0 "
+	    "reads=0 blocks=0 fails=0 cancel=0 complete=0") != 0);
+	CHECK(g_partcmp_whole->open_calls == 1);
 	return 0;
 }
 
@@ -2882,6 +3031,14 @@ static const struct scenario_entry scenarios[] = {
 	{ "partcmp-property", scenario_partcmp_property },
 	{ "partcmp-whole-no-base", scenario_partcmp_whole_no_base },
 	{ "partcmp-whole-base-invalid", scenario_partcmp_whole_base_invalid },
+	{ "partcmp-scheme-absent", scenario_partcmp_scheme_absent },
+	{ "partcmp-scheme-unregistered", scenario_partcmp_scheme_unregistered },
+	{ "partcmp-scheme-wrong-class", scenario_partcmp_scheme_wrong_class },
+	{ "partcmp-scheme-no-uuid", scenario_partcmp_scheme_no_uuid },
+	{ "partcmp-scheme-wrong-provider",
+	    scenario_partcmp_scheme_wrong_provider },
+	{ "partcmp-scheme-duplicate", scenario_partcmp_scheme_duplicate },
+	{ "partcmp-open-refused", scenario_partcmp_open_refused },
 	{ "partcmp-gpt-invalid", scenario_partcmp_gpt_invalid },
 	{ "partcmp-entry-variants", scenario_partcmp_entry_variants },
 	{ "partcmp-geometry", scenario_partcmp_geometry },

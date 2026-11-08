@@ -11,6 +11,8 @@ IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 int gta4l_test_media_count;
 IOService *gta4l_test_schemes[GTA4L_TEST_MAX_SCHEMES];
 int gta4l_test_scheme_count;
+static const IORegistryPlane gta4l_test_service_plane;
+const IORegistryPlane *gIOServicePlane = &gta4l_test_service_plane;
 
 void
 gta4l_test_reset(void)
@@ -93,6 +95,18 @@ gta4l_test_media_chain(IOMedia *media, IOService *driver, IOService *root)
 	media->provider_ = driver;
 	if (driver != 0) {
 		driver->provider_ = root;
+	}
+}
+
+void
+gta4l_test_add_child(IOService *parent, IOService *child)
+{
+	if ((parent == 0) || (child == 0)) {
+		return;
+	}
+	if (parent->child_count_ < (int)(sizeof(parent->children_) /
+	    sizeof(parent->children_[0]))) {
+		parent->children_[parent->child_count_++] = child;
 	}
 }
 
@@ -615,6 +629,22 @@ IOService::serviceMatching(const char *className)
 }
 
 OSIterator *
+IOService::getChildIterator(const IORegistryPlane *plane) const
+{
+	static OSObject *items[8];
+	int count = 0;
+	int index;
+
+	if (plane != gIOServicePlane) {
+		return new OSIterator(items, 0);
+	}
+	for (index = 0; index < child_count_; index++) {
+		items[count++] = children_[index];
+	}
+	return new OSIterator(items, count);
+}
+
+OSIterator *
 IOService::getMatchingServices(OSDictionary *matching)
 {
 	static OSObject *items[GTA4L_TEST_MAX_MEDIA];
@@ -628,10 +658,14 @@ IOService::getMatchingServices(OSDictionary *matching)
 	className = (matching != 0) ? matching->className() : 0;
 	if ((className != 0) &&
 	    (strcmp(className, "IOGUIDPartitionScheme") == 0)) {
+		int count = 0;
+
 		for (index = 0; index < gta4l_test_scheme_count; index++) {
-			items[index] = gta4l_test_schemes[index];
+			if (gta4l_test_schemes[index]->registered_) {
+				items[count++] = gta4l_test_schemes[index];
+			}
 		}
-		return new OSIterator(items, gta4l_test_scheme_count);
+		return new OSIterator(items, count);
 	}
 	if ((className != 0) && (strcmp(className, "IOMedia") != 0)) {
 		return new OSIterator(items, 0);

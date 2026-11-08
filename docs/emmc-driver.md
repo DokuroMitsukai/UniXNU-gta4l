@@ -4617,13 +4617,237 @@ semantics are unchanged.
 The block suite passes 48 core scenarios/38 mutation controls and 87 adapter
 scenarios with 16 adapter and eight policy mutation controls. This is
 host-only evidence. N9.5 archive/prelink/ABI-QEMU/payload/BOOT production is
-separately gated, as are a fresh explicit BOOT-only approval, verified
-protected backups/readbacks and a new predeclared owner-controlled one-boot
-budget. No retry, reflash, rollback, reset/repair, mount/root switch,
-partition write, wider/faster mode, DMA/CQE/ICE or request-limit increase is
-authorized. No partition-completeness claim is made; N8/N8.5's historical
-`complete=0` is not upgraded, and no initialization-reliability, wider/faster
-mode, write, mount, DMA/CQE/ICE or arbitrary-I/O result is added.
+recorded in §5.3.61; a fresh explicit BOOT-only approval, verified protected
+backups/readbacks and a new predeclared owner-controlled one-boot budget
+remain separately gated. No retry, reflash, rollback, reset/repair,
+mount/root switch, partition write, wider/faster mode, DMA/CQE/ICE or
+request-limit increase is authorized. No partition-completeness claim is
+made; N8/N8.5's historical `complete=0` is not upgraded, and no
+initialization-reliability, wider/faster mode, write, mount, DMA/CQE/ICE or
+arbitrary-I/O result is added.
+
+### 5.3.61 N9.5 corrected candidate production (host-only, 2026-11-07)
+
+Follow-up to §5.3.60. N9.5 built the corrected whole-media `Base` candidate
+through the archive/prelink/audit/payload/BOOT flow and stopped at the
+production record. No flash, boot, device access, retry, reset/repair, commit
+or push was performed.
+
+The prelinked kernel is `a610e9d1…` (51,257,344 bytes; plan `737305c9…`). The
+kernel-build archive `b9b7ecc0…` records `Gta4lEmmcBlock.cpp` `b7aeff0a…`
+compiled to `Gta4lEmmcBlockCpp.o` `f9d2e3ed…`; the policy object is unchanged
+at `fb94f96f…`. A fresh candidate-matched Linux/QEMU audit in
+`out/gta4l/storage-abi-a610e9d1` (`gdb-stop.json` `862bc0ff…`,
+`interface-audit.json` `5ad1bfb1…`, `provenance.json` `c92ece5f…`,
+`run.json` `09ab30ec…`) binds 190 slots, 181 kernel bindings (167 inherited
++ 14 pure virtual), 26 concrete overrides and 0 unresolved original imports,
+with live sizes 0x90/0x88, native 4K and `runtime_qualified=false`.
+Requalifying the archive against that audit produced `bd394f12…`; all three
+members are byte-identical to the kernel-build archive and the container
+differs only in its index.
+
+The packaged kernel is `a17c71dd…`. The payload is `79ac3a10…` (83,886,080
+bytes; manifest `68bf9a22…`; 14/14 contract; diagnostic
+`emmc-block-3-partcmp`; hold root `327ac826…`, fixture `00363681…`, trust
+cache `30a72f78…`). The BOOT image is `45f3bb81…` (85,688,320 bytes;
+manifest `732e2d59…`; gate `299c689f…`, 18/18, only the ramdisk differs from
+the hardware-tested `ce4d76e8…` baseline; baseline kernel section
+`a4b054e0…`, firmware `1e8a3132…` and DTB `dc4c719d…` unchanged). The
+packaged kernel carries one `GTA4L-EMMC P5 PARTMAP` string, three `REPORT`
+strings, one legacy `PART:` string, five `gta4l-emmc-partcmp` and five
+`gta4l-emmc-partobs` strings, and no literal `complete=`.
+
+The block suite passes 48 core scenarios/38 mutation controls and 87 adapter
+scenarios with 16 adapter and eight policy mutation controls; the payload
+suite passes 28 checks, the packager self-test 11 checks, and the storage-ABI
+positive/negative checks, evidence counts, fixture recipe and board check
+pass. This is host-only production. N8/N8.5's historical `complete=0` is not
+upgraded and no partition-completeness or initialization-reliability claim is
+made. A fresh explicit BOOT-only approval, verified protected
+backups/readbacks and a new predeclared owner-controlled one-boot budget
+remain separately gated. No retry, reflash, rollback, reset/repair,
+mount/root switch, partition write, wider/faster mode, DMA/CQE/ICE or
+request-limit increase is authorized by this record. No commit or push. The
+full record is `docs/emmc-n9.5-partcmp-candidate-2026-11-07.md`.
+
+### 5.3.62 N9.6 exact-comparator observation and GUID-scheme lookup (2026-11-07)
+
+Follow-up to §5.3.61. N9.6 flashed the N9.5 `emmc-block-3-partcmp` BOOT image
+to p69 only and consumed its one owner-controlled cold boot. The report
+selected the real whole media, so the N9.5 absent-`Base` correction works on
+hardware, but the comparator stopped at the GUID-scheme lookup before any GPT
+read. The owner returned the tablet to TWRP; no retry, reflash, rollback,
+reset/repair, commit or push was performed. The flash record is
+`flash-commands.log` `f7e32544…` and `flash-record.json` `3ccc9d9d…`; the
+candidate chain is BOOT `45f3bb81…`, payload `79ac3a10…`, prelinked kernel
+`a610e9d1…`, packaged kernel `a17c71dd…` and source `Gta4lEmmcBlock.cpp`
+`b7aeff0a…`, with the post-flash p69 readback `9c5bcf2c…` (candidate prefix
+plus unchanged tail `a28b4ea2…`) and unchanged RECOVERY/EFS/sec_efs. The
+rollback `boot-before-n9.6.img.xz` (`baddb107…` -> raw `8d5042d3…`) was not
+restored. Raw evidence is in
+`out/gta4l/ram-root-emmc-n9.6-hardware-evidence/observation-1/` (raw
+`440b0d44…`, interpretation `57221ca8…`, record `87c45795…`, manifest binding
+`evidence-sha256.txt` `423923e7…`); the sanitized record is
+`docs/emmc-n9.6-partcmp-observation-2026-11-07.md`.
+
+The report was `rc=0 stop=0 mode=3 blocks=61071360 bs=512
+bytes=31268536320 wid=0 tim=0 clk=400000`, `MEDIA: whole=1 base=0
+size=31268536320 content=GUID_partition_scheme writable=0`, `PARTMAP: gpt=0
+reason=10 slots=0 used=0 pmbr=0 hdr=0 arr=0 bak=0 xcheck=0 media=0 match=0
+missing=0 extra=0 dup=0 nested=0 prop=0 samples=0 changes=0 stable=0
+stable_ms=0 deadline_ms=2000 timed_out=0 budget=0 reads=0 blocks=0 fails=0
+cancel=0 complete=0`, `PART: count=0 expected=0 waited_ms=0 error=0
+reported=0`, and zero `READ`/`QUAL`/`QUAL3` counters. The driver aggregate was
+online=1, wp=1, 10 reads/29 blocks, fails=0, max=8; the transport aggregate
+was req=29, c17=7, c18=11, c18b=22, cfail=0, stops=11, sfail=0, last_stop=0.
+These are incidental/scan requests, not comparator reads. The supplied panic
+suffix `@Gta41EmmcBlock.cpp:1991` preserves its spelling; line 1991 in the
+candidate source is the intentional `panic("%s", reportBuffer)` in
+`panicWithReport()`, so header success and FAIL valid=0 are consistent with
+the report stop.
+
+`whole=1` and the populated MEDIA fields establish a successful whole-media
+selection and confirm the N9.5 correction on this boot. `reason=10` is
+`GTA4L_EMMC_BLOCK_PARTMAP_REASON_MEDIA`; `reads=0 blocks=0` and
+`samples=0 complete=0` establish that no GPT read, GPT validation or exact
+partition comparison occurred. They do not establish a corrupt GPT, missing
+partitions or initialization reliability. The owner classified the run as
+exactly one cold boot with a return to TWRP and described the delay as
+noticeably shorter; that wording is preserved as a subjective observation, not
+a measured duration. N8/N8.5's historical `complete=0` is not upgraded, and no
+partition-completeness or reliability claim is made. A later correction,
+candidate production and hardware run remain separately gated.
+
+### 5.3.63 N9.7 GUID-scheme seam investigation (host-only, 2026-11-07)
+
+Follow-up to §5.3.62. This section records the read-only source/seam
+investigation of the two remaining pre-read `reason=10` guards. No driver
+correction was implemented, no candidate was built, no ABI/QEMU audit was run,
+and no device access, flash, boot, commit or push was performed.
+
+`findGuidScheme()` in `Gta4lEmmcBlock.cpp` enumerates
+`IOService::getMatchingServices(IOService::serviceMatching("IOGUIDPartitionScheme"))`
+and keeps the direct-provider, `UUID`-string and exactly-one predicates. In the
+pinned XNU, `getMatchingServices()` calls
+`copyExistingServices(matching, kIOServiceMatchedState)`, and `instanceMatch()`
+requires the service state to contain `kIOServiceMatchedState` and to be
+non-inactive. The state bit is set by `copyNotifiers(gIOMatchedNotification,
+…)` inside `doServiceMatch()`, reached from `IOService::registerService()` ->
+`startMatching()`.
+
+In the pinned IOStorageFamily `67f9003c`, `IOGUIDPartitionScheme::start()`
+attaches and registers every partition media (`IOPartitionScheme.cpp:582,716`)
+but never registers the scheme object itself; `IOPartitionScheme` has no
+`start()`/`probe()` override and `IOStorage` does not register it either. The
+scheme is nevertheless a direct service-plane child of the whole media:
+`IOService::startCandidate()` calls `service->attach(this)` before
+`probe()`/`start()`, and `IOMedia::attachToChild()` copies the scheme's
+`Content Mask` `GUID_partition_scheme` into the whole media's `Content`.
+`findExactWholeMedia()` requires that `Content`, so the accepted whole media
+proves the scheme attached before selection; `IOGUIDPartitionScheme::scan()`
+sets the `UUID` property during probe, before attach. The scheme is therefore
+attached and carries its `UUID`, but it is invisible to matched-state matching
+because it never registered. That is the source-grounded cause of the N9.6
+`reason=10`.
+
+The whole-media reader-open guard is eliminated as the cause.
+`IOGUIDPartitionScheme::scan()` opens the provider media with
+`open(this, 0, kIOStorageAccessReader)` and closes it before returning; the
+pinned `IOMedia::handleOpen()` sums the existing reader levels instead of
+excluding a second reader, and `IOMedia::read()` fails only when
+`_openLevel == kIOStorageAccessNone`. Read-only access and fail-closed
+behavior are unchanged, and no access-mode change is proposed.
+
+The host seam previously returned every configured scheme from
+`getMatchingServices()` and modeled no registration state, so the comparator
+scenarios could not see the failure. It now models registration visibility:
+`getMatchingServices()` returns only schemes whose `registerService()` was
+called, and the fixture separates attach-only
+(`partcmp_add_scheme_unregistered()`) from attached-and-registered
+(`partcmp_add_scheme()`). New scenarios pin the hardware-identical `gpt=0
+reason=10 slots=0 used=0 … samples=0 changes=0 stable=0 stable_ms=0
+deadline_ms=2000 timed_out=0 budget=0 reads=0 blocks=0 fails=0 cancel=0
+complete=0` signature for an attached-but-unregistered scheme
+(`partcmp-scheme-unregistered`) and for a missing scheme
+(`partcmp-scheme-absent`), plus a missing `UUID` (`partcmp-scheme-no-uuid`), a
+wrong provider (`partcmp-scheme-wrong-provider`), duplicate matching schemes
+(`partcmp-scheme-duplicate`) and reader-open refusal
+(`partcmp-open-refused`, using the fixture's open-refusal flag). The
+registered-scheme scenarios are unchanged and still reach the full comparison.
+
+The block suite passes 48 core scenarios/38 mutation controls and 93 adapter
+scenarios with 16 adapter and eight policy mutation controls. This is host-only
+evidence and does not qualify the driver on hardware.
+
+The smallest justified correction, presented for owner approval only, is to
+replace the `getMatchingServices()` enumeration with the selected whole
+media's direct service-plane children (for example
+`whole->getChildIterator(gIOServicePlane)`), keeping the class, direct-provider,
+`UUID`-string and exactly-one guards and the existing discovery wait. The
+accepted whole media already proves the scheme attached, so no new wait or
+timing change is proposed. An approved host-only correction must add
+service-plane child tracking to the seam, invert
+`partcmp-scheme-unregistered` to require the full successful comparison, and
+preserve the absent/missing-`UUID`/wrong-provider/duplicate and
+reader-open-refusal controls. No identity, ancestry, exactly-one, read-only,
+GPT-validation or exact-comparison guard may be weakened. Candidate production
+and any new hardware run remain later, separately approved gates.
+
+### 5.3.64 N9.7 GUID-scheme lookup correction (host-only, 2026-11-07)
+
+Owner-approved follow-up to §5.3.63. This section records the host-only
+correction and its seam extension. No candidate was built, no ABI/QEMU audit
+was run, and no device access, flash, boot, commit or push was performed.
+
+`findGuidScheme()` now enumerates the selected whole media's direct
+service-plane children with `whole->getChildIterator(gIOServicePlane)`. The
+lookup no longer calls `IOService::getMatchingServices()`; the four remaining
+matching walks in the adapter are the whole-media and partition-media `IOMedia`
+walks. The class guard (`OSDynamicCast(IOGUIDPartitionScheme, object)`), the
+direct-provider guard, the `UUID`-string guard and the exactly-one guard are
+unchanged, as is the existing media discovery wait. In the pinned headers
+`getChildIterator()` returns `OSPtr<OSIterator>`; the build does not define
+`IOKIT_ENABLE_SHARED_PTR`, so `OSPtr<T>` is `T *` and the iterator is released
+exactly once. A failed iterator allocation still returns `nullptr` and reports
+the existing media reason without a read.
+
+The host seam now models direct service-plane children. `IOService` carries a
+bounded child list and `getChildIterator(gIOServicePlane)` returns only those
+children; `gta4l_test_add_child()` attaches a child, and the seam defines an
+`IOGUIDPartitionScheme` class so the production class guard is exercised by
+the same `OSDynamicCast` expression used on target. `partcmp_setup()` gained a
+registration flag. The unregistered fixture attaches the scheme as a child of
+the whole media and configures its provider and `UUID` but never calls
+`registerService()`; the registered fixture does both. `getMatchingServices()`
+still hides unregistered schemes, so the two visibility models remain
+distinct.
+
+`partcmp-scheme-unregistered` is inverted: it now requires the full successful
+comparison (`gpt=1 reason=0 slots=84 used=80 pmbr=1 hdr=1 arr=1 bak=1
+xcheck=1 media=80 match=1 … stable=1 stable_ms=250 timed_out=0 budget=0
+reads=25 blocks=45 fails=0 cancel=0 complete=1`) and asserts that the scheme
+was never registered (only the adapter's own registration is counted). The new
+`partcmp-scheme-wrong-class` control attaches a plain `IOService` child with a
+`UUID` and requires the class guard to reject it with the pre-read
+`gpt=0 reason=10 … reads=0 complete=0` signature. The
+`partcmp-scheme-absent`, `partcmp-scheme-no-uuid`,
+`partcmp-scheme-wrong-provider`, `partcmp-scheme-duplicate` and
+`partcmp-open-refused` controls are retained.
+
+The adapter mutation set grows to 18: `partcmp-scheme-class-guard` replaces the
+`IOGUIDPartitionScheme` cast with `IOService` and must fail
+`partcmp-scheme-wrong-class`; `partcmp-scheme-exactly-one` accepts zero or many
+children and must fail `partcmp-scheme-duplicate`. The policy mutation set is
+unchanged at eight.
+
+The block suite passes 48 core scenarios/38 mutation controls and 94 adapter
+scenarios with 18 adapter and eight policy mutation controls. The diagnostic
+payload (28), packager (11), evidence-count (core 187/115, probe 196/100),
+RAM-root fixture recipe and board checks pass unchanged. This is host-only
+evidence: the correction is not hardware-verified, N9.6's `complete=0` is not
+upgraded, and no partition-completeness or initialization-reliability claim is
+made. Candidate production, the ABI/QEMU audit, a BOOT-only flash and any new
+boot remain later, separately approved gates.
 
 ## 6. Expected report
 

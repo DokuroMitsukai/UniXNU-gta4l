@@ -455,6 +455,15 @@ ADAPTER_MUTATIONS = [
        '\t\t\treturn;\n'
        '\t\t}\n')],
      'partcmp-cancel'),
+    ('partcmp-scheme-class-guard',
+     [('\t\tIOGUIDPartitionScheme *scheme =\n'
+       '\t\t    OSDynamicCast(IOGUIDPartitionScheme, object);\n',
+       '\t\tIOService *scheme = OSDynamicCast(IOService, object);\n')],
+     'partcmp-scheme-wrong-class'),
+    ('partcmp-scheme-exactly-one',
+     [('\tif (count != 1u) {\n',
+       '\tif (count == 0u) {\n')],
+     'partcmp-scheme-duplicate'),
 ]
 
 POLICY_MUTATIONS = [
@@ -679,6 +688,12 @@ def check_adapter_source():
         'observation must report the GPT slot count separately'
     assert 'reportCancel' in adapter and 'countPartitions()' in adapter, \
         'observation must keep cancellation and the registry walk'
+    assert 'whole->getChildIterator(gIOServicePlane)' in adapter, \
+        'scheme lookup must enumerate attached service-plane children'
+    assert 'OSDynamicCast(IOGUIDPartitionScheme, object)' in adapter, \
+        'scheme lookup must keep the partition-scheme class guard'
+    assert adapter.count('getMatchingServices(matching)') == 4, \
+        'only whole-media and partition-media walks may use matching'
 
 
 def compile_adapter(compiler, temp):
@@ -842,8 +857,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 88, f'expected 88 adapter PASS lines, got {passes}'
-        print('PASS adapter: 87 scenarios against the host IOKit seam')
+        assert passes == 95, f'expected 95 adapter PASS lines, got {passes}'
+        print('PASS adapter: 94 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(
