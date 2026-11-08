@@ -728,12 +728,14 @@ partition layout, payload policy and packaging.
   independent read-only post-boot comparison confirmed the stored BOOT,
   unchanged RECOVERY/EFS/sec_efs and both pulled-byte gates (18/18 each). This
   qualifies only the six pinned ranges on that one boot; the boot budget is
-  consumed and no retry, reflash or repair is authorized. A host-only captured
-  repeatability protocol for this unchanged image is proposed in
+  consumed and no retry, reflash or repair is authorized. The owner then
+  approved the captured repeatability protocol
   [docs/emmc-n10.1-partread-repeatability-protocol-2026-11-08.md](docs/emmc-n10.1-partread-repeatability-protocol-2026-11-08.md)
-  (not executed; it requires separate owner approval and a finite cold-boot
-  budget).
-  See
+  with three additional cold boots; observations 2-4 were all class D with the
+  same six-of-six `complete=1` signature, so four captured cold boots on the
+  unchanged image show descriptive repeatability only, not initialization
+  reliability. See
+  [docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md](docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md),
   [docs/emmc-n10.1-partread-hardware-result-2026-11-08.md](docs/emmc-n10.1-partread-hardware-result-2026-11-08.md),
   [docs/emmc-n10.1-partread-candidate-2026-11-08.md](docs/emmc-n10.1-partread-candidate-2026-11-08.md),
   [docs/emmc-n9.11-reliability-observation-2026-11-08.md](docs/emmc-n9.11-reliability-observation-2026-11-08.md),
@@ -742,7 +744,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.74,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.76,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

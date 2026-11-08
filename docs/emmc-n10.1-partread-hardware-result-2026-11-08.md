@@ -174,11 +174,14 @@ equality. The sanitized command/result record is
 This closeout does not authorize another boot, flash, retry, reflash,
 rollback, reset/repair, commit or push. The next milestone is a separate
 proposal from the storage-publication roadmap; it must not be implemented,
-built or flashed in this batch. The host-only captured repeatability protocol
-for this unchanged image is
+built or flashed in this batch. The captured repeatability protocol for this
+unchanged image is
 [docs/emmc-n10.1-partread-repeatability-protocol-2026-11-08.md](docs/emmc-n10.1-partread-repeatability-protocol-2026-11-08.md)
-(not executed). Any later hardware attempt requires fresh explicit owner
-approval and an explicit boot budget.
+and was executed with three additional owner-controlled cold boots
+(observations 2-4, all class D); see
+[docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md](docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md).
+Any later hardware attempt requires fresh explicit owner approval and an
+explicit boot budget.
 
 ## 6. Evidence
 

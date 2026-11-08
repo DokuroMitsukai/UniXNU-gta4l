@@ -1461,13 +1461,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `2ba07608f90ddba0175f68133c6b95aa4e6bda2f59f50e79cb1679a79da15253` |
+| Repository README | `README.md` | `5ca342b5083cd2ac3a871e5a5065f346eceeb9acd279b6320e7d9a92c34d7a18` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `f32ee87e1c187f05ad7fbce95acbacfd431b4075c5ce1637525cc45bde8d2a37` |
+| Porting record | `porting.toml` | `fbbdbfbc3b264e1559d24154e85e4a194e200df740d04113a9bb4b52e89fd365` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `0ab10bfea3526bef2f2c42e618df5751fd86cd7ee2193968b0df9325626d554c` |
+| eMMC driver record | `docs/emmc-driver.md` | `49f87e77395c57d70eeff3191887c9c7acb6e0d62ac59f27e829597d42077ce4` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1689,6 +1689,14 @@ requires per-attempt full-report capture and hash-chained evidence, defines
 PARTREAD outcome classes and stop rules, and authorizes no device access,
 flash, boot, commit or push. A formatting-only cleanup also removed the extra
 blank line at EOF from the N9.11 protocol document; its content is unchanged.
+The N10.1 captured repeatability execution then completed: the owner approved
+the protocol's section 10 scope with three additional cold boots, observations
+2-4 were supplied as screen transcriptions and all three were class D with the
+same six-of-six PARTREAD signature, and the approved read-only pre-series and
+post-series checks matched the unchanged p69 and protected partitions.
+`docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md` is outside
+the table or not listed. The series supports
+descriptive repeatability only; initialization reliability remains `[U]`.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 

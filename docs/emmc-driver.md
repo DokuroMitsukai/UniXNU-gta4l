@@ -5383,6 +5383,37 @@ TWRP; the one-boot budget is consumed and no retry, reflash, rollback,
 reset/repair, commit or push was performed. Findings:
 `docs/emmc-n10.1-partread-hardware-result-2026-11-08.md`.
 
+### 5.3.76 N10.1 captured repeatability series (2026-11-08)
+
+Follow-up to §5.3.74-§5.3.75. The owner approved the captured repeatability
+protocol (`docs/emmc-n10.1-partread-repeatability-protocol-2026-11-08.md`)
+section 10 with three additional owner-controlled cold boots. No rebuild,
+reflash, rollback, reset/repair or host-issued reboot occurred; the unchanged
+image stayed on p69. Observations 2-4 were supplied as screen transcriptions
+(fully cold, about 10-20 seconds off, in boot order, TWRP return after each)
+and all three were class D:
+
+```
+GTA4L-EMMC P5 PARTREAD: cases=6 passed=6 failed=0 reason=0 complete=1 reads=6 blocks=138 bytes=70656 fails=0 cancel=0 budget=0 media=0 part=0 cap=61071360
+```
+
+`READTEST` remained the final pinned case (`index=5 … off=100662784 …
+digest=400039fd…`), `READFAIL` was zero-filled and `FAIL valid=0`. Together
+with observation 1, four captured cold-boot observations returned the
+identical six-of-six qualification. Incidental variation was limited to the
+whole-boot `DRV reads` aggregate (31 in observation 1, 30 in observations
+2-4) and the panic `pages`/`free` counters; no qualification field changed.
+The approved read-only pre-series and post-series checks matched p69
+full/prefix/tail and RECOVERY/EFS/sec_efs, and the tablet returned to TWRP
+after each boot. The series supports descriptive repeatability only: it does
+not establish initialization reliability, a failure rate, arbitrary I/O,
+filesystem mount, writes, wider/faster modes, DMA/CQE/ICE or the real
+context/deblock/breakup layers. N8.5/N9.6/N9.7/N9.8 `complete=0`, the N9.10
+comparator result and N10.1 observation 1 are preserved; initialization
+reliability remains `[U]`. The three-boot budget is consumed and no further
+boot is authorized. Findings:
+`docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
