@@ -734,7 +734,20 @@ partition layout, payload policy and packaging.
   with three additional cold boots; observations 2-4 were all class D with the
   same six-of-six `complete=1` signature, so four captured cold boots on the
   unchanged image show descriptive repeatability only, not initialization
-  reliability. See
+  reliability. N10.2 then expanded the same opt-in read-only qualification
+  from six to fourteen pinned cases without changing the protocol: PMBR-only,
+  primary GPT header, primary and backup arrays, LBA 34, the last sector, and
+  two kernel-section ranges at 4 KiB and 1 MiB inside the gate-pinned
+  1,798,052-byte boot kernel section, in addition to the whole-media and
+  boot-tail cases. The host-only candidate chain built prelinked kernel
+  `e7a1982b…`, candidate audit `out/gta4l/storage-abi-e7a1982b`, requalified
+  archive `2ea638ef…`, packaged kernel `d987c350…`, payload `462870cd…`
+  (18/18 contract) and BOOT image `ca1789f0…` (18/18 gate, only the ramdisk
+  differs from the `ce4d76e8…` baseline); the block suite passes 48 core
+  scenarios/38 mutation controls and 114 adapter scenarios with 33 adapter
+  and eight policy mutation controls. No flash, boot or device access was
+  performed for N10.2; a hardware run needs fresh owner approval. See
+  [docs/emmc-n10.2-partread-candidate-2026-11-08.md](docs/emmc-n10.2-partread-candidate-2026-11-08.md),
   [docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md](docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md),
   [docs/emmc-n10.1-partread-hardware-result-2026-11-08.md](docs/emmc-n10.1-partread-hardware-result-2026-11-08.md),
   [docs/emmc-n10.1-partread-candidate-2026-11-08.md](docs/emmc-n10.1-partread-candidate-2026-11-08.md),
@@ -744,7 +757,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.76,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.77,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

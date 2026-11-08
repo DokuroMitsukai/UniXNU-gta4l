@@ -112,6 +112,12 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES \
 	((uint64_t)196608u * GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
 
+/* The boot-image kernel section begins at page 1 and is pinned by the
+ * boot-image gate to the hardware-tested baseline. Both partread kernel
+ * ranges lie inside the 1,798,052-byte section. */
+#define GTA4L_EMMC_BLOCK_PARTREAD_BOOT_KERNEL_OFFSET 4096u
+#define GTA4L_EMMC_BLOCK_PARTREAD_BOOT_KERNEL_MID_OFFSET (1024u * 1024u)
+
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u

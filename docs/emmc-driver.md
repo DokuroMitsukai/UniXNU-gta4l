@@ -69,7 +69,9 @@ approved. The 2026-11-08 N10.1 read-only content qualification then completed
 six pinned range reads on one owner-reported cold boot with `complete=1`, plus
 an independent read-only post-boot content and protected-partition comparison
 (§5.3.75) `[C]`; it qualifies only those ranges, not arbitrary I/O, mount,
-writes, wider/faster modes, DMA/CQE/ICE or initialization reliability.
+writes, wider/faster modes, DMA/CQE/ICE or initialization reliability. The
+2026-11-08 N10.2 host-only candidate then expanded the same mode to fourteen
+pinned ranges (§5.3.77); it has not run on a device.
 
 This document records the native eMMC implementation. It is deliberately small:
 one-bit bus, legacy timing, polling, single 512-byte PIO reads and no card
@@ -5413,6 +5415,63 @@ comparator result and N10.1 observation 1 are preserved; initialization
 reliability remains `[U]`. The three-boot budget is consumed and no further
 boot is authorized. Findings:
 `docs/emmc-n10.1-partread-repeatability-observation-2026-11-08.md`.
+
+### 5.3.77 N10.2 read-only IOMedia content qualification expansion (host-only, 2026-11-08)
+
+Follow-up to §5.3.74 and §5.3.76. N10.2 expands the pinned partread case table
+from six to fourteen without changing the selector, media/partition discovery,
+page-aligned bounce buffer, digest comparison, reason codes or `complete=1`
+guard. Cases 2-7 split the whole-media coverage into the PMBR only (LBA 0, one
+block), the primary GPT header only (LBA 1), the full primary array (LBA 2, 32
+blocks), the first usable LBA (LBA 34), the full backup array (32 blocks at
+`capacity - 33`) and the backup GPT header (the last block); cases 12-13 add
+64-block reads at boot offsets 4,096 and 1,048,576 inside the 1,798,052-byte
+kernel section. The boot-tail cases 8-11 are unchanged. The run is
+`reads=14 blocks=334 bytes=171008`; the last case is index 13, target boot,
+64 blocks at offset 1,048,576, 32,768 actual bytes.
+
+The digests were re-verified before the build: cases 0-7 against
+`lbas-0-33.bin`, `lba-34.bin` and `lbas-61071326-61071359.bin`; cases 8-11
+against the retained full BOOT partition backup `boot-backup-20261027-pmgr.img`
+(100,663,296 bytes); cases 12-13 against the v5 BOOT image (85,688,320 bytes),
+whose kernel section `a4b054e0…` is the boot-image gate baseline. Cases 8-11
+address the end of the full partition, which the shorter image does not reach;
+the image's own last 32 KiB (`c3502047…`) is not a case digest. Case 6 shares
+case 4's array digest (`ecde9f6f…e272aa`).
+
+The candidate chain: prelinked kernel `e7a1982b…` (51,277,824 bytes; plan
+`1a84cff2…`); kernel-build archive `cb3d6df0…` with `Gta4lEmmcBlock.c`
+`62d1d706…` compiled to `Gta4lEmmcBlock.o` `7abc97d6…` and
+`Gta4lEmmcBlock.cpp` `6a11aa76…` compiled to `Gta4lEmmcBlockCpp.o`
+`0c5c1b96…`; candidate storage-ABI audit `out/gta4l/storage-abi-e7a1982b`
+(`gdb-stop.json` `f2bdc155…`, `interface-audit.json` `88ebe8a3…`,
+`provenance.json` `c3a98a7e…`, `run.json` `a26f1d3a…`; 190 slots, 181 kernel
+bindings, 26 concrete overrides, 0 unresolved original imports, vtable
+`0xfffffff005cb44c0`, service metaclass `0xfffffff007af75b8`,
+`runtime_qualified=false`); requalified archive `2ea638ef…` with
+byte-identical members; packaged kernel `d987c350…`; payload `462870cd…`
+(83,886,080 bytes, manifest `b6439f2a…`, 18/18 contract,
+`emmc-block-3-partread` mapping to `gta4l-emmc-block=3
+gta4l-emmc-partread=1` with the `fs-timer-hold` fixture) and BOOT image
+`ca1789f0…` (85,688,320 bytes, manifest `c3272820…`, 18/18 gate, only the
+ramdisk differs from the `ce4d76e8…` v5 baseline).
+
+The packaged kernel token scan is unchanged from N10.1 (one `PARTREAD`, one
+`READTEST`, one `READFAIL`, one `PARTMAP`, three `REPORT`, one `READDETAIL`,
+one `PARTOBS`, one legacy `PART:` and six `gta4l-emmc-partread` strings, no
+literal `complete=`). Host suites pass: block 48 core scenarios/38 mutation
+controls and 114 adapter scenarios with 33 adapter and eight policy mutation
+controls; core 187/115, probe 196/100, payload, packager, boot-image,
+storage-ABI, evidence-count, fixture recipe and board checks. The adapter
+expectations pin `cases=14 passed=14 reads=14 blocks=334 bytes=171008` and
+`READTEST index=13 target=1 blocks=64 off=1048576 actual=32768`, plus the
+expanded failure shapes (hash mismatch `passed=13 failed=1 reason=7`; boot
+partition absent after eight whole-media cases `passed=8 reads=8 blocks=136
+bytes=69632 part=1`; descriptor failure `passed=0 failed=14 reason=4`). No
+flash, boot, device access, commit or push was part of N10.2; a BOOT-only
+flash and cold boot need fresh explicit owner approval. N10.1's hardware and
+repeatability results are preserved and initialization reliability remains
+`[U]`. Findings: `docs/emmc-n10.2-partread-candidate-2026-11-08.md`.
 
 ## 6. Expected report
 
