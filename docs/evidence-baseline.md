@@ -1461,13 +1461,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `1855bd69b09cabe2df68a37523e88d87fce9c83895d0d6a0dd422acfaba6a1aa` |
+| Repository README | `README.md` | `7ac0ea6e61ab5792a66308e96214c435c225199cebf4bf418150661e308f1b8e` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `bd720791ae3ae0231ea27bc17e3f1fc3b513faf005c2e373ca2387f353f29c70` |
+| Porting record | `porting.toml` | `7e2f33bc390d2e1ae19f98c4234ab24cd455f8b21fb3401a378f506f1afef7b7` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `b7368c017c89aaf7a5cb48e1e4ef5db32d451ad5b1b1b5cdb403da6f330a397f` |
+| eMMC driver record | `docs/emmc-driver.md` | `4cec4fff0ed8fa11a3a12434aa509251e5c1e274206f54e0a8cefe72da425f83` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1877,6 +1877,35 @@ policy mutation controls; diagnostic payload 40 checks; packager 15 checks;
 core 187/115 and probe 196/100; evidence-count, fixture recipe, board and TOML
 checks pass. No candidate build, ABI/QEMU audit, device access, flash, boot,
 commit or push; N10.13/N10.14 remain separately gated, the sweep has no
+hardware observation, N10.10 remains the only breakup-layer hardware result
+and initialization reliability remains `[U]`.
+The N10.13 bounded read-sweep candidate production refreshed the `README.md`,
+`docs/emmc-driver.md` and `porting.toml` rows without adding a hash-table
+row; the new N10.13 candidate document, the §5.3.86 section and the private
+evidence directory are outside the table or not listed. The host-only
+candidate chain is prelinked kernel `64bab406…` (51,363,840 bytes; plan
+`cd402f0e…`; original `f18b4df8…`), kernel-build archive `14f40fa8…`,
+candidate audit `out/gta4l/storage-abi-64bab406` (`gdb-stop.json`
+`227fec6d…`, `interface-audit.json` `bbd49581…`, `provenance.json`
+`50d546bf…`, `run.json` `e8f1b9d2…`; 190 method slots, 181 kernel bindings,
+26 concrete overrides, 0 unresolved original imports,
+`runtime_qualified=false`), requalified archive `14f40fa8…` with
+byte-identical members, packaged kernel `f1ab2b1d…`, payload `62371bfb…`
+(83,886,080 bytes; manifest `e39debae…`; gate `20e23cee…`; 36/36 contract;
+`emmc-block-3-sweep` mapping to `gta4l-emmc-block=3 gta4l-emmc-sweep=1`;
+hold root `327ac826…`, fixture `00363681…`) and BOOT image `b626a1fa…`
+(85,688,320 bytes; manifest `a43d16e3…`; gate `1b43740a…`; 18/18, only the
+ramdisk differs from the `ce4d76e8…` v5 baseline; kernel section
+`a4b054e0…`, firmware `1e8a3132…` and DTB `dc4c719d…` unchanged). Both
+anchor digests were re-verified against the gate-pinned v5 image
+(`5878bcf8…` at 4,096/4,096 and `fa43aa5d…` at 4,096/16,384); the four
+runtime windows are compared in the same boot against their direct CMD17
+references. The host suites re-passed: block 48 core scenarios/38 mutation
+controls and 218 adapter scenarios with 71 adapter, three support and eight
+policy mutation controls, core 187/115, probe 196/100, payload 40, packager
+15, boot-image self-test, storage-ABI positive/negative, evidence counts,
+fixture recipe, board and TOML checks. It records no flash, boot, device
+access, commit or push; N10.14 remains separately gated, the sweep has no
 hardware observation, N10.10 remains the only breakup-layer hardware result
 and initialization reliability remains `[U]`.
 The §6 self-check expected 35 until an earlier correction, then

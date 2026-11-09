@@ -857,8 +857,22 @@ partition layout, payload policy and packaging.
   mutation controls and 218 adapter scenarios with 71 adapter, three support
   and eight policy mutation controls; diagnostic payload 40 checks and
   packager self-test 15 checks also pass. The host model reconstructs the
-  media/breaker path; it does not run the real family code. N10.13 candidate
-  production and N10.14 hardware remain separately gated. See
+  media/breaker path; it does not run the real family code. N10.13 then
+  produced the host-only sweep candidate: prelinked kernel `64bab406`
+  (51363840 bytes; plan `cd402f0e`), candidate audit
+  `out/gta4l/storage-abi-64bab406` (gdb-stop `227fec6d`, interface-audit
+  `bbd49581`, provenance `50d546bf`, run `e8f1b9d2`; 190 slots, 181
+  bindings, 26 overrides, 0 unresolved imports, `runtime_qualified=false`),
+  requalified archive `14f40fa8` with byte-identical members, packaged
+  kernel `f1ab2b1d`, payload `62371bfb` (83886080 bytes, manifest
+  `e39debae`, gate `20e23cee`, 36/36 contract, `emmc-block-3-sweep` to
+  `gta4l-emmc-block=3 gta4l-emmc-sweep=1` with the fs-timer-hold fixture)
+  and BOOT image `b626a1fa` (85688320 bytes, manifest `a43d16e3`, gate
+  `1b43740a`, 18/18, only the ramdisk differs from the `ce4d76e8` v5
+  baseline). Both anchor digests were re-verified against the v5 image and
+  the host suites re-passed. No flash, boot, device access, commit or push;
+  N10.14 hardware remains separately gated. See
+  [docs/emmc-n10.13-sweep-candidate-2026-11-09.md](docs/emmc-n10.13-sweep-candidate-2026-11-09.md),
   [docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md](docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md),
   [docs/emmc-n10.10-breakup-hardware-result-2026-11-09.md](docs/emmc-n10.10-breakup-hardware-result-2026-11-09.md),
   [docs/emmc-n10.9-breakup-candidate-2026-11-09.md](docs/emmc-n10.9-breakup-candidate-2026-11-09.md),
@@ -877,7 +891,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.85,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.86,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

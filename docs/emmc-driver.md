@@ -5920,6 +5920,48 @@ only breakup-layer hardware result and initialization reliability remains
 `[U]`. Findings:
 `docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md`.
 
+### 5.3.86 N10.13 bounded read-sweep qualification candidate (host-only, 2026-11-09)
+
+Follow-up to §5.3.85 and the N10.11 design. N10.13 builds and gates the N10.12
+opt-in `gta4l-emmc-sweep=1` mode through the archive/prelink/audit/payload/
+BOOT flow without changing the selector, six-case table, two page-aligned
+16,384-byte buffers, direct CMD17 reference, pinned anchor digests,
+`SWEEP`/`SWEEPREAD` report lines or `complete=1` guard. The candidate chain is
+prelinked kernel `64bab406…` (51,363,840 bytes; plan `cd402f0e…`; original
+`f18b4df8…`), kernel-build archive `14f40fa8…`, candidate storage-ABI audit
+`out/gta4l/storage-abi-64bab406` (`gdb-stop.json` `227fec6d…`,
+`interface-audit.json` `bbd49581…`, `provenance.json` `50d546bf…`,
+`run.json` `e8f1b9d2…`; 190 method slots, 181 kernel bindings, 26 concrete
+overrides, 0 unresolved original imports, vtable `0xfffffff005cb44c0`,
+metaclass `0xfffffff006add1d0`, service metaclass `0xfffffff007b0b5b8`,
+`bsd_init` `0xfffffff0076eba3c`, `runtime_qualified=false`), requalified
+archive `14f40fa8…` with byte-identical members, packaged kernel `f1ab2b1d…`,
+payload `62371bfb…` (83,886,080 bytes; manifest `e39debae…`; gate
+`20e23cee…`; 36/36 contract; `emmc-block-3-sweep` mapping to
+`gta4l-emmc-block=3 gta4l-emmc-sweep=1`; hold root `327ac826…`, fixture
+`00363681…`) and BOOT image `b626a1fa…` (85,688,320 bytes; manifest
+`a43d16e3…`; gate `1b43740a…`; 18/18, only the ramdisk differs from the
+`ce4d76e8…` v5 baseline; kernel section `a4b054e0…`, firmware `1e8a3132…`
+and DTB `dc4c719d…` unchanged). Both anchor digests were re-verified against
+the gate-pinned v5 image (`5878bcf8…` at 4,096/4,096 and `fa43aa5d…` at
+4,096/16,384); the anchors are inside the 1,798,052-byte kernel section and
+are invariant across candidates, while the four runtime windows are compared
+in the same boot against their direct CMD17 references. No audited
+method-target changed from the N10.9 audit; the bindings object stays
+`3e53b66d…`. The packaged kernel carries the two `SWEEP`/`SWEEPREAD` lines,
+nine `gta4l-emmc-sweep` strings and no literal `complete=`.
+
+Host suites re-passed: block 48 core scenarios/38 mutation controls and 218
+adapter scenarios with 71 adapter, three support and eight policy mutation
+controls (including the sweep mutations), core 187/115, probe 196/100,
+payload 40, packager 15, boot-image self-test, storage-ABI positive/negative,
+evidence counts, fixture recipe, board and TOML checks. No flash, boot, device
+access, commit or push was performed while producing the candidate; N10.12's
+host implementation is unchanged, N10.14 remains separately gated, the sweep
+has no hardware observation, N10.10 remains the only breakup-layer hardware
+result and initialization reliability remains `[U]`. Findings:
+`docs/emmc-n10.13-sweep-candidate-2026-11-09.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
