@@ -5754,6 +5754,44 @@ remain separately gated, N10.6 remains the only breakup-layer hardware
 observation and initialization reliability remains `[U]`. Findings:
 `docs/emmc-n10.7-breakup-qualification-design-2026-11-09.md`.
 
+### 5.3.83 N10.9 deterministic breakup qualification candidate (host-only, 2026-11-09)
+
+Follow-up to §5.3.82 and the N10.7 design. N10.9 builds and gates the N10.8
+opt-in `gta4l-emmc-breakup=1` mode through the archive/prelink/audit/payload/
+BOOT flow without changing the selector, four-case table, page-aligned
+65,536-byte bounce buffer, pinned digests, `BREAKUP`/`BREAKUPREAD` report
+lines or `complete=1` guard. The candidate chain is prelinked kernel
+`71828829…` (51,331,072 bytes; plan `2cee429c…`), kernel-build archive
+`8e636a01…`, candidate storage-ABI audit `out/gta4l/storage-abi-71828829`
+(`gdb-stop.json` `20ac48a4…`, `interface-audit.json` `d4ac2abf…`,
+`provenance.json` `eefbc490…`, `run.json` `3bb349bf…`; 190 method slots,
+181 kernel bindings, 26 concrete overrides, 0 unresolved original imports,
+vtable `0xfffffff005cb44c0`, service metaclass `0xfffffff007b035b8`,
+`runtime_qualified=false`), requalified archive `8e636a01…` with
+byte-identical members, packaged kernel `a8a5a609…`, payload `706cfd53…`
+(83,886,080 bytes; manifest `e9fdba1c…`; gate `84bd1ab7…`; 29/29 contract;
+`emmc-block-3-breakup` mapping to `gta4l-emmc-block=3
+gta4l-emmc-breakup=1`; hold root `327ac826…`, fixture `00363681…`) and BOOT
+image `a8f4a54b…` (85,688,320 bytes; manifest `ee878222…`; gate `39571235…`;
+18/18, only the ramdisk differs from the `ce4d76e8…` v5 baseline; kernel
+section `a4b054e0…`, firmware `1e8a3132…` and DTB `dc4c719d…` unchanged).
+The four pinned digests were re-derived from the gate-pinned v5 image kernel
+section; the ranges are inside the 1,798,052-byte kernel section and are
+invariant across candidates. The packaged kernel carries the two
+`BREAKUP`/`BREAKUPREAD` lines and eight `gta4l-emmc-breakup` strings with no
+literal `complete=`.
+
+Host suites re-passed: block 48 core scenarios/38 mutation controls and 178
+adapter scenarios with 58 adapter, three support and eight policy mutation
+controls (including the thirteen breakup mutations), core 187/115, probe
+196/100, payload 37, packager 14, boot-image self-test, storage-ABI
+positive/negative, evidence counts, fixture recipe, board and TOML checks.
+No flash, boot, device access, commit or push was performed while producing
+the candidate; N10.8's host implementation is unchanged, N10.10 remains
+separately gated, N10.6 remains the only breakup-layer hardware observation
+and initialization reliability remains `[U]`. Findings:
+`docs/emmc-n10.9-breakup-candidate-2026-11-09.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
