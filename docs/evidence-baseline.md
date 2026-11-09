@@ -1461,13 +1461,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `ff7d4a1a4c4dc9d20f34f9d7db2036f30dec0dd56142747450e9c60abe55972c` |
+| Repository README | `README.md` | `b6652777a6bfee072760a572cf52bf3572d6cb7e16fb5b0b31f5e94d5b04a9a3` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `ad30056c3933342da4dc24260195df8b0810a1c2b8eed7df725fb8e2f41ba722` |
+| Porting record | `porting.toml` | `8b29aed3e68493a0db91a782d7b8435cc41d44139b60fb37e5c37f7c9860441e` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `26fa5c59d154168e49b762ae1a5c27d2b47da77cc7474b3b63c65082d9dc6ac9` |
+| eMMC driver record | `docs/emmc-driver.md` | `14d2f4699f016f5fdebb24d9745150c78b295531bf6bd419119bdb32190fc785` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1830,6 +1830,26 @@ storage-ABI positive/negative, evidence counts, fixture recipe, board and
 TOML checks. It records no flash, boot, device access, commit or push;
 N10.10 remains separately gated, N10.6 remains the only breakup-layer
 hardware observation and initialization reliability remains `[U]`.
+The N10.10 deterministic breakup hardware-result closeout refreshed the
+`README.md`, `docs/emmc-driver.md` and `porting.toml` rows without adding a
+hash-table row; the new hardware-result document, the §5.3.84 section and the
+private evidence directory are outside the table or not listed. The approved
+BOOT-only flash wrote p69 only; the post-write readback matched the N10.9
+candidate prefix `a8f4a54b…` plus the unchanged tail `a28b4ea2…`
+(`4b51ff21…` full) with unchanged RECOVERY/EFS/sec_efs, and one owner-reported
+cold boot then returned `cases=4 passed=4 failed=0 reason=0 complete=1
+reads=4 bytes=199680 span=200192 blocks=391 subrequests=49 max=8 foreign=0
+fails=0 cancel=0 budget=0 media=0 part=0 limit=8 seg=3 cap=61071360` with the
+pinned case-3 digest `bc0b9bb9…26db17` and its first 16 bytes in
+`BREAKUPREAD`. The whole-boot counters (`DRV reads=58 blocks=420 fails=0
+max=8`, `XFER req=420 c17=8 c18=206 c18b=412 stops=206 sfail=0`) show the
+mode-scoped eight-block cap and 49 driver-level subrequests, so the real
+`IOBreaker`/`breakUpRequest()` split path was entered; the N10.6 deblock-mode
+24-block three-segment fold remains a distinct observation. No post-boot
+readback was taken; the report is bound through the pre-boot post-flash
+readback, target-binding re-verification and pinned digest. The N10.1/N10.2
+hardware results and the N10.6 deblock result are preserved, the one-boot
+budget is consumed and initialization reliability remains `[U]`.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 

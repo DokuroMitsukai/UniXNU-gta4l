@@ -5792,6 +5792,63 @@ separately gated, N10.6 remains the only breakup-layer hardware observation
 and initialization reliability remains `[U]`. Findings:
 `docs/emmc-n10.9-breakup-candidate-2026-11-09.md`.
 
+### 5.3.84 N10.10 deterministic breakup hardware result (2026-11-09)
+
+Follow-up to §5.3.83. The owner approved a BOOT-only write of the N10.9 BOOT
+image `a8f4a54b…` (85,688,320 bytes; payload `706cfd53…`, prelinked kernel
+`71828829…`, packaged kernel `a8a5a609…`, requalified archive `8e636a01…`) to
+p69 and controlled one cold boot. Only `/dev/block/mmcblk0p69` was written
+(20,920 x 4096 records, synced). The pre-flash p69 was the N10.6 post-flash
+image `f4882047…` with prefix `bacc933f…` and tail `a28b4ea2…`; the post-flash
+full readback `4b51ff21…` matched the candidate prefix `a8f4a54b…` plus the
+unchanged tail, and RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` were unchanged. The rollback image `boot-before-n10.10.img.xz`
+(`70312a39…` -> raw `f4882047…`) was not restored.
+
+The owner report returned `rc=0 stop=0 mode=3` with the read-only whole media
+and `BREAKUP: cases=4 passed=4 failed=0 reason=0 complete=1 reads=4
+bytes=199680 span=200192 blocks=391 subrequests=49 max=8 foreign=0 fails=0
+cancel=0 budget=0 media=0 part=0 limit=8 seg=3 cap=61071360`; the last case
+emitted `BREAKUPREAD: index=3 target=1 start=4196 length=65024 span=65536
+actual=65024 status=0 subrequests=16 blocks=128 max=8
+digest=bc0b9bb9c6dd11c3aea665d01dc5f108`, the first 16 bytes of the pinned
+case-3 digest `bc0b9bb9…26db17` at `package/Gta4lEmmcBlock.c:322-331`.
+Every pinned digest matched. The aggregate is the four-case table: 4,096 +
+65,536 + 65,024 + 65,024 = 199,680 requested bytes, 200,192 aligned bytes,
+391 blocks and 1 + 16 + 16 + 16 = 49 driver-level subrequests. `complete=1` is
+the guard at `package/Gta4lEmmcBlock.cpp:3559-3572`; `media=0 part=0` are
+clear failure flags; `limit=8` and `seg=3` are the mode-scoped advertisements
+at `package/Gta4lEmmcBlock.cpp:961-980`.
+
+The whole-boot counters are `DRV: online=1 wp=1 reads=58 blocks=420 fails=0
+max=8` and `XFER: req=420 c17=8 c18=206 c18b=412 cfail=0 stops=206 sfail=0
+last_stop=0`. `max=8` is the mode-scoped eight-block/4,096-byte cap; the N10.6
+deblock-mode 24-block three-segment fold remains its own observation and is
+not expected in breakup mode. Because case 1 and case 3 span 128 blocks, a
+direct `executeRequest()` short-circuit would have passed 128 blocks; the
+observed maximum and the 49 subrequests show the real
+`IOBreaker::getBreakSize()` / `breakUpRequest()` split path was entered. The
+transport issued 8 CMD17 single-block reads and 206 two-block CMD18 chunks
+with one successful CMD12 stop per chunk; the 29-block difference from the
+391-block case-table span is the deblocker's head/tail scratch reads and block
+rounding. The `@Gta41EmmcBlock.cpp:3899` suffix (spelling preserved) is the
+intentional `panic("%s", reportBuffer)` terminal report stop, the same class
+as N10.6's `:3172`.
+
+No post-boot readback is recorded: the owner returned the tablet to TWRP after
+the one cold boot and no further device access is authorized, so the stored
+image after the boot is not independently re-verified in this record. The
+report is bound to the candidate by the pre-boot post-flash readback, the
+read-only target-binding re-verification and the pinned digest match. This is
+a bounded same-boot qualification of four pinned boot-partition ranges and the
+real breakup path on one boot, not an initialization-reliability or general
+I/O result; N8.5/N9.6/N9.7/N9.8 `complete=0`, the N9.10 comparator result, the
+N9.11 owner-reported series, the N10.1/N10.2 partread results and the N10.6
+deblock result are preserved, and initialization reliability remains `[U]`.
+The one-boot budget is consumed; no retry, reflash, rollback, reset/repair,
+mount, commit or push was performed. Findings:
+`docs/emmc-n10.10-breakup-hardware-result-2026-11-09.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
