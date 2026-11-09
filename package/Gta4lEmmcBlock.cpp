@@ -81,6 +81,25 @@ static_assert(GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BYTES >=
     "DEBLOCK bounce must cover the 64-block aligned span");
 static_assert(GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS > 1u,
     "DEBLOCK must advertise the multi-segment path");
+static_assert(GTA4L_EMMC_BLOCK_BREAKUP_WORST_MS <
+    GTA4L_EMMC_BLOCK_WATCHDOG_MS,
+    "BREAKUP worst case must stay below the watchdog");
+static_assert(GTA4L_EMMC_BLOCK_BREAKUP_SECTOR_BYTES ==
+    GTA4L_EMMC_BLOCK_BYTES,
+    "BREAKUP sector must match the media block size");
+static_assert(GTA4L_EMMC_BLOCK_BREAKUP_MAX_BLOCKS == 128u,
+    "BREAKUP bounce must cover 128 blocks");
+static_assert(GTA4L_EMMC_BLOCK_BREAKUP_MAX_BYTES == 65536u,
+    "BREAKUP bounce must be 65,536 bytes");
+static_assert(GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS == 8u,
+    "BREAKUP must advertise the eight-block read limit");
+static_assert(GTA4L_EMMC_BLOCK_BREAKUP_MAX_SUBREQUESTS == 16u,
+    "BREAKUP case must not exceed sixteen subrequests");
+static_assert(GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS > 1u,
+    "BREAKUP must advertise the multi-segment path");
+static_assert(GTA4L_EMMC_BLOCK_BREAKUP_MAX_BYTES >=
+    GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BYTES,
+    "BREAKUP bounce must cover the largest aligned span");
 
 /* The exact comparator needs a 16 KiB GPT array plus both validated copies
  * and two media snapshots. Keeping that state in the driver object would
@@ -218,6 +237,13 @@ private:
 	void deblockReportFailure(uint32_t reason);
 	void deblockReportCancel(void);
 	uint64_t deblockElapsedMs(void);
+	void runBreakup(void);
+	void releaseBreakupMedia(void);
+	void breakupReportFailure(uint32_t reason);
+	void breakupReportCancel(void);
+	uint64_t breakupElapsedMs(void);
+	void breakupObserve(IOMemoryDescriptor *buffer, UInt64 block,
+	    UInt64 nblks);
 	IOMedia *findWholeMedia(void);
 	uint32_t countPartitions(void);
 	bool ancestryContains(IOService *service) const;
@@ -262,6 +288,25 @@ private:
 	IOMedia *deblockBoot = nullptr;
 	bool deblockWholeOpen = false;
 	bool deblockBootOpen = false;
+	bool breakupMode = false;
+	uint64_t breakupReadStart = 0;
+	uint8_t *breakupBuffer = nullptr;
+	IOMedia *breakupWhole = nullptr;
+	IOMedia *breakupBoot = nullptr;
+	bool breakupWholeOpen = false;
+	bool breakupBootOpen = false;
+	bool breakupActive = false;
+	uint32_t breakupActiveTag = 0;
+	uint64_t breakupActiveFirst = 0;
+	uint64_t breakupActiveNext = 0;
+	uint64_t breakupActiveEnd = 0;
+	uint32_t breakupActiveSubrequests = 0;
+	uint32_t breakupActiveMax = 0;
+	uint32_t breakupObservedSubrequests = 0;
+	uint32_t breakupObservedBlocks = 0;
+	uint32_t breakupObservedMax = 0;
+	uint32_t breakupObservedOrder = 0;
+	uint32_t breakupObservedForeign = 0;
 	bool registered = false;
 	bool reportStarted = false;
 	thread_t reportThread = nullptr;
@@ -573,21 +618,25 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t partcmpTokens;
 	uint32_t partreadTokens;
 	uint32_t deblockTokens;
+	uint32_t breakupTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
 	int partreadValue = 0;
 	int deblockValue = 0;
+	int breakupValue = 0;
 	int parsed;
 	int partobsParsed;
 	int partcmpParsed;
 	int partreadParsed;
 	int deblockParsed;
+	int breakupParsed;
 	int mode;
 	int partobs;
 	int partcmp;
 	int partread;
 	int deblock;
+	int breakup;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -603,6 +652,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_PARTREAD_ARG);
 	deblockTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_DEBLOCK_ARG);
+	breakupTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_BREAKUP_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -633,6 +684,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	if ((deblockParsed == 0) && (deblockTokens != 0)) {
 		deblockValue = -1;
 	}
+	breakupParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_BREAKUP_ARG,
+	    &breakupValue, sizeof(breakupValue));
+	if ((breakupParsed == 0) && (breakupTokens != 0)) {
+		breakupValue = -1;
+	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
 	if (mode == GTA4L_EMMC_BLOCK_SELECT_INERT) {
@@ -654,6 +710,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 		if (deblockTokens != 0) {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-deblock requires "
+			    "gta4l-emmc-block=1 or 3\n");
+		}
+		if (breakupTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-breakup requires "
 			    "gta4l-emmc-block=1 or 3\n");
 		}
 		return false;
@@ -760,6 +821,39 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	deblockMode = (deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON);
+	breakup = gta4l_emmc_block_breakup_select(breakupTokens != 0,
+	    breakupValue, breakupTokens > 1u, 1,
+	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
+	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
+	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
+	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON);
+	if (breakup == GTA4L_EMMC_BLOCK_BREAKUP_REFUSED) {
+		if (breakupTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-breakup token\n");
+		} else if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partobs "
+			    "and gta4l-emmc-breakup are mutually "
+			    "exclusive\n");
+		} else if (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partcmp "
+			    "and gta4l-emmc-breakup are mutually "
+			    "exclusive\n");
+		} else if (partread == GTA4L_EMMC_BLOCK_PARTREAD_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partread "
+			    "and gta4l-emmc-breakup are mutually "
+			    "exclusive\n");
+		} else if (deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-deblock "
+			    "and gta4l-emmc-breakup are mutually "
+			    "exclusive\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
+			    "gta4l-emmc-breakup value\n");
+		}
+		return false;
+	}
+	breakupMode = (breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON);
 	if (partReadMode) {
 		/* Every case is copied through one page-aligned buffer so the
 		 * descriptor never straddles a page boundary and every
@@ -781,6 +875,19 @@ Gta4lEmmcBlock::start(IOService *provider)
 		    GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BYTES, PAGE_SIZE);
 		if (deblockBuffer == nullptr) {
 			IOLog("GTA4L-EMMC P5 FAILED: deblock buffer "
+			    "allocation\n");
+			return false;
+		}
+	}
+	if (breakupMode) {
+		/* Every case is copied through one page-aligned buffer so the
+		 * breaker sees the same deterministic page-aligned span on
+		 * every stage; it covers the largest requested length and the
+		 * largest aligned span. */
+		breakupBuffer = (uint8_t *)IOMallocAligned(
+		    GTA4L_EMMC_BLOCK_BREAKUP_MAX_BYTES, PAGE_SIZE);
+		if (breakupBuffer == nullptr) {
+			IOLog("GTA4L-EMMC P5 FAILED: breakup buffer "
 			    "allocation\n");
 			return false;
 		}
@@ -852,17 +959,22 @@ Gta4lEmmcBlock::start(IOService *provider)
 	}
 
 	if (!setProperty(kIOMaximumBlockCountReadKey,
-	    (unsigned long long)GTA4L_EMMC_BLOCK_MAX_BLOCKS, 32)) {
+	    (unsigned long long)(breakupMode ?
+	    GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS :
+	    GTA4L_EMMC_BLOCK_MAX_BLOCKS), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: block limit property\n");
 		return false;
 	}
 	if (!setProperty(kIOMaximumByteCountReadKey,
-	    (unsigned long long)GTA4L_EMMC_BLOCK_MAX_BYTES, 32)) {
+	    (unsigned long long)(breakupMode ?
+	    GTA4L_EMMC_BLOCK_BREAKUP_READ_MAX_BYTES :
+	    GTA4L_EMMC_BLOCK_MAX_BYTES), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: byte limit property\n");
 		return false;
 	}
 	if (!setProperty(kIOMaximumSegmentCountReadKey,
-	    (unsigned long long)(deblockMode ?
+	    (unsigned long long)(breakupMode ?
+	    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?
 	    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : 1u), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: segment limit property\n");
 		return false;
@@ -935,6 +1047,11 @@ Gta4lEmmcBlock::free()
 		    GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BYTES);
 		deblockBuffer = nullptr;
 	}
+	if (breakupBuffer != nullptr) {
+		IOFreeAligned(breakupBuffer,
+		    GTA4L_EMMC_BLOCK_BREAKUP_MAX_BYTES);
+		breakupBuffer = nullptr;
+	}
 	if (partmapDma != nullptr) {
 		IOFreeAligned(partmapDma,
 		    GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES);
@@ -975,6 +1092,7 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	if (nblks == 0) {
 		return kIOReturnBadArgument;
 	}
+	breakupObserve(buffer, blockNumber, nblks);
 	if (blockNumber >= (UInt64)capacityBlocks) {
 		return kIOReturnBadArgument;
 	}
@@ -1458,6 +1576,56 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		memcpy(target->deblock_fail_digest,
 		    report.deblock_fail_digest,
 		    sizeof(target->deblock_fail_digest));
+		target->breakup = report.breakup;
+		target->breakup_cases = report.breakup_cases;
+		target->breakup_passed = report.breakup_passed;
+		target->breakup_failed = report.breakup_failed;
+		target->breakup_reason = report.breakup_reason;
+		target->breakup_complete = report.breakup_complete;
+		target->breakup_reads = report.breakup_reads;
+		target->breakup_bytes = report.breakup_bytes;
+		target->breakup_span = report.breakup_span;
+		target->breakup_blocks = report.breakup_blocks;
+		target->breakup_subrequests = report.breakup_subrequests;
+		target->breakup_max = report.breakup_max;
+		target->breakup_foreign = report.breakup_foreign;
+		target->breakup_fails = report.breakup_fails;
+		target->breakup_cancel = report.breakup_cancel;
+		target->breakup_budget = report.breakup_budget;
+		target->breakup_media = report.breakup_media;
+		target->breakup_part = report.breakup_part;
+		target->breakup_limit = report.breakup_limit;
+		target->breakup_segments = report.breakup_segments;
+		target->breakup_capacity = report.breakup_capacity;
+		target->breakup_last_index = report.breakup_last_index;
+		target->breakup_last_target = report.breakup_last_target;
+		target->breakup_last_start = report.breakup_last_start;
+		target->breakup_last_length = report.breakup_last_length;
+		target->breakup_last_span = report.breakup_last_span;
+		target->breakup_last_status = report.breakup_last_status;
+		target->breakup_last_actual = report.breakup_last_actual;
+		target->breakup_last_subrequests =
+		    report.breakup_last_subrequests;
+		target->breakup_last_blocks = report.breakup_last_blocks;
+		target->breakup_last_max = report.breakup_last_max;
+		memcpy(target->breakup_last_digest,
+		    report.breakup_last_digest,
+		    sizeof(target->breakup_last_digest));
+		target->breakup_fail_index = report.breakup_fail_index;
+		target->breakup_fail_reason = report.breakup_fail_reason;
+		target->breakup_fail_status = report.breakup_fail_status;
+		target->breakup_fail_actual = report.breakup_fail_actual;
+		target->breakup_fail_target = report.breakup_fail_target;
+		target->breakup_fail_start = report.breakup_fail_start;
+		target->breakup_fail_length = report.breakup_fail_length;
+		target->breakup_fail_span = report.breakup_fail_span;
+		target->breakup_fail_subrequests =
+		    report.breakup_fail_subrequests;
+		target->breakup_fail_blocks = report.breakup_fail_blocks;
+		target->breakup_fail_max = report.breakup_fail_max;
+		memcpy(target->breakup_fail_digest,
+		    report.breakup_fail_digest,
+		    sizeof(target->breakup_fail_digest));
 		IOLockUnlock(reportLock);
 	}
 	return locked;
@@ -2182,6 +2350,151 @@ Gta4lEmmcBlock::deblockReportCancel()
 	reportDone = true;
 }
 
+uint64_t
+Gta4lEmmcBlock::breakupElapsedMs()
+{
+	uint64_t now = gta4l_emmc_platform_counter();
+	uint64_t hz = gta4l_emmc_platform_counter_hz();
+	uint64_t ticks_per_ms;
+
+	if (hz == 0) {
+		return 0;
+	}
+	ticks_per_ms = hz / 1000u;
+	if (ticks_per_ms == 0) {
+		ticks_per_ms = 1;
+	}
+	return (now - breakupReadStart) / ticks_per_ms;
+}
+
+void
+Gta4lEmmcBlock::releaseBreakupMedia()
+{
+	if (breakupBootOpen && (breakupBoot != nullptr)) {
+		breakupBoot->close(this, 0);
+		breakupBootOpen = false;
+	}
+	if (breakupBoot != nullptr) {
+		breakupBoot->release();
+		breakupBoot = nullptr;
+	}
+	if (breakupWholeOpen && (breakupWhole != nullptr)) {
+		breakupWhole->close(this, 0);
+		breakupWholeOpen = false;
+	}
+	if (breakupWhole != nullptr) {
+		breakupWhole->release();
+		breakupWhole = nullptr;
+	}
+}
+
+void
+Gta4lEmmcBlock::breakupReportFailure(uint32_t reason)
+{
+	IOLockLock(reportLock);
+	report.breakup_reason = reason;
+	report.breakup_complete = 0;
+	breakupActive = false;
+	if (reason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_MEDIA) {
+		report.breakup_media = 1;
+	}
+	if (reason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_PART) {
+		report.breakup_part = 1;
+	}
+	if (reason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_BUDGET) {
+		report.breakup_budget = 1;
+	}
+	IOLockUnlock(reportLock);
+	releaseBreakupMedia();
+	panicWithReport();
+}
+
+void
+Gta4lEmmcBlock::breakupReportCancel()
+{
+	IOLockLock(reportLock);
+	report.breakup_cancel = 1;
+	report.breakup_reason = GTA4L_EMMC_BLOCK_BREAKUP_REASON_CANCEL;
+	report.breakup_complete = 0;
+	breakupActive = false;
+	IOLockUnlock(reportLock);
+	releaseBreakupMedia();
+	reportDone = true;
+}
+
+void
+Gta4lEmmcBlock::breakupObserve(IOMemoryDescriptor *buffer, UInt64 block,
+    UInt64 nblks)
+{
+	uint32_t tag;
+	uint32_t order = 0;
+	uint64_t end;
+
+	if (!breakupMode || (buffer == nullptr)) {
+		return;
+	}
+	tag = (uint32_t)buffer->getTag();
+	IOLockLock(reportLock);
+	if (!breakupActive) {
+		IOLockUnlock(reportLock);
+		return;
+	}
+	if ((tag == 0) &&
+	    ((block < breakupActiveFirst) || (block >= breakupActiveEnd))) {
+		if (breakupObservedForeign != 0xffffffffu) {
+			breakupObservedForeign++;
+		}
+		IOLockUnlock(reportLock);
+		return;
+	}
+	if ((tag != 0) && (tag != breakupActiveTag)) {
+		if (breakupObservedForeign != 0xffffffffu) {
+			breakupObservedForeign++;
+		}
+		IOLockUnlock(reportLock);
+		return;
+	}
+	if (nblks > GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS) {
+		order = 1;
+	}
+	if ((breakupActiveMax != 0) && (nblks > breakupActiveMax)) {
+		order = 1;
+	}
+	if ((breakupActiveSubrequests != 0) &&
+	    (breakupObservedSubrequests >= breakupActiveSubrequests)) {
+		order = 1;
+	}
+	if (block != breakupActiveNext) {
+		order = 1;
+	}
+	end = (nblks > (~0ull - block)) ? ~0ull : (block + nblks);
+	if (end > breakupActiveEnd) {
+		order = 1;
+	}
+	if (breakupObservedSubrequests != 0xffffffffu) {
+		breakupObservedSubrequests++;
+	}
+	if (nblks > 0xffffffffull) {
+		breakupObservedBlocks = 0xffffffffu;
+	} else if (breakupObservedBlocks <=
+	    (0xffffffffu - (uint32_t)nblks)) {
+		breakupObservedBlocks += (uint32_t)nblks;
+	} else {
+		breakupObservedBlocks = 0xffffffffu;
+	}
+	if (nblks > 0xffffffffull) {
+		breakupObservedMax = 0xffffffffu;
+	} else if ((uint32_t)nblks > breakupObservedMax) {
+		breakupObservedMax = (uint32_t)nblks;
+	}
+	if (order != 0) {
+		breakupObservedOrder = 1;
+	} else {
+		breakupActiveNext = end;
+	}
+	IOLockUnlock(reportLock);
+}
+
 void
 Gta4lEmmcBlock::runPartitionRead()
 {
@@ -2849,6 +3162,420 @@ Gta4lEmmcBlock::runDeblock()
 }
 
 void
+Gta4lEmmcBlock::runBreakup()
+{
+	uint32_t wholeCount = 0;
+	uint32_t partCount = 0;
+	uint32_t waited = 0;
+	uint32_t index;
+	uint32_t cases;
+	uint32_t passed = 0;
+	uint32_t failed = 0;
+	uint32_t reads = 0;
+	uint32_t blocks = 0;
+	uint32_t bytes = 0;
+	uint32_t span = 0;
+	uint32_t subrequests = 0;
+	uint32_t maxObserved = 0;
+	uint32_t foreign = 0;
+	uint32_t fails = 0;
+	uint32_t reason = GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE;
+	uint32_t complete;
+	uint32_t budget = 0;
+	uint32_t writable;
+	uint64_t wholeSize;
+	OSBoolean *writableProperty;
+	OSString *contentProperty;
+	int check;
+	uint8_t digest[32];
+
+	bzero(digest, sizeof(digest));
+	breakupWhole = nullptr;
+	breakupBoot = nullptr;
+	breakupWholeOpen = false;
+	breakupBootOpen = false;
+	IOLockLock(reportLock);
+	breakupActive = false;
+	breakupObservedSubrequests = 0;
+	breakupObservedBlocks = 0;
+	breakupObservedMax = 0;
+	breakupObservedOrder = 0;
+	breakupObservedForeign = 0;
+	report.breakup_cases = gta4l_emmc_block_breakup_case_count();
+	report.breakup_reason = GTA4L_EMMC_BLOCK_BREAKUP_REASON_MEDIA;
+	report.breakup_capacity = capacityBlocks;
+	report.breakup_segments = GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS;
+	report.breakup_limit = GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS;
+	IOLockUnlock(reportLock);
+
+	while (waited < GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS) {
+		if (reportCancel) {
+			breakupReportCancel();
+			return;
+		}
+		wholeCount = 0;
+		breakupWhole = findExactWholeMedia(&wholeCount);
+		if (wholeCount > 1u) {
+			breakupReportFailure(
+			    GTA4L_EMMC_BLOCK_BREAKUP_REASON_MEDIA);
+			return;
+		}
+		if ((breakupWhole != nullptr) && (wholeCount == 1u)) {
+			break;
+		}
+		if (breakupWhole != nullptr) {
+			breakupWhole->release();
+			breakupWhole = nullptr;
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_MEDIA_STEP_MS);
+		waited += GTA4L_EMMC_BLOCK_MEDIA_STEP_MS;
+	}
+	if (breakupWhole == nullptr) {
+		breakupReportFailure(GTA4L_EMMC_BLOCK_BREAKUP_REASON_MEDIA);
+		return;
+	}
+
+	wholeSize = (uint64_t)capacityBlocks * GTA4L_EMMC_BLOCK_BYTES;
+	writableProperty = OSDynamicCast(OSBoolean,
+	    breakupWhole->getProperty(kIOMediaWritableKey));
+	contentProperty = OSDynamicCast(OSString,
+	    breakupWhole->getProperty(kIOMediaContentKey));
+	writable = ((writableProperty != nullptr) &&
+	    writableProperty->getValue()) ? 1u : 0u;
+	copyContent(mediaContent, (contentProperty != nullptr) ?
+	    contentProperty->getCStringNoCopy() : nullptr);
+	IOLockLock(reportLock);
+	report.media_valid = 1;
+	report.whole = 1;
+	report.base = 0;
+	report.size = wholeSize;
+	report.writable = writable;
+	report.content = mediaContent;
+	report.breakup_capacity = capacityBlocks;
+	IOLockUnlock(reportLock);
+	check = gta4l_emmc_block_media_check(0, wholeSize, capacityBlocks, 1,
+	    (int)writable);
+	if (check != 0) {
+		breakupReportFailure(GTA4L_EMMC_BLOCK_BREAKUP_REASON_MEDIA);
+		return;
+	}
+	if (!breakupWhole->open(this, 0, kIOStorageAccessReader)) {
+		breakupReportFailure(GTA4L_EMMC_BLOCK_BREAKUP_REASON_OPEN);
+		return;
+	}
+	breakupWholeOpen = true;
+	breakupReadStart = gta4l_emmc_platform_counter();
+
+	cases = gta4l_emmc_block_breakup_case_count();
+	for (index = 0; index < cases; index++) {
+		const struct gta4l_emmc_block_breakup_case *item =
+		    gta4l_emmc_block_breakup_case_at(index);
+		IOMedia *media = nullptr;
+		IOMemoryDescriptor *descriptor;
+		UInt64 actual = 0;
+		uint64_t start = 0;
+		uint64_t limit = 0;
+		uint64_t mediaBase = 0;
+		uint64_t firstBlock = 0;
+		uint64_t endBlock = 0;
+		uint32_t length = 0;
+		uint32_t caseSpan = 0;
+		uint32_t caseBlocks = 0;
+		uint32_t caseSubrequests = 0;
+		uint32_t caseMax = 0;
+		uint32_t caseTag = index + 1u;
+		uint32_t caseReason = GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE;
+		uint32_t observedSubrequests = 0;
+		uint32_t observedBlocks = 0;
+		uint32_t observedMax = 0;
+		uint32_t observedOrder = 0;
+		uint32_t ok = 0;
+		int32_t caseStatus = 0;
+		uint64_t caseActual = 0;
+		IOReturn status;
+
+		bzero(digest, sizeof(digest));
+		if (reportCancel) {
+			breakupReportCancel();
+			return;
+		}
+		if (breakupElapsedMs() >=
+		    GTA4L_EMMC_BLOCK_BREAKUP_READ_BUDGET_MS) {
+			budget = 1;
+			break;
+		}
+		if (item == nullptr) {
+			caseReason = GTA4L_EMMC_BLOCK_BREAKUP_REASON_ARG;
+		} else {
+			start = item->start;
+			length = item->length;
+			if ((length == 0u) ||
+			    (length > GTA4L_EMMC_BLOCK_BREAKUP_MAX_BYTES)) {
+				caseReason =
+				    GTA4L_EMMC_BLOCK_BREAKUP_REASON_ARG;
+			}
+		}
+		if ((item != nullptr) &&
+		    (caseReason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE)) {
+			if (item->target ==
+			    GTA4L_EMMC_BLOCK_BREAKUP_TARGET_WHOLE) {
+				media = breakupWhole;
+				limit = wholeSize;
+			} else if (item->target ==
+			    GTA4L_EMMC_BLOCK_BREAKUP_TARGET_BOOT) {
+				if (breakupBoot == nullptr) {
+					uint32_t waitPart = 0;
+
+					while (waitPart <
+					    GTA4L_EMMC_BLOCK_BREAKUP_DEADLINE_MS) {
+						if (reportCancel) {
+							breakupReportCancel();
+							return;
+						}
+						partCount = 0;
+						breakupBoot = findPartitionMedia(
+						    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+						    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+						    &partCount);
+						if (partCount > 1u) {
+							breakupReportFailure(
+							    GTA4L_EMMC_BLOCK_BREAKUP_REASON_PART);
+							return;
+						}
+						if ((breakupBoot != nullptr) &&
+						    (partCount == 1u)) {
+							break;
+						}
+						if (breakupBoot != nullptr) {
+							breakupBoot->release();
+							breakupBoot = nullptr;
+						}
+						IOSleep(
+						    GTA4L_EMMC_BLOCK_BREAKUP_STEP_MS);
+						waitPart +=
+						    GTA4L_EMMC_BLOCK_BREAKUP_STEP_MS;
+					}
+					if (breakupBoot == nullptr) {
+						breakupReportFailure(
+						    GTA4L_EMMC_BLOCK_BREAKUP_REASON_PART);
+						return;
+					}
+					if (!breakupBoot->open(this, 0,
+					    kIOStorageAccessReader)) {
+						breakupReportFailure(
+						    GTA4L_EMMC_BLOCK_BREAKUP_REASON_OPEN);
+						return;
+					}
+					breakupBootOpen = true;
+				}
+				media = breakupBoot;
+				limit =
+				    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES;
+				mediaBase =
+				    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES;
+			} else {
+				caseReason =
+				    GTA4L_EMMC_BLOCK_BREAKUP_REASON_ARG;
+			}
+		}
+		if (caseReason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE) {
+			if ((start > limit) ||
+			    ((uint64_t)length > limit - start)) {
+				caseReason =
+				    GTA4L_EMMC_BLOCK_BREAKUP_REASON_ARG;
+			} else if (gta4l_emmc_block_breakup_geometry(start,
+			    length, &caseSpan, &caseBlocks, &caseSubrequests,
+			    &caseMax) != 0) {
+				caseReason =
+				    GTA4L_EMMC_BLOCK_BREAKUP_REASON_ARG;
+			} else if ((caseSpan != item->span) ||
+			    (caseBlocks != item->blocks) ||
+			    (caseSubrequests != item->subrequests) ||
+			    (caseMax != item->max_blocks)) {
+				caseReason =
+				    GTA4L_EMMC_BLOCK_BREAKUP_REASON_ARG;
+			}
+		}
+
+		if (caseReason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE) {
+			descriptor = IOMemoryDescriptor::withAddress(
+			    breakupBuffer, length, kIODirectionIn);
+			if (descriptor == nullptr) {
+				caseReason =
+				    GTA4L_EMMC_BLOCK_BREAKUP_REASON_DESC;
+			} else {
+				descriptor->setTag(caseTag);
+				firstBlock = (mediaBase + start) /
+				    GTA4L_EMMC_BLOCK_BREAKUP_SECTOR_BYTES;
+				endBlock = firstBlock + caseBlocks;
+				IOLockLock(reportLock);
+				breakupActive = true;
+				breakupActiveTag = caseTag;
+				breakupActiveFirst = firstBlock;
+				breakupActiveNext = firstBlock;
+				breakupActiveEnd = endBlock;
+				breakupActiveSubrequests = caseSubrequests;
+				breakupActiveMax = caseMax;
+				breakupObservedSubrequests = 0;
+				breakupObservedBlocks = 0;
+				breakupObservedMax = 0;
+				breakupObservedOrder = 0;
+				IOLockUnlock(reportLock);
+				status = media->read(this, start,
+				    descriptor, nullptr, &actual);
+				IOLockLock(reportLock);
+				breakupActive = false;
+				observedSubrequests =
+				    breakupObservedSubrequests;
+				observedBlocks = breakupObservedBlocks;
+				observedMax = breakupObservedMax;
+				observedOrder = breakupObservedOrder;
+				IOLockUnlock(reportLock);
+				descriptor->release();
+				reads++;
+				span += caseSpan;
+				blocks += caseSpan /
+				    GTA4L_EMMC_BLOCK_BREAKUP_SECTOR_BYTES;
+				bytes += length;
+				subrequests += observedSubrequests;
+				if (observedMax > maxObserved) {
+					maxObserved = observedMax;
+				}
+				caseStatus = (int32_t)status;
+				caseActual = actual;
+				if (status != kIOReturnSuccess) {
+					caseReason =
+					    GTA4L_EMMC_BLOCK_BREAKUP_REASON_READ;
+					fails++;
+				} else if (actual != length) {
+					caseReason =
+					    GTA4L_EMMC_BLOCK_BREAKUP_REASON_SHORT;
+					fails++;
+				} else {
+					gta4l_emmc_block_sha256(
+					    breakupBuffer, length, digest);
+					if (memcmp(digest, item->expected,
+					    sizeof(digest)) != 0) {
+						caseReason =
+						    GTA4L_EMMC_BLOCK_BREAKUP_REASON_HASH;
+					} else if (observedOrder != 0) {
+						caseReason =
+						    GTA4L_EMMC_BLOCK_BREAKUP_REASON_ORDER;
+					} else if ((observedSubrequests !=
+					    caseSubrequests) ||
+					    (observedBlocks != caseBlocks) ||
+					    (observedMax != caseMax)) {
+						caseReason =
+						    GTA4L_EMMC_BLOCK_BREAKUP_REASON_SPLIT;
+					} else {
+						ok = 1;
+					}
+				}
+			}
+		}
+
+		if (caseReason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE) {
+			passed++;
+		} else {
+			failed++;
+			if (reason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE) {
+				reason = caseReason;
+				IOLockLock(reportLock);
+				report.breakup_fail_index = index;
+				report.breakup_fail_reason = caseReason;
+				report.breakup_fail_status = caseStatus;
+				report.breakup_fail_actual = caseActual;
+				report.breakup_fail_target =
+				    (item != nullptr) ? item->target : 0u;
+				report.breakup_fail_start = start;
+				report.breakup_fail_length = length;
+				report.breakup_fail_span = caseSpan;
+				report.breakup_fail_subrequests =
+				    observedSubrequests;
+				report.breakup_fail_blocks = observedBlocks;
+				report.breakup_fail_max = observedMax;
+				memcpy(report.breakup_fail_digest, digest,
+				    sizeof(report.breakup_fail_digest));
+				IOLockUnlock(reportLock);
+			}
+		}
+		IOLockLock(reportLock);
+		report.breakup_passed = passed;
+		report.breakup_failed = failed;
+		report.breakup_reads = reads;
+		report.breakup_blocks = blocks;
+		report.breakup_bytes = bytes;
+		report.breakup_span = span;
+		report.breakup_subrequests = subrequests;
+		report.breakup_max = maxObserved;
+		report.breakup_fails = fails;
+		report.breakup_last_index = index;
+		report.breakup_last_target =
+		    (item != nullptr) ? item->target : 0u;
+		report.breakup_last_start = start;
+		report.breakup_last_length = length;
+		report.breakup_last_span = caseSpan;
+		report.breakup_last_status = caseStatus;
+		report.breakup_last_actual = caseActual;
+		report.breakup_last_subrequests = observedSubrequests;
+		report.breakup_last_blocks = observedBlocks;
+		report.breakup_last_max = observedMax;
+		if (ok != 0) {
+			memcpy(report.breakup_last_digest, digest,
+			    sizeof(report.breakup_last_digest));
+		} else {
+			bzero(report.breakup_last_digest,
+			    sizeof(report.breakup_last_digest));
+		}
+		IOLockUnlock(reportLock);
+	}
+
+	if (reportCancel) {
+		breakupReportCancel();
+		return;
+	}
+
+	IOLockLock(reportLock);
+	foreign = breakupObservedForeign;
+	report.breakup_cases = cases;
+	report.breakup_passed = passed;
+	report.breakup_failed = failed;
+	report.breakup_reason = (reason !=
+	    GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE) ? reason :
+	    ((foreign != 0) ? GTA4L_EMMC_BLOCK_BREAKUP_REASON_FOREIGN :
+	    ((budget != 0) ? GTA4L_EMMC_BLOCK_BREAKUP_REASON_BUDGET :
+	    GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE));
+	report.breakup_reads = reads;
+	report.breakup_blocks = blocks;
+	report.breakup_bytes = bytes;
+	report.breakup_span = span;
+	report.breakup_subrequests = subrequests;
+	report.breakup_max = maxObserved;
+	report.breakup_foreign = foreign;
+	report.breakup_fails = fails;
+	if (budget != 0) {
+		report.breakup_budget = 1;
+	}
+	complete = ((report.breakup_cases != 0u) &&
+	    (report.breakup_passed == report.breakup_cases) &&
+	    (report.breakup_failed == 0u) &&
+	    (report.breakup_reason == GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE) &&
+	    (report.breakup_cancel == 0u) &&
+	    (report.breakup_budget == 0u) &&
+	    (report.breakup_media == 0u) &&
+	    (report.breakup_part == 0u) &&
+	    (report.breakup_foreign == 0u) &&
+	    (report.breakup_limit ==
+	    GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS) &&
+	    (report.breakup_segments ==
+	    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS)) ? 1u : 0u;
+	report.breakup_complete = complete;
+	IOLockUnlock(reportLock);
+	releaseBreakupMedia();
+	panicWithReport();
+}
+
+void
 Gta4lEmmcBlock::runPartitionComparison()
 {
 	uint32_t wholeCount = 0;
@@ -3436,6 +4163,16 @@ Gta4lEmmcBlock::runReport()
 	report.deblock_complete = 0;
 	report.deblock_reason = GTA4L_EMMC_BLOCK_DEBLOCK_REASON_MEDIA;
 	report.deblock_segments = GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS;
+	report.breakup = breakupMode ? 1u : 0u;
+	report.breakup_cases = gta4l_emmc_block_breakup_case_count();
+	report.breakup_complete = 0;
+	report.breakup_reason = GTA4L_EMMC_BLOCK_BREAKUP_REASON_MEDIA;
+	report.breakup_segments = GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS;
+	report.breakup_limit = GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS;
+	if (breakupMode) {
+		runBreakup();
+		return;
+	}
 	if (deblockMode) {
 		runDeblock();
 		return;

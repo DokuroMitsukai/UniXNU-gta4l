@@ -570,8 +570,12 @@ ADAPTER_MUTATIONS = [
        '\t\t\t\t\t    sizeof(digest)) != 0) && 0) {\n')],
      'deblock-hash-mismatch'),
     ('deblock-short-accept',
-     [('\t\t\t\t} else if (actual != length) {\n',
-       '\t\t\t\t} else if ((actual != length) && 0) {\n')],
+     [('\t\t\t\t} else if (actual != length) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_SHORT;\n',
+       '\t\t\t\t} else if ((actual != length) && 0) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_SHORT;\n')],
      'deblock-short-read'),
     ('deblock-read-error-accept',
      [('\t\t\t\tif (status != kIOReturnSuccess) {\n'
@@ -600,10 +604,10 @@ ADAPTER_MUTATIONS = [
        '\treport.deblock_complete = complete | 1u;\n')],
      'deblock-hash-mismatch'),
     ('deblock-segment-advertise-1',
-     [('\t    (unsigned long long)(deblockMode ?\n'
-       '\t    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : 1u), 32)) {\n',
-       '\t    (unsigned long long)(0 ?\n'
-       '\t    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : 1u), 32)) {\n')],
+     [('\t    (unsigned long long)(breakupMode ?\n'
+       '\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?\n',
+       '\t    (unsigned long long)(breakupMode ?\n'
+       '\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : 0 ?\n')],
      'deblock-segment-property'),
     ('deblock-bounce-skip',
      [('\t\t\tdescriptor = IOMemoryDescriptor::withAddress(\n'
@@ -613,9 +617,13 @@ ADAPTER_MUTATIONS = [
      'deblock-match'),
     ('deblock-range-accept',
      [('\t\t\tif ((start > limit) ||\n'
-       '\t\t\t    ((uint64_t)length > limit - start)) {\n',
+       '\t\t\t    ((uint64_t)length > limit - start)) {\n'
+       '\t\t\t\tcaseReason =\n'
+       '\t\t\t\t    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_ARG;\n',
        '\t\t\tif (((start > limit) ||\n'
-       '\t\t\t    ((uint64_t)length > limit - start)) && 0) {\n')],
+       '\t\t\t    ((uint64_t)length > limit - start)) && 0) {\n'
+       '\t\t\t\tcaseReason =\n'
+       '\t\t\t\t    GTA4L_EMMC_BLOCK_DEBLOCK_REASON_ARG;\n')],
      'deblock-range-invalid'),
     ('deblock-whole-close-skip',
      [('\tdeblockWholeOpen = true;\n',
@@ -625,15 +633,102 @@ ADAPTER_MUTATIONS = [
      [('\t\t\t\t\tdeblockBootOpen = true;\n',
        '\t\t\t\t\tdeblockBootOpen = false;\n')],
      'deblock-match'),
+    ('breakup-select-refused-accepted',
+     [('\tif (breakup == GTA4L_EMMC_BLOCK_BREAKUP_REFUSED) {\n',
+       '\tif ((breakup == GTA4L_EMMC_BLOCK_BREAKUP_REFUSED) && 0) {\n')],
+     'breakup-refused-value'),
+    ('breakup-hash-skip',
+     [('\t\t\t\t\tgta4l_emmc_block_sha256(\n'
+       '\t\t\t\t\t    breakupBuffer, length, digest);\n'
+       '\t\t\t\t\tif (memcmp(digest, item->expected,\n'
+       '\t\t\t\t\t    sizeof(digest)) != 0) {\n',
+       '\t\t\t\t\tgta4l_emmc_block_sha256(\n'
+       '\t\t\t\t\t    breakupBuffer, length, digest);\n'
+       '\t\t\t\t\tif ((memcmp(digest, item->expected,\n'
+       '\t\t\t\t\t    sizeof(digest)) != 0) && 0) {\n')],
+     'breakup-hash-mismatch'),
+    ('breakup-short-accept',
+     [('\t\t\t\t} else if (actual != length) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_BREAKUP_REASON_SHORT;\n',
+       '\t\t\t\t} else if ((actual != length) && 0) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_BREAKUP_REASON_SHORT;\n')],
+     'breakup-short-read'),
+    ('breakup-read-error-accept',
+     [('\t\t\t\tif (status != kIOReturnSuccess) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_BREAKUP_REASON_READ;\n',
+       '\t\t\t\tif ((status != kIOReturnSuccess) && 0) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_BREAKUP_REASON_READ;\n')],
+     'breakup-read-failure'),
+    ('breakup-budget-skip',
+     [('\t\tif (breakupElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_BREAKUP_READ_BUDGET_MS) {\n',
+       '\t\tif ((breakupElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_BREAKUP_READ_BUDGET_MS) && 0) {\n')],
+     'breakup-budget'),
+    ('breakup-cancel-skip',
+     [('\t\tbzero(digest, sizeof(digest));\n'
+       '\t\tif (reportCancel) {\n'
+       '\t\t\tbreakupReportCancel();\n',
+       '\t\tbzero(digest, sizeof(digest));\n'
+       '\t\tif (reportCancel && 0) {\n'
+       '\t\t\tbreakupReportCancel();\n')],
+     'breakup-cancel'),
+    ('breakup-complete-claim',
+     [('\treport.breakup_complete = complete;\n',
+       '\treport.breakup_complete = complete | 1u;\n')],
+     'breakup-hash-mismatch'),
+    ('breakup-segment-advertise-1',
+     [('\t    (unsigned long long)(breakupMode ?\n'
+       '\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?\n',
+       '\t    (unsigned long long)(0 ?\n'
+       '\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?\n')],
+     'breakup-properties'),
+    ('breakup-bounce-skip',
+     [('\t\t\tdescriptor = IOMemoryDescriptor::withAddress(\n'
+       '\t\t\t    breakupBuffer, length, kIODirectionIn);\n',
+       '\t\t\tdescriptor = IOMemoryDescriptor::withAddress(\n'
+       '\t\t\t    breakupBuffer + 8, length, kIODirectionIn);\n')],
+     'breakup-match'),
+    ('breakup-order-skip',
+     [('\t\t\t\t\t} else if (observedOrder != 0) {\n'
+       '\t\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_BREAKUP_REASON_ORDER;\n',
+       '\t\t\t\t\t} else if ((observedOrder != 0) && 0) {\n'
+       '\t\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_BREAKUP_REASON_ORDER;\n')],
+     'breakup-split-extra'),
+    ('breakup-split-count-skip',
+     [('\t\t\t\t\t} else if ((observedSubrequests !=\n'
+       '\t\t\t\t\t    caseSubrequests) ||\n'
+       '\t\t\t\t\t    (observedBlocks != caseBlocks) ||\n'
+       '\t\t\t\t\t    (observedMax != caseMax)) {\n',
+       '\t\t\t\t\t} else if (0) {\n')],
+     'breakup-split-missing'),
+    ('breakup-whole-close-skip',
+     [('\tbreakupWholeOpen = true;\n',
+       '\tbreakupWholeOpen = false;\n')],
+     'breakup-match'),
+    ('breakup-boot-close-skip',
+     [('\t\t\t\t\tbreakupBootOpen = true;\n',
+       '\t\t\t\t\tbreakupBootOpen = false;\n')],
+     'breakup-match'),
 ]
 
 SUPPORT_MUTATIONS = [
     ('deblock-head-discard',
-     [('\tchunks[chunk_count].span_offset = head;\n',
+     [('\tchunks[chunk_count].length = request_length;\n'
+       '\tchunks[chunk_count].span_offset = head;\n',
+       '\tchunks[chunk_count].length = request_length;\n'
        '\tchunks[chunk_count].span_offset = 0;\n')],
      'deblock-match'),
     ('deblock-copy-shift',
-     [('\tchunks[chunk_count].span_offset = head;\n',
+     [('\tchunks[chunk_count].length = request_length;\n'
+       '\tchunks[chunk_count].span_offset = head;\n',
+       '\tchunks[chunk_count].length = request_length;\n'
        '\tchunks[chunk_count].span_offset = head + 8u;\n')],
      'deblock-match'),
     ('deblock-tail-into-request',
@@ -923,6 +1018,31 @@ def check_adapter_source():
         'deblock worst case must stay below the watchdog'
     assert 'static_assert(GTA4L_EMMC_BLOCK_DEBLOCK_MAX_BYTES >=' in \
         adapter, 'deblock bounce must cover the aligned span'
+    assert '#define GTA4L_EMMC_BLOCK_BREAKUP_MAX_BLOCKS 128u' in \
+        policy_header, 'breakup spans must stay inside the request limit'
+    assert 'GTA4L_EMMC_BLOCK_BREAKUP_REASON_HASH 7u' in policy_header, \
+        'breakup digest mismatch must have a distinct reason'
+    assert 'GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS 3u' in policy_header, \
+        'breakup reads must advertise the multi-segment path'
+    assert 'GTA4L_EMMC_BLOCK_BREAKUP_ARG' in adapter, \
+        'adapter must parse the breakup token'
+    assert 'gta4l_emmc_block_breakup_select' in adapter, \
+        'adapter must use the shared breakup selector'
+    assert 'runBreakup' in adapter, \
+        'adapter must implement the breakup qualification'
+    assert 'breakupBuffer' in adapter and \
+        'IOFreeAligned(breakupBuffer' in adapter, \
+        'breakup scratch must be allocated and freed'
+    assert 'report.breakup_complete = 0' in adapter, \
+        'breakup qualification must start as an explicit non-claim'
+    assert 'breakupElapsedMs() >=' in adapter, \
+        'breakup qualification must enforce the read budget'
+    assert 'static_assert(GTA4L_EMMC_BLOCK_BREAKUP_WORST_MS <' in adapter, \
+        'breakup worst case must stay below the watchdog'
+    assert 'static_assert(GTA4L_EMMC_BLOCK_BREAKUP_MAX_BYTES >=' in \
+        adapter, 'breakup bounce must cover the aligned span'
+    assert 'breakupObserve(buffer, blockNumber, nblks)' in adapter, \
+        'adapter must observe the actual subrequest decomposition'
 
 
 def compile_adapter(compiler, temp):
@@ -1095,8 +1215,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 144, f'expected 144 adapter PASS lines, got {passes}'
-        print('PASS adapter: 143 scenarios against the host IOKit seam')
+        assert passes == 179, f'expected 179 adapter PASS lines, got {passes}'
+        print('PASS adapter: 178 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

@@ -481,6 +481,16 @@ def test_emmc_block_3_deblock(base):
                                   'deblock')
 
 
+def test_emmc_block_1_breakup(base):
+    check_observation_personality(base, 'emmc-block-1-breakup', 1,
+                                  'breakup')
+
+
+def test_emmc_block_3_breakup(base):
+    check_observation_personality(base, 'emmc-block-3-breakup', 3,
+                                  'breakup')
+
+
 def test_partcmp_rejects_early_panic_fixture(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
@@ -562,6 +572,34 @@ def test_deblock_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS deblock rejects the early-panic fs-timer fixture')
+
+
+def test_breakup_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-1-breakup'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for breakup')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS breakup rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -707,6 +745,42 @@ def test_diagnostic_contract(_base):
     missing_deblock = checks('gta4l-emmc-block=1', 'emmc-block-1-deblock')
     assert not missing_deblock[
         'emmc-block-1-deblock_diagnostic_selected']
+    broken = checks('rd=md0 gta4l-emmc-block=1 gta4l-emmc-breakup=1',
+                    'emmc-block-1-breakup')
+    assert all(broken.values()), broken
+    broken_chunked = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-breakup=1',
+        'emmc-block-3-breakup')
+    assert all(broken_chunked.values()), broken_chunked
+    orphan_breakup = checks('gta4l-emmc-probe=1 gta4l-emmc-breakup=1')
+    assert not orphan_breakup['no_breakup_token_outside_block_mode']
+    duplicate_breakup = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-breakup=1 gta4l-emmc-breakup=1',
+        'emmc-block-1-breakup')
+    assert not duplicate_breakup['at_most_one_breakup_token']
+    bad_breakup_value = checks('gta4l-emmc-block=1 gta4l-emmc-breakup=2',
+                               'emmc-block-1-breakup')
+    assert not bad_breakup_value['breakup_value_one']
+    assert not bad_breakup_value[
+        'emmc-block-1-breakup_diagnostic_selected']
+    breakup_partobs = checks('gta4l-emmc-block=1 gta4l-emmc-partobs=1 '
+                             'gta4l-emmc-breakup=1')
+    assert not breakup_partobs['breakup_partobs_exclusive']
+    breakup_partcmp = checks('gta4l-emmc-block=1 gta4l-emmc-partcmp=1 '
+                             'gta4l-emmc-breakup=1')
+    assert not breakup_partcmp['breakup_partcmp_exclusive']
+    breakup_partread = checks('gta4l-emmc-block=1 gta4l-emmc-partread=1 '
+                              'gta4l-emmc-breakup=1')
+    assert not breakup_partread['breakup_partread_exclusive']
+    breakup_deblock = checks('gta4l-emmc-block=1 gta4l-emmc-deblock=1 '
+                             'gta4l-emmc-breakup=1')
+    assert not breakup_deblock['breakup_deblock_exclusive']
+    plain_breakup_expected = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-breakup=1', 'emmc-block-1')
+    assert not plain_breakup_expected['emmc-block-1_diagnostic_selected']
+    missing_breakup = checks('gta4l-emmc-block=1', 'emmc-block-1-breakup')
+    assert not missing_breakup[
+        'emmc-block-1-breakup_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -724,10 +798,12 @@ def main():
              test_emmc_block_1_partcmp, test_emmc_block_3_partcmp,
              test_emmc_block_1_partread, test_emmc_block_3_partread,
              test_emmc_block_1_deblock, test_emmc_block_3_deblock,
+             test_emmc_block_1_breakup, test_emmc_block_3_breakup,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,
              test_deblock_rejects_early_panic_fixture,
+             test_breakup_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)

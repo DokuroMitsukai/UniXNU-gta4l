@@ -5688,6 +5688,72 @@ preserved. The one-boot budget is consumed; no retry, reflash, rollback,
 reset/repair, mount, commit or push was performed. Findings:
 `docs/emmc-n10.6-deblock-hardware-result-2026-11-08.md`.
 
+### 5.3.82 N10.8 deterministic breakup qualification implementation (host-only, 2026-11-09)
+
+Follow-up to §5.3.79-§5.3.81 and the owner-approved
+`docs/emmc-n10.7-breakup-qualification-design-2026-11-09.md`. N10.8 implements
+the opt-in `gta4l-emmc-breakup=1` mode in `package/Gta4lEmmcBlock.h`/`.c`/
+`.cpp` without a candidate build, ABI/QEMU audit, device access, flash or
+boot. The token requires exactly one block token 1/3 and refuses a duplicate,
+an orphan, a non-1 or malformed value and every partobs/partcmp/partread/
+deblock combination; the absent-token legacy, partobs, partcmp, partread and
+deblock reports stay byte-for-byte unchanged. The mode advertises
+`kIOMaximumBlockCountReadKey=8` and `kIOMaximumByteCountReadKey=4,096` only
+for itself (the other modes keep 64/32,768) and
+`kIOMaximumSegmentCountReadKey=3`; it allocates one page-aligned 65,536-byte
+`IOMallocAligned` bounce buffer covering the largest requested length and the
+largest aligned span, freed with `IOFreeAligned()`.
+
+The four pinned cases are boot-partition reads at `4096/4096`, `4096/65536`,
+`4096/65024` and `4196/65024`. They cover the direct `executeRequest()`
+short-circuit (case 0), the exact 16-stage eight-block split (case 1), the
+15-stage split with a 7-block final stage (case 2) and the unaligned split
+through the deblocker's three-chunk descriptor (case 3). Each case carries a
+full 32-byte SHA-256 derived from the gate-pinned v5 BOOT image kernel
+section; the report prints the first 16 bytes. The expected full-pass line is
+`BREAKUP: cases=4 passed=4 failed=0 reason=0 complete=1 reads=4 bytes=199680
+span=200192 blocks=391 subrequests=49 max=8 foreign=0 fails=0 cancel=0
+budget=0 media=0 part=0 limit=8 seg=3 cap=61071360`, and the first failing
+case otherwise supplies `BREAKUPREAD`.
+
+The report thread records the active case under `reportLock` before each
+`media->read()` and clears it after the call; it never holds the lock across
+the media call. The adapter's `doAsyncReadWrite()` calls the mode-scoped
+`breakupObserve()` after the null/zero checks and before taking the
+controller `gate`. The observer takes `reportLock` briefly, classifies the
+request by case tag (direct path) or tag-0 block range (deblocker path),
+records subrequest count/block total/maximum/order, counts unattributable
+requests as `foreign`, does not retain the buffer and performs no I/O; there
+is no lock inversion. The first failure latches its case index, reason,
+status, actual, observed decomposition and digest prefix; later
+read/short/hash/descriptor/split/order failures continue, while media,
+partition, open, budget and cancellation stop the run. `complete=1` requires
+all four cases to pass with `reason=0`, `cancel=0`, `budget=0`, `media=0`,
+`part=0`, `foreign=0`, `limit=8` and `seg=3`. The worst case is
+20,000 + 6,000 + 2,000 + 1,000 = 29,000 ms, below the 30,000 ms watchdog, and
+the formatter keeps the `BREAKUP` line at or below 448 bytes, the
+`BREAKUPREAD` line at or below 320 bytes and the whole report below 2,048
+bytes before NUL termination with fail-closed behavior unchanged.
+
+Host results: the block suite passes 48 core scenarios/38 mutation controls
+and 178 adapter scenarios with 58 adapter, three support and eight policy
+mutation controls. The adapter coverage includes the four-case full pass, the
+production 64-block control (case 0 is one 8-block subrequest; cases 1-3
+split at 64 blocks and fail with `SPLIT`/`ORDER`), the `seg=1` anti-weakening
+control (case 3 fails with `kIOReturnDMAError` before the adapter), wrong
+decomposition (missing/extra/reordered/overlapping/oversized/single
+subrequest), foreign traffic, read/short/hash/descriptor/range/zero-length
+failures, budget, cancellation, media/partition/open failures, the watchdog
+race and the selector/property/report controls. Diagnostic payload tests pass
+37 checks and the packager self-test 14 checks, including both
+`emmc-block-1-breakup` and `emmc-block-3-breakup` personalities, the
+`fs-timer-hold` fixture requirement and the exclusivity refusals. The host
+model reconstructs the `IOBreaker`/`IODeblocker` split; it does not execute
+the real family code, so N10.9 candidate production and N10.10 hardware
+remain separately gated, N10.6 remains the only breakup-layer hardware
+observation and initialization reliability remains `[U]`. Findings:
+`docs/emmc-n10.7-breakup-qualification-design-2026-11-09.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

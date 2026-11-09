@@ -203,10 +203,13 @@ public:
 	virtual UInt64 getLength() const { return length_; }
 	virtual int getDirection() const { return direction_; }
 	virtual void *address() const { return address_; }
+	virtual void setTag(UInt32 tag) { tag_ = tag; }
+	virtual UInt32 getTag() const { return tag_; }
 protected:
-	void *address_;
-	UInt64 length_;
-	int direction_;
+	void *address_ = nullptr;
+	UInt64 length_ = 0;
+	int direction_ = 0;
+	UInt32 tag_ = 0;
 };
 
 class IOService : public OSObject {
@@ -500,6 +503,24 @@ struct gta4l_test_state {
 	int deblock_adapter_calls;
 	int deblock_dma_errors;
 	int deblock_unaligned_bounce;
+	int breakup_model;
+	int breakup_limit_blocks;
+	int breakup_limit_bytes;
+	int breakup_limit_segments;
+	int breakup_fail_at;
+	int breakup_fail_status;
+	int breakup_short_at;
+	int breakup_short_mode;
+	int breakup_corrupt_at;
+	int breakup_cancel_at;
+	uint32_t breakup_advance_ms;
+	int breakup_read_calls;
+	int breakup_adapter_calls;
+	int breakup_dma_errors;
+	int breakup_unaligned_bounce;
+	int breakup_split_mode;
+	int breakup_foreign_at;
+	int breakup_foreign_mode;
 };
 
 typedef void (*gta4l_test_partition_sample_fn)(uint32_t sample,
@@ -514,6 +535,9 @@ extern gta4l_test_media_read_fn gta4l_test_media_read_hook;
 
 typedef void (*gta4l_test_deblock_sample_fn)(uint32_t call, uint32_t phase);
 extern gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;
+
+typedef void (*gta4l_test_breakup_sample_fn)(uint32_t call, uint32_t phase);
+extern gta4l_test_breakup_sample_fn gta4l_test_breakup_hook;
 
 void gta4l_test_fill_sector(uint64_t block, void *buffer);
 

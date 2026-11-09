@@ -792,7 +792,30 @@ partition layout, payload policy and packaging.
   post-flash readback and the pinned digest. This qualifies only those eleven
   ranges and the deblock/breakup path on that one boot; the boot budget is
   consumed and no retry, reflash or repair is authorized. Initialization
-  reliability remains `[U]`. See
+  reliability remains `[U]`.
+  N10.7 then designed the owner-approved deterministic breakup qualification:
+  the opt-in `gta4l-emmc-breakup=1` token requires exactly one block token
+  1/3 and refuses duplicates, orphans, non-1 values and every
+  partobs/partcmp/partread/deblock combination; the mode-scoped advertisement
+  is eight read blocks (4,096 bytes) and three segments, and four pinned
+  boot-partition cases exercise the direct short-circuit, an exact 16-stage
+  split, a 15-stage split with a 7-block final stage and an unaligned split
+  through the deblocker. N10.8 then implemented the host-only mode without a
+  candidate build or device access: a page-aligned 65,536-byte bounce buffer,
+  a bounded tag/range observer that records each driver-level subrequest
+  without taking the controller gate or retaining the buffer, first-16-byte
+  SHA-256 checks against the pinned digests, and the two `BREAKUP`/
+  `BREAKUPREAD` report lines inside the existing 2,048-byte report. The
+  expected full-pass line is `cases=4 passed=4 failed=0 reason=0 complete=1
+  reads=4 bytes=199680 span=200192 blocks=391 subrequests=49 max=8 foreign=0
+  fails=0 cancel=0 budget=0 media=0 part=0 limit=8 seg=3 cap=61071360`, and
+  the block suite passes 48 core scenarios/38 mutation controls and 178
+  adapter scenarios with 58 adapter, three support and eight policy mutation
+  controls; diagnostic payload 37 checks and packager self-test 14 checks
+  also pass. The host model reconstructs the breaker/deblocker split; it does
+  not run the real family code, so N10.9 candidate production and N10.10
+  hardware remain separately gated. See
+  [docs/emmc-n10.7-breakup-qualification-design-2026-11-09.md](docs/emmc-n10.7-breakup-qualification-design-2026-11-09.md),
   [docs/emmc-n10.6-deblock-hardware-result-2026-11-08.md](docs/emmc-n10.6-deblock-hardware-result-2026-11-08.md),
   [docs/emmc-n10.5-deblock-candidate-2026-11-08.md](docs/emmc-n10.5-deblock-candidate-2026-11-08.md),
   [docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md](docs/emmc-n10.3-deblock-qualification-design-2026-11-08.md),
@@ -807,7 +830,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.81,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.82,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

@@ -304,7 +304,13 @@ personality, and any deblock+partobs, deblock+partcmp or deblock+partread
 combination. The host-only N10.4 batch rebuilt no payload. N10.5 rebuilt the
 same `emmc-block-3-deblock` payload (`924c7bbd…`) against the deblock kernel
 with the same fixture and mapping, and N10.6 flashed that payload in the BOOT
-image `bacc933f…` and booted it once. The
+image `bacc933f…` and booted it once. The N10.7 design and N10.8 host
+implementation add `emmc-block-1-breakup` and `emmc-block-3-breakup`, which
+map to the same block token plus `gta4l-emmc-breakup=1`; both require the
+hold fixture, and the checker refuses an orphan, duplicate or non-1 breakup
+token, a mismatched personality, and any breakup+partobs, breakup+partcmp,
+breakup+partread or breakup+deblock combination. N10.8 rebuilt no payload;
+N10.9 candidate production is separately gated. The
 stage-2
 image built on
 2026-10-31 is

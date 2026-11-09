@@ -22,6 +22,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTCMP_ARG "gta4l-emmc-partcmp"
 #define GTA4L_EMMC_BLOCK_PARTREAD_ARG "gta4l-emmc-partread"
 #define GTA4L_EMMC_BLOCK_DEBLOCK_ARG "gta4l-emmc-deblock"
+#define GTA4L_EMMC_BLOCK_BREAKUP_ARG "gta4l-emmc-breakup"
 
 #define GTA4L_EMMC_BLOCK_MODE_OFF 0
 #define GTA4L_EMMC_BLOCK_MODE_REPORT 1
@@ -50,6 +51,10 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_DEBLOCK_OFF 0
 #define GTA4L_EMMC_BLOCK_DEBLOCK_ON 1
 #define GTA4L_EMMC_BLOCK_DEBLOCK_REFUSED (-1)
+
+#define GTA4L_EMMC_BLOCK_BREAKUP_OFF 0
+#define GTA4L_EMMC_BLOCK_BREAKUP_ON 1
+#define GTA4L_EMMC_BLOCK_BREAKUP_REFUSED (-1)
 
 /* Bounded observation budgets. The media wait is the design's 20 s window;
  * the partition wait is an additional, non-fatal observation. The N8
@@ -145,6 +150,34 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS 3u
 #define GTA4L_EMMC_BLOCK_DEBLOCK_LINE_BYTES 384u
 #define GTA4L_EMMC_BLOCK_DEBLOCK_DETAIL_LINE_BYTES 256u
+
+/* N10.7 deterministic IOBreaker breakup qualification. The mode-scoped
+ * advertisement is 8 read blocks (4,096 bytes) and three segments; the
+ * 65,536-byte page-aligned bounce covers the largest requested length and
+ * the largest aligned span. The media wait, the 6,000 ms read budget, one
+ * in-flight 1,000 ms read and the partition deadline stay below the 30 s
+ * watchdog. */
+#define GTA4L_EMMC_BLOCK_BREAKUP_MAX_BLOCKS 128u
+#define GTA4L_EMMC_BLOCK_BREAKUP_MAX_SUBREQUESTS 16u
+#define GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS 8u
+#define GTA4L_EMMC_BLOCK_BREAKUP_SECTOR_BYTES 512u
+#define GTA4L_EMMC_BLOCK_BREAKUP_MAX_BYTES \
+	(GTA4L_EMMC_BLOCK_BREAKUP_MAX_BLOCKS * \
+	GTA4L_EMMC_BLOCK_BREAKUP_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_BREAKUP_READ_MAX_BYTES \
+	(GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS * \
+	GTA4L_EMMC_BLOCK_BREAKUP_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS 3u
+#define GTA4L_EMMC_BLOCK_BREAKUP_DEADLINE_MS 2000u
+#define GTA4L_EMMC_BLOCK_BREAKUP_STEP_MS 50u
+#define GTA4L_EMMC_BLOCK_BREAKUP_STABLE_MS 250u
+#define GTA4L_EMMC_BLOCK_BREAKUP_READ_BUDGET_MS 6000u
+#define GTA4L_EMMC_BLOCK_BREAKUP_WORST_MS \
+	(GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS + \
+	GTA4L_EMMC_BLOCK_BREAKUP_READ_BUDGET_MS + 1000u + \
+	GTA4L_EMMC_BLOCK_BREAKUP_DEADLINE_MS)
+#define GTA4L_EMMC_BLOCK_BREAKUP_LINE_BYTES 448u
+#define GTA4L_EMMC_BLOCK_BREAKUP_DETAIL_LINE_BYTES 320u
 
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
@@ -339,6 +372,53 @@ struct gta4l_emmc_block_report {
 	int32_t deblock_fail_status;
 	uint64_t deblock_fail_actual;
 	uint8_t deblock_fail_digest[16];
+	/* Opt-in deterministic IOBreaker breakup qualification. The mode
+	 * advertises eight read blocks and three segments; each case records
+	 * the observed driver-level decomposition and the digest prefix. */
+	uint32_t breakup;
+	uint32_t breakup_cases;
+	uint32_t breakup_passed;
+	uint32_t breakup_failed;
+	uint32_t breakup_reason;
+	uint32_t breakup_complete;
+	uint32_t breakup_reads;
+	uint32_t breakup_bytes;
+	uint32_t breakup_span;
+	uint32_t breakup_blocks;
+	uint32_t breakup_subrequests;
+	uint32_t breakup_max;
+	uint32_t breakup_foreign;
+	uint32_t breakup_fails;
+	uint32_t breakup_cancel;
+	uint32_t breakup_budget;
+	uint32_t breakup_media;
+	uint32_t breakup_part;
+	uint32_t breakup_limit;
+	uint32_t breakup_segments;
+	uint32_t breakup_capacity;
+	uint32_t breakup_last_index;
+	uint32_t breakup_last_target;
+	uint64_t breakup_last_start;
+	uint32_t breakup_last_length;
+	uint32_t breakup_last_span;
+	int32_t breakup_last_status;
+	uint64_t breakup_last_actual;
+	uint32_t breakup_last_subrequests;
+	uint32_t breakup_last_blocks;
+	uint32_t breakup_last_max;
+	uint8_t breakup_last_digest[16];
+	uint32_t breakup_fail_index;
+	uint32_t breakup_fail_reason;
+	int32_t breakup_fail_status;
+	uint64_t breakup_fail_actual;
+	uint32_t breakup_fail_target;
+	uint64_t breakup_fail_start;
+	uint32_t breakup_fail_length;
+	uint32_t breakup_fail_span;
+	uint32_t breakup_fail_subrequests;
+	uint32_t breakup_fail_blocks;
+	uint32_t breakup_fail_max;
+	uint8_t breakup_fail_digest[16];
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -427,6 +507,14 @@ int gta4l_emmc_block_deblock_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
     int partcmp_selected, int partread_selected);
 
+/* Select the deterministic breakup qualification. The token is accepted only
+ * when exactly one block mode 1/3 token is selected, the value is exactly 1,
+ * the token is not duplicated and none of the other partition/read
+ * instruments (including deblock) is selected in the same boot. */
+int gta4l_emmc_block_breakup_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int partobs_selected,
+    int partcmp_selected, int partread_selected, int deblock_selected);
+
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_PMBR 1u
@@ -513,6 +601,55 @@ gta4l_emmc_block_deblock_case_at(uint32_t index);
 struct gta4l_emmc_block_deblock_case *
 gta4l_emmc_block_deblock_case_mutable(uint32_t index);
 #endif
+
+/* BREAKUP reason codes. The first failing case latches the reason; later
+ * read/short/hash/descriptor/split/order failures keep the counters. */
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_MEDIA 1u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_PART 2u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_OPEN 3u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_DESC 4u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_READ 5u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_SHORT 6u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_HASH 7u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_BUDGET 8u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_CANCEL 9u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_ARG 10u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_SPLIT 11u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_ORDER 12u
+#define GTA4L_EMMC_BLOCK_BREAKUP_REASON_FOREIGN 13u
+
+#define GTA4L_EMMC_BLOCK_BREAKUP_TARGET_WHOLE 0u
+#define GTA4L_EMMC_BLOCK_BREAKUP_TARGET_BOOT 1u
+
+/* One pinned breakup read. start and length are byte quantities relative to
+ * the target media; span is the deblocker-aligned byte count and blocks,
+ * subrequests and max_blocks are the expected decomposition. expected is the
+ * SHA-256 of the exact requested bytes. */
+struct gta4l_emmc_block_breakup_case {
+	uint32_t target;
+	uint64_t start;
+	uint32_t length;
+	uint32_t span;
+	uint32_t blocks;
+	uint32_t subrequests;
+	uint32_t max_blocks;
+	uint8_t expected[32];
+};
+
+uint32_t gta4l_emmc_block_breakup_case_count(void);
+const struct gta4l_emmc_block_breakup_case *
+gta4l_emmc_block_breakup_case_at(uint32_t index);
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+struct gta4l_emmc_block_breakup_case *
+gta4l_emmc_block_breakup_case_mutable(uint32_t index);
+#endif
+
+/* Derive and bound-check one breakup case's aligned span and expected
+ * decomposition. Returns 0 on success and fills every output. */
+int gta4l_emmc_block_breakup_geometry(uint64_t start, uint32_t length,
+    uint32_t *span, uint32_t *blocks, uint32_t *subrequests,
+    uint32_t *max_blocks);
 
 /* PARTMAP comparator read-detail states. The detail records the most recent
  * comparator media read while no failure has been observed; the first error

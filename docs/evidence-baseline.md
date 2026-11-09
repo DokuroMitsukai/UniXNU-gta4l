@@ -1461,13 +1461,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `ebee023e37dd58430d6821dec7791cfc8ac237dd32d788aa083e773afe769a89` |
+| Repository README | `README.md` | `e1c9ce211a8f5de2d42233ede500918ed54b203caa85de9ffacbaa94a0b7525d` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `16413362ec6a0ffdedc6d3a06e63ce8d6c24d5b2492ffd97535713d043a3e971` |
+| Porting record | `porting.toml` | `19657a2a8124304733633f7b2cbac1efbc950582d2433a6a396de0f4ccdc5d4a` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `1a66c5121e7cd1c165794966d57dc7e3819bc389a63f9c7d6f26049f591b5bbd` |
+| eMMC driver record | `docs/emmc-driver.md` | `fdf0e75f372f5353905723cd036672431612fa3ce40dfaf26a6a1f908db20fc0` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1476,10 +1476,10 @@ bytes of the previously booted image `[S]`.
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `272db9f0fd02fe9f6960f647e017f4e7cc156f6cc53010bb8ec8d6a1c6137d7f` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `73ca21a8bebf91354be878f8aff6b912fca3e03dee7e7ac1e2c55525381adf9e` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `ebe98274007c554c3bb69293eefc1a606d68dddb3ce401efb57d0b3409ed891f` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `dcf35834223f9537355b8877cec1f169850394ff12fef5f1308a983f2ea4b867` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `885e9b7edfc4c4ff61f097a4f45e2f8a07d05493c5872378e724226fc123b612` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
-| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `f15496328f27516977a6f736fd8176fec2cdc052cb6abce948b6a9c63b32e11c` |
+| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `dceac265c332facb436e9cc0c8dd9bc1a2ac4e2dfa712f4d838f19812ff3f14f` |
 
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
@@ -1776,6 +1776,33 @@ subrequest (three 4 KiB physical segments), so the real
 `IOBreaker`/`breakUpRequest()` split path was entered. No post-boot readback
 was taken; the N10.1/N10.2 hardware results are preserved, the one-boot budget
 is consumed and initialization reliability remains `[U]`.
+The N10.7 deterministic breakup qualification design is a host-only proposal;
+the owner approved N10.8 implementation on 2026-11-09. N10.8 implements the
+opt-in `gta4l-emmc-breakup=1` mode in `package/Gta4lEmmcBlock.h`/`.c`/`.cpp`:
+the selector requires exactly one block token 1/3 and refuses a duplicate, an
+orphan, a malformed value and every partobs/partcmp/partread/deblock
+combination; the mode-scoped advertisement is 8 read blocks/4,096 bytes/3
+segments; four pinned boot-partition cases (4,096/4,096, 4,096/65,536,
+4,096/65,024 and 4,196/65,024) cover the direct short-circuit, an exact
+16-stage split, a 15-stage split with a 7-block final stage and the unaligned
+split through the deblocker; one page-aligned 65,536-byte bounce buffer is
+allocated only for the mode; and a bounded tag/range observer records each
+driver-level subrequest without taking the controller gate or retaining the
+buffer. The expected full-pass line is `cases=4 passed=4 failed=0 reason=0
+complete=1 reads=4 bytes=199680 span=200192 blocks=391 subrequests=49 max=8
+foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 limit=8 seg=3
+cap=61071360`. The host suites pass (block 48 core scenarios/38 mutation
+controls and 178 adapter scenarios with 58 adapter, three support and eight
+policy mutation controls; diagnostic payload 37; packager 14). The
+implementation refreshed the `README.md`, `docs/emmc-driver.md`,
+`docs/diagnostic-payload-input-inventory.md`, `porting.toml` and
+`scripts/test-gta4l-diagnostic-payload.py` rows without adding a hash-table
+row; the N10.7 design document, the §5.3.82 section and the N10.8 host-only
+changes are outside the table or not listed. No candidate build, ABI/QEMU
+audit, device access, flash, boot, commit or push was performed while
+implementing the host mode; N10.9/N10.10 remain separately gated, N10.6
+remains the only breakup-layer hardware observation and initialization
+reliability remains `[U]`.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
