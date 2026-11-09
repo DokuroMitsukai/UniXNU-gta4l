@@ -4862,6 +4862,1106 @@ scenario_breakup_foreign(void)
 	return 0;
 }
 
+static int g_sweep_fail_at = -1;
+static int g_sweep_short_at = -1;
+static int g_sweep_corrupt_at = -1;
+static int g_sweep_cancel_at = -1;
+static int g_sweep_watchdog_at = -1;
+static int g_sweep_foreign_at = -1;
+static int g_sweep_foreign_mode;
+static uint32_t g_sweep_advance_ms;
+static IOMedia *g_sweep_whole_media;
+static IOMedia *g_sweep_boot_media;
+
+static void
+sweep_expected_digest(const struct gta4l_emmc_block_sweep_case *item,
+    uint32_t runtimeIndex, uint32_t bootBlocks, uint8_t digest[32])
+{
+	static uint8_t scratch[GTA4L_EMMC_BLOCK_SWEEP_MAX_BYTES];
+	uint8_t sector[GTA4L_EMMC_BLOCK_BYTES];
+	uint64_t absolute;
+	uint64_t block;
+	uint64_t last_block = ~0ull;
+	uint64_t position;
+	uint64_t start_block = 0;
+	uint32_t length;
+	uint32_t index;
+	uint32_t offset;
+
+	if (item->runtime != 0u) {
+		(void)gta4l_emmc_block_sweep_derive(runtimeIndex,
+		    item->blocks, bootBlocks, &start_block);
+		absolute = GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES +
+		    start_block * GTA4L_EMMC_BLOCK_SWEEP_SECTOR_BYTES;
+	} else {
+		absolute = GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES +
+		    item->start;
+	}
+	length = item->length;
+	for (index = 0; index < length; index++) {
+		position = absolute + index;
+		block = position / GTA4L_EMMC_BLOCK_BYTES;
+		offset = (uint32_t)(position % GTA4L_EMMC_BLOCK_BYTES);
+		if (block != last_block) {
+			deblock_fill_sector(block, sector);
+			last_block = block;
+		}
+		scratch[index] = sector[offset];
+	}
+	gta4l_emmc_block_sha256(scratch, length, digest);
+}
+
+static void
+sweep_hook(uint32_t call, uint32_t phase)
+{
+	if ((phase == 2u) && (g_sweep_cancel_at >= 0) &&
+	    (call == (uint32_t)g_sweep_cancel_at)) {
+		g_self->reportCancel = true;
+	}
+	if ((phase == 0u) && (g_sweep_watchdog_at >= 0) &&
+	    (call == (uint32_t)g_sweep_watchdog_at)) {
+		(void)invoke_thread(1);
+	}
+}
+
+static void
+sweep_reset_fixture(void)
+{
+	g_sweep_fail_at = -1;
+	g_sweep_short_at = -1;
+	g_sweep_corrupt_at = -1;
+	g_sweep_cancel_at = -1;
+	g_sweep_watchdog_at = -1;
+	g_sweep_foreign_at = -1;
+	g_sweep_foreign_mode = 0;
+	g_sweep_advance_ms = 0u;
+	g_sweep_whole_media = 0;
+	g_sweep_boot_media = 0;
+}
+
+static void
+sweep_setup(bool withWhole, bool withBoot)
+{
+	uint32_t index;
+
+	sweep_reset_fixture();
+	gta4l_test.breakup_model = 1;
+	gta4l_test_breakup_hook = sweep_hook;
+	if (withWhole) {
+		g_sweep_whole_media = add_media(true, 0,
+		    (UInt64)gta4l_test.capacity_blocks *
+		    GTA4L_EMMC_BLOCK_BYTES, false,
+		    "GUID_partition_scheme", true);
+	}
+	if (withBoot) {
+		g_sweep_boot_media = add_media(false,
+		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+		    false, "Apple_Boot", true);
+	}
+	for (index = 0; index < gta4l_emmc_block_sweep_case_count();
+	    index++) {
+		struct gta4l_emmc_block_sweep_case *item =
+		    gta4l_emmc_block_sweep_case_mutable(index);
+
+		sweep_expected_digest(item,
+		    (index >= GTA4L_EMMC_BLOCK_SWEEP_ANCHOR_CASES) ?
+		    (index - GTA4L_EMMC_BLOCK_SWEEP_ANCHOR_CASES) : 0u,
+		    (uint32_t)(GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES /
+		    GTA4L_EMMC_BLOCK_SWEEP_SECTOR_BYTES), item->expected);
+	}
+}
+
+static void
+sweep_apply_fixture(void)
+{
+	gta4l_test.breakup_fail_at = g_sweep_fail_at;
+	gta4l_test.breakup_short_at = g_sweep_short_at;
+	gta4l_test.breakup_corrupt_at = g_sweep_corrupt_at;
+	gta4l_test.breakup_cancel_at = g_sweep_cancel_at;
+	gta4l_test.breakup_advance_ms = g_sweep_advance_ms;
+	gta4l_test.breakup_foreign_at = g_sweep_foreign_at;
+	gta4l_test.breakup_foreign_mode = g_sweep_foreign_mode;
+}
+
+static int
+scenario_sweep_refused_orphan(void)
+{
+	begin("gta4l-emmc-sweep=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "gta4l-emmc-sweep requires") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_refused_value(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=2");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "malformed gta4l-emmc-sweep") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1 "
+	    "gta4l-emmc-sweep=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "duplicate gta4l-emmc-sweep") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_refused_partobs(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partobs=1 "
+	    "gta4l-emmc-sweep=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_refused_partcmp(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partcmp=1 "
+	    "gta4l-emmc-sweep=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_refused_partread(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-partread=1 "
+	    "gta4l-emmc-sweep=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_refused_deblock(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-deblock=1 "
+	    "gta4l-emmc-sweep=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_refused_breakup(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-breakup=1 "
+	    "gta4l-emmc-sweep=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_properties(void)
+{
+	OSNumber *property;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumBlockCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() ==
+	    GTA4L_EMMC_BLOCK_SWEEP_READ_BLOCKS);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumByteCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() ==
+	    GTA4L_EMMC_BLOCK_SWEEP_READ_MAX_BYTES);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumSegmentCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() ==
+	    GTA4L_EMMC_BLOCK_SWEEP_SEGMENTS);
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumBlockCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() ==
+	    GTA4L_EMMC_BLOCK_SWEEP_READ_BLOCKS);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumByteCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() ==
+	    GTA4L_EMMC_BLOCK_SWEEP_READ_MAX_BYTES);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumSegmentCountReadKey));
+	CHECK(property != 0);
+	CHECK(property->unsigned64BitValue() ==
+	    GTA4L_EMMC_BLOCK_SWEEP_SEGMENTS);
+	return 0;
+}
+
+static int
+scenario_sweep_pinned(void)
+{
+	static const uint8_t pinned[2][32] = {
+		{
+			0x58, 0x78, 0xbc, 0xf8, 0xa6, 0xaf, 0xe4, 0xdd,
+			0x79, 0xa0, 0x02, 0xca, 0xa8, 0xb6, 0xae, 0xea,
+			0xe1, 0x61, 0x25, 0xb8, 0x90, 0xab, 0x75, 0x0b,
+			0x67, 0xd6, 0xab, 0x3c, 0x25, 0xf3, 0xb1, 0xb2,
+		},
+		{
+			0xfa, 0x43, 0xaa, 0x5d, 0x40, 0x59, 0x1e, 0x9b,
+			0x61, 0x9c, 0x99, 0xc4, 0xe4, 0x90, 0x05, 0x4f,
+			0xea, 0xc8, 0x5a, 0xc5, 0x45, 0xf5, 0xc8, 0x4a,
+			0x38, 0xf8, 0xaa, 0x04, 0x82, 0x07, 0x82, 0xda,
+		},
+	};
+	static const uint64_t starts[4] = {
+		51528u, 102928u, 154296u, 9128u
+	};
+	const struct gta4l_emmc_block_sweep_case *item;
+	uint64_t startBlock;
+	uint32_t index;
+
+	CHECK(gta4l_emmc_block_sweep_case_count() == 6);
+	CHECK(gta4l_emmc_block_sweep_case_at(6) == 0);
+	for (index = 0; index < 2u; index++) {
+		item = gta4l_emmc_block_sweep_case_at(index);
+		CHECK(item != 0);
+		CHECK(item->target == GTA4L_EMMC_BLOCK_SWEEP_TARGET_BOOT);
+		CHECK(item->runtime == 0u);
+		CHECK(item->start == 4096u);
+		CHECK(item->length == ((index == 0u) ? 4096u : 16384u));
+		CHECK(item->span == item->length);
+		CHECK(item->blocks == ((index == 0u) ? 8u : 32u));
+		CHECK(item->subrequests == ((index == 0u) ? 1u : 4u));
+		CHECK(item->max_blocks == 8u);
+		CHECK(memcmp(item->expected, pinned[index],
+		    sizeof(pinned[index])) == 0);
+	}
+	for (index = 2; index < 6u; index++) {
+		item = gta4l_emmc_block_sweep_case_at(index);
+		CHECK(item != 0);
+		CHECK(item->target == GTA4L_EMMC_BLOCK_SWEEP_TARGET_BOOT);
+		CHECK(item->runtime == 1u);
+		CHECK(item->start == 0u);
+		CHECK(item->length ==
+		    ((index == 2u) ? 16384u : (index == 3u) ? 8192u :
+		    4096u));
+		CHECK(item->span == item->length);
+		CHECK(item->blocks ==
+		    ((index == 2u) ? 32u : (index == 3u) ? 16u : 8u));
+		CHECK(item->subrequests ==
+		    ((index == 2u) ? 4u : (index == 3u) ? 2u : 1u));
+		CHECK(item->max_blocks == 8u);
+		CHECK(gta4l_emmc_block_sweep_derive(index - 2u,
+		    item->blocks, 196608u, &startBlock) == 0);
+		CHECK(startBlock == starts[index - 2u]);
+	}
+	CHECK(gta4l_emmc_block_sweep_derive(0, 32u, 196608u,
+	    &startBlock) == 0);
+	CHECK(startBlock == 51528u);
+	CHECK(gta4l_emmc_block_sweep_derive(0, 32u, 100000u,
+	    &startBlock) == 0);
+	CHECK(startBlock == 38088u);
+	CHECK(gta4l_emmc_block_sweep_derive(0, 0u, 196608u,
+	    &startBlock) != 0);
+	CHECK(gta4l_emmc_block_sweep_derive(0, 33u, 196608u,
+	    &startBlock) != 0);
+	CHECK(gta4l_emmc_block_sweep_derive(0, 32u, 24u,
+	    &startBlock) != 0);
+	CHECK(gta4l_emmc_block_sweep_derive(0, 32u, 196607u,
+	    &startBlock) != 0);
+	CHECK(gta4l_emmc_block_sweep_validate(
+	    gta4l_emmc_block_sweep_case_at(0), 4096u, 196608u,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES) == 0);
+	CHECK(gta4l_emmc_block_sweep_validate(
+	    gta4l_emmc_block_sweep_case_at(0), 4097u, 196608u,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES) != 0);
+	CHECK(gta4l_emmc_block_sweep_validate(
+	    gta4l_emmc_block_sweep_case_at(0), 4096u, 196607u,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES) != 0);
+	CHECK(gta4l_emmc_block_sweep_validate(
+	    gta4l_emmc_block_sweep_case_at(1), 4096u, 196608u,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES) == 0);
+	CHECK(gta4l_emmc_block_sweep_validate(
+	    gta4l_emmc_block_sweep_case_at(5),
+	    9128u * GTA4L_EMMC_BLOCK_SWEEP_SECTOR_BYTES, 196608u,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES) == 0);
+	return 0;
+}
+
+static int
+scenario_sweep_match(void)
+{
+	const struct gta4l_emmc_block_sweep_case *last;
+	uint8_t lastdigest[32];
+	char digest[33];
+	char expected[512];
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=6 failed=0 reason=0 "
+	    "complete=1 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	last = gta4l_emmc_block_sweep_case_at(5);
+	CHECK(last != 0);
+	sweep_expected_digest(last, 3u, 196608u, lastdigest);
+	partread_digest_hex(lastdigest, digest);
+	snprintf(expected, sizeof(expected),
+	    "GTA4L-EMMC P5 SWEEPREAD: index=5 target=1 start=4673536 "
+	    "length=4096 span=4096 actual=4096 status=0 subrequests=1 "
+	    "blocks=8 max=8 ref=1 refbytes=4096 refstatus=0 mvalid=0 "
+	    "mismatch=0 digest=%s refdigest=%s", digest, digest);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "BREAKUP") == 0);
+	CHECK(strstr(gta4l_test.panic, "DEBLOCK") == 0);
+	CHECK(strstr(gta4l_test.panic, "PARTREAD") == 0);
+	CHECK(gta4l_test.breakup_read_calls == 6);
+	CHECK(gta4l_test.breakup_adapter_calls == 13);
+	CHECK(gta4l_test.breakup_dma_errors == 0);
+	CHECK(g_sweep_whole_media != 0);
+	CHECK(g_sweep_whole_media->open_calls == 1);
+	CHECK(g_sweep_whole_media->close_calls == 1);
+	CHECK(g_sweep_boot_media != 0);
+	CHECK(g_sweep_boot_media->open_calls == 1);
+	CHECK(g_sweep_boot_media->close_calls == 1);
+	CHECK(g_self->report.sweep_complete == 1);
+	CHECK(g_self->report.sweep_anchor == 1);
+	CHECK(g_self->report.sweep_mismatches == 0);
+	return 0;
+}
+
+static int
+scenario_sweep_block3(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=6 failed=0 reason=0 "
+	    "complete=1 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(gta4l_test.breakup_adapter_calls == 13);
+	return 0;
+}
+
+static int
+scenario_sweep_production_limit(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	sweep_apply_fixture();
+	gta4l_test.breakup_limit_blocks = 64;
+	gta4l_test.breakup_limit_bytes = 32768;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=3 failed=3 reason=12 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=6 max=32 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 1);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_ORDER);
+	CHECK(g_self->report.sweep_fail_subrequests == 1);
+	CHECK(g_self->report.sweep_fail_blocks == 32);
+	CHECK(g_self->report.sweep_fail_max == 32);
+	return 0;
+}
+
+static int
+scenario_sweep_zero_length(void)
+{
+	struct gta4l_emmc_block_sweep_case *first;
+	uint32_t saved_length;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	first = gta4l_emmc_block_sweep_case_mutable(0);
+	CHECK(first != 0);
+	saved_length = first->length;
+	first->length = 0;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	first->length = saved_length;
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=1 reason=10 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_ARG);
+	return 0;
+}
+
+static int
+scenario_sweep_range_invalid(void)
+{
+	struct gta4l_emmc_block_sweep_case *first;
+	uint64_t saved_start;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	first = gta4l_emmc_block_sweep_case_mutable(0);
+	CHECK(first != 0);
+	saved_start = first->start;
+	first->start = GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES - 100u;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	first->start = saved_start;
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=1 reason=10 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_ARG);
+	return 0;
+}
+
+static int
+scenario_sweep_wrong_target(void)
+{
+	struct gta4l_emmc_block_sweep_case *first;
+	uint32_t saved_target;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	first = gta4l_emmc_block_sweep_case_mutable(0);
+	CHECK(first != 0);
+	saved_target = first->target;
+	first->target = GTA4L_EMMC_BLOCK_SWEEP_TARGET_WHOLE;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	first->target = saved_target;
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=1 reason=10 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_ARG);
+	return 0;
+}
+
+static int
+scenario_sweep_unaligned_start(void)
+{
+	struct gta4l_emmc_block_sweep_case *first;
+	uint64_t saved_start;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	first = gta4l_emmc_block_sweep_case_mutable(0);
+	CHECK(first != 0);
+	saved_start = first->start;
+	first->start = 4097u;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	first->start = saved_start;
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=1 reason=10 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_ARG);
+	return 0;
+}
+
+static int
+scenario_sweep_length_invalid(void)
+{
+	struct gta4l_emmc_block_sweep_case *first;
+	uint32_t saved_length;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	first = gta4l_emmc_block_sweep_case_mutable(0);
+	CHECK(first != 0);
+	saved_length = first->length;
+	first->length = 4095u;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	first->length = saved_length;
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=1 reason=10 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_ARG);
+	return 0;
+}
+
+static int
+scenario_sweep_hash_mismatch(void)
+{
+	struct gta4l_emmc_block_sweep_case *first;
+	uint8_t saved;
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	first = gta4l_emmc_block_sweep_case_mutable(0);
+	CHECK(first != 0);
+	saved = first->expected[0];
+	first->expected[0] ^= 0x5au;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	first->expected[0] = saved;
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=1 reason=7 "
+	    "complete=0 reads=1 bytes=4096 span=4096 blocks=8 "
+	    "subrequests=1 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=1 refbytes=4096 anchor=0 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_HASH);
+	return 0;
+}
+
+static int
+scenario_sweep_read_failure(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_fail_at = 0;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=5 failed=1 reason=5 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=12 max=8 foreign=0 fails=1 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=0 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_READ);
+	return 0;
+}
+
+static int
+scenario_sweep_short_read(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_short_at = 0;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=5 failed=1 reason=6 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=0 fails=1 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=0 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_SHORT);
+	return 0;
+}
+
+static int
+scenario_sweep_short_reference(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.sweep_reference_short_at = gta4l_test.read_calls;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=1 reason=15 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=0 refbytes=1 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_REF);
+	CHECK(g_self->report.sweep_fail_ref == 0);
+	CHECK(g_self->report.sweep_fail_refbytes == 1);
+	CHECK(g_self->report.sweep_fail_refstatus == 0);
+	return 0;
+}
+
+static int
+scenario_sweep_reference_failure(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.fail_read_at = gta4l_test.read_calls;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=1 reason=15 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "refstatus=4294967291") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_REF);
+	CHECK(g_self->report.sweep_fail_ref == 0);
+	CHECK(g_self->report.sweep_fail_refbytes == 0);
+	CHECK(g_self->report.sweep_fail_refstatus == -5);
+	return 0;
+}
+
+static int
+scenario_sweep_reference_wrong_lba(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.sweep_reference_corrupt_at = gta4l_test.read_calls;
+	gta4l_test.sweep_reference_corrupt_count = 8;
+	gta4l_test.sweep_reference_corrupt_mode = 1;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=5 failed=1 reason=14 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=0 mismatches=1 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_MISMATCH);
+	CHECK(g_self->report.sweep_fail_mvalid == 1);
+	CHECK(g_self->report.sweep_fail_mismatch == 0);
+	return 0;
+}
+
+static int
+scenario_sweep_reference_shifted(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.sweep_reference_corrupt_at = gta4l_test.read_calls;
+	gta4l_test.sweep_reference_corrupt_count = 8;
+	gta4l_test.sweep_reference_corrupt_mode = 2;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=5 failed=1 reason=14 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=0 mismatches=1 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_MISMATCH);
+	CHECK(g_self->report.sweep_fail_mvalid == 1);
+	CHECK(g_self->report.sweep_fail_mismatch == 0);
+	return 0;
+}
+
+static int
+scenario_sweep_reference_stale(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.sweep_reference_corrupt_at = gta4l_test.read_calls + 16;
+	gta4l_test.sweep_reference_corrupt_count = 32;
+	gta4l_test.sweep_reference_corrupt_mode = 3;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=5 failed=1 reason=14 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=0 mismatches=1 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 1);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_MISMATCH);
+	CHECK(g_self->report.sweep_fail_mvalid == 1);
+	CHECK(g_self->report.sweep_fail_mismatch == 0);
+	return 0;
+}
+
+static int
+scenario_sweep_mismatch(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_corrupt_at = 0;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=5 failed=1 reason=14 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=0 mismatches=1 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_MISMATCH);
+	CHECK(g_self->report.sweep_fail_mvalid == 1);
+	CHECK(g_self->report.sweep_fail_mismatch == 2048u);
+	return 0;
+}
+
+static int
+scenario_sweep_split_missing(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.breakup_split_mode = 1;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=3 failed=3 reason=11 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=10 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 1);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_SPLIT);
+	CHECK(g_self->report.sweep_fail_subrequests == 3);
+	CHECK(g_self->report.sweep_fail_blocks == 24);
+	CHECK(gta4l_test.breakup_adapter_calls == 10);
+	return 0;
+}
+
+static int
+scenario_sweep_split_overlap(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.breakup_split_mode = 4;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=3 failed=3 reason=14 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=0 mismatches=3 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 1);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_MISMATCH);
+	CHECK(g_self->report.sweep_fail_mvalid == 1);
+	CHECK(g_self->report.sweep_fail_mismatch == 4608);
+	return 0;
+}
+
+static int
+scenario_sweep_split_oversize(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.breakup_split_mode = 5;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=6 reason=12 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=9 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_ORDER);
+	CHECK(g_self->report.sweep_fail_subrequests == 1);
+	CHECK(g_self->report.sweep_fail_blocks == 9);
+	CHECK(g_self->report.sweep_fail_max == 9);
+	return 0;
+}
+
+static int
+scenario_sweep_order(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.breakup_split_mode = 2;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=6 reason=12 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=19 max=8 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_ORDER);
+	CHECK(g_self->report.sweep_fail_subrequests == 2);
+	CHECK(g_self->report.sweep_fail_blocks == 16);
+	return 0;
+}
+
+static int
+scenario_sweep_foreign(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_foreign_at = 0;
+	g_sweep_foreign_mode = 1;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=6 failed=0 reason=13 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=1 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	CHECK(gta4l_test.breakup_adapter_calls == 14);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_foreign_at = 0;
+	g_sweep_foreign_mode = 2;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=6 failed=0 reason=13 "
+	    "complete=0 reads=6 bytes=53248 span=53248 blocks=104 "
+	    "subrequests=13 max=8 foreign=1 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_descriptor_failure(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	gta4l_test.descriptor_alloc_fail = 1;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=6 reason=4 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=6 refbytes=53248 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(g_self->report.sweep_fail_index == 0);
+	CHECK(g_self->report.sweep_fail_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_DESC);
+	CHECK(g_self->report.sweep_fail_ref == 1);
+	CHECK(g_self->report.sweep_fail_refbytes == 4096);
+	return 0;
+}
+
+static int
+scenario_sweep_budget(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_advance_ms = 4000u;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=1 failed=0 reason=8 "
+	    "complete=0 reads=1 bytes=4096 span=4096 blocks=8 "
+	    "subrequests=1 max=8 foreign=0 fails=0 cancel=0 budget=1 "
+	    "media=0 part=0 refs=1 refbytes=4096 anchor=0 mismatches=0 "
+	    "limit=8 seg=1 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_cancel(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_cancel_at = 0;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(gta4l_test.panic[0] == 0);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(g_self->report.sweep_cancel == 1);
+	CHECK(g_self->report.sweep_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_CANCEL);
+	CHECK(g_self->report.sweep_complete == 0);
+	CHECK(g_self->report.sweep_reads == 1);
+	CHECK(g_sweep_whole_media->close_calls == 1);
+	CHECK(g_sweep_boot_media->close_calls == 1);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	sweep_apply_fixture();
+	g_self->reportCancel = true;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(g_self->report.sweep_cancel == 1);
+	CHECK(g_self->report.sweep_reason ==
+	    GTA4L_EMMC_BLOCK_SWEEP_REASON_CANCEL);
+	CHECK(g_self->report.sweep_reads == 0);
+	return 0;
+}
+
+static int
+scenario_sweep_watchdog(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_watchdog_at = 0;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 0);
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic, "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 REPORT: rc=16 stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: ") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_media_absent(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(false, false);
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=0 reason=1 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=1 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEPREAD: index=0 target=0 start=0 "
+	    "length=0 span=0 actual=0 status=0 subrequests=0 blocks=0 "
+	    "max=0 ref=0 refbytes=0 refstatus=0 mvalid=0 mismatch=0 "
+	    "digest=00000000000000000000000000000000 "
+	    "refdigest=00000000000000000000000000000000") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_part_absent(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, false);
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=0 reason=2 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=1 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_open_refused(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_whole_media->open_refuse = true;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=0 reason=3 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	g_sweep_boot_media->open_refuse = true;
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=3 complete=0 reads=0 bytes=0 span=0 blocks=0") != 0);
+	return 0;
+}
+
+static int
+scenario_sweep_two_whole(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-sweep=1");
+	CHECK(g_started);
+	sweep_setup(true, true);
+	(void)add_media(true, 0,
+	    (UInt64)gta4l_test.capacity_blocks * GTA4L_EMMC_BLOCK_BYTES,
+	    false, "GUID_partition_scheme", true);
+	sweep_apply_fixture();
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SWEEP: cases=6 passed=0 failed=0 reason=1 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=1 part=0 "
+	    "refs=0 refbytes=0 anchor=0 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	return 0;
+}
+
 static int
 scenario_policy(void)
 {
@@ -5296,6 +6396,85 @@ scenario_policy(void)
 	CHECK(gta4l_emmc_block_report_format(small, sizeof(small),
 	    &report) == 0);
 	CHECK(small[0] == 0);
+
+	memset(&report, 0, sizeof(report));
+	report.sweep = 1;
+	report.sweep_cases = 6;
+	report.sweep_passed = 6;
+	report.sweep_complete = 1;
+	report.sweep_reads = 6;
+	report.sweep_bytes = 53248;
+	report.sweep_span = 53248;
+	report.sweep_blocks = 104;
+	report.sweep_subrequests = 13;
+	report.sweep_max = 8;
+	report.sweep_foreign = 0;
+	report.sweep_fails = 0;
+	report.sweep_cancel = 0;
+	report.sweep_budget = 0;
+	report.sweep_media = 0;
+	report.sweep_part = 0;
+	report.sweep_refs = 6;
+	report.sweep_refbytes = 53248;
+	report.sweep_anchor = 1;
+	report.sweep_mismatches = 0;
+	report.sweep_limit = 8;
+	report.sweep_segments = 1;
+	report.sweep_capacity = 61071360;
+	report.sweep_last_index = 5;
+	report.sweep_last_target = 1;
+	report.sweep_last_start = 4673536;
+	report.sweep_last_length = 4096;
+	report.sweep_last_span = 4096;
+	report.sweep_last_actual = 4096;
+	report.sweep_last_subrequests = 1;
+	report.sweep_last_blocks = 8;
+	report.sweep_last_max = 8;
+	report.sweep_last_ref = 1;
+	report.sweep_last_refbytes = 4096;
+	memset(report.sweep_last_digest, 0xab,
+	    sizeof(report.sweep_last_digest));
+	memset(report.sweep_last_refdigest, 0xab,
+	    sizeof(report.sweep_last_refdigest));
+	memset(report.sweep_fail_digest, 0xcd,
+	    sizeof(report.sweep_fail_digest));
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 SWEEP: cases=6 passed=6 "
+	    "failed=0 reason=0 complete=1 reads=6 bytes=53248 "
+	    "span=53248 blocks=104 subrequests=13 max=8 foreign=0 "
+	    "fails=0 cancel=0 budget=0 media=0 part=0 refs=6 "
+	    "refbytes=53248 anchor=1 mismatches=0 limit=8 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 SWEEPREAD: index=5 "
+	    "target=1 start=4673536 length=4096 span=4096 actual=4096 "
+	    "status=0 subrequests=1 blocks=8 max=8 ref=1 refbytes=4096 "
+	    "refstatus=0 mvalid=0 mismatch=0 "
+	    "digest=abababababababababababababababab "
+	    "refdigest=abababababababababababababababab") != 0);
+	line = strstr(buffer, "GTA4L-EMMC P5 SWEEP: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_SWEEP_LINE_BYTES);
+	line = strstr(buffer, "GTA4L-EMMC P5 SWEEPREAD: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_SWEEPREAD_LINE_BYTES);
+	report.sweep = 0;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(strstr(buffer, "SWEEP") == 0);
+	report.sweep = 1;
+	CHECK(gta4l_emmc_block_report_format(small, sizeof(small),
+	    &report) == 0);
+	CHECK(small[0] == 0);
 	return 0;
 }
 
@@ -5496,6 +6675,46 @@ static const struct scenario_entry scenarios[] = {
 	{ "breakup-split-single", scenario_breakup_split_single },
 	{ "breakup-order-inspan", scenario_breakup_order_inspan },
 	{ "breakup-foreign", scenario_breakup_foreign },
+	{ "sweep-refused-orphan", scenario_sweep_refused_orphan },
+	{ "sweep-refused-value", scenario_sweep_refused_value },
+	{ "sweep-refused-duplicate", scenario_sweep_refused_duplicate },
+	{ "sweep-refused-partobs", scenario_sweep_refused_partobs },
+	{ "sweep-refused-partcmp", scenario_sweep_refused_partcmp },
+	{ "sweep-refused-partread", scenario_sweep_refused_partread },
+	{ "sweep-refused-deblock", scenario_sweep_refused_deblock },
+	{ "sweep-refused-breakup", scenario_sweep_refused_breakup },
+	{ "sweep-properties", scenario_sweep_properties },
+	{ "sweep-pinned", scenario_sweep_pinned },
+	{ "sweep-match", scenario_sweep_match },
+	{ "sweep-block3", scenario_sweep_block3 },
+	{ "sweep-production-limit", scenario_sweep_production_limit },
+	{ "sweep-zero-length", scenario_sweep_zero_length },
+	{ "sweep-range-invalid", scenario_sweep_range_invalid },
+	{ "sweep-wrong-target", scenario_sweep_wrong_target },
+	{ "sweep-unaligned-start", scenario_sweep_unaligned_start },
+	{ "sweep-length-invalid", scenario_sweep_length_invalid },
+	{ "sweep-hash-mismatch", scenario_sweep_hash_mismatch },
+	{ "sweep-read-failure", scenario_sweep_read_failure },
+	{ "sweep-short-read", scenario_sweep_short_read },
+	{ "sweep-short-reference", scenario_sweep_short_reference },
+	{ "sweep-reference-failure", scenario_sweep_reference_failure },
+	{ "sweep-reference-wrong-lba", scenario_sweep_reference_wrong_lba },
+	{ "sweep-reference-shifted", scenario_sweep_reference_shifted },
+	{ "sweep-reference-stale", scenario_sweep_reference_stale },
+	{ "sweep-mismatch", scenario_sweep_mismatch },
+	{ "sweep-split-missing", scenario_sweep_split_missing },
+	{ "sweep-split-overlap", scenario_sweep_split_overlap },
+	{ "sweep-split-oversize", scenario_sweep_split_oversize },
+	{ "sweep-order", scenario_sweep_order },
+	{ "sweep-foreign", scenario_sweep_foreign },
+	{ "sweep-descriptor-failure", scenario_sweep_descriptor_failure },
+	{ "sweep-budget", scenario_sweep_budget },
+	{ "sweep-cancel", scenario_sweep_cancel },
+	{ "sweep-watchdog", scenario_sweep_watchdog },
+	{ "sweep-media-absent", scenario_sweep_media_absent },
+	{ "sweep-part-absent", scenario_sweep_part_absent },
+	{ "sweep-open-refused", scenario_sweep_open_refused },
+	{ "sweep-two-whole", scenario_sweep_two_whole },
 	{ "policy", scenario_policy },
 };
 

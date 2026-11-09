@@ -838,7 +838,28 @@ partition layout, payload policy and packaging.
   taken; the report is bound through the pre-boot post-flash readback and the
   pinned digest. This qualifies only those four ranges and the breakup path on
   that one boot; the boot budget is consumed and no retry, reflash or repair
-  is authorized. Initialization reliability remains `[U]`. See
+  is authorized. Initialization reliability remains `[U]`.
+  N10.11 then designed the owner-approved bounded aligned read sweep: the
+  opt-in `gta4l-emmc-sweep=1` token requires exactly one block token 1/3 and
+  refuses duplicates, orphans, non-1 values and every
+  partobs/partcmp/partread/deblock/breakup combination; the mode-scoped
+  advertisement is eight read blocks (4,096 bytes) and one segment, and six
+  cases — two pinned boot anchors and four runtime-derived windows — compare a
+  media-path read against a direct per-block CMD17 reference. N10.12 then
+  implemented the host-only mode without a candidate build or device access:
+  two page-aligned 16,384-byte buffers, a bounded tag/range observer, a
+  first-16-byte SHA-256 anchor check and the two `SWEEP`/`SWEEPREAD` report
+  lines inside the existing 2,048-byte report. The expected full-pass line is
+  `cases=6 passed=6 failed=0 reason=0 complete=1 reads=6 bytes=53248
+  span=53248 blocks=104 subrequests=13 max=8 foreign=0 fails=0 cancel=0
+  budget=0 media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 limit=8
+  seg=1 cap=61071360`, and the block suite passes 48 core scenarios/38
+  mutation controls and 218 adapter scenarios with 71 adapter, three support
+  and eight policy mutation controls; diagnostic payload 40 checks and
+  packager self-test 15 checks also pass. The host model reconstructs the
+  media/breaker path; it does not run the real family code. N10.13 candidate
+  production and N10.14 hardware remain separately gated. See
+  [docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md](docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md),
   [docs/emmc-n10.10-breakup-hardware-result-2026-11-09.md](docs/emmc-n10.10-breakup-hardware-result-2026-11-09.md),
   [docs/emmc-n10.9-breakup-candidate-2026-11-09.md](docs/emmc-n10.9-breakup-candidate-2026-11-09.md),
   [docs/emmc-n10.7-breakup-qualification-design-2026-11-09.md](docs/emmc-n10.7-breakup-qualification-design-2026-11-09.md),
@@ -856,7 +877,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.84,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.85,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

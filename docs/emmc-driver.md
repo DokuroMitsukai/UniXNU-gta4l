@@ -5849,6 +5849,77 @@ The one-boot budget is consumed; no retry, reflash, rollback, reset/repair,
 mount, commit or push was performed. Findings:
 `docs/emmc-n10.10-breakup-hardware-result-2026-11-09.md`.
 
+### 5.3.85 N10.12 bounded aligned read sweep implementation (host-only, 2026-11-09)
+
+Follow-up to §5.3.82-§5.3.84 and the owner-approved
+`docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md`. N10.12 implements
+the opt-in `gta4l-emmc-sweep=1` mode in `package/Gta4lEmmcBlock.h`/`.c`/
+`.cpp` without a candidate build, ABI/QEMU audit, device access, flash or
+boot. The token requires exactly one block token 1/3 and refuses a duplicate,
+an orphan, a non-1 or malformed value and every partobs/partcmp/partread/
+deblock/breakup combination; the absent-token legacy, partobs, partcmp,
+partread, deblock and breakup reports stay byte-for-byte unchanged. The mode
+advertises `kIOMaximumBlockCountReadKey=8`,
+`kIOMaximumByteCountReadKey=4,096` and
+`kIOMaximumSegmentCountReadKey=1` only for itself (the other modes keep their
+limits); it allocates two page-aligned 16,384-byte `IOMallocAligned` buffers,
+one for the media read and one for the direct CMD17 reference, both freed with
+`IOFreeAligned()`.
+
+The six cases are two pinned boot-partition anchors, A0 at `4096/4096`
+(digest prefix `5878bcf8…`) and A1 at `4096/16384` (digest prefix `fa43…`),
+and four runtime windows derived from the discovered boot-partition block
+count `P = 196,608`: R0 32 blocks at start block 51,528, R1 16 blocks at
+102,928, R2 8 blocks at 154,296 and R3 8 blocks at 9,128. Each runtime start
+is `((i + 1) * 104729) % ((P - W) / 8) * 8` blocks, and the whole table is
+validated before any case I/O; production refuses a `P` other than the pinned
+boot-partition size. Every case is read once through the real media path into
+the media buffer and once by direct per-block CMD17 under the controller gate
+into the reference buffer; the two are compared byte-for-byte, and the anchors
+additionally check the pinned SHA-256 prefix. The expected full-pass line is
+`SWEEP: cases=6 passed=6 failed=0 reason=0 complete=1 reads=6 bytes=53248
+span=53248 blocks=104 subrequests=13 max=8 foreign=0 fails=0 cancel=0 budget=0
+media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 limit=8 seg=1
+cap=61071360`, and the first failing case otherwise supplies `SWEEPREAD`.
+
+The report thread arms the active case under `reportLock` before each
+`media->read()` and clears it after the call; it never holds the lock across
+the media call. The adapter's `doAsyncReadWrite()` calls the mode-scoped
+`sweepObserve()` after the null/zero checks and before taking the controller
+`gate`. The observer takes `reportLock` briefly, classifies the request by
+case tag (direct path) or tag-0 block range, records subrequest
+count/block total/maximum/order, counts unattributable requests as `foreign`,
+does not retain the buffer and performs no I/O. The first failure latches its
+case index, reason, status, actual, observed decomposition, reference
+status/bytes, mismatch offset and digest prefixes; later read/short/mismatch/
+descriptor/split/order failures continue, while media, partition, open,
+budget, cancellation, reference-transport and anchor-mismatch failures stop
+the run. `complete=1` requires all six cases with `reason=0`, `cancel=0`,
+`budget=0`, `media=0`, `part=0`, `foreign=0`, `anchor=1`, `mismatches=0`,
+`limit=8` and `seg=1`; reason 14 is the reference/media mismatch and 15 a
+reference failure. The worst case is 20,000 + 2,000 + 4,000 + 1,700 =
+27,700 ms, below the 30,000 ms watchdog, and the formatter keeps `SWEEP` at or
+below 384 bytes, `SWEEPREAD` at or below 352 bytes and the whole report below
+2,048 bytes before NUL termination with fail-closed behavior unchanged.
+
+Host results: the block suite passes 48 core scenarios/38 mutation controls
+and 218 adapter scenarios with 71 adapter, three support and eight policy
+mutation controls. The adapter coverage includes the six-case full pass, the
+production 64-block control (the oversized requests fail with `ORDER`), the
+one-segment advertisement control, short reference/media, hash/anchor skips,
+budget, cancellation, complete-claim, start-hardcode, bounce, decomposition
+and order skips, a shifted reference LBA, media/partition/open failures, the
+watchdog race and the selector/property/report controls. Diagnostic payload
+tests pass 40 checks and the packager self-test 15 checks, including both
+`emmc-block-1-sweep` and `emmc-block-3-sweep` personalities, the
+`fs-timer-hold` fixture requirement and the exclusivity refusals. The host
+model reconstructs the media/breaker path; it does not execute the real
+family code, so N10.13 candidate production and N10.14 hardware remain
+separately gated, the sweep has no hardware observation, N10.10 remains the
+only breakup-layer hardware result and initialization reliability remains
+`[U]`. Findings:
+`docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

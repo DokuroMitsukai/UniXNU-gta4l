@@ -73,6 +73,10 @@ gta4l_test_reset(void)
 	gta4l_test.breakup_split_mode = 0;
 	gta4l_test.breakup_foreign_at = -1;
 	gta4l_test.breakup_foreign_mode = 0;
+	gta4l_test.sweep_reference_corrupt_at = -1;
+	gta4l_test.sweep_reference_corrupt_count = 0;
+	gta4l_test.sweep_reference_corrupt_mode = 0;
+	gta4l_test.sweep_reference_short_at = -1;
 	gta4l_test_media_read_hook = 0;
 	gta4l_test_deblock_hook = 0;
 	gta4l_test_breakup_hook = 0;
@@ -480,11 +484,36 @@ gta4l_emmc_read_block(struct gta4l_emmc_host *host, uint64_t block,
     void *buffer)
 {
 	uint8_t *bytes = static_cast<uint8_t *>(buffer);
+	uint32_t call = gta4l_test.read_calls;
 
 	(void)host;
 	if ((gta4l_test.fail_read_at >= 0) &&
 	    ((uint32_t)gta4l_test.fail_read_at == gta4l_test.read_calls)) {
 		return -5;
+	}
+	if ((gta4l_test.sweep_reference_corrupt_at >= 0) &&
+	    (call >= (uint32_t)gta4l_test.sweep_reference_corrupt_at) &&
+	    (call < (uint32_t)gta4l_test.sweep_reference_corrupt_at +
+	    (uint32_t)gta4l_test.sweep_reference_corrupt_count)) {
+		switch (gta4l_test.sweep_reference_corrupt_mode) {
+		case 1:
+			gta4l_test_fill_sector(block + 8u, buffer);
+			break;
+		case 2:
+			gta4l_test_fill_sector(block, buffer);
+			memmove(bytes, bytes + 1,
+			    GTA4L_EMMC_BLOCK_BYTES - 1u);
+			bytes[GTA4L_EMMC_BLOCK_BYTES - 1u] = 0u;
+			break;
+		case 3:
+			memset(bytes, 0, GTA4L_EMMC_BLOCK_BYTES);
+			break;
+		default:
+			gta4l_test_fill_sector(block, buffer);
+			break;
+		}
+		gta4l_test.read_calls++;
+		return 0;
 	}
 	gta4l_test_fill_sector(block, buffer);
 	if ((gta4l_test.read_corrupt_at >= 0) &&

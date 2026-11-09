@@ -491,6 +491,14 @@ def test_emmc_block_3_breakup(base):
                                   'breakup')
 
 
+def test_emmc_block_1_sweep(base):
+    check_observation_personality(base, 'emmc-block-1-sweep', 1, 'sweep')
+
+
+def test_emmc_block_3_sweep(base):
+    check_observation_personality(base, 'emmc-block-3-sweep', 3, 'sweep')
+
+
 def test_partcmp_rejects_early_panic_fixture(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
@@ -600,6 +608,34 @@ def test_breakup_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS breakup rejects the early-panic fs-timer fixture')
+
+
+def test_sweep_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-1-sweep'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for sweep')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS sweep rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -781,6 +817,43 @@ def test_diagnostic_contract(_base):
     missing_breakup = checks('gta4l-emmc-block=1', 'emmc-block-1-breakup')
     assert not missing_breakup[
         'emmc-block-1-breakup_diagnostic_selected']
+    broken_sweep = checks('rd=md0 gta4l-emmc-block=1 gta4l-emmc-sweep=1',
+                          'emmc-block-1-sweep')
+    assert all(broken_sweep.values()), broken_sweep
+    broken_sweep_chunked = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-sweep=1',
+        'emmc-block-3-sweep')
+    assert all(broken_sweep_chunked.values()), broken_sweep_chunked
+    orphan_sweep = checks('gta4l-emmc-probe=1 gta4l-emmc-sweep=1')
+    assert not orphan_sweep['no_sweep_token_outside_block_mode']
+    duplicate_sweep = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-sweep=1 gta4l-emmc-sweep=1',
+        'emmc-block-1-sweep')
+    assert not duplicate_sweep['at_most_one_sweep_token']
+    bad_sweep_value = checks('gta4l-emmc-block=1 gta4l-emmc-sweep=2',
+                             'emmc-block-1-sweep')
+    assert not bad_sweep_value['sweep_value_one']
+    assert not bad_sweep_value['emmc-block-1-sweep_diagnostic_selected']
+    sweep_partobs = checks('gta4l-emmc-block=1 gta4l-emmc-partobs=1 '
+                           'gta4l-emmc-sweep=1')
+    assert not sweep_partobs['sweep_partobs_exclusive']
+    sweep_partcmp = checks('gta4l-emmc-block=1 gta4l-emmc-partcmp=1 '
+                           'gta4l-emmc-sweep=1')
+    assert not sweep_partcmp['sweep_partcmp_exclusive']
+    sweep_partread = checks('gta4l-emmc-block=1 gta4l-emmc-partread=1 '
+                            'gta4l-emmc-sweep=1')
+    assert not sweep_partread['sweep_partread_exclusive']
+    sweep_deblock = checks('gta4l-emmc-block=1 gta4l-emmc-deblock=1 '
+                           'gta4l-emmc-sweep=1')
+    assert not sweep_deblock['sweep_deblock_exclusive']
+    sweep_breakup = checks('gta4l-emmc-block=1 gta4l-emmc-breakup=1 '
+                           'gta4l-emmc-sweep=1')
+    assert not sweep_breakup['sweep_breakup_exclusive']
+    plain_sweep_expected = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-sweep=1', 'emmc-block-1')
+    assert not plain_sweep_expected['emmc-block-1_diagnostic_selected']
+    missing_sweep = checks('gta4l-emmc-block=1', 'emmc-block-1-sweep')
+    assert not missing_sweep['emmc-block-1-sweep_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -799,11 +872,13 @@ def main():
              test_emmc_block_1_partread, test_emmc_block_3_partread,
              test_emmc_block_1_deblock, test_emmc_block_3_deblock,
              test_emmc_block_1_breakup, test_emmc_block_3_breakup,
+             test_emmc_block_1_sweep, test_emmc_block_3_sweep,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,
              test_deblock_rejects_early_panic_fixture,
              test_breakup_rejects_early_panic_fixture,
+             test_sweep_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)

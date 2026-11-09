@@ -521,6 +521,10 @@ struct gta4l_test_state {
 	int breakup_split_mode;
 	int breakup_foreign_at;
 	int breakup_foreign_mode;
+	int sweep_reference_corrupt_at;
+	int sweep_reference_corrupt_count;
+	int sweep_reference_corrupt_mode;
+	int sweep_reference_short_at;
 };
 
 typedef void (*gta4l_test_partition_sample_fn)(uint32_t sample,

@@ -604,9 +604,7 @@ ADAPTER_MUTATIONS = [
        '\treport.deblock_complete = complete | 1u;\n')],
      'deblock-hash-mismatch'),
     ('deblock-segment-advertise-1',
-     [('\t    (unsigned long long)(breakupMode ?\n'
-       '\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?\n',
-       '\t    (unsigned long long)(breakupMode ?\n'
+     [('\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?\n',
        '\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : 0 ?\n')],
      'deblock-segment-property'),
     ('deblock-bounce-skip',
@@ -682,10 +680,8 @@ ADAPTER_MUTATIONS = [
        '\treport.breakup_complete = complete | 1u;\n')],
      'breakup-hash-mismatch'),
     ('breakup-segment-advertise-1',
-     [('\t    (unsigned long long)(breakupMode ?\n'
-       '\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?\n',
-       '\t    (unsigned long long)(0 ?\n'
-       '\t    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?\n')],
+     [('\t    GTA4L_EMMC_BLOCK_SWEEP_SEGMENTS : breakupMode ?\n',
+       '\t    GTA4L_EMMC_BLOCK_SWEEP_SEGMENTS : 0 ?\n')],
      'breakup-properties'),
     ('breakup-bounce-skip',
      [('\t\t\tdescriptor = IOMemoryDescriptor::withAddress(\n'
@@ -716,6 +712,97 @@ ADAPTER_MUTATIONS = [
      [('\t\t\t\t\tbreakupBootOpen = true;\n',
        '\t\t\t\t\tbreakupBootOpen = false;\n')],
      'breakup-match'),
+    ('sweep-short-reference-accept',
+     [('\t\t\t} else if (refBytes !=\n'
+       '\t\t\t    item->blocks * GTA4L_EMMC_BLOCK_BYTES) {\n',
+       '\t\t\t} else if ((refBytes !=\n'
+       '\t\t\t    item->blocks * GTA4L_EMMC_BLOCK_BYTES) && 0) {\n')],
+     'sweep-short-reference'),
+    ('sweep-hash-skip',
+     [('\t\t\t\t\tif (memcmp(sweepBuffer,\n'
+       '\t\t\t\t\t    sweepReference, length) != 0) {\n',
+       '\t\t\t\t\tif ((memcmp(sweepBuffer,\n'
+       '\t\t\t\t\t    sweepReference, length) != 0) && 0) {\n')],
+     'sweep-reference-wrong-lba'),
+    ('sweep-anchor-skip',
+     [('\t\t\t\t\t\tif (memcmp(digest,\n'
+       '\t\t\t\t\t\t    item->expected,\n'
+       '\t\t\t\t\t\t    sizeof(digest)) != 0) {\n',
+       '\t\t\t\t\t\tif ((memcmp(digest,\n'
+       '\t\t\t\t\t\t    item->expected,\n'
+       '\t\t\t\t\t\t    sizeof(digest)) != 0) && 0) {\n')],
+     'sweep-hash-mismatch'),
+    ('sweep-budget-skip',
+     [('\t\tif (sweepElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_SWEEP_READ_BUDGET_MS) {\n',
+       '\t\tif ((sweepElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_SWEEP_READ_BUDGET_MS) && 0) {\n')],
+     'sweep-budget'),
+    ('sweep-cancel-skip',
+     [('\t\tbzero(digest, sizeof(digest));\n'
+       '\t\tbzero(refdigest, sizeof(refdigest));\n'
+       '\t\tif (reportCancel) {\n'
+       '\t\t\tsweepReportCancel();\n',
+       '\t\tbzero(digest, sizeof(digest));\n'
+       '\t\tbzero(refdigest, sizeof(refdigest));\n'
+       '\t\tif (reportCancel && 0) {\n'
+       '\t\t\tsweepReportCancel();\n')],
+     'sweep-cancel'),
+    ('sweep-complete-claim',
+     [('\treport.sweep_complete = complete;\n',
+       '\treport.sweep_complete = complete | 1u;\n')],
+     'sweep-mismatch'),
+    ('sweep-start-hardcode',
+     [('\t\t\t\t} else {\n'
+       '\t\t\t\t\tstart = startBlock *\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_SWEEP_SECTOR_BYTES;\n'
+       '\t\t\t\t}\n',
+       '\t\t\t\t} else {\n'
+       '\t\t\t\t\tstart = 4096u;\n'
+       '\t\t\t\t}\n')],
+     'sweep-match'),
+    ('sweep-bounce-skip',
+     [('\t\t\tdescriptor = IOMemoryDescriptor::withAddress(\n'
+       '\t\t\t    sweepBuffer, length, kIODirectionIn);\n',
+       '\t\t\tdescriptor = IOMemoryDescriptor::withAddress(\n'
+       '\t\t\t    sweepBuffer + 8, length, kIODirectionIn);\n')],
+     'sweep-match'),
+    ('sweep-decomposition-skip',
+     [('\t\t\t\t\t\t} else if (\n'
+       '\t\t\t\t\t\t    (observedSubrequests !=\n'
+       '\t\t\t\t\t\t    item->subrequests) ||\n'
+       '\t\t\t\t\t\t    (observedBlocks !=\n'
+       '\t\t\t\t\t\t    item->blocks) ||\n'
+       '\t\t\t\t\t\t    (observedMax !=\n'
+       '\t\t\t\t\t\t    item->max_blocks)) {\n',
+       '\t\t\t\t\t\t} else if (0) {\n')],
+     'sweep-split-missing'),
+    ('sweep-order-skip',
+     [('\t\t\t\t\t\tif (observedOrder != 0) {\n'
+       '\t\t\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_SWEEP_REASON_ORDER;\n',
+       '\t\t\t\t\t\tif ((observedOrder != 0) && 0) {\n'
+       '\t\t\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_SWEEP_REASON_ORDER;\n')],
+     'sweep-order'),
+    ('sweep-segment-advertise-3',
+     [('\t    (unsigned long long)(sweepMode ?\n'
+       '\t    GTA4L_EMMC_BLOCK_SWEEP_SEGMENTS : breakupMode ?\n',
+       '\t    (unsigned long long)(sweepMode ?\n'
+       '\t    3u : breakupMode ?\n')],
+     'sweep-properties'),
+    ('sweep-reference-lba-shift',
+     [('\t\tresult = gta4l_emmc_read_block(&host, firstBlock + index,\n',
+       '\t\tresult = gta4l_emmc_read_block(&host, firstBlock + index + 8u,\n')],
+     'sweep-match'),
+    ('sweep-short-media-accept',
+     [('\t\t\t\t} else if (actual != length) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_SWEEP_REASON_SHORT;\n',
+       '\t\t\t\t} else if ((actual != length) && 0) {\n'
+       '\t\t\t\t\tcaseReason =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_SWEEP_REASON_SHORT;\n')],
+     'sweep-short-read'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -1043,6 +1130,36 @@ def check_adapter_source():
         adapter, 'breakup bounce must cover the aligned span'
     assert 'breakupObserve(buffer, blockNumber, nblks)' in adapter, \
         'adapter must observe the actual subrequest decomposition'
+    assert '#define GTA4L_EMMC_BLOCK_SWEEP_READ_BLOCKS 8u' in \
+        policy_header, 'sweep subrequests must stay inside the request limit'
+    assert 'GTA4L_EMMC_BLOCK_SWEEP_REASON_MISMATCH 14u' in policy_header, \
+        'sweep reference mismatch must have a distinct reason'
+    assert 'GTA4L_EMMC_BLOCK_SWEEP_REASON_REF 15u' in policy_header, \
+        'sweep reference failure must have a distinct reason'
+    assert 'GTA4L_EMMC_BLOCK_SWEEP_SEGMENTS 1u' in policy_header, \
+        'sweep reads must advertise the single-segment path'
+    assert 'GTA4L_EMMC_BLOCK_SWEEP_ARG' in adapter, \
+        'adapter must parse the sweep token'
+    assert 'gta4l_emmc_block_sweep_select' in adapter, \
+        'adapter must use the shared sweep selector'
+    assert 'runSweep' in adapter, \
+        'adapter must implement the bounded read sweep'
+    assert 'sweepBuffer' in adapter and \
+        'IOFreeAligned(sweepBuffer' in adapter, \
+        'sweep media scratch must be allocated and freed'
+    assert 'sweepReference' in adapter and \
+        'IOFreeAligned(sweepReference' in adapter, \
+        'sweep reference scratch must be allocated and freed'
+    assert 'report.sweep_complete = 0' in adapter, \
+        'sweep qualification must start as an explicit non-claim'
+    assert 'sweepElapsedMs() >=' in adapter, \
+        'sweep qualification must enforce the read budget'
+    assert 'static_assert(GTA4L_EMMC_BLOCK_SWEEP_WORST_MS <' in adapter, \
+        'sweep worst case must stay below the watchdog'
+    assert 'static_assert(GTA4L_EMMC_BLOCK_SWEEP_MAX_BYTES == 16384u' in \
+        adapter, 'sweep scratch must cover the aligned span'
+    assert 'sweepObserve(buffer, blockNumber, nblks)' in adapter, \
+        'adapter must observe the actual sweep subrequest decomposition'
 
 
 def compile_adapter(compiler, temp):
@@ -1215,8 +1332,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 179, f'expected 179 adapter PASS lines, got {passes}'
-        print('PASS adapter: 178 scenarios against the host IOKit seam')
+        assert passes == 219, f'expected 219 adapter PASS lines, got {passes}'
+        print('PASS adapter: 218 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(
