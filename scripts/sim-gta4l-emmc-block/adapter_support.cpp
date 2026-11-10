@@ -600,11 +600,81 @@ IOMemoryDescriptor::withAddress(void *address, UInt64 length, int direction)
 	if (gta4l_test.descriptor_alloc_fail != 0) {
 		return 0;
 	}
+	gta4l_test.descriptor_alloc_calls++;
 	descriptor = new IOMemoryDescriptor();
 	descriptor->address_ = address;
 	descriptor->length_ = length;
 	descriptor->direction_ = direction;
 	return descriptor;
+}
+
+void
+IOMemoryDescriptor::release()
+{
+	gta4l_test.descriptor_release_calls++;
+}
+
+IOPhysicalAddress
+IOMemoryDescriptor::getPhysicalSegment(IOByteCount offset, IOByteCount *length,
+    IOOptionBits options)
+{
+	(void)options;
+	if (length != 0) {
+		*length = 0;
+	}
+	if ((offset > length_) || (address_ == 0)) {
+		return 0;
+	}
+	if (gta4l_test.consume_segment_zero != 0) {
+		return 0;
+	}
+	if (length != 0) {
+		*length = length_ - offset;
+		if ((gta4l_test.consume_segment_short != 0) &&
+		    (*length > 1u)) {
+			*length = 1;
+		}
+	}
+	return (IOPhysicalAddress)(uintptr_t)
+	    (static_cast<uint8_t *>(address_) + offset);
+}
+
+void *
+IOMallocContiguous(size_t size, size_t alignment, void *tag)
+{
+	void *address = nullptr;
+
+	(void)tag;
+	gta4l_test.consume_alloc_calls++;
+	gta4l_test.consume_alloc_size = size;
+	gta4l_test.consume_alloc_alignment = alignment;
+	if (gta4l_test.consume_alloc_fail != 0) {
+		return 0;
+	}
+	if (posix_memalign(&address, alignment, size) != 0) {
+		return 0;
+	}
+	gta4l_test.consume_alloc_address = address;
+	gta4l_test.consume_live_alloc = 1;
+	return address;
+}
+
+void
+IOFreeContiguous(void *address, size_t size)
+{
+	gta4l_test.consume_free_calls++;
+	gta4l_test.consume_free_size = size;
+	if ((address != 0) &&
+	    (address == gta4l_test.consume_alloc_address)) {
+		gta4l_test.consume_live_alloc = 0;
+	}
+	free(address);
+}
+
+bool
+IOService::init()
+{
+	return gta4l_test.consume_client_init_fail == 0;
 }
 
 IOByteCount
@@ -802,6 +872,7 @@ IOMedia::IOMedia()
       open_calls(0),
       close_calls(0),
       open_client(0),
+      close_client(0),
       open_access(kIOStorageAccessNone)
 {
 }
@@ -817,6 +888,10 @@ IOMedia::open(IOService *client, IOOptionBits options, IOStorageAccess access)
 	open_value = true;
 	open_client = client;
 	open_access = access;
+	if (gta4l_test.consume_advance_on_open != 0) {
+		gta4l_test.now_ms += (uint32_t)
+		    gta4l_test.consume_advance_on_open;
+	}
 	return true;
 }
 
@@ -825,6 +900,7 @@ IOMedia::close(IOService *client, IOOptionBits options)
 {
 	(void)options;
 	close_calls++;
+	close_client = client;
 	if (open_client == client) {
 		open_value = false;
 		open_client = 0;
@@ -1781,8 +1857,8 @@ IOMedia::read(IOService *client, UInt64 byteStart,
 	completion.action = gta4l_test_media_completion_action;
 	completion.parameter = &record;
 	status = device->doAsyncReadWrite(buffer,
-	    byteStart / GTA4L_EMMC_BLOCK_BYTES, nblks, attributes,
-	    &completion);
+	    (base_value + byteStart) / GTA4L_EMMC_BLOCK_BYTES, nblks,
+	    attributes, &completion);
 	if (status != kIOReturnSuccess) {
 		if (actualByteCount != 0) {
 			*actualByteCount = 0;
@@ -1795,8 +1871,8 @@ IOMedia::read(IOService *client, UInt64 byteStart,
 		record.status = kIOReturnSuccess;
 		record.actual = 0;
 		(void)device->doAsyncReadWrite(buffer,
-		    byteStart / GTA4L_EMMC_BLOCK_BYTES, nblks, attributes,
-		    &completion);
+		    (base_value + byteStart) / GTA4L_EMMC_BLOCK_BYTES,
+		    nblks, attributes, &completion);
 	}
 	if (actualByteCount != 0) {
 		*actualByteCount = record.actual;

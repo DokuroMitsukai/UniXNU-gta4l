@@ -886,7 +886,30 @@ partition layout, payload policy and packaging.
   reference agreement. This qualifies only the two anchors and the four
   runtime windows on that one boot; the boot budget is consumed and no
   retry, reflash or repair is authorized. Initialization reliability remains
-  `[U]`. See
+  `[U]`.
+  N10.15 then implemented the host-only read-only consumer rung from its
+  design: the opt-in `gta4l-emmc-consume=1` token requires exactly one block
+  token 3 and refuses block 1, duplicates, orphans, non-1 values and every
+  partobs/partcmp/partread/deblock/breakup/sweep combination. A distinct
+  `IOService` client opens the pinned BOOT partition, reads one 1,024-byte
+  window at offset 0 through the production 64-block/32,768-byte/one-segment
+  advertisement from a 32 KiB `IOMallocContiguous` buffer, and records the
+  exact tag/range attribution (`subrequests=1 blocks=2 max=2`). Under option A
+  the observed SHA-256 prefix is printed for an external host comparison and
+  no expected digest is compiled in. The expected success line is
+  `CONSUME: cases=1 passed=1 failed=0 reason=0 complete=1 reads=1 bytes=1024
+  span=1024 blocks=2 subrequests=1 max=2 foreign=0 fails=0 cancel=0 budget=0
+  media=0 part=0 open=1 close=1 alloc=0 client=1 mismatches=0 limit=64 seg=1
+  cap=61071360`; the block suite passes 48 core scenarios/38 mutation
+  controls and 248 adapter scenarios with 95 adapter/support and 10 policy
+  mutation controls, diagnostic payload 42 checks and packager 16 checks
+  pass, and the ABI gate pins the consumer probe's 187 imports against the
+  unchanged N10.13 kernel `64bab406`. The host model reconstructs the
+  client/provider path; it does not run the real family code. Candidate
+  production and hardware remain separately gated because the 25,000 ms
+  timing argument is conditional and the external window digest must be
+  rebound to the final packaged image. No payload was rebuilt. See
+  [docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md](docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md),
   [docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md](docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md),
   [docs/emmc-n10.13-sweep-candidate-2026-11-09.md](docs/emmc-n10.13-sweep-candidate-2026-11-09.md),
   [docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md](docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md),
@@ -907,7 +930,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.87,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.88,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

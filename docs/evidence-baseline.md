@@ -1931,6 +1931,39 @@ target-binding re-verification, the pinned anchors and the same-boot
 media/reference agreement. The sweep has its first hardware observation, the
 N10.10 breakup result remains the only breakup-layer hardware result, the
 one-boot budget is consumed and initialization reliability remains `[U]`.
+The N10.15 read-only consumer design and host implementation refreshed the
+`README.md`, `docs/emmc-driver.md`,
+`docs/diagnostic-payload-input-inventory.md`,
+`scripts/test-gta4l-diagnostic-payload.py` and `porting.toml` rows without
+adding a hash-table row; the new design document, the §5.3.88 section, the
+new compile-only consumer probe and the private evidence directory are
+outside the table or not listed. N10.15 implemented the opt-in
+`gta4l-emmc-consume=1` mode: exactly one block token 3, refusal of block 1, a
+duplicate, orphan, non-1 or malformed value and every partobs/partcmp/
+partread/deblock/breakup/sweep combination; the production
+64-block/32,768-byte/one-segment advertisement; a distinct `IOService`
+consumer client; one 1,024-byte BOOT window at offset 0 read through a 32 KiB
+`IOMallocContiguous` buffer and a one-segment-validated descriptor; an
+entry-side tag/range observer and completion-side private counter deltas
+(one two-block CMD18 chunk, two blocks, one stop); option A external digest
+comparison with no compiled-in expected value; and `CONSUME`/`CONSUMEREAD`/
+`CONSUMEFAIL` lines inside the 2,048-byte report with `READ`/`QUAL`/`QUAL3`
+suppressed only in consume mode. The expected full-pass line is
+`cases=1 passed=1 failed=0 reason=0 complete=1 reads=1 bytes=1024 span=1024
+blocks=2 subrequests=1 max=2 foreign=0 fails=0 cancel=0 budget=0 media=0
+part=0 open=1 close=1 alloc=0 client=1 mismatches=0 limit=64 seg=1
+cap=61071360`. Host results: block suite 48 core scenarios/38 mutation
+controls and 248 adapter scenarios with 95 adapter/support and 10 policy
+mutation controls; diagnostic payload 42 checks; packager 16 checks; the
+builder and checker self-tests pass; the extended ABI gate compiles the
+187-import consumer probe against the unchanged N10.13 kernel `64bab406…`
+(185/1/1 section split) and reports `qualified=True` with 238 non-bound
+imports checked. No candidate build, ABI/QEMU audit, device access, flash,
+boot, commit or push; N10.15 has no hardware observation, the 25,000 ms
+timing argument remains conditional, the external window digest must be
+rebound to the final packaged image, N10.14 remains the only sweep-mode
+hardware result, N10.10 remains the only breakup-layer hardware result and
+initialization reliability remains `[U]`.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 

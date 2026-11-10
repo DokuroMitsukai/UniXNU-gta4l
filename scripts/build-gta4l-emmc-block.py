@@ -66,6 +66,17 @@ POLICY_RECORD = (ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
                  / 'bsd/DEVELOPMENT/bsd_init.o.json')
 ADAPTER_RECORD = (ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837'
                   / 'iokit/DEVELOPMENT/IOPlatformExpert.cpo.json')
+PROBE_SOURCE = (ROOT / 'scripts' / 'sim-gta4l-emmc-block'
+                / 'consumer_lifecycle_probe.cpp')
+PROBE_OBJECT = OUT / 'consumer-lifecycle-probe.o'
+PROBE_IMPORTS = 187
+PROBE_SECTION_SPLIT = {
+    '__TEXT_EXEC,__text': 185,
+    '__DATA_CONST,__const': 1,
+    '__DATA,__common': 1,
+}
+PROBE_CONST_SYMBOL = '_PAGE_SHIFT_CONST'
+PROBE_COMMON_SYMBOL = '__ZN9IOService10gMetaClassE'
 
 SOURCES = [
     {
@@ -101,8 +112,8 @@ def tool_command(name: str, *arguments: str):
     raise SystemExit(f'no {name} tool for the eMMC block archive build')
 
 
-def archive_symbols(archive: Path) -> set:
-    output = subprocess.run(tool_command('nm', '-g', str(archive)),
+def defined_symbols(path: Path) -> set:
+    output = subprocess.run(tool_command('nm', '-g', str(path)),
                             capture_output=True, text=True, check=True).stdout
     symbols = set()
     for line in output.splitlines():
@@ -110,10 +121,25 @@ def archive_symbols(archive: Path) -> set:
         if len(fields) < 2:
             continue
         kind = fields[-2]
-        if kind == 'U' or len(kind) != 1:
+        if kind == 'U' or kind == 'u' or len(kind) != 1:
             continue
         symbols.add(fields[-1].lstrip('_'))
     return symbols
+
+
+def archive_symbols(archive: Path) -> set:
+    return defined_symbols(archive)
+
+
+def symbol_sections(path: Path) -> dict:
+    output = subprocess.run(tool_command('nm', '-m', '-g', str(path)),
+                            capture_output=True, text=True, check=True).stdout
+    sections = {}
+    for line in output.splitlines():
+        match = re.match(r'^[0-9a-fA-F]+ \(([^)]*)\) \S+ (\S+)$', line)
+        if match is not None:
+            sections[match.group(2)] = match.group(1)
+    return sections
 
 
 def write_archive(objects) -> None:
@@ -184,6 +210,71 @@ def demangle(names):
     raise SystemExit('c++filt failed for the eMMC block archive build')
 
 
+def check_consumer_abi():
+    if not PROBE_SOURCE.is_file():
+        raise SystemExit(f'missing consumer ABI probe: {PROBE_SOURCE}')
+    record = json.loads(ADAPTER_RECORD.read_text().strip().rstrip(','))
+    arguments = list(record['arguments'])
+    try:
+        arguments[arguments.index(record['file'])] = str(PROBE_SOURCE)
+    except ValueError:
+        raise SystemExit(f'{ADAPTER_RECORD}: no source path')
+    try:
+        arguments[arguments.index('-o') + 1] = str(PROBE_OBJECT)
+    except (ValueError, IndexError):
+        raise SystemExit(f'{ADAPTER_RECORD}: no output path')
+    arguments += ['-I', str(STORAGE_INCLUDE), '-I', str(DEVICE)]
+    subprocess.run(arguments, cwd=record['directory'], check=True)
+    _, _, symbols = load_object(PROBE_OBJECT)
+    imports = [name for name, value, kind in symbols if kind == 1]
+    sections = symbol_sections(KERNEL)
+    missing = sorted(name for name in imports if name not in sections)
+    if missing:
+        raise SystemExit('consumer import absent from candidate kernel: '
+                         + ', '.join(missing))
+    split = {}
+    for name in imports:
+        section = sections[name]
+        split[section] = split.get(section, 0) + 1
+    if (len(imports) != PROBE_IMPORTS) or (split != PROBE_SECTION_SPLIT):
+        raise SystemExit('consumer ABI surface changed: '
+                         + str(len(imports)) + ' imports ' + str(split))
+    if sections.get(PROBE_CONST_SYMBOL) != '__DATA_CONST,__const':
+        raise SystemExit('consumer PAGE_SHIFT_CONST is not '
+                         '__DATA_CONST,__const')
+    if sections.get(PROBE_COMMON_SYMBOL) != '__DATA,__common':
+        raise SystemExit('consumer IOService::gMetaClass is not '
+                         '__DATA,__common')
+    return {
+        'probe_source_sha256': sha256(PROBE_SOURCE),
+        'probe_object_sha256': sha256(PROBE_OBJECT),
+        'imports': len(imports),
+        'sections': split,
+    }
+
+
+def check_archive_imports(undefined):
+    archive_defined = set()
+    for item in SOURCES:
+        _, _, symbols = load_object(item['object'])
+        for name, value, kind in symbols:
+            if kind != 1:
+                archive_defined.add(name)
+    kernel_exports = defined_symbols(KERNEL)
+    checked = set()
+    for name in undefined:
+        if name in archive_defined:
+            continue
+        if 'IOBlockStorageDevice' in name:
+            continue
+        checked.add(name.lstrip('_'))
+    missing = sorted(checked - kernel_exports)
+    if missing:
+        raise SystemExit('archive import absent from candidate kernel: '
+                         + ', '.join(missing))
+    return len(checked)
+
+
 def generate_bindings():
     if not AUDIT.is_file():
         raise SystemExit(f'missing storage-ABI audit: {AUDIT}')
@@ -247,8 +338,9 @@ def generate_bindings():
             int(audit['original_metaclass'], 16),
         '__ZTV20IOBlockStorageDevice': int(audit['vtable'], 16),
     })
-    undefined = [name for name, value, kind in symbols
-                 if kind == 1 and 'IOBlockStorageDevice' in name]
+    all_undefined = [name for name, value, kind in symbols if kind == 1]
+    undefined = [name for name in all_undefined
+                 if 'IOBlockStorageDevice' in name]
     unqualified = [name for name in undefined if name not in possible]
     if unqualified:
         raise SystemExit('unqualified original storage import: '
@@ -262,6 +354,9 @@ def generate_bindings():
     if media:
         raise SystemExit('adapter imports unbound IOMedia symbols: '
                          + ', '.join(sorted(media)))
+
+    consumer_abi = check_consumer_abi()
+    kernel_imports_checked = check_archive_imports(all_undefined)
 
     bindings = {name: possible[name] for name in undefined}
     assembly = OUT / 'original-bindings.S'
@@ -282,6 +377,8 @@ def generate_bindings():
         'virtual_methods_checked': SLOT_COUNT,
         'concrete_overrides': overrides,
         'unresolved_original_imports': 0,
+        'consumer_abi': consumer_abi,
+        'kernel_imports_checked': kernel_imports_checked,
         'bindings': {name: hex(value)
                      for name, value in bindings.items()},
     }, bindings_object

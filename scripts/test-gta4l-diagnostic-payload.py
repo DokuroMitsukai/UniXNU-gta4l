@@ -499,6 +499,10 @@ def test_emmc_block_3_sweep(base):
     check_observation_personality(base, 'emmc-block-3-sweep', 3, 'sweep')
 
 
+def test_emmc_block_3_consume(base):
+    check_observation_personality(base, 'emmc-block-3-consume', 3, 'consume')
+
+
 def test_partcmp_rejects_early_panic_fixture(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
@@ -636,6 +640,34 @@ def test_sweep_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS sweep rejects the early-panic fs-timer fixture')
+
+
+def test_consume_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-consume'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for consume')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS consume rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -854,6 +886,44 @@ def test_diagnostic_contract(_base):
     assert not plain_sweep_expected['emmc-block-1_diagnostic_selected']
     missing_sweep = checks('gta4l-emmc-block=1', 'emmc-block-1-sweep')
     assert not missing_sweep['emmc-block-1-sweep_diagnostic_selected']
+    good_consume = checks('gta4l-emmc-block=3 gta4l-emmc-consume=1',
+                          'emmc-block-3-consume')
+    assert all(good_consume.values()), good_consume
+    orphan_consume = checks('gta4l-emmc-probe=1 gta4l-emmc-consume=1')
+    assert not orphan_consume['no_consume_token_outside_block_mode']
+    duplicate_consume = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-consume=1 '
+        'gta4l-emmc-consume=1', 'emmc-block-3-consume')
+    assert not duplicate_consume['at_most_one_consume_token']
+    bad_consume_value = checks('gta4l-emmc-block=3 gta4l-emmc-consume=2',
+                               'emmc-block-3-consume')
+    assert not bad_consume_value['consume_value_one']
+    assert not bad_consume_value['emmc-block-3-consume_diagnostic_selected']
+    consume_block_one = checks('gta4l-emmc-block=1 gta4l-emmc-consume=1')
+    assert not consume_block_one['consume_requires_block_three']
+    consume_partobs = checks('gta4l-emmc-block=3 gta4l-emmc-partobs=1 '
+                             'gta4l-emmc-consume=1')
+    assert not consume_partobs['consume_partobs_exclusive']
+    consume_partcmp = checks('gta4l-emmc-block=3 gta4l-emmc-partcmp=1 '
+                             'gta4l-emmc-consume=1')
+    assert not consume_partcmp['consume_partcmp_exclusive']
+    consume_partread = checks('gta4l-emmc-block=3 gta4l-emmc-partread=1 '
+                              'gta4l-emmc-consume=1')
+    assert not consume_partread['consume_partread_exclusive']
+    consume_deblock = checks('gta4l-emmc-block=3 gta4l-emmc-deblock=1 '
+                             'gta4l-emmc-consume=1')
+    assert not consume_deblock['consume_deblock_exclusive']
+    consume_breakup = checks('gta4l-emmc-block=3 gta4l-emmc-breakup=1 '
+                             'gta4l-emmc-consume=1')
+    assert not consume_breakup['consume_breakup_exclusive']
+    consume_sweep = checks('gta4l-emmc-block=3 gta4l-emmc-sweep=1 '
+                           'gta4l-emmc-consume=1')
+    assert not consume_sweep['consume_sweep_exclusive']
+    plain_consume_expected = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-consume=1', 'emmc-block-3')
+    assert not plain_consume_expected['emmc-block-3_diagnostic_selected']
+    missing_consume = checks('gta4l-emmc-block=3', 'emmc-block-3-consume')
+    assert not missing_consume['emmc-block-3-consume_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -873,12 +943,14 @@ def main():
              test_emmc_block_1_deblock, test_emmc_block_3_deblock,
              test_emmc_block_1_breakup, test_emmc_block_3_breakup,
              test_emmc_block_1_sweep, test_emmc_block_3_sweep,
+             test_emmc_block_3_consume,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,
              test_deblock_rejects_early_panic_fixture,
              test_breakup_rejects_early_panic_fixture,
              test_sweep_rejects_early_panic_fixture,
+             test_consume_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)

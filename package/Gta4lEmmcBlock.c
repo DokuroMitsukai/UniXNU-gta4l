@@ -11,6 +11,10 @@
 
 #include "Gta4lEmmcBlockCore.h"
 
+/* Option A prints a zero expected digest; the host owns the external
+ * reference and compares the observed prefix after the run. */
+static const uint8_t gta4l_emmc_block_zero_digest[16] = { 0 };
+
 static int
 gta4l_emmc_block_is_space(char value)
 {
@@ -189,6 +193,28 @@ gta4l_emmc_block_sweep_select(int token_present, int token_value,
 		return GTA4L_EMMC_BLOCK_SWEEP_REFUSED;
 	}
 	return GTA4L_EMMC_BLOCK_SWEEP_ON;
+}
+
+int
+gta4l_emmc_block_consume_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected)
+{
+	if (token_present == 0) {
+		return GTA4L_EMMC_BLOCK_CONSUME_OFF;
+	}
+	if ((duplicate_tokens != 0) || (block_selected == 0) ||
+	    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||
+	    (partobs_selected != 0) || (partcmp_selected != 0) ||
+	    (partread_selected != 0) || (deblock_selected != 0) ||
+	    (breakup_selected != 0) || (sweep_selected != 0)) {
+		return GTA4L_EMMC_BLOCK_CONSUME_REFUSED;
+	}
+	if (token_value != 1) {
+		return GTA4L_EMMC_BLOCK_CONSUME_REFUSED;
+	}
+	return GTA4L_EMMC_BLOCK_CONSUME_ON;
 }
 
 static struct gta4l_emmc_block_deblock_case gta4l_emmc_block_deblock_cases[] = {
@@ -797,6 +823,31 @@ gta4l_emmc_block_sweep_validate(
 	    GTA4L_EMMC_BLOCK_SWEEP_SECTOR_BYTES)) ||
 	    ((end_block * GTA4L_EMMC_BLOCK_SWEEP_SECTOR_BYTES) >
 	    (~0ull - boot_base_bytes))) {
+		return -1;
+	}
+	return 0;
+}
+
+int
+gta4l_emmc_block_consume_validate(uint64_t start, uint32_t length,
+    uint64_t boot_size)
+{
+	if (start != 0u) {
+		return -1;
+	}
+	if (length != GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES) {
+		return -1;
+	}
+	if ((length % GTA4L_EMMC_BLOCK_CONSUME_SECTOR_BYTES) != 0u) {
+		return -1;
+	}
+	if ((boot_size % GTA4L_EMMC_BLOCK_CONSUME_SECTOR_BYTES) != 0u) {
+		return -1;
+	}
+	if (start > (~0ull - length)) {
+		return -1;
+	}
+	if ((start + length) > boot_size) {
 		return -1;
 	}
 	return 0;
@@ -1556,6 +1607,19 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 	uint32_t sweep_mismatch;
 	const uint8_t *sweep_digest;
 	const uint8_t *sweep_refdigest;
+	uint32_t consume_index;
+	uint32_t consume_target;
+	uint64_t consume_start;
+	uint32_t consume_length;
+	uint32_t consume_span;
+	uint64_t consume_actual;
+	int32_t consume_status;
+	uint32_t consume_subrequests;
+	uint32_t consume_blocks;
+	uint32_t consume_max;
+	uint32_t consume_requested;
+	uint32_t consume_completed;
+	const uint8_t *consume_digest;
 
 	if ((buffer == 0) || (report == 0) || (size < 2u)) {
 		if ((buffer != 0) && (size != 0)) {
@@ -2281,6 +2345,201 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
+	if (report->consume != 0) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 CONSUME: ");
+		gta4l_emmc_block_put_key(&writer, "cases");
+		gta4l_emmc_block_put_u64(&writer, report->consume_cases);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "passed");
+		gta4l_emmc_block_put_u64(&writer, report->consume_passed);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "failed");
+		gta4l_emmc_block_put_u64(&writer, report->consume_failed);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reason");
+		gta4l_emmc_block_put_u64(&writer, report->consume_reason);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "complete");
+		gta4l_emmc_block_put_u64(&writer, report->consume_complete);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reads");
+		gta4l_emmc_block_put_u64(&writer, report->consume_reads);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "bytes");
+		gta4l_emmc_block_put_u64(&writer, report->consume_bytes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "span");
+		gta4l_emmc_block_put_u64(&writer, report->consume_span);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "blocks");
+		gta4l_emmc_block_put_u64(&writer, report->consume_blocks);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "subrequests");
+		gta4l_emmc_block_put_u64(&writer, report->consume_subrequests);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "max");
+		gta4l_emmc_block_put_u64(&writer, report->consume_max);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "foreign");
+		gta4l_emmc_block_put_u64(&writer, report->consume_foreign);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "fails");
+		gta4l_emmc_block_put_u64(&writer, report->consume_fails);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "cancel");
+		gta4l_emmc_block_put_u64(&writer, report->consume_cancel);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "budget");
+		gta4l_emmc_block_put_u64(&writer, report->consume_budget);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "media");
+		gta4l_emmc_block_put_u64(&writer, report->consume_media);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "part");
+		gta4l_emmc_block_put_u64(&writer, report->consume_part);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "open");
+		gta4l_emmc_block_put_u64(&writer, report->consume_open);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "close");
+		gta4l_emmc_block_put_u64(&writer, report->consume_close);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "alloc");
+		gta4l_emmc_block_put_u64(&writer, report->consume_alloc);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "client");
+		gta4l_emmc_block_put_u64(&writer, report->consume_client);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "mismatches");
+		gta4l_emmc_block_put_u64(&writer, report->consume_mismatch);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "limit");
+		gta4l_emmc_block_put_u64(&writer, report->consume_limit);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "seg");
+		gta4l_emmc_block_put_u64(&writer, report->consume_segments);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "cap");
+		gta4l_emmc_block_put_u64(&writer, report->consume_capacity);
+		gta4l_emmc_block_put_char(&writer, '\n');
+
+		if (report->consume_failed != 0u) {
+			consume_index = report->consume_fail_index;
+			consume_target = report->consume_fail_target;
+			consume_start = report->consume_fail_start;
+			consume_length = report->consume_fail_length;
+			consume_span = report->consume_fail_span;
+			consume_requested = report->consume_fail_requested;
+			consume_completed = report->consume_fail_completed;
+			consume_actual = report->consume_fail_actual;
+			consume_status = report->consume_fail_status;
+			consume_digest = report->consume_fail_digest;
+			gta4l_emmc_block_put_string(&writer,
+			    "GTA4L-EMMC P5 CONSUMEFAIL: ");
+			gta4l_emmc_block_put_key(&writer, "reason");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->consume_fail_reason);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "case");
+			gta4l_emmc_block_put_u64(&writer, consume_index);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "target");
+			gta4l_emmc_block_put_u64(&writer, consume_target);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "start");
+			gta4l_emmc_block_put_u64(&writer, consume_start);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "length");
+			gta4l_emmc_block_put_u64(&writer, consume_length);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "span");
+			gta4l_emmc_block_put_u64(&writer, consume_span);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "requested");
+			gta4l_emmc_block_put_u64(&writer, consume_requested);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "completed");
+			gta4l_emmc_block_put_u64(&writer, consume_completed);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "actual");
+			gta4l_emmc_block_put_u64(&writer, consume_actual);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "status");
+			gta4l_emmc_block_put_u64(&writer,
+			    (uint64_t)(uint32_t)consume_status);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "digest");
+			gta4l_emmc_block_put_digest(&writer, consume_digest, 16u);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "expected");
+			gta4l_emmc_block_put_digest(&writer,
+			    gta4l_emmc_block_zero_digest, 16u);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "mismatch");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->consume_mismatch);
+			gta4l_emmc_block_put_char(&writer, '\n');
+		} else {
+			consume_index = report->consume_last_index;
+			consume_target = report->consume_last_target;
+			consume_start = report->consume_last_start;
+			consume_length = report->consume_last_length;
+			consume_span = report->consume_last_span;
+			consume_actual = report->consume_last_actual;
+			consume_status = report->consume_last_status;
+			consume_subrequests =
+			    report->consume_last_subrequests;
+			consume_blocks = report->consume_last_blocks;
+			consume_max = report->consume_last_max;
+			consume_digest = report->consume_last_digest;
+			gta4l_emmc_block_put_string(&writer,
+			    "GTA4L-EMMC P5 CONSUMEREAD: ");
+			gta4l_emmc_block_put_key(&writer, "index");
+			gta4l_emmc_block_put_u64(&writer, consume_index);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "target");
+			gta4l_emmc_block_put_u64(&writer, consume_target);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "start");
+			gta4l_emmc_block_put_u64(&writer, consume_start);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "length");
+			gta4l_emmc_block_put_u64(&writer, consume_length);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "span");
+			gta4l_emmc_block_put_u64(&writer, consume_span);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "actual");
+			gta4l_emmc_block_put_u64(&writer, consume_actual);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "status");
+			gta4l_emmc_block_put_u64(&writer,
+			    (uint64_t)(uint32_t)consume_status);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "subrequests");
+			gta4l_emmc_block_put_u64(&writer, consume_subrequests);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "blocks");
+			gta4l_emmc_block_put_u64(&writer, consume_blocks);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "max");
+			gta4l_emmc_block_put_u64(&writer, consume_max);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "digest");
+			gta4l_emmc_block_put_digest(&writer, consume_digest, 16u);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "expected");
+			gta4l_emmc_block_put_digest(&writer,
+			    gta4l_emmc_block_zero_digest, 16u);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "mismatch");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->consume_mismatch);
+			gta4l_emmc_block_put_char(&writer, '\n');
+		}
+	}
+
 	if (report->part_obs != 0) {
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 PARTOBS: ");
@@ -2386,113 +2645,115 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
-	gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");
-	gta4l_emmc_block_put_key(&writer, "lba");
-	gta4l_emmc_block_put_u64(&writer, GTA4L_EMMC_BLOCK_REPORT_LBA);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "attempted");
-	gta4l_emmc_block_put_u64(&writer, report->read_attempted);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "ok");
-	gta4l_emmc_block_put_u64(&writer, report->read_ok);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "bytes");
-	gta4l_emmc_block_put_u64(&writer, report->read_bytes);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "sum");
-	gta4l_emmc_block_put_u64(&writer, report->read_sum);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "base");
-	gta4l_emmc_block_put_u64(&writer, report->baseline_sum);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "same");
-	gta4l_emmc_block_put_u64(&writer, report->same);
-	gta4l_emmc_block_put_char(&writer, '\n');
+	if (report->consume == 0) {
+		gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");
+		gta4l_emmc_block_put_key(&writer, "lba");
+		gta4l_emmc_block_put_u64(&writer, GTA4L_EMMC_BLOCK_REPORT_LBA);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "attempted");
+		gta4l_emmc_block_put_u64(&writer, report->read_attempted);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "ok");
+		gta4l_emmc_block_put_u64(&writer, report->read_ok);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "bytes");
+		gta4l_emmc_block_put_u64(&writer, report->read_bytes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "sum");
+		gta4l_emmc_block_put_u64(&writer, report->read_sum);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "base");
+		gta4l_emmc_block_put_u64(&writer, report->baseline_sum);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "same");
+		gta4l_emmc_block_put_u64(&writer, report->same);
+		gta4l_emmc_block_put_char(&writer, '\n');
 
-	gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 QUAL: ");
-	gta4l_emmc_block_put_key(&writer, "ref");
-	gta4l_emmc_block_put_u64(&writer, report->qual_ref_valid);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "ref_lba");
-	gta4l_emmc_block_put_u64(&writer, report->qual_ref_lba);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "ref_blocks");
-	gta4l_emmc_block_put_u64(&writer, report->qual_ref_blocks);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_att");
-	gta4l_emmc_block_put_u64(&writer, report->qual_two_attempted);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_ok");
-	gta4l_emmc_block_put_u64(&writer, report->qual_two_ok);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_reason");
-	gta4l_emmc_block_put_u64(&writer, report->qual_two_reason);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_bytes");
-	gta4l_emmc_block_put_u64(&writer, report->qual_two_bytes);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_mismatch");
-	gta4l_emmc_block_put_u64(&writer,
-	    report->qual_two_mismatch_valid);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_off");
-	gta4l_emmc_block_put_u64(&writer,
-	    report->qual_two_mismatch_offset);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_match");
-	gta4l_emmc_block_put_u64(&writer, report->qual_two_matches);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_c18");
-	gta4l_emmc_block_put_u64(&writer, report->qual_two_cmd18);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_c17");
-	gta4l_emmc_block_put_u64(&writer, report->qual_two_cmd17);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_stops");
-	gta4l_emmc_block_put_u64(&writer, report->qual_two_stops);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "two_sfail");
-	gta4l_emmc_block_put_u64(&writer,
-	    report->qual_two_stop_failures);
-	gta4l_emmc_block_put_char(&writer, '\n');
+		gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 QUAL: ");
+		gta4l_emmc_block_put_key(&writer, "ref");
+		gta4l_emmc_block_put_u64(&writer, report->qual_ref_valid);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "ref_lba");
+		gta4l_emmc_block_put_u64(&writer, report->qual_ref_lba);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "ref_blocks");
+		gta4l_emmc_block_put_u64(&writer, report->qual_ref_blocks);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_att");
+		gta4l_emmc_block_put_u64(&writer, report->qual_two_attempted);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_ok");
+		gta4l_emmc_block_put_u64(&writer, report->qual_two_ok);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_reason");
+		gta4l_emmc_block_put_u64(&writer, report->qual_two_reason);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_bytes");
+		gta4l_emmc_block_put_u64(&writer, report->qual_two_bytes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_mismatch");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->qual_two_mismatch_valid);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_off");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->qual_two_mismatch_offset);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_match");
+		gta4l_emmc_block_put_u64(&writer, report->qual_two_matches);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_c18");
+		gta4l_emmc_block_put_u64(&writer, report->qual_two_cmd18);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_c17");
+		gta4l_emmc_block_put_u64(&writer, report->qual_two_cmd17);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_stops");
+		gta4l_emmc_block_put_u64(&writer, report->qual_two_stops);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "two_sfail");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->qual_two_stop_failures);
+		gta4l_emmc_block_put_char(&writer, '\n');
 
-	gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 QUAL3: ");
-	gta4l_emmc_block_put_key(&writer, "att");
-	gta4l_emmc_block_put_u64(&writer, report->qual_three_attempted);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "ok");
-	gta4l_emmc_block_put_u64(&writer, report->qual_three_ok);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "reason");
-	gta4l_emmc_block_put_u64(&writer, report->qual_three_reason);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "bytes");
-	gta4l_emmc_block_put_u64(&writer, report->qual_three_bytes);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "mismatch");
-	gta4l_emmc_block_put_u64(&writer,
-	    report->qual_three_mismatch_valid);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "off");
-	gta4l_emmc_block_put_u64(&writer,
-	    report->qual_three_mismatch_offset);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "match");
-	gta4l_emmc_block_put_u64(&writer, report->qual_three_matches);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "c18");
-	gta4l_emmc_block_put_u64(&writer, report->qual_three_cmd18);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "c17");
-	gta4l_emmc_block_put_u64(&writer, report->qual_three_cmd17);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "stops");
-	gta4l_emmc_block_put_u64(&writer, report->qual_three_stops);
-	gta4l_emmc_block_put_char(&writer, ' ');
-	gta4l_emmc_block_put_key(&writer, "sfail");
-	gta4l_emmc_block_put_u64(&writer,
-	    report->qual_three_stop_failures);
-	gta4l_emmc_block_put_char(&writer, '\n');
+		gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 QUAL3: ");
+		gta4l_emmc_block_put_key(&writer, "att");
+		gta4l_emmc_block_put_u64(&writer, report->qual_three_attempted);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "ok");
+		gta4l_emmc_block_put_u64(&writer, report->qual_three_ok);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reason");
+		gta4l_emmc_block_put_u64(&writer, report->qual_three_reason);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "bytes");
+		gta4l_emmc_block_put_u64(&writer, report->qual_three_bytes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "mismatch");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->qual_three_mismatch_valid);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "off");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->qual_three_mismatch_offset);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "match");
+		gta4l_emmc_block_put_u64(&writer, report->qual_three_matches);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "c18");
+		gta4l_emmc_block_put_u64(&writer, report->qual_three_cmd18);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "c17");
+		gta4l_emmc_block_put_u64(&writer, report->qual_three_cmd17);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "stops");
+		gta4l_emmc_block_put_u64(&writer, report->qual_three_stops);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "sfail");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->qual_three_stop_failures);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
 
 	gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 SNAP: ");
 	gta4l_emmc_block_put_key(&writer, "locked");

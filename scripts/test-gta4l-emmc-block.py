@@ -24,6 +24,8 @@ ADAPTER = ROOT / 'package' / 'Gta4lEmmcBlock.cpp'
 SIM = ROOT / 'scripts' / 'sim-gta4l-emmc-block'
 ADAPTER_SUPPORT = SIM / 'adapter_support.cpp'
 ADAPTER_HARNESS = SIM / 'adapter_harness.cpp'
+CONSUMER_PROBE = SIM / 'consumer_lifecycle_probe.cpp'
+BUILD = ROOT / 'scripts' / 'build-gta4l-emmc-block.py'
 UNIXNU = ROOT.parent / 'UniXNU'
 BUILD_SCRIPT = UNIXNU / 'scripts' / 'build-xnu-4k-baseline.sh'
 PERSONALITY_HELPER = UNIXNU / 'scripts' / 'xnu-native-personality.sh'
@@ -347,8 +349,8 @@ ADAPTER_MUTATIONS = [
        '\tif (wentOffline) {')],
      'read-one'),
     ('callback-under-lock',
-     [('\tIOLockUnlock(gate);\n\n\tswitch (result) {',
-       '\tswitch (result) {'),
+     [('\tIOLockUnlock(gate);\n\n\tif (consumeAttributed &&',
+       '\tif (consumeAttributed &&'),
       ('\tcompletion->action(completion->target, completion->parameter, '
        'status,\n'
        '\t    completed);\n'
@@ -803,6 +805,182 @@ ADAPTER_MUTATIONS = [
        '\t\t\t\t\tcaseReason =\n'
        '\t\t\t\t\t    GTA4L_EMMC_BLOCK_SWEEP_REASON_SHORT;\n')],
      'sweep-short-read'),
+    ('consume-open-drop',
+     [('\tif (!consumeWhole->open(this, 0, kIOStorageAccessReader)) {\n'
+       '\t\tconsumeReportFailure(GTA4L_EMMC_BLOCK_CONSUME_REASON_OPEN);\n'
+       '\t\treturn;\n'
+       '\t}\n'
+       '\tconsumeWholeOpen = true;\n',
+       '\tif (false) {\n'
+       '\t\tconsumeReportFailure(GTA4L_EMMC_BLOCK_CONSUME_REASON_OPEN);\n'
+       '\t\treturn;\n'
+       '\t}\n'
+       '\tconsumeWholeOpen = true;\n')],
+     'consume-match'),
+    ('consume-close-drop',
+     [('\tconsumeBootOpen = true;\n',
+       '\tconsumeBootOpen = false;\n')],
+     'consume-match'),
+    ('consume-client-release-drop',
+     [('\tif (consumeClient != nullptr) {\n'
+       '\t\tconsumeClient->release();\n'
+       '\t\tconsumeClient = nullptr;\n'
+       '\t}\n'
+       '\treleaseConsumeMedia();\n',
+       '\tif (consumeClient != nullptr) {\n'
+       '\t\tconsumeClient = nullptr;\n'
+       '\t}\n'
+       '\treleaseConsumeMedia();\n')],
+     'consume-match'),
+    ('consume-double-close',
+     [('\tif (consumeBootOpen && (consumeBoot != nullptr)) {\n'
+       '\t\tconsumeBoot->close(consumeClient, 0);\n'
+       '\t\tconsumeBootOpen = false;\n'
+       '\t\tIOLockLock(reportLock);\n'
+       '\t\treport.consume_close = 1;\n'
+       '\t\tIOLockUnlock(reportLock);\n'
+       '\t}\n'
+       '\tif (consumeClient != nullptr) {\n'
+       '\t\tconsumeClient->release();\n'
+       '\t\tconsumeClient = nullptr;\n'
+       '\t}\n'
+       '\treleaseConsumeMedia();\n',
+       '\tif (consumeBootOpen && (consumeBoot != nullptr)) {\n'
+       '\t\tconsumeBoot->close(consumeClient, 0);\n'
+       '\t\tconsumeBoot->close(consumeClient, 0);\n'
+       '\t\tconsumeBootOpen = false;\n'
+       '\t\tIOLockLock(reportLock);\n'
+       '\t\treport.consume_close = 1;\n'
+       '\t\tIOLockUnlock(reportLock);\n'
+       '\t}\n'
+       '\tif (consumeClient != nullptr) {\n'
+       '\t\tconsumeClient->release();\n'
+       '\t\tconsumeClient = nullptr;\n'
+       '\t}\n'
+       '\treleaseConsumeMedia();\n')],
+     'consume-match'),
+    ('consume-alloc-check',
+     [('\tbuffer = (uint8_t *)IOMallocContiguous(\n'
+       '\t    GTA4L_EMMC_BLOCK_CONSUME_BUFFER_BYTES, PAGE_SIZE, nullptr);\n'
+       '\tif (buffer == nullptr) {\n'
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_ALLOC;\n',
+       '\tbuffer = (uint8_t *)IOMallocContiguous(\n'
+       '\t    GTA4L_EMMC_BLOCK_CONSUME_BUFFER_BYTES, PAGE_SIZE, nullptr);\n'
+       '\tif (false) {\n'
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_ALLOC;\n')],
+     'consume-alloc-failure'),
+    ('consume-segment-length',
+     [('\tif ((address == 0) || (segmentLength < (IOByteCount)length)) {\n',
+       '\tif (address == 0) {\n')],
+     'consume-descriptor-failure'),
+    ('consume-tag-omit',
+     [('\tdescriptor->setTag(tag);\n',
+       '\t(void)tag;\n')],
+     'consume-match'),
+    ('consume-tag-late',
+     [('\tdescriptor->setTag(tag);\n'
+       '\tresult->attempted = 1;\n'
+       '\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n',
+       '\tresult->attempted = 1;\n'
+       '\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n'
+       '\tdescriptor->setTag(tag);\n')],
+     'consume-match'),
+    ('consume-descriptor-release-drop',
+     [('\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n'
+       '\tdescriptor->release();\n'
+       '\tresult->status = (int32_t)status;\n',
+       '\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n'
+       '\tresult->status = (int32_t)status;\n')],
+     'consume-match'),
+    ('consume-digest-omit',
+     [('\t\tgta4l_emmc_block_sha256(buffer, length, result->digest);\n',
+       '\t\tbzero(result->digest, sizeof(result->digest));\n')],
+     'consume-match'),
+    ('consume-short-accept',
+     [('\t} else if (actual != (UInt64)length) {\n'
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_SHORT;\n',
+       '\t} else if (false) {\n'
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_SHORT;\n')],
+     'consume-short-read'),
+    ('consume-foreign-skip',
+     [('\tif ((reason == GTA4L_EMMC_BLOCK_CONSUME_REASON_NONE) &&\n'
+       '\t    (observedForeign != 0u)) {\n'
+       '\t\treason = GTA4L_EMMC_BLOCK_CONSUME_REASON_FOREIGN;\n'
+       '\t}\n',
+       '\tif (false) {\n'
+       '\t\treason = GTA4L_EMMC_BLOCK_CONSUME_REASON_FOREIGN;\n'
+       '\t}\n')],
+     'consume-foreign'),
+    ('consume-order-skip',
+     [('\tif ((reason == GTA4L_EMMC_BLOCK_CONSUME_REASON_NONE) &&\n'
+       '\t    ((observedOrder != 0u) || (observedSubrequests != 1u))) {\n'
+       '\t\treason = GTA4L_EMMC_BLOCK_CONSUME_REASON_ORDER;\n'
+       '\t}\n',
+       '\tif ((reason == GTA4L_EMMC_BLOCK_CONSUME_REASON_NONE) &&\n'
+       '\t    ((observedOrder != 0u) || (observedSubrequests != 1u)) &&\n'
+       '\t    0) {\n'
+       '\t\treason = GTA4L_EMMC_BLOCK_CONSUME_REASON_ORDER;\n'
+       '\t}\n')],
+     'consume-order'),
+    ('consume-budget-skip',
+     [('\tif (consumeElapsedMs() >=\n'
+       '\t    GTA4L_EMMC_BLOCK_CONSUME_READ_MS) {\n'
+       '\t\tconsumeReportFailure(GTA4L_EMMC_BLOCK_CONSUME_REASON_BUDGET);\n',
+       '\tif (false) {\n'
+       '\t\tconsumeReportFailure(GTA4L_EMMC_BLOCK_CONSUME_REASON_BUDGET);\n')],
+     'consume-budget'),
+    ('consume-cancel-skip',
+     [('\tif (reportCancel) {\n'
+       '\t\tconsumeReportCancel();\n'
+       '\t\treturn;\n'
+       '\t}\n'
+       '\n'
+       '\tif (consumeBootOpen && (consumeBoot != nullptr)) {\n',
+       '\tif (false) {\n'
+       '\t\tconsumeReportCancel();\n'
+       '\t\treturn;\n'
+       '\t}\n'
+       '\n'
+       '\tif (consumeBootOpen && (consumeBoot != nullptr)) {\n')],
+     'consume-cancel'),
+    ('consume-complete-claim',
+     [('\treport.consume_complete = complete;\n',
+       '\treport.consume_complete = complete ? 1 : 1;\n')],
+     'consume-read-failure'),
+    ('consume-offset-shift',
+     [('\t(void)consumeClient->run(consumeBoot, 0,\n'
+       '\t    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES,\n',
+       '\t(void)consumeClient->run(consumeBoot, 512,\n'
+       '\t    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES,\n')],
+     'consume-match'),
+    ('consume-base-skip',
+     [('\t\tif (baseProperty->unsigned64BitValue() != base) {\n'
+       '\t\t\tcontinue;\n'
+       '\t\t}\n',
+       '\t\tif ((baseProperty->unsigned64BitValue() != base) && 0) {\n'
+       '\t\t\tcontinue;\n'
+       '\t\t}\n')],
+     'consume-part-wrong-base'),
+    ('consume-writable-skip',
+     [('\tif ((bootWritableProperty == nullptr) ||\n'
+       '\t    bootWritableProperty->getValue()) {\n'
+       '\t\tconsumeReportFailure(GTA4L_EMMC_BLOCK_CONSUME_REASON_PART);\n',
+       '\tif (((bootWritableProperty == nullptr) ||\n'
+       '\t    bootWritableProperty->getValue()) && 0) {\n'
+       '\t\tconsumeReportFailure(GTA4L_EMMC_BLOCK_CONSUME_REASON_PART);\n')],
+     'consume-part-writable'),
+    ('consume-advertise-8',
+     [('\t    GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS :\n'
+       '\t    GTA4L_EMMC_BLOCK_MAX_BLOCKS), 32)) {\n',
+       '\t    GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS :\n'
+       '\t    GTA4L_EMMC_BLOCK_SWEEP_READ_BLOCKS), 32)) {\n')],
+     'consume-match'),
+    ('consume-digest-report-omit',
+     [('\tmemcpy(report.consume_last_digest, result.digest,\n'
+       '\t    sizeof(report.consume_last_digest));\n',
+       '\tbzero(report.consume_last_digest,\n'
+       '\t    sizeof(report.consume_last_digest));\n')],
+     'consume-match'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -886,6 +1064,18 @@ POLICY_MUTATIONS = [
        '\t    ((out->slots > GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS) && 0)) '
        '{\n')],
      'partcmp-geometry'),
+    ('consume-suppress-read',
+     [('\tif (report->consume == 0) {\n'
+       '\t\tgta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");\n',
+       '\tif (1) {\n'
+       '\t\tgta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");\n')],
+     'consume-match'),
+    ('consume-width-overflow',
+     [('\t\tgta4l_emmc_block_put_string(&writer,\n'
+       '\t\t    "GTA4L-EMMC P5 CONSUME: ");\n',
+       '\t\tgta4l_emmc_block_put_string(&writer,\n'
+       '\t\t    "' + 'C' * 2100 + '");\n')],
+     'policy'),
 ]
 
 
@@ -1012,10 +1202,51 @@ def check_adapter_source():
         'report media must be opened read-only before the media-path read'
     assert 'media->close(this, 0)' in adapter, \
         'report media must be closed after the media-path read'
+    assert 'GTA4L_EMMC_BLOCK_CONSUME_ARG' in adapter, \
+        'adapter must parse the opt-in consume token'
+    assert 'gta4l_emmc_block_consume_select' in adapter, \
+        'adapter must use the shared consume selector'
+    assert 'runConsume' in adapter, \
+        'adapter must implement the fixed read-only consumer window'
+    assert 'class Gta4lEmmcConsumer : public IOService' in adapter, \
+        'consumer must be a distinct IOService client'
+    assert 'IOMallocContiguous(' in adapter and \
+        'IOFreeContiguous(' in adapter, \
+        'consumer must own one contiguous buffer and free it'
+    assert 'getPhysicalSegment(0, &segmentLength' in adapter, \
+        'consumer must validate the one-segment descriptor'
+    assert 'descriptor->setTag(tag)' in adapter, \
+        'consumer must tag the single case descriptor'
+    assert '->prepare(' not in adapter and '->complete(' not in adapter, \
+        'consumer must not manually prepare or complete the descriptor'
     assert 'kIOStorageAccessReaderWriter' not in adapter, \
         'report media must never request writer access'
     assert '->write(' not in adapter and 'IOStorage::write' not in adapter, \
         'adapter must not issue media writes'
+    probe = CONSUMER_PROBE.read_text()
+    assert 'IOMallocContiguous(' in probe and \
+        'IOFreeContiguous(' in probe, \
+        'consumer ABI probe must own and free the contiguous buffer'
+    assert 'getPhysicalSegment(0, &segmentLength' in probe, \
+        'consumer ABI probe must validate the one-segment descriptor'
+    assert 'descriptor->setTag(tag)' in probe, \
+        'consumer ABI probe must tag the single case descriptor'
+    assert 'boot->open(this, 0, kIOStorageAccessReader)' in probe, \
+        'consumer ABI probe must open the BOOT media read-only'
+    assert 'boot->read(this, start, descriptor, nullptr, &actual)' in probe, \
+        'consumer ABI probe must issue one synchronous read'
+    assert 'boot->close(this, 0)' in probe, \
+        'consumer ABI probe must close the BOOT media'
+    assert 'kIOStorageAccessReaderWriter' not in probe and \
+        'IOBufferMemoryDescriptor' not in probe, \
+        'consumer ABI probe must stay read-only and contiguous'
+    build = BUILD.read_text()
+    assert 'check_consumer_abi' in build, \
+        'archive build must gate the consumer ABI probe'
+    assert 'PROBE_IMPORTS = 187' in build, \
+        'archive build must pin the consumer import count'
+    assert 'check_archive_imports' in build, \
+        'archive build must gate imports against the candidate kernel'
     watchdog = re.search(r'#define GTA4L_EMMC_BLOCK_WATCHDOG_MS (\d+)u', adapter)
     assert watchdog is not None, 'missing adapter watchdog budget'
     media_wait = re.search(
@@ -1332,8 +1563,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 219, f'expected 219 adapter PASS lines, got {passes}'
-        print('PASS adapter: 218 scenarios against the host IOKit seam')
+        assert passes == 249, f'expected 249 adapter PASS lines, got {passes}'
+        print('PASS adapter: 248 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

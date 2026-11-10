@@ -7,9 +7,9 @@ The tracked board.toml is never modified. A temporary copy is made, its
 fixture is a raw N4KROOT image. The payload is built by the normal UniXNU
 payload step and checked by scripts/check-gta4l-payload.py before it is copied
 to --output or a manifest is written. The partobs, partcmp, partread, deblock,
-breakup and sweep personalities additionally require --data-ramdisk-manifest
-naming the fs-timer-hold fixture, so the old early-success-panic RAM-root
-fixture cannot be repackaged for the observation.
+breakup, sweep and consume personalities additionally require
+--data-ramdisk-manifest naming the fs-timer-hold fixture, so the old
+early-success-panic RAM-root fixture cannot be repackaged for the observation.
 """
 import argparse
 import datetime
@@ -60,6 +60,7 @@ DIAGNOSTICS = {
     'emmc-block-3-breakup': 'gta4l-emmc-block=3 gta4l-emmc-breakup=1',
     'emmc-block-1-sweep': 'gta4l-emmc-block=1 gta4l-emmc-sweep=1',
     'emmc-block-3-sweep': 'gta4l-emmc-block=3 gta4l-emmc-sweep=1',
+    'emmc-block-3-consume': 'gta4l-emmc-block=3 gta4l-emmc-consume=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
@@ -67,10 +68,12 @@ PARTREAD_DIAGNOSTICS = ('emmc-block-1-partread', 'emmc-block-3-partread')
 DEBLOCK_DIAGNOSTICS = ('emmc-block-1-deblock', 'emmc-block-3-deblock')
 BREAKUP_DIAGNOSTICS = ('emmc-block-1-breakup', 'emmc-block-3-breakup')
 SWEEP_DIAGNOSTICS = ('emmc-block-1-sweep', 'emmc-block-3-sweep')
+CONSUME_DIAGNOSTICS = ('emmc-block-3-consume',)
 PARTITION_DIAGNOSTICS = (PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS +
                          PARTREAD_DIAGNOSTICS)
 OBSERVATION_DIAGNOSTICS = (PARTITION_DIAGNOSTICS + DEBLOCK_DIAGNOSTICS +
-                           BREAKUP_DIAGNOSTICS + SWEEP_DIAGNOSTICS)
+                           BREAKUP_DIAGNOSTICS + SWEEP_DIAGNOSTICS +
+                           CONSUME_DIAGNOSTICS)
 DATA_RAMDISK_DIAGNOSTICS = ('report', 'fs-timer', 'fs-timer-hold')
 
 

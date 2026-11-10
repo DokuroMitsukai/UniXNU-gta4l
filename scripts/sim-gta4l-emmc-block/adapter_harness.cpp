@@ -5962,6 +5962,724 @@ scenario_sweep_two_whole(void)
 	return 0;
 }
 
+static IOMedia *g_consume_whole_media;
+static IOMedia *g_consume_boot_media;
+static int g_consume_cancel_at;
+static int g_consume_watchdog_at;
+
+static void
+consume_hook(uint32_t call, uint32_t phase)
+{
+	if ((phase == 2u) && (g_consume_cancel_at >= 0) &&
+	    (call == (uint32_t)g_consume_cancel_at)) {
+		g_self->reportCancel = true;
+	}
+	if ((phase == 0u) && (g_consume_watchdog_at >= 0) &&
+	    (call == (uint32_t)g_consume_watchdog_at)) {
+		(void)invoke_thread(1);
+	}
+}
+
+static void
+consume_reset_fixture(void)
+{
+	g_consume_cancel_at = -1;
+	g_consume_watchdog_at = -1;
+	g_consume_whole_media = 0;
+	g_consume_boot_media = 0;
+}
+
+static void
+consume_setup(bool withWhole, bool withBoot)
+{
+	consume_reset_fixture();
+	/* The breakup model splits the request against the advertised
+	 * 64-block / 32 KiB / one-segment limits before issuing it through
+	 * the adapter, so the production advertisement is exercised. */
+	gta4l_test.breakup_model = 1;
+	gta4l_test_breakup_hook = consume_hook;
+	if (withWhole) {
+		g_consume_whole_media = add_media(true, 0,
+		    (UInt64)gta4l_test.capacity_blocks *
+		    GTA4L_EMMC_BLOCK_BYTES, false,
+		    "GUID_partition_scheme", true);
+	}
+	if (withBoot) {
+		g_consume_boot_media = add_media(false,
+		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+		    false, "Apple_Boot", true);
+	}
+}
+
+static void
+consume_expected_digest(uint8_t *digest)
+{
+	static uint8_t scratch[GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES];
+	uint64_t first = GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES /
+	    GTA4L_EMMC_BLOCK_BYTES;
+
+	gta4l_test_fill_sector(first, scratch);
+	gta4l_test_fill_sector(first + 1u,
+	    scratch + GTA4L_EMMC_BLOCK_BYTES);
+	gta4l_emmc_block_sha256(scratch,
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES, digest);
+}
+
+static int
+scenario_consume_refused_orphan(void)
+{
+	begin("gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-consume requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_block1(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-consume requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_value(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=2");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "malformed gta4l-emmc-consume value") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1 "
+	    "gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "duplicate gta4l-emmc-consume token") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_partobs(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-partobs=1 "
+	    "gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_partcmp(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-partcmp=1 "
+	    "gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_partread(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-partread=1 "
+	    "gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_deblock(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-deblock=1 "
+	    "gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_breakup(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-breakup=1 "
+	    "gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_refused_sweep(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-sweep=1 "
+	    "gta4l-emmc-consume=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log, "mutually exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_match(void)
+{
+	uint8_t expected_digest[32];
+	char digest[33];
+	char expected[512];
+	OSNumber *property;
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumBlockCountReadKey));
+	CHECK((property != 0) &&
+	    (property->unsigned64BitValue() == 64));
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumByteCountReadKey));
+	CHECK((property != 0) &&
+	    (property->unsigned64BitValue() == 32768));
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumSegmentCountReadKey));
+	CHECK((property != 0) &&
+	    (property->unsigned64BitValue() == 1));
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=1 failed=0 reason=0 "
+	    "complete=1 reads=1 bytes=1024 span=1024 blocks=2 "
+	    "subrequests=1 max=2 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=1 close=1 alloc=0 client=1 "
+	    "mismatches=0 limit=64 seg=1 cap=61071360") != 0);
+	consume_expected_digest(expected_digest);
+	partread_digest_hex(expected_digest, digest);
+	snprintf(expected, sizeof(expected),
+	    "GTA4L-EMMC P5 CONSUMEREAD: index=0 target=1 start=0 "
+	    "length=1024 span=1024 actual=1024 status=0 subrequests=1 "
+	    "blocks=2 max=2 digest=%s "
+	    "expected=00000000000000000000000000000000 mismatch=0",
+	    digest);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 READ:") == 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 QUAL") == 0);
+	CHECK(g_consume_whole_media != 0);
+	CHECK(g_consume_whole_media->open_calls == 1);
+	CHECK(g_consume_whole_media->close_calls == 1);
+	CHECK(g_consume_boot_media != 0);
+	CHECK(g_consume_boot_media->open_calls == 1);
+	CHECK(g_consume_boot_media->close_calls == 1);
+	CHECK((g_consume_boot_media->close_client != 0) &&
+	    (g_consume_boot_media->close_client != g_self));
+	CHECK(g_consume_whole_media->close_client == g_self);
+	CHECK(g_consume_boot_media->open_access == kIOStorageAccessReader);
+	CHECK(g_consume_whole_media->open_access == kIOStorageAccessReader);
+	CHECK(g_self->report.consume_complete == 1);
+	CHECK(gta4l_test.consume_alloc_calls == 1);
+	CHECK(gta4l_test.consume_alloc_size ==
+	    GTA4L_EMMC_BLOCK_CONSUME_BUFFER_BYTES);
+	CHECK(gta4l_test.consume_alloc_alignment == PAGE_SIZE);
+	CHECK(gta4l_test.consume_free_calls == 1);
+	CHECK(gta4l_test.consume_free_size ==
+	    GTA4L_EMMC_BLOCK_CONSUME_BUFFER_BYTES);
+	CHECK(gta4l_test.consume_live_alloc == 0);
+	CHECK(gta4l_test.descriptor_alloc_calls == 1);
+	CHECK(gta4l_test.descriptor_release_calls == 1);
+	CHECK(gta4l_test.consumer_release_calls == 1);
+	CHECK(g_self->consumeClient == 0);
+	CHECK(g_self->consumeBoot == 0);
+	CHECK(g_self->consumeWhole == 0);
+	return 0;
+}
+
+static int
+scenario_consume_media_absent(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(false, false);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=1 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=1 part=0 "
+	    "open=0 close=0 alloc=0 client=0 mismatches=0 limit=64 "
+	    "seg=1 cap=61071360") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUMEFAIL: reason=1 case=0 target=0 "
+	    "start=0 length=0 span=0 requested=0 completed=0 actual=0 "
+	    "status=0 digest=00000000000000000000000000000000 "
+	    "expected=00000000000000000000000000000000 mismatch=0") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_two_whole(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	(void)add_media(true, 0,
+	    (UInt64)gta4l_test.capacity_blocks * GTA4L_EMMC_BLOCK_BYTES,
+	    false, "GUID_partition_scheme", true);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=1 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=1 part=0 open=0 close=0 alloc=0 client=0") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_part_absent(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, false);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=2 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=1 "
+	    "open=0 close=0 alloc=0 client=0 mismatches=0 limit=64 "
+	    "seg=1 cap=61071360") != 0);
+	CHECK(g_consume_whole_media != 0);
+	CHECK(g_consume_whole_media->open_calls == 1);
+	CHECK(g_consume_whole_media->close_calls == 1);
+	return 0;
+}
+
+static int
+scenario_consume_part_duplicate(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	(void)add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=2 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=1 "
+	    "open=0 close=0 alloc=0 client=0 mismatches=0 limit=64 "
+	    "seg=1 cap=61071360") != 0);
+	CHECK(g_consume_whole_media->open_calls == 1);
+	CHECK(g_consume_whole_media->close_calls == 1);
+	return 0;
+}
+
+static int
+scenario_consume_part_wrong_base(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, false);
+	(void)add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES +
+	    GTA4L_EMMC_BLOCK_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=2 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=1 open=0 close=0 alloc=0 client=0") != 0);
+	CHECK(g_consume_whole_media->open_calls == 1);
+	CHECK(g_consume_whole_media->close_calls == 1);
+	return 0;
+}
+
+static int
+scenario_consume_part_wrong_size(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, false);
+	(void)add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES -
+	    GTA4L_EMMC_BLOCK_BYTES,
+	    false, "Apple_Boot", true);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=2 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=1 open=0 close=0 alloc=0 client=0") != 0);
+	CHECK(g_consume_whole_media->open_calls == 1);
+	CHECK(g_consume_whole_media->close_calls == 1);
+	return 0;
+}
+
+static int
+scenario_consume_part_writable(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, false);
+	(void)add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    true, "Apple_Boot", true);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=2 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=1 open=0 close=0 alloc=0 client=0") != 0);
+	CHECK(g_consume_whole_media->open_calls == 1);
+	CHECK(g_consume_whole_media->close_calls == 1);
+	return 0;
+}
+
+static int
+scenario_consume_open_refused(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	g_consume_whole_media->open_refuse = true;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=3 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=0 close=0 alloc=0 client=0") != 0);
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	g_consume_boot_media->open_refuse = true;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=3 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=0 close=0 alloc=0 client=1") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_client_failure(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.consume_client_alloc_fail = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=14 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=0 close=0 alloc=0 client=0") != 0);
+	CHECK(g_consume_boot_media->open_calls == 0);
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.consume_client_init_fail = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=14 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=0 close=0 alloc=0 client=0") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_alloc_failure(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.consume_alloc_fail = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=4 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0 "
+	    "open=1 close=1 alloc=1 client=1 mismatches=0 limit=64 "
+	    "seg=1 cap=61071360") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUMEFAIL: reason=4 case=0 target=1 "
+	    "start=0 length=1024 span=1024 requested=0 completed=0 "
+	    "actual=0 status=0") != 0);
+	CHECK(gta4l_test.consume_alloc_calls == 1);
+	CHECK(gta4l_test.consume_free_calls == 0);
+	CHECK(g_consume_boot_media->close_calls == 1);
+	return 0;
+}
+
+static int
+scenario_consume_descriptor_failure(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.descriptor_alloc_fail = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=5 complete=0 reads=0 bytes=0 span=0 blocks=0 "
+	    "subrequests=0 max=0 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=1 close=1 alloc=0 client=1") != 0);
+	CHECK(gta4l_test.consume_alloc_calls == 1);
+	CHECK(gta4l_test.consume_free_calls == 1);
+	CHECK(gta4l_test.consume_live_alloc == 0);
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.consume_segment_zero = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=5 complete=0 reads=0 bytes=0 span=0 blocks=0") != 0);
+	CHECK(gta4l_test.consume_live_alloc == 0);
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.consume_segment_short = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=5 complete=0 reads=0 bytes=0 span=0 blocks=0") != 0);
+	CHECK(gta4l_test.consume_live_alloc == 0);
+	return 0;
+}
+
+static int
+scenario_consume_read_failure(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.breakup_fail_at = 0;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=6 "
+	    "complete=0 reads=1 bytes=1024 span=1024 blocks=2 "
+	    "subrequests=0 max=0 foreign=0 fails=1 cancel=0 budget=0 "
+	    "media=0 part=0 open=1 close=1 alloc=0 client=1 "
+	    "mismatches=0 limit=64 seg=1 cap=61071360") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUMEFAIL: reason=6 case=0 target=1 "
+	    "start=0 length=1024 span=1024 requested=2 completed=0 "
+	    "actual=0") != 0);
+	CHECK(gta4l_test.consume_live_alloc == 0);
+	return 0;
+}
+
+static int
+scenario_consume_short_read(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.breakup_short_at = 0;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=7 "
+	    "complete=0 reads=1 bytes=1024 span=1024 blocks=2 "
+	    "subrequests=1 max=2 foreign=0 fails=1 cancel=0 budget=0 "
+	    "media=0 part=0 open=1 close=1 alloc=0 client=1 "
+	    "mismatches=0 limit=64 seg=1 cap=61071360") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUMEFAIL: reason=7 case=0 target=1 "
+	    "start=0 length=1024 span=1024 requested=2 completed=1 "
+	    "actual=1023") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_digest_mismatch(void)
+{
+	uint8_t expected_digest[32];
+	char digest[33];
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.breakup_corrupt_at = 0;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=1 failed=0 reason=0 "
+	    "complete=1 reads=1 bytes=1024 span=1024 blocks=2 "
+	    "subrequests=1 max=2 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=1 close=1 alloc=0 client=1 "
+	    "mismatches=0 limit=64 seg=1 cap=61071360") != 0);
+	consume_expected_digest(expected_digest);
+	partread_digest_hex(expected_digest, digest);
+	CHECK(strstr(gta4l_test.panic, digest) == 0);
+	return 0;
+}
+
+static int
+scenario_consume_foreign(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.breakup_foreign_at = 0;
+	gta4l_test.breakup_foreign_mode = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=13 "
+	    "complete=0 reads=1 bytes=1024 span=1024 blocks=2 "
+	    "subrequests=1 max=2 foreign=1 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=1 close=1 alloc=0 client=1 "
+	    "mismatches=0 limit=64 seg=1 cap=61071360") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUMEFAIL: reason=13 case=0 target=1 "
+	    "start=0 length=1024 span=1024 requested=2 completed=2 "
+	    "actual=1024") != 0);
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.breakup_foreign_at = 0;
+	gta4l_test.breakup_foreign_mode = 2;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=13 complete=0 reads=1 bytes=1024 span=1024 "
+	    "blocks=2 subrequests=1 max=2 foreign=1") != 0);
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.breakup_foreign_at = 0;
+	gta4l_test.breakup_foreign_mode = 3;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=13 complete=0 reads=1 bytes=1024 span=1024 "
+	    "blocks=2 subrequests=1 max=2 foreign=1") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_order(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.breakup_split_mode = 2;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=12 "
+	    "complete=0 reads=1 bytes=1024 span=1024 blocks=2 "
+	    "subrequests=1 max=2 foreign=0 fails=0 cancel=0 budget=0 "
+	    "media=0 part=0 open=1 close=1 alloc=0 client=1 "
+	    "mismatches=0 limit=64 seg=1 cap=61071360") != 0);
+	return 0;
+}
+
+static int
+scenario_consume_budget(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	gta4l_test.consume_advance_on_open = 3000;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: cases=1 passed=0 failed=1 reason=9 "
+	    "complete=0 reads=0 bytes=0 span=0 blocks=0 subrequests=0 "
+	    "max=0 foreign=0 fails=0 cancel=0 budget=1 media=0 part=0 "
+	    "open=1 close=1 alloc=0 client=1 mismatches=0 limit=64 "
+	    "seg=1 cap=61071360") != 0);
+	CHECK(gta4l_test.consume_alloc_calls == 0);
+	return 0;
+}
+
+static int
+scenario_consume_cancel(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	g_consume_cancel_at = 0;
+	gta4l_test.breakup_cancel_at = 0;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(gta4l_test.panic[0] == 0);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(g_self->report.consume_cancel == 1);
+	CHECK(g_self->report.consume_reason ==
+	    GTA4L_EMMC_BLOCK_CONSUME_REASON_CANCEL);
+	CHECK(g_self->report.consume_complete == 0);
+	CHECK(g_consume_whole_media->close_calls == 1);
+	CHECK(g_consume_boot_media->close_calls == 1);
+	CHECK(gta4l_test.consume_live_alloc == 0);
+	CHECK(gta4l_test.descriptor_alloc_calls == 1);
+	CHECK(gta4l_test.descriptor_release_calls == 1);
+	CHECK(gta4l_test.consumer_release_calls == 1);
+	CHECK(g_self->consumeClient == 0);
+	CHECK(g_self->consumeBoot == 0);
+	CHECK(g_self->consumeWhole == 0);
+
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	g_self->reportCancel = true;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(g_self->report.consume_cancel == 1);
+	CHECK(g_self->report.consume_reason ==
+	    GTA4L_EMMC_BLOCK_CONSUME_REASON_CANCEL);
+	CHECK(g_self->report.consume_reads == 0);
+	CHECK(gta4l_test.descriptor_alloc_calls == 0);
+	CHECK(gta4l_test.descriptor_release_calls == 0);
+	CHECK(gta4l_test.consumer_release_calls == 0);
+	CHECK(g_self->consumeClient == 0);
+	CHECK(g_self->consumeBoot == 0);
+	CHECK(g_self->consumeWhole == 0);
+	return 0;
+}
+
+static int
+scenario_consume_watchdog(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1");
+	CHECK(g_started);
+	consume_setup(true, true);
+	g_consume_watchdog_at = 0;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic, "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 REPORT: rc=16 stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 CONSUME: ") != 0);
+	CHECK(gta4l_test.consume_free_calls == 1);
+	CHECK(gta4l_test.descriptor_alloc_calls == 1);
+	CHECK(gta4l_test.descriptor_release_calls == 1);
+	CHECK(gta4l_test.consumer_release_calls == 1);
+	return 0;
+}
+
 static int
 scenario_policy(void)
 {
@@ -6040,6 +6758,45 @@ scenario_policy(void)
 	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
 	CHECK(gta4l_emmc_block_partread_case_count() == 14);
 	CHECK(gta4l_emmc_block_partread_case_at(14) == 0);
+	CHECK(gta4l_emmc_block_consume_select(0, 0, 0, 0, 0,
+	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_OFF);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_ON);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 0, 3,
+	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 1,
+	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 1, 1, 3,
+	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 2, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
+	    1, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
+	    0, 1, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
+	    0, 0, 1, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 1, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 1, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 1) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_validate(0,
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) == 0);
+	CHECK(gta4l_emmc_block_consume_validate(1,
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) != 0);
+	CHECK(gta4l_emmc_block_consume_validate(0,
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES / 2u,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) != 0);
+	CHECK(gta4l_emmc_block_consume_validate(0,
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES, 1024) == 0);
+	CHECK(gta4l_emmc_block_consume_validate(0,
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES, 1025) != 0);
+	CHECK(gta4l_emmc_block_consume_validate(0,
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES, 512) != 0);
 	CHECK(gta4l_emmc_block_request_check(10, 0, 1, 512,
 	    GTA4L_EMMC_BLOCK_DIRECTION_READ, 1) ==
 	    GTA4L_EMMC_BLOCK_REQUEST_OK);
@@ -6475,6 +7232,109 @@ scenario_policy(void)
 	CHECK(gta4l_emmc_block_report_format(small, sizeof(small),
 	    &report) == 0);
 	CHECK(small[0] == 0);
+
+	memset(&report, 0, sizeof(report));
+	report.consume = 1;
+	report.consume_cases = 1;
+	report.consume_passed = 1;
+	report.consume_failed = 0;
+	report.consume_reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_NONE;
+	report.consume_complete = 1;
+	report.consume_reads = 1;
+	report.consume_bytes = 1024;
+	report.consume_span = 1024;
+	report.consume_blocks = 2;
+	report.consume_subrequests = 1;
+	report.consume_max = 2;
+	report.consume_foreign = 0;
+	report.consume_fails = 0;
+	report.consume_cancel = 0;
+	report.consume_budget = 0;
+	report.consume_media = 0;
+	report.consume_part = 0;
+	report.consume_open = 1;
+	report.consume_close = 1;
+	report.consume_alloc = 0;
+	report.consume_client = 1;
+	report.consume_mismatch = 0;
+	report.consume_limit = GTA4L_EMMC_BLOCK_CONSUME_MAX_BLOCKS;
+	report.consume_segments = GTA4L_EMMC_BLOCK_CONSUME_SEGMENTS;
+	report.consume_capacity = 61071360;
+	report.consume_last_index = 0;
+	report.consume_last_target = GTA4L_EMMC_BLOCK_CONSUME_TARGET_BOOT;
+	report.consume_last_start = 0;
+	report.consume_last_length =
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES;
+	report.consume_last_span = GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES;
+	report.consume_last_actual = GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES;
+	report.consume_last_subrequests = 1;
+	report.consume_last_blocks = GTA4L_EMMC_BLOCK_CONSUME_CASE_BLOCKS;
+	report.consume_last_max = GTA4L_EMMC_BLOCK_CONSUME_CASE_BLOCKS;
+	memset(report.consume_last_digest, 0xab,
+	    sizeof(report.consume_last_digest));
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 CONSUME: cases=1 passed=1 "
+	    "failed=0 reason=0 complete=1 reads=1 bytes=1024 span=1024 "
+	    "blocks=2 subrequests=1 max=2 foreign=0 fails=0 cancel=0 "
+	    "budget=0 media=0 part=0 open=1 close=1 alloc=0 client=1 "
+	    "mismatches=0 limit=64 seg=1 cap=61071360") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 CONSUMEREAD: index=0 target=1 "
+	    "start=0 length=1024 span=1024 actual=1024 status=0 "
+	    "subrequests=1 blocks=2 max=2 "
+	    "digest=abababababababababababababababab "
+	    "expected=00000000000000000000000000000000 mismatch=0") != 0);
+	line = strstr(buffer, "GTA4L-EMMC P5 CONSUME: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_CONSUME_LINE_BYTES);
+	line = strstr(buffer, "GTA4L-EMMC P5 CONSUMEREAD: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_CONSUMEREAD_LINE_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 READ:") == 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 QUAL") == 0);
+	report.consume_failed = 1;
+	report.consume_passed = 0;
+	report.consume_complete = 0;
+	report.consume_reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_READ;
+	report.consume_fail_reason =
+	    GTA4L_EMMC_BLOCK_CONSUME_REASON_READ;
+	report.consume_fail_index = 0;
+	report.consume_fail_target = GTA4L_EMMC_BLOCK_CONSUME_TARGET_BOOT;
+	report.consume_fail_length =
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES;
+	report.consume_fail_span = GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES;
+	report.consume_fail_requested =
+	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BLOCKS;
+	memset(report.consume_fail_digest, 0xcd,
+	    sizeof(report.consume_fail_digest));
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 CONSUMEFAIL: reason=6 "
+	    "case=0 target=1 start=0 length=1024 span=1024 "
+	    "requested=2 completed=0 actual=0 status=0 "
+	    "digest=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd "
+	    "expected=00000000000000000000000000000000 mismatch=0") != 0);
+	line = strstr(buffer, "GTA4L-EMMC P5 CONSUMEFAIL: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_CONSUMEFAIL_LINE_BYTES);
+	report.consume = 0;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(strstr(buffer, "CONSUME") == 0);
 	return 0;
 }
 
@@ -6715,6 +7575,36 @@ static const struct scenario_entry scenarios[] = {
 	{ "sweep-part-absent", scenario_sweep_part_absent },
 	{ "sweep-open-refused", scenario_sweep_open_refused },
 	{ "sweep-two-whole", scenario_sweep_two_whole },
+	{ "consume-refused-orphan", scenario_consume_refused_orphan },
+	{ "consume-refused-block1", scenario_consume_refused_block1 },
+	{ "consume-refused-value", scenario_consume_refused_value },
+	{ "consume-refused-duplicate", scenario_consume_refused_duplicate },
+	{ "consume-refused-partobs", scenario_consume_refused_partobs },
+	{ "consume-refused-partcmp", scenario_consume_refused_partcmp },
+	{ "consume-refused-partread", scenario_consume_refused_partread },
+	{ "consume-refused-deblock", scenario_consume_refused_deblock },
+	{ "consume-refused-breakup", scenario_consume_refused_breakup },
+	{ "consume-refused-sweep", scenario_consume_refused_sweep },
+	{ "consume-match", scenario_consume_match },
+	{ "consume-media-absent", scenario_consume_media_absent },
+	{ "consume-two-whole", scenario_consume_two_whole },
+	{ "consume-part-absent", scenario_consume_part_absent },
+	{ "consume-part-duplicate", scenario_consume_part_duplicate },
+	{ "consume-part-wrong-base", scenario_consume_part_wrong_base },
+	{ "consume-part-wrong-size", scenario_consume_part_wrong_size },
+	{ "consume-part-writable", scenario_consume_part_writable },
+	{ "consume-open-refused", scenario_consume_open_refused },
+	{ "consume-client-failure", scenario_consume_client_failure },
+	{ "consume-alloc-failure", scenario_consume_alloc_failure },
+	{ "consume-descriptor-failure", scenario_consume_descriptor_failure },
+	{ "consume-read-failure", scenario_consume_read_failure },
+	{ "consume-short-read", scenario_consume_short_read },
+	{ "consume-digest-mismatch", scenario_consume_digest_mismatch },
+	{ "consume-foreign", scenario_consume_foreign },
+	{ "consume-order", scenario_consume_order },
+	{ "consume-budget", scenario_consume_budget },
+	{ "consume-cancel", scenario_consume_cancel },
+	{ "consume-watchdog", scenario_consume_watchdog },
 	{ "policy", scenario_policy },
 };
 

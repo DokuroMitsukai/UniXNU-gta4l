@@ -25,10 +25,12 @@
 typedef uint64_t UInt64;
 typedef uint32_t UInt32;
 typedef uint64_t IOByteCount;
+typedef uint64_t IOPhysicalAddress;
 
 #ifndef PAGE_SIZE
 #define PAGE_SIZE 4096u
 #endif
+#define kIOMemoryMapperNone 0u
 typedef uint32_t IOOptionBits;
 typedef int IOStorageAccess;
 typedef int IOReturn;
@@ -205,6 +207,9 @@ public:
 	virtual void *address() const { return address_; }
 	virtual void setTag(UInt32 tag) { tag_ = tag; }
 	virtual UInt32 getTag() const { return tag_; }
+	virtual void release() override;
+	virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
+	    IOByteCount *length, IOOptionBits options);
 protected:
 	void *address_ = nullptr;
 	UInt64 length_ = 0;
@@ -217,7 +222,8 @@ public:
 	inline static const int test_tag = 0;
 	IOService() : property_count_(0), provider_(0), registered_(false),
 	    uuid_value_(0), child_count_(0) {}
-	const void *typeTag() const override { return &test_tag; }	virtual bool start(IOService *provider) { provider_ = provider; return true; }
+	const void *typeTag() const override { return &test_tag; }	virtual bool init();
+	virtual bool start(IOService *provider) { provider_ = provider; return true; }
 	virtual void stop(IOService *provider) { (void)provider; }
 	virtual void free() {}
 	virtual IOService *getProvider() const { return provider_; }
@@ -410,6 +416,7 @@ public:
 	int open_calls;
 	int close_calls;
 	IOService *open_client;
+	IOService *close_client;
 	IOStorageAccess open_access;
 	OSBoolean whole_object;
 	OSBoolean writable_object;
@@ -467,6 +474,9 @@ struct gta4l_test_state {
 	uint32_t copy_calls;
 	int short_copy_at;
 	int descriptor_alloc_fail;
+	uint32_t descriptor_alloc_calls;
+	uint32_t descriptor_release_calls;
+	uint32_t consumer_release_calls;
 	uint32_t registered;
 	uint32_t sleeps;
 	uint32_t now_ms;
@@ -525,6 +535,19 @@ struct gta4l_test_state {
 	int sweep_reference_corrupt_count;
 	int sweep_reference_corrupt_mode;
 	int sweep_reference_short_at;
+	int consume_client_alloc_fail;
+	int consume_client_init_fail;
+	int consume_alloc_fail;
+	int consume_segment_zero;
+	int consume_segment_short;
+	int consume_advance_on_open;
+	uint32_t consume_alloc_calls;
+	uint32_t consume_free_calls;
+	uint64_t consume_alloc_size;
+	uint64_t consume_alloc_alignment;
+	uint64_t consume_free_size;
+	void *consume_alloc_address;
+	int consume_live_alloc;
 };
 
 typedef void (*gta4l_test_partition_sample_fn)(uint32_t sample,
@@ -606,6 +629,9 @@ static inline void IOFreeAligned(void *address, size_t size)
 	(void)size;
 	free(address);
 }
+
+void *IOMallocContiguous(size_t size, size_t alignment, void *tag);
+void IOFreeContiguous(void *address, size_t size);
 
 void IOLog(const char *format, ...);
 void IOSleep(unsigned milliseconds);

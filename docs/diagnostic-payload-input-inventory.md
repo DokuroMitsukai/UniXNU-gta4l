@@ -316,7 +316,14 @@ map to the same block token plus `gta4l-emmc-sweep=1`; both require the hold
 fixture, and the checker refuses an orphan, duplicate or non-1 sweep token, a
 mismatched personality, and any sweep+partobs, sweep+partcmp, sweep+partread,
 sweep+deblock or sweep+breakup combination. N10.12 rebuilt no payload; N10.13
-candidate production is separately gated. The
+candidate production is separately gated. The N10.15 design and host
+implementation add `emmc-block-3-consume`, which maps to
+`gta4l-emmc-block=3` plus `gta4l-emmc-consume=1`; it requires the hold
+fixture, and the checker refuses an orphan, duplicate or non-1 consume token,
+a mismatched personality, a block-1 combination, and any consume+partobs,
+consume+partcmp, consume+partread, consume+deblock, consume+breakup or
+consume+sweep combination. N10.15 rebuilt no payload; candidate production is
+separately gated. The
 stage-2
 image built on
 2026-10-31 is

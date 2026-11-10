@@ -24,6 +24,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_DEBLOCK_ARG "gta4l-emmc-deblock"
 #define GTA4L_EMMC_BLOCK_BREAKUP_ARG "gta4l-emmc-breakup"
 #define GTA4L_EMMC_BLOCK_SWEEP_ARG "gta4l-emmc-sweep"
+#define GTA4L_EMMC_BLOCK_CONSUME_ARG "gta4l-emmc-consume"
 
 #define GTA4L_EMMC_BLOCK_MODE_OFF 0
 #define GTA4L_EMMC_BLOCK_MODE_REPORT 1
@@ -60,6 +61,10 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SWEEP_OFF 0
 #define GTA4L_EMMC_BLOCK_SWEEP_ON 1
 #define GTA4L_EMMC_BLOCK_SWEEP_REFUSED (-1)
+
+#define GTA4L_EMMC_BLOCK_CONSUME_OFF 0
+#define GTA4L_EMMC_BLOCK_CONSUME_ON 1
+#define GTA4L_EMMC_BLOCK_CONSUME_REFUSED (-1)
 
 /* Bounded observation budgets. The media wait is the design's 20 s window;
  * the partition wait is an additional, non-fatal observation. The N8
@@ -217,6 +222,38 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SWEEP_LINE_BYTES 384u
 #define GTA4L_EMMC_BLOCK_SWEEPREAD_LINE_BYTES 352u
 #define GTA4L_EMMC_BLOCK_SWEEP_DERIVE_MULTIPLIER 104729u
+
+/* N10.15 read-only consumer. One fixed BOOT window (offset 0, 1,024 bytes)
+ * read by a distinct IOService client under the production 64-block /
+ * 32 KiB / one-segment advertisement. The buffer stays the pinned 32 KiB
+ * contiguous allocation; the descriptor and request are 1,024 bytes. The
+ * per-chunk CMD18/CMD12 bound is 3,000 ms and the discovery deadline is
+ * 2,000 ms after the 20,000 ms media wait, for a conditional 25,000 ms
+ * against the 30,000 ms watchdog. */
+#define GTA4L_EMMC_BLOCK_CONSUME_CASES 1u
+#define GTA4L_EMMC_BLOCK_CONSUME_CASE_BLOCKS 2u
+#define GTA4L_EMMC_BLOCK_CONSUME_SECTOR_BYTES 512u
+#define GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES \
+	(GTA4L_EMMC_BLOCK_CONSUME_CASE_BLOCKS * \
+	GTA4L_EMMC_BLOCK_CONSUME_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_CONSUME_MAX_BLOCKS 64u
+#define GTA4L_EMMC_BLOCK_CONSUME_MAX_BYTES \
+	(GTA4L_EMMC_BLOCK_CONSUME_MAX_BLOCKS * \
+	GTA4L_EMMC_BLOCK_CONSUME_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_CONSUME_BUFFER_BYTES 32768u
+#define GTA4L_EMMC_BLOCK_CONSUME_SEGMENTS 1u
+#define GTA4L_EMMC_BLOCK_CONSUME_CASE_TAG 1u
+#define GTA4L_EMMC_BLOCK_CONSUME_DEADLINE_MS 2000u
+#define GTA4L_EMMC_BLOCK_CONSUME_STEP_MS 50u
+#define GTA4L_EMMC_BLOCK_CONSUME_READ_MS 3000u
+#define GTA4L_EMMC_BLOCK_CONSUME_WORST_MS \
+	(GTA4L_EMMC_BLOCK_MEDIA_WAIT_MS + \
+	GTA4L_EMMC_BLOCK_CONSUME_DEADLINE_MS + \
+	GTA4L_EMMC_BLOCK_CONSUME_READ_MS)
+#define GTA4L_EMMC_BLOCK_CONSUME_LINE_BYTES 320u
+#define GTA4L_EMMC_BLOCK_CONSUMEREAD_LINE_BYTES 352u
+#define GTA4L_EMMC_BLOCK_CONSUMEFAIL_LINE_BYTES 384u
+#define GTA4L_EMMC_BLOCK_CONSUME_REPORT_WORST_BYTES 1959u
 
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
@@ -522,6 +559,59 @@ struct gta4l_emmc_block_report {
 	uint32_t sweep_fail_mismatch;
 	uint8_t sweep_fail_digest[16];
 	uint8_t sweep_fail_refdigest[16];
+	/* Opt-in single-window read-only consumer. A distinct IOService client
+	 * opens the BOOT partition, reads 1,024 bytes through the production
+	 * advertisement and records the observed SHA-256 prefix. Option A
+	 * compares that prefix on the host, so complete=1 covers transport,
+	 * attribution, open/close and allocation only. */
+	uint32_t consume;
+	uint32_t consume_cases;
+	uint32_t consume_passed;
+	uint32_t consume_failed;
+	uint32_t consume_reason;
+	uint32_t consume_complete;
+	uint32_t consume_reads;
+	uint32_t consume_bytes;
+	uint32_t consume_span;
+	uint32_t consume_blocks;
+	uint32_t consume_subrequests;
+	uint32_t consume_max;
+	uint32_t consume_foreign;
+	uint32_t consume_fails;
+	uint32_t consume_cancel;
+	uint32_t consume_budget;
+	uint32_t consume_media;
+	uint32_t consume_part;
+	uint32_t consume_limit;
+	uint32_t consume_segments;
+	uint32_t consume_capacity;
+	uint32_t consume_open;
+	uint32_t consume_close;
+	uint32_t consume_alloc;
+	uint32_t consume_client;
+	uint32_t consume_mismatch;
+	uint32_t consume_last_index;
+	uint32_t consume_last_target;
+	uint64_t consume_last_start;
+	uint32_t consume_last_length;
+	uint32_t consume_last_span;
+	int32_t consume_last_status;
+	uint64_t consume_last_actual;
+	uint32_t consume_last_subrequests;
+	uint32_t consume_last_blocks;
+	uint32_t consume_last_max;
+	uint8_t consume_last_digest[16];
+	uint32_t consume_fail_index;
+	uint32_t consume_fail_reason;
+	int32_t consume_fail_status;
+	uint64_t consume_fail_actual;
+	uint32_t consume_fail_target;
+	uint64_t consume_fail_start;
+	uint32_t consume_fail_length;
+	uint32_t consume_fail_span;
+	uint32_t consume_fail_requested;
+	uint32_t consume_fail_completed;
+	uint8_t consume_fail_digest[16];
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -626,6 +716,16 @@ int gta4l_emmc_block_sweep_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
     int partcmp_selected, int partread_selected, int deblock_selected,
     int breakup_selected);
+
+/* Select the single-window read-only consumer. The token is accepted only
+ * when exactly one gta4l-emmc-block=3 token is selected, the value is
+ * exactly 1, the token is not duplicated and none of the other
+ * partition/read instruments is selected in the same boot. A block mode 1
+ * token is refused because the consumer exercises the multi-block path. */
+int gta4l_emmc_block_consume_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected);
 
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
@@ -782,6 +882,35 @@ int gta4l_emmc_block_breakup_geometry(uint64_t start, uint32_t length,
 #define GTA4L_EMMC_BLOCK_SWEEP_REASON_FOREIGN 13u
 #define GTA4L_EMMC_BLOCK_SWEEP_REASON_MISMATCH 14u
 #define GTA4L_EMMC_BLOCK_SWEEP_REASON_REF 15u
+
+/* CONSUME reason codes. The first failure latches the reason and suppresses
+ * suffix I/O. HASH is reserved for the option B compiled comparison; option
+ * A compares the observed digest on the host after the run. CLOSE is a host
+ * accounting guard. */
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_MEDIA 1u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_PART 2u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_OPEN 3u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_ALLOC 4u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_DESC 5u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_READ 6u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_SHORT 7u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_HASH 8u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_BUDGET 9u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_CANCEL 10u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_ARG 11u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_ORDER 12u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_FOREIGN 13u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_CLIENT 14u
+#define GTA4L_EMMC_BLOCK_CONSUME_REASON_CLOSE 15u
+
+#define GTA4L_EMMC_BLOCK_CONSUME_TARGET_BOOT 1u
+
+/* Validate the fixed consumer window against the discovered BOOT size. The
+ * window is offset 0, 1,024 bytes, whole 512-byte blocks, and entirely
+ * inside the partition. Returns 0 on success. */
+int gta4l_emmc_block_consume_validate(uint64_t start, uint32_t length,
+    uint64_t boot_size);
 
 #define GTA4L_EMMC_BLOCK_SWEEP_TARGET_WHOLE 0u
 #define GTA4L_EMMC_BLOCK_SWEEP_TARGET_BOOT 1u

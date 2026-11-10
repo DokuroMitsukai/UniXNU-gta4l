@@ -6023,6 +6023,95 @@ budget is consumed; no retry, reflash, rollback, reset/repair, mount, commit
 or push was performed. Findings:
 `docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md`.
 
+### 5.3.88 N10.15 read-only consumer implementation (host-only, 2026-11-10)
+
+Follow-up to §5.3.87 and the owner-approved
+`docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md`. N10.15 implements
+the opt-in `gta4l-emmc-consume=1` mode in `package/Gta4lEmmcBlock.h`/`.c`/
+`.cpp` without a candidate build, ABI/QEMU audit, device access, flash, boot
+or payload rebuild. The token requires exactly one `gta4l-emmc-block=3` token
+and refuses block 1, a duplicate, an orphan, a non-1 or malformed value and
+every partobs/partcmp/partread/deblock/breakup/sweep combination; the
+absent-token legacy, partobs, partcmp, partread, deblock, breakup and sweep
+reports stay byte-for-byte unchanged.
+
+The mode uses the production advertisement (`kIOMaximumBlockCountReadKey=64`,
+`kIOMaximumByteCountReadKey=32,768`, `kIOMaximumSegmentCountReadKey=1`),
+pinned by a host scenario and reported as `limit=64 seg=1`. A distinct
+minimal `Gta4lEmmcConsumer : public IOService` client is created with `new`
+and `init()`, opens the pinned BOOT partition read-only with its own client
+identity, issues one `partition->read(consumer, 0, descriptor, nullptr,
+&actual)` and is released; the whole media is opened and closed with the
+provider `this` and balanced separately. The single window is BOOT offset 0,
+1,024 bytes (two blocks). The consumer allocates one
+`IOMallocContiguous(32768, PAGE_SIZE, nullptr)` buffer, builds the descriptor
+with `withAddress(buffer, 1024, kIODirectionIn)` and `kIOMemoryAutoPrepare`,
+requires `getPhysicalSegment(0, &segmentLength, kIOMemoryMapperNone)` to
+return a nonzero address and a segment of at least 1,024 bytes (`DESC`
+otherwise), sets the distinct nonzero case tag and frees the buffer with
+`IOFreeContiguous(buffer, 32768)` on every path. Allocation, descriptor,
+open, read, short-read, cancellation and budget failures latch their first
+reason and do not retry or substitute a fragmented buffer.
+
+The entry-side observer at the top of `doAsyncReadWrite()` runs before the
+controller gate only while the single case is in flight and requires the
+descriptor tag, exact whole-media first block, block count and range to match;
+a tag-0 or otherwise different request is `foreign` even when it overlaps the
+window, a second matching request while in flight or a missing/extra case is
+`ORDER`, and the completion side credits the private `block.counters` deltas
+under the gate only for the exact tagged request (one two-block CMD18 chunk,
+two blocks and one stop). The mode adds no write, mount, wider/faster mode,
+other partition read or fallback. Under option A no expected digest is
+compiled in: the report prints the observed first-16-byte SHA-256 prefix with
+`expected` all zeros and `mismatch=0`, and the host compares it with the
+external reference; the host `consume_expected_digest()` recomputes the
+two-block fixture through `gta4l_test_fill_sector()`, so a mismatch fails
+acceptance host-side without changing the on-device `complete` field.
+
+The expected success lines are
+`CONSUME: cases=1 passed=1 failed=0 reason=0 complete=1 reads=1 bytes=1024
+span=1024 blocks=2 subrequests=1 max=2 foreign=0 fails=0 cancel=0 budget=0
+media=0 part=0 open=1 close=1 alloc=0 client=1 mismatches=0 limit=64 seg=1
+cap=61071360` and `CONSUMEREAD: index=0 target=1 start=0 length=1024
+span=1024 actual=1024 status=0 subrequests=1 blocks=2 max=2
+digest=<observed> expected=00000000000000000000000000000000 mismatch=0`;
+the failure form is `CONSUMEFAIL` with reason, case, target, start, length,
+span, requested, completed, actual, status, digest, expected and mismatch.
+Consume mode suppresses `READ`/`QUAL`/`QUAL3` and every other line is
+unchanged. The formatter caps are 320/352/384 bytes for the three lines and
+the pinned worst report is 1,959 content bytes inside the 2,048-byte report;
+the static asserts at `package/Gta4lEmmcBlock.cpp:129-162` pin the timing,
+window, advertisement, tag and width bounds. The worst case is the conditional
+20,000 + 2,000 + 3,000 = 25,000 ms against the 30,000 ms watchdog; the 5,000 ms
+margin must also cover allocation, gate contention and scheduling, so this is
+not a complete path-condition proof and remains a candidate-production gate.
+
+Host results: the block suite passes 48 core scenarios/38 mutation controls
+and 248 adapter scenarios with 95 adapter/support and 10 policy mutation
+controls, including the full pass, the production 64/32,768/1 advertisement,
+the one-segment descriptor, the digest host comparison, media/partition/open/
+allocation/descriptor failures, short/read/cancel/budget/foreign/order
+controls, the suppression and width controls, and the legacy-mode equality
+checks. Diagnostic payload tests pass 42 checks and the packager 16 checks,
+including the `emmc-block-3-consume` personality, the `fs-timer-hold` fixture
+requirement, the block-1 refusal and the six-mode exclusivity refusals. The
+ABI gate compiles the new compile-only
+`scripts/sim-gta4l-emmc-block/consumer_lifecycle_probe.cpp` with the pinned
+adapter record and both include paths: it has 187 undefined symbols, all
+defined in the unchanged N10.13 candidate kernel `64bab406…` (185
+`__TEXT_EXEC,__text`, one `__DATA_CONST,__const` for `PAGE_SHIFT_CONST` and one
+`__DATA,__common` for `IOService::gMetaClass`), and the extended build gate
+checks 238 non-bound imports against that kernel and reports `qualified=True`
+(probe source `984ab609…`, probe object `629735dc…`, archive `10228710…`).
+The host model reconstructs the IOKit client/provider path; it does not
+execute the real family code, so N10.15 has no hardware observation, N10.14
+remains the only sweep-mode hardware result and N10.10 the only breakup-layer
+result, and initialization reliability remains `[U]`. Candidate production
+and any hardware run remain separately gated: the conditional timing margin
+must be proved or explicitly accepted, and the external window digest must be
+rebound to the final packaged image. No payload was rebuilt. Findings:
+`docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
