@@ -2029,6 +2029,30 @@ window, the 25,000 ms timing argument remains conditional and accepted, the
 one-boot budget is consumed, N10.14 remains the only sweep-mode hardware
 result, N10.10 remains the only breakup-layer hardware result and
 initialization reliability remains `[U]`.
+The N10.16 host-only 4-bit SDR storage-publication readiness audit added
+`docs/emmc-n10.16-4bit-sdr-readiness-2026-11-10.md` and refreshed the
+`README.md` and `porting.toml` rows without adding a hash-table row. The
+audit maps the H15-H17 verified width-switch/recovery helpers onto the
+production block driver, fixes the insertion point after
+`initializeHardware()` returns and before the baseline read/publication,
+keeps the 64-block/32,768-byte/one-segment advertisement and the legacy
+1-bit path unchanged, and proposes an opt-in `gta4l-emmc-width=4` mode
+requiring block token 3. The mode reads the pinned BOOT-partition window
+(device LBA 2,255,360, two blocks) at 1-bit, performs the verified 4-bit
+switch (CMD6, CMD13 TRAN wait, host width apply/readback, read-only EXT_CSD
+properties comparison), re-reads the same window at 4-bit through the
+published path, reverts to 1-bit with the baseline-based recovery helper and
+reports `WIDTH`/`WIDTHREAD`/`WIDTHFAIL` inside the 2,048-byte report. The
+switch proof never uses the unreadable byte 183; CMD19/CMD14 is excluded.
+The success bound is 24,230 ms and the failed-switch bound is 21,030 ms
+against the 30,000 ms watchdog, and the margin remains conditional. The
+verdict is GO for a host-only implementation/test batch and NO-GO for
+candidate production or hardware until the batch tests, owner CMD6-write and
+read-scope approval, timing acceptance, content-reference rebinding,
+candidate ABI/packaging and finite-boot-budget gates close. No
+implementation, candidate build, device access, flash or boot was performed;
+cold-boot identification reliability, repeatability and failure rates remain
+`[U]`, and no 4-bit publication result exists yet.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
