@@ -6112,6 +6112,50 @@ must be proved or explicitly accepted, and the external window digest must be
 rebound to the final packaged image. No payload was rebuilt. Findings:
 `docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md`.
 
+### 5.3.89 N10.15 read-only consumer qualification candidate (host-only, 2026-11-10)
+
+Follow-up to §5.3.88 and the N10.15 design. N10.15 candidate production
+builds and gates the opt-in `gta4l-emmc-consume=1` mode through the
+archive/prelink/audit/payload/BOOT flow without changing the selector,
+production 64-block/32,768-byte/one-segment advertisement, distinct
+`Gta4lEmmcConsumer` client, one 1,024-byte BOOT window at offset 0, 32 KiB
+`IOMallocContiguous` buffer, one-segment descriptor, tag/range observer,
+option A digest reporting or `complete=1` guard. The candidate chain is
+prelinked kernel `d943c228…` (51,437,568 bytes; plan `29b7a386…`; original
+`f18b4df8…`), kernel-build archive `12d851a8…`, candidate storage-ABI audit
+`out/gta4l/storage-abi-d943c228` (`gdb-stop.json` `92ccffbf…`,
+`interface-audit.json` `fdfae103…`, `provenance.json` `a9088e50…`,
+`run.json` `615b27d2…`; 190 method slots, 181 kernel bindings, 26 concrete
+overrides, 0 unresolved original imports, vtable `0xfffffff005cb44c0`,
+metaclass `0xfffffff006add1d0`, service metaclass `0xfffffff007b175b8`,
+`bsd_init` `0xfffffff0076efa3c`, `runtime_qualified=false`), requalified
+archive `12d851a8…` with byte-identical members, packaged kernel
+`e5ba92e3…`, payload `e05eb1cb…` (83,886,080 bytes; manifest `c23aaa9b…`;
+45/45 contract; `emmc-block-3-consume` mapping to `gta4l-emmc-block=3
+gta4l-emmc-consume=1`; hold root `327ac826…`, fixture `00363681…`) and BOOT
+image `777b446c…` (85,688,320 bytes; manifest `09dfe4ea…`; gate
+`22587d59…`; 18/18, only the ramdisk differs from the `ce4d76e8…` v5
+baseline; kernel section `a4b054e0…`, firmware `1e8a3132…` and DTB
+`dc4c719d…` unchanged; header ID `4b15eb2a…`). The external window reference
+was rebound from the N10.13 image's `5a25ed5e…` to the packaged image's
+first 1,024 bytes
+`97479ae876ec6fe6f45b38492b9eb9ac934b092ee8bcdccd3167cdc4eb502c7a` (prefix
+`97479ae8…`); the on-device `CONSUMEREAD` digest must equal that prefix, and
+a mismatch fails acceptance host-side only. The packaged kernel carries one
+`CONSUME`, one `CONSUMEREAD` and one `CONSUMEFAIL` string, ten
+`gta4l-emmc-consume` strings and no literal `complete=`.
+
+Host suites re-passed: block 48 core scenarios/38 mutation controls and 248
+adapter scenarios with 95 adapter/support and 10 policy mutation controls
+(including the consume mutations), core 187/115, probe 196/100, payload 42,
+packager 16, boot-image self-test, storage-ABI positive/negative, evidence
+counts, fixture recipe, board and TOML checks. The owner accepted the
+conditional 25,000 ms timing margin for the separately approved BOOT-only
+flash and one cold boot; N10.15 has no hardware observation yet, the one-boot
+budget is not consumed, N10.14 remains the only sweep-mode hardware result,
+N10.10 the only breakup-layer result and initialization reliability remains
+`[U]`. Findings: `docs/emmc-n10.15-consume-candidate-2026-11-10.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

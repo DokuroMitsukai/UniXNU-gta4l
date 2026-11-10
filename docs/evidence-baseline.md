@@ -1461,13 +1461,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `50926ca9f4988249524370d23659fafd673a1b1ae45fa6f0e2e9405fbecc7c65` |
+| Repository README | `README.md` | `adfb2f952ed2a0585c9dd8c718322319f939425cc9941bec745886ec036209a9` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `b3f53826c91497a2b9197c0e257f39ec45c8e39b09a625e6836242a0d0138af9` |
+| Porting record | `porting.toml` | `069344a8493a6c5675ad5599789ca297151b3e0fb269f3393745b06f67a5002f` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `5b755adaad14939a4075629f3b318112a72d79743415dcc974cbdffdcebdfbe9` |
+| eMMC driver record | `docs/emmc-driver.md` | `1381ab369278d3432ec02794395b898a2a4247c1e97284a660fd915d7e8b4849` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1476,10 +1476,10 @@ bytes of the previously booted image `[S]`.
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `272db9f0fd02fe9f6960f647e017f4e7cc156f6cc53010bb8ec8d6a1c6137d7f` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `73ca21a8bebf91354be878f8aff6b912fca3e03dee7e7ac1e2c55525381adf9e` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `ebe98274007c554c3bb69293eefc1a606d68dddb3ce401efb57d0b3409ed891f` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `ffd6bff87b85f326bba12fcaa40d6dd1ff66293d35b0dbeb0db6a978bf23c554` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `1d105fdb8e320b4582c63f3a20e1d53040aaa4a9a46d88ede03d0439fc53906d` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
-| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `9f02b9ea26f35fd4761be5ffb1a69dc4c9efaac9ebd87bcdc6c002c99af019a8` |
+| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `103421cc0b0ee918c9141ef167643dcb5602f5851cb4a0fcf0646f8d62bff56e` |
 
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
@@ -1964,6 +1964,42 @@ timing argument remains conditional, the external window digest must be
 rebound to the final packaged image, N10.14 remains the only sweep-mode
 hardware result, N10.10 remains the only breakup-layer hardware result and
 initialization reliability remains `[U]`.
+The N10.15 read-only consumer candidate production refreshed the `README.md`,
+`docs/emmc-driver.md` and `porting.toml` rows without adding a hash-table
+row; the new N10.15 candidate document, the §5.3.89 section and the private
+evidence directory are outside the table or not listed. The host-only
+candidate chain is prelinked kernel `d943c228…` (51,437,568 bytes; plan
+`29b7a386…`; original `f18b4df8…`), kernel-build archive `12d851a8…` with
+`Gta4lEmmcBlock.c` `9587c98a…` to `Gta4lEmmcBlock.o` `cd224a74…` and
+`Gta4lEmmcBlock.cpp` `86dab8b1…` to `Gta4lEmmcBlockCpp.o` `eff8fd7c…`,
+candidate storage-ABI audit `out/gta4l/storage-abi-d943c228` (`gdb-stop.json`
+`92ccffbf…`, `interface-audit.json` `fdfae103…`, `provenance.json`
+`a9088e50…`, `run.json` `615b27d2…`; 190 method slots, 181 kernel bindings,
+26 concrete overrides, 0 unresolved original imports,
+`runtime_qualified=false`), requalified archive `12d851a8…` with
+byte-identical members, packaged kernel `e5ba92e3…`, payload `e05eb1cb…`
+(83,886,080 bytes; manifest `c23aaa9b…`; 45/45 contract;
+`emmc-block-3-consume` mapping to `gta4l-emmc-block=3 gta4l-emmc-consume=1`;
+hold root `327ac826…`, fixture `00363681…`) and BOOT image `777b446c…`
+(85,688,320 bytes; manifest `09dfe4ea…`; gate `22587d59…`; 18/18, only the
+ramdisk differs from the `ce4d76e8…` v5 baseline; kernel section
+`a4b054e0…`, firmware `1e8a3132…` and DTB `dc4c719d…` unchanged; header ID
+`4b15eb2a…`). The external window reference was rebound from the N10.13
+image's `5a25ed5e…` to the packaged image's first 1,024 bytes `97479ae8…`
+(prefix `97479ae876ec6fe6f45b38492b9eb9ac`), which the on-device
+`CONSUMEREAD` digest must equal; a mismatch fails acceptance host-side only.
+The packaged kernel carries one `CONSUME`, one `CONSUMEREAD` and one
+`CONSUMEFAIL` string, ten `gta4l-emmc-consume` strings and no literal
+`complete=`. The host suites re-passed: block 48 core scenarios/38 mutation
+controls and 248 adapter scenarios with 95 adapter/support and 10 policy
+mutation controls, core 187/115, probe 196/100, payload 42, packager 16,
+boot-image self-test, storage-ABI positive/negative, evidence counts,
+fixture recipe, board and TOML checks. The owner accepted the conditional
+25,000 ms timing margin for the separately approved BOOT-only flash and one
+cold boot. It records no flash, boot or device access; N10.15 has no
+hardware observation, the one-boot budget is not consumed, N10.14 remains
+the only sweep-mode hardware result, N10.10 remains the only breakup-layer
+hardware result and initialization reliability remains `[U]`.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 

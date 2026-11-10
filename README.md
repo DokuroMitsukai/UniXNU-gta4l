@@ -905,10 +905,22 @@ partition layout, payload policy and packaging.
   mutation controls, diagnostic payload 42 checks and packager 16 checks
   pass, and the ABI gate pins the consumer probe's 187 imports against the
   unchanged N10.13 kernel `64bab406`. The host model reconstructs the
-  client/provider path; it does not run the real family code. Candidate
-  production and hardware remain separately gated because the 25,000 ms
-  timing argument is conditional and the external window digest must be
-  rebound to the final packaged image. No payload was rebuilt. See
+  client/provider path; it does not run the real family code. The N10.15
+  candidate production then built and gated the consume mode through the
+  archive/prelink/audit/payload/BOOT flow: prelinked kernel `d943c228`
+  (51,437,568 bytes), candidate audit `out/gta4l/storage-abi-d943c228`
+  (190 slots, 181 bindings, 26 concrete overrides, 0 unresolved imports),
+  requalified archive `12d851a8`, packaged kernel `e5ba92e3`, payload
+  `e05eb1cb` (45/45 contract) and BOOT image `777b446c` (85,688,320 bytes,
+  18/18 gate, only the ramdisk differs from the `ce4d76e8` v5 baseline).
+  The external window reference was rebound to the packaged image: full
+  SHA-256 `777b446c…` and first-1,024-byte digest `97479ae8…` (prefix
+  `97479ae876ec6fe6f45b38492b9eb9ac`). The owner accepted the conditional
+  25,000 ms timing margin for the separately approved BOOT-only flash and
+  one cold boot; N10.15 has no hardware observation yet, the one-boot
+  budget is not consumed, N10.14 remains the only sweep-mode hardware
+  result and initialization reliability remains `[U]`. See
+  [docs/emmc-n10.15-consume-candidate-2026-11-10.md](docs/emmc-n10.15-consume-candidate-2026-11-10.md),
   [docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md](docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md),
   [docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md](docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md),
   [docs/emmc-n10.13-sweep-candidate-2026-11-09.md](docs/emmc-n10.13-sweep-candidate-2026-11-09.md),
