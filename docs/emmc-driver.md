@@ -5962,6 +5962,67 @@ has no hardware observation, N10.10 remains the only breakup-layer hardware
 result and initialization reliability remains `[U]`. Findings:
 `docs/emmc-n10.13-sweep-candidate-2026-11-09.md`.
 
+### 5.3.87 N10.14 bounded read-sweep hardware run (2026-11-10)
+
+Follow-up to §5.3.86. The owner directed a BOOT-only write of the N10.13 BOOT
+image `b626a1fa…` (85,688,320 bytes; payload `62371bfb…`, prelinked kernel
+`64bab406…`, packaged kernel `f1ab2b1d…`, requalified archive `14f40fa8…`) to
+p69 and controlled one cold boot. Only `/dev/block/mmcblk0p69` was written
+(20,920 x 4096 records, synced). The pre-flash p69 was the N10.10 post-flash
+image `4b51ff21…` with prefix `a8f4a54b…` and tail `a28b4ea2…`; the post-flash
+full readback `a2b5a62d…` matched the candidate prefix `b626a1fa…` plus the
+unchanged tail, and RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` were unchanged before and after the write. The rollback image
+`boot-before-n10.14.img.xz` (`d4fce9c9…` -> raw `4b51ff21…`) was not restored.
+
+The owner report returned `rc=0 stop=0 mode=3` with the read-only whole media
+and `SWEEP: cases=6 passed=6 failed=0 reason=0 complete=1 reads=6 bytes=53248
+span=53248 blocks=104 subrequests=13 max=8 foreign=0 fails=0 cancel=0
+budget=0 media=0 part=0 refs=6 refbytes=53248 anchor=1 mismatches=0 limit=8
+seg=1 cap=61071360`; the last case emitted `SWEEPREAD: index=5 target=1
+start=4673536 length=4096 span=4096 actual=4096 status=0 subrequests=1
+blocks=8 max=8 ref=1 refbytes=4096 refstatus=0 mvalid=0 mismatch=0
+digest=ccaa1c08dd34df3ca8d4eb3a2b530fdb
+refdigest=ccaa1c08dd34df3ca8d4eb3a2b530fdb`, a same-boot media-path digest
+prefix equal to its direct reference. The six-case aggregate is exactly the
+`package/Gta4lEmmcBlock.c` table: 4,096 + 16,384 + 16,384 + 8,192 + 4,096 +
+4,096 = 53,248 bytes; 8 + 32 + 32 + 16 + 8 + 8 = 104 blocks; and 1 + 4 + 4 +
+2 + 1 + 1 = 13 driver-level subrequests, all aligned so `span=bytes`. Both
+pinned anchors re-hashed to their invariant gate-pinned values `5878bcf8…
+f3b1b2` and `fa43aa5d…0782da` (`anchor=1`), every case's direct
+controller-gate CMD17 reference agreed byte-for-byte with the media-path
+read (`refs=6 refbytes=53248 mismatches=0`, `mvalid=0` is the equal-content
+form), and `complete=1` is the guard at `package/Gta4lEmmcBlock.cpp:4529-4554`.
+The whole-boot counters are `DRV: online=1 wp=1 reads=22 blocks=133 fails=0
+max=8` and `XFER: req=133 c17=7 c18=63 c18b=126 cfail=0 stops=63 sfail=0
+last_stop=0`: `XFER req` equals `DRV blocks`, the transport issued 7 CMD17
+reads plus 63 two-block CMD18 chunks with one successful CMD12 stop per
+chunk, the case column accounts for 52 of the chunks (13 x 4), and the
+remaining 11 chunks and 7 CMD17 reads form the same 29-block incidental
+overlay observed by the N9.6/N9.7 partcmp boots and the N10.10 breakup boot.
+The direct CMD17 reference reads bypass the driver path and are not visible
+in the `DRV`/`XFER` aggregates. The `@Gta41EmmcBlock.cpp:4882` suffix
+(spelling preserved) is the intentional `panic("%s", reportBuffer)` terminal
+report stop in the N10.13 candidate source `80c817a0…`, the same class as
+N10.10's `:3899`, and no watchdog line appeared.
+
+No post-boot readback is recorded: the owner returned the tablet to TWRP
+after the one cold boot and no further device access is authorized, so the
+stored image after the boot is not independently re-verified in this record.
+The report is bound to the candidate by the pre-boot post-flash readback,
+the read-only target-binding re-verification, the two pinned anchor digests
+and the same-boot media/reference digest equality. This is a bounded
+same-boot qualification of the two invariant anchors and the four
+P-derived runtime windows and the real driver/reference agreement on one
+boot, not an initialization-reliability or general I/O result; N8.5/N9.6/
+N9.7/N9.8 `complete=0`, the N9.10 comparator result, the N9.11 owner-reported
+series, the N10.1/N10.2 partread results, the N10.6 deblock result and the
+N10.10 breakup result are preserved, and initialization reliability remains
+`[U]`. N10.14 is the first sweep-mode hardware observation. The one-boot
+budget is consumed; no retry, reflash, rollback, reset/repair, mount, commit
+or push was performed. Findings:
+`docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

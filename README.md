@@ -870,8 +870,24 @@ partition layout, payload policy and packaging.
   and BOOT image `b626a1fa` (85688320 bytes, manifest `a43d16e3`, gate
   `1b43740a`, 18/18, only the ramdisk differs from the `ce4d76e8` v5
   baseline). Both anchor digests were re-verified against the v5 image and
-  the host suites re-passed. No flash, boot, device access, commit or push;
-  N10.14 hardware remains separately gated. See
+  the host suites re-passed. The separately approved N10.14 BOOT-only flash
+  of `b626a1fa` and one owner-reported first cold boot then completed all
+  six sweep cases (`cases=6 passed=6 failed=0 reason=0 complete=1 reads=6
+  bytes=53248 span=53248 blocks=104 subrequests=13 max=8 foreign=0 fails=0
+  cancel=0 budget=0 media=0 part=0 refs=6 refbytes=53248 anchor=1
+  mismatches=0 limit=8 seg=1 cap=61071360`), with both pinned anchors
+  matching the invariant v5 digests, every direct CMD17 reference agreeing
+  byte-for-byte and the last case printing an equal `digest`/`refdigest`
+  prefix `ccaa1c08dd34df3ca8d4eb3a2b530fdb`. The whole-boot counters (`DRV
+  reads=22 blocks=133 fails=0 max=8`, `XFER req=133 c17=7 c18=63 c18b=126
+  stops=63 sfail=0`) show an eight-block maximum subrequest and 13
+  driver-level case subrequests. No post-boot readback was taken; the
+  report is bound through the pre-boot post-flash readback and the anchor/
+  reference agreement. This qualifies only the two anchors and the four
+  runtime windows on that one boot; the boot budget is consumed and no
+  retry, reflash or repair is authorized. Initialization reliability remains
+  `[U]`. See
+  [docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md](docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md),
   [docs/emmc-n10.13-sweep-candidate-2026-11-09.md](docs/emmc-n10.13-sweep-candidate-2026-11-09.md),
   [docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md](docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md),
   [docs/emmc-n10.10-breakup-hardware-result-2026-11-09.md](docs/emmc-n10.10-breakup-hardware-result-2026-11-09.md),
@@ -891,7 +907,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.86,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.87,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),
