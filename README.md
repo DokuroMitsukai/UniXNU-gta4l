@@ -917,9 +917,25 @@ partition layout, payload policy and packaging.
   SHA-256 `777b446c…` and first-1,024-byte digest `97479ae8…` (prefix
   `97479ae876ec6fe6f45b38492b9eb9ac`). The owner accepted the conditional
   25,000 ms timing margin for the separately approved BOOT-only flash and
-  one cold boot; N10.15 has no hardware observation yet, the one-boot
-  budget is not consumed, N10.14 remains the only sweep-mode hardware
-  result and initialization reliability remains `[U]`. See
+  one cold boot. That flash then wrote p69 only and read back the candidate
+  prefix `777b446c…` plus the unchanged tail `a28b4ea2…` (`6fa2b7e9…` full)
+  with unchanged RECOVERY/EFS/sec_efs, and one owner-reported first cold
+  boot returned `CONSUME: cases=1 passed=1 failed=0 reason=0 complete=1
+  reads=1 bytes=1024 span=1024 blocks=2 subrequests=1 max=2 foreign=0
+  fails=0 cancel=0 budget=0 media=0 part=0 open=1 close=1 alloc=0 client=1
+  mismatches=0 limit=64 seg=1 cap=61071360`; `CONSUMEREAD` printed
+  `digest=97479ae876ec6fe6f45b38492b9eb9ac` with the all-zero option A
+  `expected=` and `mismatch=0`, equal to the external reference, and no
+  `CONSUMEFAIL` appeared. The whole-boot counters (`DRV reads=10 blocks=31
+  fails=0 max=8`, `XFER req=31 c17=7 c18=12 c18b=24 stops=12 sfail=0`) show
+  the case's one two-block CMD18 chunk plus the same 29-block incidental
+  overlay as the earlier boots; `DRV max=8` comes from that overlay, not the
+  case. No post-boot readback was taken; the report is bound through the
+  pre-boot post-flash readback and the external digest. This qualifies only
+  the one 1,024-byte BOOT window on that one boot; the boot budget is
+  consumed and no retry, reflash or repair is authorized. Initialization
+  reliability remains `[U]`. See
+  [docs/emmc-n10.15-consume-hardware-run-2026-11-10.md](docs/emmc-n10.15-consume-hardware-run-2026-11-10.md),
   [docs/emmc-n10.15-consume-candidate-2026-11-10.md](docs/emmc-n10.15-consume-candidate-2026-11-10.md),
   [docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md](docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md),
   [docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md](docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md),
@@ -942,7 +958,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.88,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.90,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),

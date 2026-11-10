@@ -6156,6 +6156,79 @@ budget is not consumed, N10.14 remains the only sweep-mode hardware result,
 N10.10 the only breakup-layer result and initialization reliability remains
 `[U]`. Findings: `docs/emmc-n10.15-consume-candidate-2026-11-10.md`.
 
+### 5.3.90 N10.15 read-only consumer hardware run (2026-11-10)
+
+Follow-up to §5.3.89. The owner directed a BOOT-only write of the N10.15 BOOT
+image `777b446c…` (85,688,320 bytes; payload `e05eb1cb…`, prelinked kernel
+`d943c228…`, packaged kernel `e5ba92e3…`, requalified archive `12d851a8…`) to
+p69 and controlled one cold boot. Only `/dev/block/mmcblk0p69` was written
+(20,920 x 4096 records, synced). The pre-flash p69 was the N10.14 post-flash
+image `a2b5a62d…` with prefix `b626a1fa…` and tail `a28b4ea2…`; the post-flash
+full readback `6fa2b7e9…` matched the candidate prefix `777b446c…` plus the
+unchanged tail, and RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` were unchanged before and after the write. The rollback image
+`boot-before-n10.15.img.xz` (`4a90e599…` -> raw `a2b5a62d…`) was not restored.
+
+The owner report returned `rc=0 stop=0 mode=3` with the read-only whole media
+and `CONSUME: cases=1 passed=1 failed=0 reason=0 complete=1 reads=1 bytes=1024
+span=1024 blocks=2 subrequests=1 max=2 foreign=0 fails=0 cancel=0 budget=0
+media=0 part=0 open=1 close=1 alloc=0 client=1 mismatches=0 limit=64 seg=1
+cap=61071360`; the single case emitted `CONSUMEREAD: index=0 target=1 start=0
+length=1024 span=1024 actual=1024 status=0 subrequests=1 blocks=2 max=2
+digest=97479ae876ec6fe6f45b38492b9eb9ac
+expected=00000000000000000000000000000000 mismatch=0`. The digest equals the
+option A external reference
+`97479ae876ec6fe6f45b38492b9eb9ac934b092ee8bcdccd3167cdc4eb502c7a` (the first
+1,024 bytes of the packaged image); `expected` is all zeros by design and the
+comparison is host-side only. `complete=1` is the guard at
+`package/Gta4lEmmcBlock.cpp:5209-5243`, which additionally requires the
+completion-side private deltas `creditedC18 == 1`, `creditedC18b == 2` and
+`creditedStops == 1`. The single case is BOOT target 1, offset 0, length
+1,024 bytes, two blocks, one driver-level subrequest with a largest
+subrequest of two blocks, under the production 64-block/one-segment
+advertisement. `media=0 part=0 foreign=0` are clear failure flags,
+`alloc=0` records the accepted 32 KiB `IOMallocContiguous` buffer and
+one-segment descriptor, and `open=1 close=1 client=1` record the consumer
+lifecycle.
+
+The whole-boot counters are `DRV: online=1 wp=1 reads=10 blocks=31 fails=0
+max=8` and `XFER: req=31 c17=7 c18=12 c18b=24 cfail=0 stops=12 sfail=0
+last_stop=0`: `XFER req` equals `DRV blocks`, the transport issued 7 CMD17
+reads plus 12 two-block CMD18 chunks with one successful CMD12 stop per
+chunk, the case column accounts for one of the 12 chunks (two blocks, one
+stop), and the remaining 11 chunks and 7 CMD17 reads form the same 29-block
+incidental overlay observed by the N9.6/N9.7 partcmp, N10.10 breakup and
+N10.14 sweep boots. `DRV max=8` therefore comes from that overlay, not from
+the case, whose largest subrequest is the reported `max=2`. Consume mode
+suppresses `READ`/`QUAL`/`QUAL3` through the `report->consume == 0` guard at
+`package/Gta4lEmmcBlock.c:2648`; the zero `PART` line is the unchanged legacy
+line. The `@Gta41EmmcBlock.cpp:5719` suffix (spelling preserved) is the
+intentional `panic("%s", reportBuffer)` terminal report stop in the N10.15
+candidate source `86dab8b1…`, and no watchdog line appeared. The owner's
+wrapped `expected=` field carries 35 zeros instead of the designed 32; that
+is a transcription artifact and does not change the field semantics.
+
+No post-boot readback is recorded: the owner returned the tablet to TWRP
+after the one cold boot and no further device access is authorized, so the
+stored image after the boot is not independently re-verified in this record.
+The report is bound to the candidate by the pre-boot post-flash readback, the
+read-only target-binding re-verification and the option A digest comparison
+against the packaged image. This is a bounded same-boot qualification of one
+1,024-byte BOOT window, the consumer lifecycle, the production advertisement
+and the driver/attribution path on one boot, not an initialization-reliability
+or general I/O result. The 25,000 ms worst case remains conditional and
+accepted, not a timing measurement; the absence of a watchdog line does not
+prove the margin. N8.5/N9.6/N9.7/N9.8 `complete=0`, the N9.10 comparator
+result, the N9.11 owner-reported series, the N10.1/N10.2 partread results,
+the N10.6 deblock result, the N10.10 breakup result and the N10.14 sweep
+result are preserved, and initialization reliability remains `[U]`. N10.14
+remains the only sweep-mode hardware observation, N10.10 the only
+breakup-layer hardware observation, and N10.15 is its own first hardware
+observation.
+The one-boot budget is consumed; no retry, reflash, rollback, reset/repair,
+mount, commit or push was performed. Findings:
+`docs/emmc-n10.15-consume-hardware-run-2026-11-10.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

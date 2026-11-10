@@ -1461,13 +1461,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `adfb2f952ed2a0585c9dd8c718322319f939425cc9941bec745886ec036209a9` |
+| Repository README | `README.md` | `452aaac0fd8dfd60a81e27a6e6179b0309995be815e84b2329a5e94b6b34d82a` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `069344a8493a6c5675ad5599789ca297151b3e0fb269f3393745b06f67a5002f` |
+| Porting record | `porting.toml` | `dca47bcba0bfaaa5358965d7fd002395b7161008f210924a2a9d835aca0d8630` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `1381ab369278d3432ec02794395b898a2a4247c1e97284a660fd915d7e8b4849` |
+| eMMC driver record | `docs/emmc-driver.md` | `7452850089b671960def4ee2979bb6d7be3a32900c9353c9a65f5973008be479` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -2000,6 +2000,35 @@ cold boot. It records no flash, boot or device access; N10.15 has no
 hardware observation, the one-boot budget is not consumed, N10.14 remains
 the only sweep-mode hardware result, N10.10 remains the only breakup-layer
 hardware result and initialization reliability remains `[U]`.
+The N10.15 read-only consumer hardware-run closeout refreshed the `README.md`,
+`docs/emmc-driver.md` and `porting.toml` rows without adding a hash-table row;
+the new N10.15 hardware-run document, the §5.3.90 section and the private
+evidence directory are outside the table or not listed. The owner-directed
+BOOT-only flash wrote p69 only; the post-write readback matched the N10.15
+candidate prefix `777b446c…` plus the unchanged tail `a28b4ea2…`
+(`6fa2b7e9…` full) with unchanged RECOVERY/EFS/sec_efs, and one
+owner-reported first cold boot then returned `CONSUME: cases=1 passed=1
+failed=0 reason=0 complete=1 reads=1 bytes=1024 span=1024 blocks=2
+subrequests=1 max=2 foreign=0 fails=0 cancel=0 budget=0 media=0 part=0
+open=1 close=1 alloc=0 client=1 mismatches=0 limit=64 seg=1 cap=61071360`
+with `CONSUMEREAD: index=0 target=1 start=0 length=1024 span=1024
+actual=1024 status=0 subrequests=1 blocks=2 max=2
+digest=97479ae876ec6fe6f45b38492b9eb9ac
+expected=00000000000000000000000000000000 mismatch=0`. The digest equals the
+option A external reference `97479ae8…` for the packaged image, the all-zero
+`expected` is the option A form and the comparison is host-side only; no
+`CONSUMEFAIL` appeared and consume mode suppressed `READ`/`QUAL`/`QUAL3`. The
+whole-boot counters (`DRV reads=10 blocks=31 fails=0 max=8`, `XFER req=31
+c17=7 c18=12 c18b=24 stops=12 sfail=0`) show the case's one two-block CMD18
+chunk plus the same 29-block incidental overlay observed by the earlier
+boots; `DRV max=8` comes from that overlay, not the case. No post-boot
+readback was taken; the report is bound through the pre-boot post-flash
+readback, target-binding re-verification and the option A digest comparison.
+The consume mode has its first hardware observation of one 1,024-byte BOOT
+window, the 25,000 ms timing argument remains conditional and accepted, the
+one-boot budget is consumed, N10.14 remains the only sweep-mode hardware
+result, N10.10 remains the only breakup-layer hardware result and
+initialization reliability remains `[U]`.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
