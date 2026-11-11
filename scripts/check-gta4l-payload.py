@@ -61,11 +61,12 @@ BREAKUP_PREFIX = 'gta4l-emmc-breakup='
 SWEEP_PREFIX = 'gta4l-emmc-sweep='
 CONSUME_PREFIX = 'gta4l-emmc-consume='
 WIDTH_PREFIX = 'gta4l-emmc-width='
+WIDTHHOLD_PREFIX = 'gta4l-emmc-widthhold='
 BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
-# The partobs, partcmp, partread, deblock, breakup, sweep, consume and width
-# tokens are modifiers, not independent diagnostics: each is only valid with
-# exactly one block token. Each personality names the block personality it
-# extends.
+# The partobs, partcmp, partread, deblock, breakup, sweep, consume, width and
+# widthhold tokens are modifiers, not independent diagnostics: each is only
+# valid with exactly one block token. Each personality names the block
+# personality it extends.
 PARTOBS_DIAGNOSTICS = {
     'emmc-block-1-partobs': 'emmc-block-1',
     'emmc-block-3-partobs': 'emmc-block-3',
@@ -95,6 +96,9 @@ CONSUME_DIAGNOSTICS = {
 }
 WIDTH_DIAGNOSTICS = {
     'emmc-block-3-width4': 'emmc-block-3',
+}
+WIDTHHOLD_DIAGNOSTICS = {
+    'emmc-block-3-widthhold': 'emmc-block-3',
 }
 
 
@@ -222,6 +226,8 @@ def diagnostic_contract(args, expected='any'):
                       if item.startswith(CONSUME_PREFIX)]
     width_tokens = [item for item in tokens
                     if item.startswith(WIDTH_PREFIX)]
+    widthhold_tokens = [item for item in tokens
+                        if item.startswith(WIDTHHOLD_PREFIX)]
     checks = {'exactly_one_diagnostic_argument': len(found) == 1}
     block_selected = [DIAGNOSTIC_NAMES[name] for name in BLOCK_DIAGNOSTICS
                       if DIAGNOSTIC_NAMES[name] in found]
@@ -313,6 +319,27 @@ def diagnostic_contract(args, expected='any'):
             width_tokens and sweep_tokens)
         checks['width_consume_exclusive'] = not (
             width_tokens and consume_tokens)
+        checks['at_most_one_widthhold_token'] = len(widthhold_tokens) <= 1
+        checks['widthhold_value_one'] = all(
+            item == WIDTHHOLD_PREFIX + '1' for item in widthhold_tokens)
+        checks['widthhold_requires_block_three'] = (
+            not widthhold_tokens or block_tokens == [BLOCK_PREFIX + '3'])
+        checks['widthhold_partobs_exclusive'] = not (
+            widthhold_tokens and partobs_tokens)
+        checks['widthhold_partcmp_exclusive'] = not (
+            widthhold_tokens and partcmp_tokens)
+        checks['widthhold_partread_exclusive'] = not (
+            widthhold_tokens and partread_tokens)
+        checks['widthhold_deblock_exclusive'] = not (
+            widthhold_tokens and deblock_tokens)
+        checks['widthhold_breakup_exclusive'] = not (
+            widthhold_tokens and breakup_tokens)
+        checks['widthhold_sweep_exclusive'] = not (
+            widthhold_tokens and sweep_tokens)
+        checks['widthhold_consume_exclusive'] = not (
+            widthhold_tokens and consume_tokens)
+        checks['widthhold_width_exclusive'] = not (
+            widthhold_tokens and width_tokens)
     else:
         checks['no_block_token_outside_block_mode'] = not block_tokens
         checks['no_partobs_token_outside_block_mode'] = not partobs_tokens
@@ -323,6 +350,8 @@ def diagnostic_contract(args, expected='any'):
         checks['no_sweep_token_outside_block_mode'] = not sweep_tokens
         checks['no_consume_token_outside_block_mode'] = not consume_tokens
         checks['no_width_token_outside_block_mode'] = not width_tokens
+        checks['no_widthhold_token_outside_block_mode'] = (
+            not widthhold_tokens)
     if expected != 'any':
         if expected in PARTOBS_DIAGNOSTICS:
             base = PARTOBS_DIAGNOSTICS[expected]
@@ -332,7 +361,7 @@ def diagnostic_contract(args, expected='any'):
                 not partcmp_tokens and not partread_tokens and
                 not deblock_tokens and not breakup_tokens and
                 not sweep_tokens and not consume_tokens and
-                not width_tokens)
+                not width_tokens and not widthhold_tokens)
         elif expected in PARTCMP_DIAGNOSTICS:
             base = PARTCMP_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
@@ -341,7 +370,7 @@ def diagnostic_contract(args, expected='any'):
                 not partobs_tokens and not partread_tokens and
                 not deblock_tokens and not breakup_tokens and
                 not sweep_tokens and not consume_tokens and
-                not width_tokens)
+                not width_tokens and not widthhold_tokens)
         elif expected in PARTREAD_DIAGNOSTICS:
             base = PARTREAD_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
@@ -350,7 +379,7 @@ def diagnostic_contract(args, expected='any'):
                 not partobs_tokens and not partcmp_tokens and
                 not deblock_tokens and not breakup_tokens and
                 not sweep_tokens and not consume_tokens and
-                not width_tokens)
+                not width_tokens and not widthhold_tokens)
         elif expected in DEBLOCK_DIAGNOSTICS:
             base = DEBLOCK_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
@@ -359,7 +388,7 @@ def diagnostic_contract(args, expected='any'):
                 not partobs_tokens and not partcmp_tokens and
                 not partread_tokens and not breakup_tokens and
                 not sweep_tokens and not consume_tokens and
-                not width_tokens)
+                not width_tokens and not widthhold_tokens)
         elif expected in BREAKUP_DIAGNOSTICS:
             base = BREAKUP_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
@@ -368,7 +397,7 @@ def diagnostic_contract(args, expected='any'):
                 not partobs_tokens and not partcmp_tokens and
                 not partread_tokens and not deblock_tokens and
                 not sweep_tokens and not consume_tokens and
-                not width_tokens)
+                not width_tokens and not widthhold_tokens)
         elif expected in SWEEP_DIAGNOSTICS:
             base = SWEEP_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
@@ -377,7 +406,7 @@ def diagnostic_contract(args, expected='any'):
                 not partobs_tokens and not partcmp_tokens and
                 not partread_tokens and not deblock_tokens and
                 not breakup_tokens and not consume_tokens and
-                not width_tokens)
+                not width_tokens and not widthhold_tokens)
         elif expected in CONSUME_DIAGNOSTICS:
             base = CONSUME_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
@@ -386,7 +415,7 @@ def diagnostic_contract(args, expected='any'):
                 not partobs_tokens and not partcmp_tokens and
                 not partread_tokens and not deblock_tokens and
                 not breakup_tokens and not sweep_tokens and
-                not width_tokens)
+                not width_tokens and not widthhold_tokens)
         elif expected in WIDTH_DIAGNOSTICS:
             base = WIDTH_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
@@ -395,14 +424,24 @@ def diagnostic_contract(args, expected='any'):
                 not partobs_tokens and not partcmp_tokens and
                 not partread_tokens and not deblock_tokens and
                 not breakup_tokens and not sweep_tokens and
-                not consume_tokens)
+                not consume_tokens and not widthhold_tokens)
+        elif expected in WIDTHHOLD_DIAGNOSTICS:
+            base = WIDTHHOLD_DIAGNOSTICS[expected]
+            checks[f'{expected}_diagnostic_selected'] = (
+                found == [DIAGNOSTIC_NAMES[base]] and
+                widthhold_tokens == [WIDTHHOLD_PREFIX + '1'] and
+                not partobs_tokens and not partcmp_tokens and
+                not partread_tokens and not deblock_tokens and
+                not breakup_tokens and not sweep_tokens and
+                not consume_tokens and not width_tokens)
         else:
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[expected]] and
                 not partobs_tokens and not partcmp_tokens and
                 not partread_tokens and not deblock_tokens and
                 not breakup_tokens and not sweep_tokens and
-                not consume_tokens and not width_tokens)
+                not consume_tokens and not width_tokens and
+                not widthhold_tokens)
     checks['unixnu_toml_has_xnu_args'] = bool(args)
     return checks
 
@@ -470,7 +509,8 @@ def main():
                                  *BREAKUP_DIAGNOSTICS,
                                  *SWEEP_DIAGNOSTICS,
                                  *CONSUME_DIAGNOSTICS,
-                                 *WIDTH_DIAGNOSTICS),
+                                 *WIDTH_DIAGNOSTICS,
+                                 *WIDTHHOLD_DIAGNOSTICS),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

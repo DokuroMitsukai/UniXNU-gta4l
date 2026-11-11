@@ -331,7 +331,16 @@ partobs, partcmp, partread, deblock, breakup, sweep or consume, and a width
 token smuggled into another personality. The separately approved N10.16
 candidate then built `emmc-block-3-width4` payload `fafca83a…` (55/55
 contract) and BOOT image `f18694b7…` (18/18 gate) with the same hold fixture;
-hardware remains separately gated. The
+hardware remains separately gated. The N10.17 design and N10.18 host
+implementation add `emmc-block-3-widthhold`, which maps to
+`gta4l-emmc-block=3` plus `gta4l-emmc-widthhold=1`; it requires the hold
+fixture, and the checker refuses an orphan, duplicate, malformed or non-1
+widthhold token, a block-1 or duplicate block token, a probe token, every
+combination with partobs, partcmp, partread, deblock, breakup, sweep, consume
+or width, and a widthhold token smuggled into another personality. The N10.19
+host-only candidate then built `emmc-block-3-widthhold` payload `bd112387…`
+(66/66 contract) and BOOT image `7f5455d6…` (18/18 gate) with the same hold
+fixture; hardware remains separately gated. The
 stage-2
 image built on
 2026-10-31 is

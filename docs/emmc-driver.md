@@ -6337,6 +6337,67 @@ reflash, mount, write or extra boot. Deferred: CMD19/CMD14, 8-bit, HS200/HS400,
 DDR, higher clocks, DMA/CQE/ICE, mount/root, storage writes and any user-data
 path.
 
+### 5.3.92 N10.18 sustained-width widthhold batch and N10.19 candidate (2026-11-11)
+
+Follow-up to the reconciled N10.17 design. The N10.18 host batch implemented
+the opt-in sustained-width mode; the N10.19 host-only batch produced and
+qualified the prelinked kernel, payload and BOOT candidate. No device access,
+flash, boot, mount or write was performed.
+
+Selector and scope. The mode requires exactly one `gta4l-emmc-block=3` token
+and refuses a duplicate, an orphan, a malformed or non-1 widthhold token,
+block tokens other than 3, and every combination with `partobs`, `partcmp`,
+`partread`, `deblock`, `breakup`, `sweep`, `consume` or `width`. With the
+token absent, the legacy path and the N10.16 width4 behavior are unchanged.
+
+Sequence. After the baseline EXT_CSD capture, the mode reads an 8-block/
+4,096-byte BOOT reference at 1-bit, performs the same verified 4-bit switch
+(CMD6 `BUS_WIDTH`, CMD13 TRAN wait, `HOST_CONTROL` apply/readback, read-only
+EXT_CSD properties comparison; byte 183 is never a switch condition and
+CMD19/CMD14 is excluded), issues four tagged two-block reads at BOOT offsets
+0, 1,024, 2,048 and 3,072 bytes (LBAs 2,255,360, 2,255,362, 2,255,364 and
+2,255,366), compares every byte against the reference slice and reverts to
+1-bit with the captured baseline on every post-switch exit. Each case is
+attributed through the tagged subrequest observer, so foreign traffic is
+counted rather than silently folded into a case.
+
+Report and bounds. The report family is one terminal `WIDTHHOLD` summary
+plus one `WIDTHHOLDREAD` last-case line on success, or one `WIDTHHOLDFAIL`
+line on failure; success and failure lines are mutually exclusive. Widthhold
+mode suppresses the legacy `READ`/`QUAL`/`QUAL3` and `PART` lines. The three
+line bounds are 905, 335 and 227 bytes and the worst report is 2,078 bytes
+inside the 2,560-byte buffer. The report-thread bound is 27,720 ms (8,000
+media wait + 2,000 BOOT deadline + 3,000 case budget + 4,500 two-block case
++ 2,000 revert gate + 8,220 verified revert), leaving 2,280 ms under the
+30,000 ms watchdog; the pre-watchdog path remains conditional.
+
+Candidate. The N10.19 batch produced prelinked kernel `23e3b6d90f4a…`
+(51,527,680 bytes), a candidate-matched 190-slot storage-ABI audit with 0
+unresolved methods and native 4K, a kernel-build archive byte-identical to
+the requalified-tree archive (`6dcdfe9a…`) with matching members, payload
+`bd112387…` (83,886,080 bytes; 66/66 contract; `emmc-block-3-widthhold`
+mapping to `gta4l-emmc-block=3 gta4l-emmc-widthhold=1`) and BOOT image
+`7f5455d6…` (85,688,320 bytes; 18/18 gate; only the ramdisk differs from the
+v5 baseline). `scripts/check-gta4l-widthhold-evidence.py` binds
+`refdigest`/`obsdigest` to the final image's first 4,096 bytes and
+`digest`/`predigest` to the last-case 1,024-byte slice, checks the complete
+success shape and rejects both a missing/duplicated line and a
+`WIDTHHOLDFAIL` line. The host block suite passes 48 core scenarios/38
+mutation controls and 344 adapter scenarios with 120 adapter/support and 14
+policy mutation controls, including the widthhold cancel-quiet, budget
+success, case-skip, revert-skip, advertise-mismatch and terminal-claim
+mutations; core 189/117, probe 196/100, payload and packager suites,
+storage-ABI, evidence-count, fixture, inventory, packaging and boot-image
+checks pass.
+
+Status. The sustained-width mode has no hardware observation: F5 remains
+measured PASS at 1-bit and F3 at 4-bit for one reported boot each,
+repeatability and failure rates remain `[U]`, and the N10.16 one-boot budget
+stays consumed. A hardware protocol and run (N10.20) are separately gated and
+not authorized by this batch. Findings:
+`docs/emmc-n10.17-sustained-width-read-design-2026-11-11.md` and
+`docs/emmc-n10.19-widthhold-candidate-2026-11-11.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

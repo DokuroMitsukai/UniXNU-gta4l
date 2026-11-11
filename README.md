@@ -958,7 +958,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.91,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.92,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),
@@ -1004,6 +1004,22 @@ partition layout, payload policy and packaging.
   [docs/emmc-n10.16-prehardware-review-2026-11-11.md](docs/emmc-n10.16-prehardware-review-2026-11-11.md)
   and
   [docs/emmc-n10.16-width4-hardware-protocol-2026-11-11.md](docs/emmc-n10.16-width4-hardware-protocol-2026-11-11.md).
+  N10.17 then designed and N10.18 implemented the opt-in
+  `gta4l-emmc-widthhold=1` sustained-width mode: block=3 only, a 1-bit
+  EXT_CSD and 8-block/4,096-byte reference, the verified 4-bit switch, four
+  tagged two-block BOOT reads at offsets 0, 1,024, 2,048 and 3,072 bytes with
+  byte comparison, a verified 1-bit revert on every post-switch exit, and one
+  `WIDTHHOLD` summary plus one `WIDTHHOLDREAD` (or one `WIDTHHOLDFAIL`) line.
+  The host-only N10.19 candidate produced kernel `23e3b6d90f4a…`, payload
+  `bd112387…` (66/66) and BOOT `7f5455d6…` (18/18, only the ramdisk differs),
+  and the widthhold verifier binds the report to the final image's first
+  4,096 bytes and last 1,024-byte slice. The 27,720 ms report bound leaves
+  2,280 ms under the 30,000 ms watchdog, with a conditional pre-watchdog path.
+  No widthhold hardware result exists, the N10.16 one-boot budget stays
+  consumed, and a hardware run is separately gated. See
+  [docs/emmc-n10.17-sustained-width-read-design-2026-11-11.md](docs/emmc-n10.17-sustained-width-read-design-2026-11-11.md)
+  and
+  [docs/emmc-n10.19-widthhold-candidate-2026-11-11.md](docs/emmc-n10.19-widthhold-candidate-2026-11-11.md).
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
   input requirements, not gta4l hardware evidence.
 

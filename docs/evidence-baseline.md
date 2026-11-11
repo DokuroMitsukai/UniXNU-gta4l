@@ -1461,13 +1461,13 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `6b717cc3b7ef6e859dd5081f81afbf785370361a4d32e93c313c7c9bb6d29a5c` |
+| Repository README | `README.md` | `158c30b8ecf349977e24871e9ae2746a903099480d44fe6cf04584d66c1bd8aa` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `b64129594c7c5b930555f6b68319f973e35af0269d92898603b80a60d3ad34f6` |
+| Porting record | `porting.toml` | `3d60bc6bcae0f69cb49310beaf7f558641ef7dd90d4663d0bf24e90a768a4d8b` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `90073483d29d52185a066be175d46e5291cf395b48923ddfad983d9989b968aa` |
+| eMMC driver record | `docs/emmc-driver.md` | `a210cecc06f5ab020dec82f7d44eac8e8842002397ec58d268f3201710e56aee` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1476,10 +1476,10 @@ bytes of the previously booted image `[S]`.
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `272db9f0fd02fe9f6960f647e017f4e7cc156f6cc53010bb8ec8d6a1c6137d7f` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `73ca21a8bebf91354be878f8aff6b912fca3e03dee7e7ac1e2c55525381adf9e` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `ebe98274007c554c3bb69293eefc1a606d68dddb3ce401efb57d0b3409ed891f` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `954a2b3dd84159af1d4b696914d01fff08de91f886effb4f7778622495f3baa2` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `c7c9b4b99a21121b966a5c9a02f918c54fc00a11bc40480c684a3a501c0d0d44` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
-| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `9b692663dd3f5f94b899690f8730151daaf86e3b39b6b0fc23d71c5ef0e35884` |
+| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `18e257cf3226350859dc9b234ac32f08620a48e693418b6bda84fdfdc6e816ad` |
 
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
@@ -2089,6 +2089,43 @@ adding a hash-table row; the C2/C3 candidate documents, pre-hardware review,
 hardware protocol, hardware observation and width4 verifier are outside the
 table or not listed. Candidate, owner and hardware gates are tracked in the
 readiness document §10.
+The N10.18 host batch then implemented the reconciled N10.17 sustained-width
+design (commit `0c6aebe`): the opt-in `gta4l-emmc-widthhold=1` mode with
+block-3-only selection and conflict refusals, a 1-bit EXT_CSD and 8-block/
+4,096-byte reference, the verified 4-bit switch, four tagged two-block BOOT
+reads at offsets 0/1,024/2,048/3,072 with byte comparison, a verified 1-bit
+revert on every post-switch exit, and one `WIDTHHOLD` summary plus one
+`WIDTHHOLDREAD` (or one `WIDTHHOLDFAIL`) line with legacy line suppression.
+The N10.19 host-only candidate then produced prelinked kernel
+`23e3b6d90f4a…` (51,527,680 bytes), a candidate-matched 190-slot storage-ABI
+audit with 0 unresolved methods and native 4K, a kernel-build archive
+byte-identical to the requalified-tree archive (`6dcdfe9a…`) with matching
+members, payload `bd112387…` (83,886,080 bytes; manifest `e159639c…`; 66/66
+contract; `emmc-block-3-widthhold` mapping to `gta4l-emmc-block=3
+gta4l-emmc-widthhold=1`; hold root `327ac826…`, trust cache `30a72f78…` and
+fixture `00363681…`) and BOOT image `7f5455d6…` (85,688,320 bytes; manifest
+`33548be7…`; 18/18 gate; only the ramdisk differs from the `ce4d76e8…` v5
+baseline; header ID `adb8232a…`), packaged kernel `82ad663d…`.
+`scripts/check-gta4l-widthhold-evidence.py` binds `refdigest`/`obsdigest` to
+the final image's first 4,096 bytes (`fa169295…`, prefix
+`fa169295a70cc707bcd18d279507df12`) and `digest`/`predigest` to the last-case
+1,024-byte slice (`5f70bf18…`, prefix `5f70bf18a086007016e948b04aed3b82`),
+requires the one-summary/one-read success shape and rejects a missing or
+duplicated line and a `WIDTHHOLDFAIL` line; the self-test and a real-image
+run pass and the FAIL rejection returns rc=1. The report bound is 27,720 ms
+against the 30,000 ms watchdog, with the pre-watchdog path still conditional.
+Host results: block 48 core scenarios/38 mutation controls and 344 adapter
+scenarios with 120 adapter/support and 14 policy mutation controls, core
+189/117, probe 196/100, payload builder/package, boot-image, storage-ABI,
+evidence-count, fixture recipe, inventory/board, packaging and TOML checks
+pass. No device access, flash, boot, mount or write occurred; the sustained
+mode has no hardware result, the N10.16 one-boot budget remains consumed,
+N10.20 is separately gated and initialization reliability remains `[U]`. The
+batch refreshed the `README.md`, `docs/emmc-driver.md`,
+`docs/diagnostic-payload-input-inventory.md`, `porting.toml` and
+`scripts/test-gta4l-diagnostic-payload.py` rows without adding a hash-table
+row; the N10.17 design, N10.19 candidate record, widthhold verifier and the
+payload/packager scripts are outside the table or not listed.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
