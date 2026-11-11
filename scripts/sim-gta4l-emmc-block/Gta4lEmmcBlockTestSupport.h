@@ -453,6 +453,8 @@ struct gta4l_test_state {
 	uint32_t capacity_blocks;
 	int reporter_start_result;
 	int watchdog_start_result;
+	int thread_start_fail_at;
+	int thread_start_fail_result;
 	int lock_alloc_fail;
 	uint32_t platform_maps;
 	uint32_t init_calls;
@@ -483,6 +485,8 @@ struct gta4l_test_state {
 	uint32_t registered;
 	uint32_t sleeps;
 	uint32_t now_ms;
+	uint32_t property_calls;
+	int property_fail_at;
 	uint32_t sleep_with_lock;
 	uint32_t message_count;
 	uint32_t message_type;
@@ -492,6 +496,7 @@ struct gta4l_test_state {
 	char log[4096];
 	char panic[GTA4L_EMMC_BLOCK_REPORT_BYTES];
 	int panicked;
+	uint32_t panic_calls;
 	jmp_buf panic_jump;
 	gta4l_test_thread threads[2];
 	int thread_count;
@@ -534,6 +539,9 @@ struct gta4l_test_state {
 	int breakup_split_mode;
 	int breakup_foreign_at;
 	int breakup_foreign_mode;
+	int widthhold_media_tag_delta;
+	int widthhold_media_block_delta;
+	int widthhold_media_extra;
 	int sweep_reference_corrupt_at;
 	int sweep_reference_corrupt_count;
 	int sweep_reference_corrupt_mode;
@@ -565,6 +573,7 @@ struct gta4l_test_state {
 	int width_recover_fail;
 	int width_recover_verified;
 	int width_recover_host_clear;
+	int width_recover_card_keep;
 	int width_recover_cmd6;
 	int width_recover_advance_ms;
 	int width_host_control;
@@ -589,6 +598,14 @@ extern gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 typedef void (*gta4l_test_width_sample_fn)(uint32_t phase);
 extern gta4l_test_width_sample_fn gta4l_test_width_hook;
 
+/* Widthhold recovery seam. The before-revert phase fires while the card is
+ * still at 4-bit; the after-revert phase fires once the verified 1-bit
+ * revert has completed but before the terminal report is emitted. */
+#define GTA4L_TEST_WIDTHHOLD_PHASE_BEFORE_REVERT 0u
+#define GTA4L_TEST_WIDTHHOLD_PHASE_AFTER_REVERT 1u
+typedef void (*gta4l_test_widthhold_sample_fn)(uint32_t phase);
+extern gta4l_test_widthhold_sample_fn gta4l_test_widthhold_hook;
+
 extern gta4l_test_state gta4l_test;
 
 typedef IOReturn (*gta4l_test_media_read_fn)(IOMedia *media, UInt64 byteStart,
@@ -600,6 +617,9 @@ extern gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;
 
 typedef void (*gta4l_test_breakup_sample_fn)(uint32_t call, uint32_t phase);
 extern gta4l_test_breakup_sample_fn gta4l_test_breakup_hook;
+
+typedef void (*gta4l_test_multi_sample_fn)(uint32_t call);
+extern gta4l_test_multi_sample_fn gta4l_test_multi_hook;
 
 void gta4l_test_fill_sector(uint64_t block, void *buffer);
 
@@ -618,6 +638,8 @@ extern int gta4l_test_scheme_count;
 #define GTA4L_TEST_PROP_BASE_WRONG 0x20u
 #define GTA4L_TEST_PROP_SIZE_WRONG 0x40u
 #define GTA4L_TEST_PROP_CONTENT_WRONG 0x80u
+#define GTA4L_TEST_PROP_WRITABLE_MISSING 0x100u
+#define GTA4L_TEST_PROP_WRITABLE_WRONG 0x200u
 
 void gta4l_test_reset(void);
 void gta4l_test_media_reset(void);

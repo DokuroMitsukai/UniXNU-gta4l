@@ -8,8 +8,10 @@ gta4l_test_state gta4l_test;
 gta4l_test_media_read_fn gta4l_test_media_read_hook;
 gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;
 gta4l_test_breakup_sample_fn gta4l_test_breakup_hook;
+gta4l_test_multi_sample_fn gta4l_test_multi_hook;
 gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 gta4l_test_width_sample_fn gta4l_test_width_hook;
+gta4l_test_widthhold_sample_fn gta4l_test_widthhold_hook;
 IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 int gta4l_test_media_count;
 IOService *gta4l_test_schemes[GTA4L_TEST_MAX_SCHEMES];
@@ -26,6 +28,8 @@ gta4l_test_reset(void)
 	gta4l_test.capacity_blocks = 61071360u;
 	gta4l_test.reporter_start_result = 0;
 	gta4l_test.watchdog_start_result = 0;
+	gta4l_test.thread_start_fail_at = -1;
+	gta4l_test.thread_start_fail_result = 0;
 	gta4l_test.lock_alloc_fail = 0;
 	gta4l_test.fail_read_at = -1;
 	gta4l_test.fail_multi_at = -1;
@@ -87,12 +91,19 @@ gta4l_test_reset(void)
 	gta4l_test.width_switch_cmd6 = 1;
 	gta4l_test.width_recover_verified = 1;
 	gta4l_test.width_recover_host_clear = 1;
+	gta4l_test.width_recover_card_keep = 0;
 	gta4l_test.width_recover_cmd6 = 2;
+	gta4l_test.property_fail_at = -1;
+	gta4l_test.widthhold_media_tag_delta = 0;
+	gta4l_test.widthhold_media_block_delta = 0;
+	gta4l_test.widthhold_media_extra = 0;
 	gta4l_test_media_read_hook = 0;
 	gta4l_test_deblock_hook = 0;
 	gta4l_test_breakup_hook = 0;
+	gta4l_test_multi_hook = 0;
 	gta4l_test_partition_sample_hook = 0;
 	gta4l_test_width_hook = 0;
+	gta4l_test_widthhold_hook = 0;
 	gta4l_test_media_count = 0;
 	gta4l_test_scheme_count = 0;
 }
@@ -296,6 +307,7 @@ panic(const char *format, ...)
 	vsnprintf(gta4l_test.panic, sizeof(gta4l_test.panic), format, arguments);
 	va_end(arguments);
 	gta4l_test.panicked = 1;
+	gta4l_test.panic_calls++;
 	longjmp(gta4l_test.panic_jump, 1);
 }
 
@@ -352,6 +364,9 @@ kernel_thread_start(void (*func)(void *, wait_result_t), void *context,
 	int result = (index == 0) ? gta4l_test.reporter_start_result :
 	    gta4l_test.watchdog_start_result;
 
+	if (index == gta4l_test.thread_start_fail_at) {
+		return gta4l_test.thread_start_fail_result;
+	}
 	if (result != KERN_SUCCESS) {
 		return result;
 	}
@@ -564,6 +579,9 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 	result->completed_blocks = 0;
 	result->stop_attempted = 0;
 	result->stop_result = 0;
+	if (gta4l_test_multi_hook != 0) {
+		gta4l_test_multi_hook(gta4l_test.multi_calls);
+	}
 	if ((host == 0) || (buffer == 0) || (host->initialized == 0)) {
 		return GTA4L_EMMC_ERR_ARG;
 	}
@@ -740,7 +758,9 @@ gta4l_emmc_set_bus_width_recover(struct gta4l_emmc_host *host, uint32_t bits,
 	}
 	if (gta4l_test.width_recover_host_clear != 0) {
 		gta4l_test.width_host_control = control;
-		host->bus_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
+		if (gta4l_test.width_recover_card_keep == 0) {
+			host->bus_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
+		}
 	}
 	return GTA4L_EMMC_OK;
 }
@@ -886,6 +906,12 @@ bool
 IOService::setProperty(const char *key, unsigned long long value,
     unsigned int bits)
 {
+	uint32_t call = gta4l_test.property_calls++;
+
+	if ((gta4l_test.property_fail_at >= 0) &&
+	    (call == (uint32_t)gta4l_test.property_fail_at)) {
+		return false;
+	}
 	if (property_count_ < (int)(sizeof(properties_) /
 	    sizeof(properties_[0]))) {
 		properties_[property_count_].key = key;
@@ -1109,7 +1135,15 @@ IOMedia::getProperty(const char *key) const
 		    content_value);
 		return const_cast<OSString *>(&content_object);
 	}
-	if (strcmp(key, kIOMediaWritableKey) == 0) {
+	else if (strcmp(key, kIOMediaWritableKey) == 0) {
+		if ((property_faults &
+		    GTA4L_TEST_PROP_WRITABLE_MISSING) != 0) {
+			return 0;
+		}
+		if ((property_faults &
+		    GTA4L_TEST_PROP_WRITABLE_WRONG) != 0) {
+			return const_cast<OSNumber *>(&base_object);
+		}
 		const_cast<IOMedia *>(this)->writable_object.setValue(
 		    writable_value);
 		return const_cast<OSBoolean *>(&writable_object);
@@ -1812,17 +1846,55 @@ gta4l_test_breakup_read(IOBlockStorageDevice *device,
 			break;
 		}
 		for (index = 0; index < count; index++) {
+			uint32_t partTag = tag;
+			uint64_t partBlock =
+			    (absolute_start + parts[index].offset) /
+			    GTA4L_EMMC_BLOCK_BYTES;
+
+			if ((index == 0) &&
+			    (gta4l_test.widthhold_media_tag_delta != 0)) {
+				partTag += (uint32_t)
+				    gta4l_test.widthhold_media_tag_delta;
+			}
+			if ((index == 0) &&
+			    (gta4l_test.widthhold_media_block_delta != 0)) {
+				partBlock += (uint64_t)
+				    (int64_t)gta4l_test.widthhold_media_block_delta;
+			}
 			gta4l_test_breakup_descriptor descriptor(
 			    static_cast<uint8_t *>(buffer->address()) +
 			    parts[index].offset, parts[index].length,
-			    kIODirectionIn, tag);
+			    kIODirectionIn, partTag);
 
 			status = gta4l_test_breakup_issue(device,
-			    &descriptor,
-			    (absolute_start + parts[index].offset) /
-			    GTA4L_EMMC_BLOCK_BYTES,
+			    &descriptor, partBlock,
 			    parts[index].length /
 			    GTA4L_EMMC_BLOCK_BYTES);
+			if (status != kIOReturnSuccess) {
+				if (actual_byte_count != 0) {
+					*actual_byte_count = 0;
+				}
+				return status;
+			}
+		}
+		if ((gta4l_test.widthhold_media_extra != 0) &&
+		    (count > 0)) {
+			gta4l_test_breakup_descriptor descriptor(
+			    static_cast<uint8_t *>(buffer->address()) +
+			    parts[0].offset, parts[0].length,
+			    kIODirectionIn, tag);
+			uint64_t partBlock =
+			    (absolute_start + parts[0].offset) /
+			    GTA4L_EMMC_BLOCK_BYTES;
+			uint64_t partBlocks = parts[0].length /
+			    GTA4L_EMMC_BLOCK_BYTES;
+
+			if (gta4l_test.widthhold_media_extra == 2) {
+				partBlocks = 1;
+				partBlock++;
+			}
+			status = gta4l_test_breakup_issue(device,
+			    &descriptor, partBlock, partBlocks);
 			if (status != kIOReturnSuccess) {
 				if (actual_byte_count != 0) {
 					*actual_byte_count = 0;

@@ -870,27 +870,53 @@ ADAPTER_MUTATIONS = [
        '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_ALLOC;\n')],
      'consume-alloc-failure'),
     ('consume-segment-length',
-     [('\tif ((address == 0) || (segmentLength < (IOByteCount)length)) {\n',
-       '\tif (address == 0) {\n')],
+     [('\tif ((address == 0) || (segmentLength < (IOByteCount)length)) {\n'
+       '\t\tdescriptor->release();\n'
+       '\t\tIOFreeContiguous(buffer,\n'
+       '\t\t    GTA4L_EMMC_BLOCK_CONSUME_BUFFER_BYTES);\n',
+       '\tif (address == 0) {\n'
+       '\t\tdescriptor->release();\n'
+       '\t\tIOFreeContiguous(buffer,\n'
+       '\t\t    GTA4L_EMMC_BLOCK_CONSUME_BUFFER_BYTES);\n')],
      'consume-descriptor-failure'),
     ('consume-tag-omit',
-     [('\tdescriptor->setTag(tag);\n',
+     [('\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_DESC;\n'
+       '\t\treturn false;\n'
+       '\t}\n'
+       '\tdescriptor->setTag(tag);\n',
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_DESC;\n'
+       '\t\treturn false;\n'
+       '\t}\n'
        '\t(void)tag;\n')],
      'consume-match'),
     ('consume-tag-late',
-     [('\tdescriptor->setTag(tag);\n'
-       '\tresult->attempted = 1;\n'
-       '\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n',
+     [('\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_DESC;\n'
+       '\t\treturn false;\n'
+       '\t}\n'
+       '\tdescriptor->setTag(tag);\n'
        '\tresult->attempted = 1;\n'
        '\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n'
+       '\tdescriptor->release();\n',
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_DESC;\n'
+       '\t\treturn false;\n'
+       '\t}\n'
+       '\tresult->attempted = 1;\n'
+       '\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n'
+       '\tdescriptor->release();\n'
        '\tdescriptor->setTag(tag);\n')],
      'consume-match'),
     ('consume-descriptor-release-drop',
      [('\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n'
        '\tdescriptor->release();\n'
-       '\tresult->status = (int32_t)status;\n',
+       '\tresult->status = (int32_t)status;\n'
+       '\tresult->actual = actual;\n'
+       '\tif (status != kIOReturnSuccess) {\n'
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_READ;\n',
        '\tstatus = boot->read(this, start, descriptor, nullptr, &actual);\n'
-       '\tresult->status = (int32_t)status;\n')],
+       '\tresult->status = (int32_t)status;\n'
+       '\tresult->actual = actual;\n'
+       '\tif (status != kIOReturnSuccess) {\n'
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_CONSUME_REASON_READ;\n')],
      'consume-match'),
     ('consume-digest-omit',
      [('\t\tgta4l_emmc_block_sha256(buffer, length, result->digest);\n',
@@ -1052,6 +1078,202 @@ ADAPTER_MUTATIONS = [
        '\tresult = gta4l_emmc_block_read(&block,\n'
        '\t    GTA4L_EMMC_BLOCK_WIDTH_LBA + 1u,\n')],
      'width-match'),
+    ('widthhold-complete-claim',
+     [('\t    revertOk) ? 1u : 0u;\n'
+       '\treport.widthhold_complete = complete;\n',
+       '\t    revertOk) ? 1u : 0u;\n'
+       '\tcomplete = 1u;\n'
+       '\treport.widthhold_complete = complete;\n')],
+     'widthhold-short'),
+    ('widthhold-bytes-skip',
+     [('\tif (memcmp(slice, widthholdReference + start,\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH;\n'
+       '\t}\n',
+       '\tif ((0) && (memcmp(slice, widthholdReference + start,\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH;\n'
+       '\t}\n')],
+     'widthhold-match-mismatch'),
+    ('widthhold-prefix-compare',
+     [('\tif (memcmp(slice, widthholdReference + start,\n',
+       '\tif (memcmp(slice, widthholdReference,\n')],
+     'widthhold-match'),
+    ('widthhold-rb-proof',
+     [('\t\tif ((widthholdRc != GTA4L_EMMC_OK) ||\n'
+       '\t\t    (widthholdSwitch.verified != 1u) ||\n',
+       '\t\tif ((widthholdRc != GTA4L_EMMC_OK) ||\n'
+       '\t\t    ((widthholdSwitch.verified != 1u) &&\n'
+       '\t\t    (widthholdSwitch.switched != 1u)) ||\n')],
+     'widthhold-switch-unverified'),
+    ('widthhold-foreign-ignore',
+     [('\tif ((tag == 0u) || (tag != widthholdActiveTag) ||\n'
+       '\t    (block != widthholdActiveFirst) ||\n'
+       '\t    (nblks != widthholdActiveBlocks)) {\n',
+       '\tif ((tag == 0u) && (tag != widthholdActiveTag) &&\n'
+       '\t    (block != widthholdActiveFirst) &&\n'
+       '\t    (nblks != widthholdActiveBlocks)) {\n')],
+     'widthhold-foreign-tag'),
+    ('widthhold-overlap-ignore',
+     [('\tif ((tag == 0u) || (tag != widthholdActiveTag) ||\n'
+       '\t    (block != widthholdActiveFirst) ||\n'
+       '\t    (nblks != widthholdActiveBlocks)) {\n',
+       '\tif ((tag == 0u) || (tag != widthholdActiveTag) ||\n'
+       '\t    (block < widthholdActiveFirst) ||\n'
+       '\t    (block >= widthholdActiveEnd) ||\n'
+       '\t    (nblks > widthholdActiveBlocks)) {\n')],
+     'widthhold-foreign-extra'),
+    ('widthhold-refc18-expect',
+     [('\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
+       '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
+       '\t    (widthholdRefSubrequests == 1u) &&\n'
+       '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
+       '\t    (chunkDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n',
+       '\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
+       '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
+       '\t    (widthholdRefSubrequests == 1u) &&\n'
+       '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
+       '\t    (chunkDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS) + 1u) &&\n'
+       '\t    (stopDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n')],
+     'widthhold-match'),
+    ('widthhold-refstop-expect',
+     [('\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
+       '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
+       '\t    (widthholdRefSubrequests == 1u) &&\n'
+       '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
+       '\t    (chunkDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n',
+       '\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
+       '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
+       '\t    (widthholdRefSubrequests == 1u) &&\n'
+       '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
+       '\t    (chunkDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS) + 1u) &&\n'
+       '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n')],
+     'widthhold-match'),
+    ('widthhold-refstopfail-expect',
+     [('\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
+       '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
+       '\t    (widthholdRefSubrequests == 1u) &&\n'
+       '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
+       '\t    (chunkDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n',
+       '\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
+       '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
+       '\t    (widthholdRefSubrequests == 1u) &&\n'
+       '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
+       '\t    (chunkDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopDelta ==\n'
+       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (stopFailDelta != 0u) && (after.last_stop_result == 0);\n')],
+     'widthhold-match'),
+    ('widthhold-short-ignore',
+     [('\t} else if (actual != (UInt64)length) {\n'
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_SHORT;\n'
+       '\t} else {\n',
+       '\t} else if (0) {\n'
+       '\t\tresult->reason = GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_SHORT;\n'
+       '\t} else {\n')],
+     'widthhold-short'),
+    ('widthhold-cancel-quiet',
+     [('\tif (reportCancel) {\n'
+       '\t\twidthholdReportCancel();\n'
+       '\t\treason = GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL;\n'
+       '\t} else {\n',
+       '\tif (reportCancel) {\n'
+       '\t\twidthholdReportCancel();\n'
+       '\t\treason = GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL;\n'
+       '\t\treturn;\n'
+       '\t} else {\n')],
+     'widthhold-cancel-post-switch'),
+    ('widthhold-budget-success',
+     [('\t\t\t\t\t\t\tbudget = 1u;\n'
+       '\t\t\t\t\t\t\treason =\n'
+       '\t\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BUDGET;\n'
+       '\t\t\t\t\t\t\tbreak;\n',
+       '\t\t\t\t\t\t\tbudget = 1u;\n'
+       '\t\t\t\t\t\t\treason =\n'
+       '\t\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE;\n'
+       '\t\t\t\t\t\t\tbreak;\n')],
+     'widthhold-budget'),
+    ('widthhold-case-skip',
+     [('\t\t\t\t\tfor (index = 0;\n'
+       '\t\t\t\t\t    index < GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES;\n',
+       '\t\t\t\t\tfor (index = 0;\n'
+       '\t\t\t\t\t    index <\n'
+       '\t\t\t\t\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES - 1u);\n'),
+      ('\t    revertOk) ? 1u : 0u;\n'
+       '\treport.widthhold_complete = complete;\n',
+       '\t    revertOk) ? 1u : 0u;\n'
+       '\tcomplete = 1u;\n'
+       '\treport.widthhold_complete = complete;\n')],
+     'widthhold-match'),
+    ('widthhold-revert-skip',
+     [('\t\trevertOk = widthholdAttemptRevert();\n',
+       '\t\trevertOk = true;\n'),
+      ('\t    revertOk) ? 1u : 0u;\n'
+       '\treport.widthhold_complete = complete;\n',
+       '\t    revertOk) ? 1u : 0u;\n'
+       '\tcomplete = 1u;\n'
+       '\treport.widthhold_complete = complete;\n')],
+     'widthhold-match'),
+    ('widthhold-advertise-mismatch',
+     [('\treport.widthhold_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;\n'
+       '\treport.widthhold_segments = 1u;\n'
+       '\treport.widthhold_capacity = capacityBlocks;\n'
+       '\tIOLockUnlock(reportLock);\n'
+       '\n'
+       '\tif (reportCancel) {\n',
+       '\treport.widthhold_limit =\n'
+       '\t    GTA4L_EMMC_BLOCK_MAX_BLOCKS + 1u;\n'
+       '\treport.widthhold_segments = 2u;\n'
+       '\treport.widthhold_capacity = capacityBlocks - 1u;\n'
+       '\tIOLockUnlock(reportLock);\n'
+       '\n'
+       '\tif (reportCancel) {\n')],
+     'widthhold-match'),
+    ('widthhold-terminal-claim',
+     [('\tIOLockLock(reportLock);\n'
+       '\tif (!terminalClaimed) {\n'
+       '\t\tterminalClaimed = true;\n'
+       '\t\tclaimed = true;\n'
+       '\t}\n'
+       '\tIOLockUnlock(reportLock);\n'
+       '\treturn claimed;\n',
+       '\tIOLockLock(reportLock);\n'
+       '\tterminalClaimed = true;\n'
+       '\tclaimed = true;\n'
+       '\tIOLockUnlock(reportLock);\n'
+       '\treturn claimed;\n')],
+     'widthhold-watchdog-after-revert'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -1136,7 +1358,8 @@ POLICY_MUTATIONS = [
        '{\n')],
      'partcmp-geometry'),
     ('consume-suppress-read',
-     [('\tif ((report->consume == 0) && (report->width == 0)) {\n'
+     [('\tif ((report->consume == 0) && (report->width == 0) &&\n'
+       '\t    (report->widthhold == 0)) {\n'
        '\t\tgta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");\n',
        '\tif (1) {\n'
        '\t\tgta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");\n')],
@@ -1147,6 +1370,67 @@ POLICY_MUTATIONS = [
        '\t\tgta4l_emmc_block_put_string(&writer,\n'
        '\t\t    "' + 'C' * 2100 + '");\n')],
      'policy'),
+    ('widthhold-value-accepted',
+     [('\tif (token_value != (int)GTA4L_EMMC_BLOCK_WIDTHHOLD_ON) {\n',
+       '\tif ((token_value != (int)GTA4L_EMMC_BLOCK_WIDTHHOLD_ON) &&\n'
+       '\t    0) {\n')],
+     'widthhold-refused-value'),
+    ('widthhold-duplicate-accepted',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
+       '\t}\n',
+       '\tif (((duplicate_tokens != 0) && 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
+       '\t}\n')],
+     'widthhold-refused-duplicate'),
+    ('widthhold-block-accepted',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
+       '\t}\n',
+       '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    ((block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) &&\n'
+       '\t    0) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
+       '\t}\n')],
+     'widthhold-refused-block'),
+    ('widthhold-width-conflict-accepted',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
+       '\t}\n',
+       '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) ||\n'
+       '\t    ((width_selected != 0) && 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
+       '\t}\n')],
+     'widthhold-refused-conflicts'),
 ]
 
 
@@ -1322,6 +1606,48 @@ def check_adapter_source():
         'width failure must emit the first-failure detail line'
     assert 'report->width == 0' in policy, \
         'legacy READ/QUAL lines must stay suppressed in width mode'
+    assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_ARG' in adapter, \
+        'adapter must parse the opt-in widthhold token'
+    assert 'gta4l_emmc_block_widthhold_select' in adapter, \
+        'adapter must use the shared widthhold selector'
+    assert 'gta4l_emmc_block_widthhold_select' in policy, \
+        'widthhold selector must live in the shared policy'
+    assert 'runWidthhold' in adapter, \
+        'adapter must implement the sustained-width qualification'
+    assert 'widthholdReference' in adapter and \
+        'IOFreeContiguous(widthholdReference' in adapter, \
+        'widthhold reference scratch must be allocated and freed'
+    assert 'widthholdObserved' in adapter and \
+        'IOFreeContiguous(widthholdObserved' in adapter, \
+        'widthhold observed scratch must be allocated and freed'
+    assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_BITS_4' in adapter, \
+        'widthhold mode must switch to 4-bit'
+    assert 'widthholdSynchronousRecover' in adapter, \
+        'widthhold mode must recover synchronously on failure'
+    assert 'memcmp(slice, widthholdReference + start' in adapter, \
+        'widthhold cases must compare against their reference slice'
+    assert 'widthholdObservedOrder' in adapter and \
+        'widthholdObservedForeign' in adapter, \
+        'widthhold mode must reject foreign and overlapping requests'
+    assert 'GTA4L-EMMC P5 WIDTHHOLDFAIL: ' in policy, \
+        'widthhold failure must emit the first-failure detail line'
+    assert 'GTA4L-EMMC P5 WIDTHHOLDREAD: ' in policy, \
+        'widthhold success must emit the observed detail line'
+    assert 'report->widthhold == 0' in policy and \
+        'report->widthhold != 0' in policy, \
+        'widthhold mode must suppress the legacy PART lines'
+    assert '(report->widthhold == 0)' in policy, \
+        'widthhold mode must suppress the legacy READ/QUAL lines'
+    assert '#define GTA4L_EMMC_BLOCK_REPORT_BYTES 2560u' in policy_header, \
+        'widthhold report must raise the report buffer to 2,560 bytes'
+    assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES <=' in policy, \
+        'widthhold summary must stay inside the report buffer'
+    assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_REPORT_WORST_BYTES <=' in policy, \
+        'widthhold worst case must stay inside the report buffer'
+    assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BUDGET 14u' in policy_header, \
+        'widthhold budget must have a distinct reason'
+    assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC 21u' in policy_header, \
+        'widthhold allocation failure must have a distinct reason'
     probe = CONSUMER_PROBE.read_text()
     assert 'IOMallocContiguous(' in probe and \
         'IOFreeContiguous(' in probe, \
@@ -1662,8 +1988,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 286, f'expected 286 adapter PASS lines, got {passes}'
-        print('PASS adapter: 285 scenarios against the host IOKit seam')
+        assert passes == 345, f'expected 345 adapter PASS lines, got {passes}'
+        print('PASS adapter: 344 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

@@ -297,7 +297,50 @@ extern "C" {
  * scalars stay zero; the bound is therefore conservative. */
 #define GTA4L_EMMC_BLOCK_WIDTH_REPORT_WORST_BYTES 1772u
 
-#define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
+/* N10.17 sustained 4-bit published-media read qualification. The mode reads
+ * the first eight BOOT blocks (4,096 bytes) at 1-bit through the block core,
+ * switches to 4-bit with the verified helper, then issues four fixed
+ * two-block tagged IOMedia reads over the same window while 4-bit stays
+ * active, compares each slice to its 1-bit reference slice and reverts to
+ * 1-bit on every post-switch exit. The report-thread bound is the 8,000 ms
+ * media wait + 2,000 ms BOOT deadline + 3,000 ms case budget + one 4,500 ms
+ * two-block case + 2,000 ms revert gate + 8,220 ms verified revert =
+ * 27,720 ms, leaving 2,280 ms under the 30,000 ms watchdog. */
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_ARG "gta4l-emmc-widthhold"
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_OFF 0
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_ON 1
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED (-1)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_BITS_4 4u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES 4u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS 2u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES \
+	(GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS * \
+	GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS 8u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES \
+	(GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS * \
+	GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA \
+	(GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES / \
+	GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_TAG 1u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_MEDIA_WAIT_MS 8000u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_DEADLINE_MS 2000u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_STEP_MS 50u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_READ_BUDGET_MS 3000u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_MS 2000u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_STEP_MS 10u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_WORST_MS 27720u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES 905u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLDREAD_LINE_BYTES 335u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLDFAIL_LINE_BYTES 227u
+/* Exact formatter worst case with every new numeric field capped at u32:
+ * base REPORT/DRV/XFER/MEDIA/SNAP/FAIL 838 (7 newlines) + WIDTHHOLD 905 +
+ * WIDTHHOLDREAD 335 = 2,078 on the success path; the failure path replaces
+ * the read line with the 227-byte WIDTHHOLDFAIL line and totals 1,970. */
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REPORT_WORST_BYTES 2078u
+
+#define GTA4L_EMMC_BLOCK_REPORT_BYTES 2560u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u
 #define GTA4L_EMMC_BLOCK_QUAL_LBA 2u
@@ -708,6 +751,79 @@ struct gta4l_emmc_block_report {
 	int32_t width_fail_status;
 	uint64_t width_fail_actual;
 	uint8_t width_fail_digest[16];
+	/* Opt-in N10.17 sustained 4-bit published-media read qualification.
+	 * Four fixed two-block BOOT reads at 4-bit, each compared to the
+	 * same-boot 1-bit reference slice, then a verified 1-bit revert. New
+	 * numeric fields are capped at u32 so the bounded report fits. */
+	uint32_t widthhold;
+	uint32_t widthhold_cases;
+	uint32_t widthhold_passed;
+	uint32_t widthhold_failed;
+	uint32_t widthhold_reason;
+	uint32_t widthhold_complete;
+	uint32_t widthhold_switch;
+	uint32_t widthhold_verified;
+	uint32_t widthhold_hb;
+	uint32_t widthhold_ha;
+	uint32_t widthhold_rb;
+	uint32_t widthhold_cmd6;
+	uint32_t widthhold_refs;
+	uint32_t widthhold_refbytes;
+	uint32_t widthhold_refblocks;
+	int32_t widthhold_refstatus;
+	uint32_t widthhold_refchunks;
+	uint32_t widthhold_refstops;
+	uint32_t widthhold_refstopfail;
+	uint8_t widthhold_refdigest[16];
+	uint32_t widthhold_reads;
+	uint32_t widthhold_bytes;
+	uint32_t widthhold_blocks;
+	uint32_t widthhold_subrequests;
+	uint32_t widthhold_max;
+	uint32_t widthhold_c18;
+	uint32_t widthhold_stops;
+	uint32_t widthhold_stopfail;
+	uint32_t widthhold_match;
+	uint32_t widthhold_mismatch;
+	uint32_t widthhold_fails;
+	uint32_t widthhold_foreign;
+	uint32_t widthhold_cancel;
+	uint32_t widthhold_budget;
+	uint8_t widthhold_obsdigest[16];
+	uint32_t widthhold_partbase;
+	uint32_t widthhold_partsize;
+	uint32_t widthhold_partro;
+	uint32_t widthhold_revert;
+	uint32_t widthhold_rverified;
+	uint32_t widthhold_rhb;
+	uint32_t widthhold_rha;
+	uint32_t widthhold_rcmd6;
+	int32_t widthhold_rstatus;
+	uint32_t widthhold_limit;
+	uint32_t widthhold_segments;
+	uint32_t widthhold_capacity;
+	uint32_t widthhold_last_index;
+	uint32_t widthhold_last_lba;
+	uint32_t widthhold_last_start;
+	uint32_t widthhold_last_length;
+	uint32_t widthhold_last_span;
+	uint32_t widthhold_last_actual;
+	int32_t widthhold_last_status;
+	uint32_t widthhold_last_subrequests;
+	uint32_t widthhold_last_blocks;
+	uint32_t widthhold_last_max;
+	uint8_t widthhold_last_digest[16];
+	uint8_t widthhold_last_predigest[16];
+	uint32_t widthhold_last_match;
+	uint32_t widthhold_fail_index;
+	int32_t widthhold_fail_status;
+	uint32_t widthhold_fail_actual;
+	uint32_t widthhold_fail_start;
+	uint32_t widthhold_fail_length;
+	uint32_t widthhold_fail_span;
+	uint32_t widthhold_fail_blocks;
+	uint32_t widthhold_fail_max;
+	uint8_t widthhold_fail_digest[16];
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -834,6 +950,16 @@ int gta4l_emmc_block_width_select(int token_present, int token_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected,
     int consume_selected);
+
+/* Select the opt-in sustained 4-bit published-media qualification. The token
+ * is accepted only when exactly one gta4l-emmc-block=3 token is selected, the
+ * value is exactly 1, the token is not duplicated and none of the other
+ * partition/read/consumer/width instruments is selected in the same boot. */
+int gta4l_emmc_block_widthhold_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int consume_selected, int width_selected);
 
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
@@ -1024,6 +1150,32 @@ int gta4l_emmc_block_breakup_geometry(uint64_t start, uint32_t length,
 #define GTA4L_EMMC_BLOCK_WIDTH_REASON_REVERT 6u
 #define GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL 7u
 #define GTA4L_EMMC_BLOCK_WIDTH_REASON_GATE 8u
+
+/* WIDTHHOLD reason and first-failure stage codes. This is a separate
+ * namespace and report field from the N10.16 WIDTH codes; numeric overlap is
+ * not a conflict and a widthhold code is never read as a width code. */
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BASELINE 1u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PREREAD 2u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_SWITCH 3u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MEDIA 4u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART 5u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_OPEN 6u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ARG 7u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_DESC 8u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_READ 9u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_SHORT 10u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH 11u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ORDER 12u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_FOREIGN 13u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BUDGET 14u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL 15u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_GATE 16u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_REVERT 17u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BASE4 18u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ADVERT 19u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_THREAD 20u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC 21u
 
 #define GTA4L_EMMC_BLOCK_CONSUME_TARGET_BOOT 1u
 
