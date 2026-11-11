@@ -6545,6 +6545,79 @@ remain `[U]`. BOOT stays as written (N10.22) and must not be booted again
 without a new finite budget; restore is a separate owner decision. Findings:
 `docs/emmc-n10.23-widthhold-hardware-run-2026-11-12.md`.
 
+### 5.3.96 N10.24 host-only publication design corrections and Track C disposition (2026-11-12)
+
+Host-only documentation batch after the N10.23 bounded PASS. No device
+access, flash, boot, restore, mount, write, driver change, candidate build,
+QEMU run or additional commit occurred. The N10.24 documents are corrected
+drafts, not accepted implementation contracts.
+
+Publication-path design. `docs/emmc-n10.24-widthpub-design-2026-11-12.md`
+now records that N10.23 already observed whole-media and BOOT-partition
+publication and four tagged reads while at 4-bit, followed by a verified
+revert; what remains unqualified is sustained/general operation and its
+lifecycle, not the act of publication. The prior success-path
+no-revert/panic-held proposal is withdrawn: a TWRP return demonstrates
+recovery access, not a physical power cycle, a reset command or a proven
+width reset, and no source-grounded stop/shutdown/error/quiesce contract
+exists for leaving the card at 4-bit. The proposed bounded mode (working
+token `gta4l-emmc-widthpub=1`, provisional) keeps the N10.23 sequence —
+1-bit EXT_CSD baseline, 8-block/4,096-byte 1-bit reference, verified 4-bit
+switch, inherited LBA-1 read, advertisement and `registerService()` — and
+serves either one four-case pass or two passes of the four two-block
+windows, with per-case digest comparison, strict foreign rejection and a
+verified pre-report 1-bit revert. The start-path timing is the N10.17
+source-derived pre-watchdog budget (28,010 ms success, 36,030 ms failed
+switch, 38,230 ms post-switch failure), not the obsolete 13,010 ms
+two-block estimate; the report thread is 27,720 ms only because one
+3,000 ms total case-loop budget is shared by both passes (a per-pass reset
+would reach 30,720 ms and is excluded). The decommission audit records
+that the async read path already sends
+`kIOMessageMediaStateHasChanged(kIOMediaStateOffline)` after completion and
+outside `gate` (`package/Gta4lEmmcBlock.cpp:2313`–`:2316`), while the
+report-thread path only clears `online` and does not message clients; a
+report-thread notification delta is an open owner decision and is not
+claimed as tested. Verdict: **NO-GO for implementation** until the owner
+accepts the corrected scope, read set, names, decommission behavior and a
+recomputed formatter/timing bound. A long-lived hold mode is NO-GO pending
+a source-grounded lifecycle contract and an observed physical power-cycle
+reset.
+
+Repeatability protocol.
+`docs/emmc-n10.24-widthhold-repeatability-protocol-2026-11-12.md` defines a
+finite owner-controlled series on the unchanged installed N10.22 image
+(`b4d63be7…`, full p69 `7260ad75…`, tail `a28b4ea2…`, protected partitions
+`14e11370…`/`51fa824c…`/`3a265d58…`). Three additional cold boots are a
+proposal only, not an approved budget; the owner must select the finite
+budget, classify each attempt and approve the read-only device access. Every
+launch attempt counts, including pre-identification stops and unusable
+captures. The series records planned/attempted/passed/failed/insufficient
+counts and stops on the **first non-pass** of any class (pre-identification,
+widthhold, watchdog, integrity, failed recovery, ambiguous capture or owner
+abort). A TWRP start is recovery-access evidence only, not a physical power
+cycle or width-reset proof. No reflash, restore, reset, mount, write, host
+reboot, retry or replacement boot is included.
+
+Track C disposition.
+`docs/emmc-n10.24-trackc-4bit-coverage-disposition-2026-11-12.md` records
+that N10.11/N10.13/N10.14 delivered a six-range **1-bit** sweep (53,248
+bytes, 13 subrequests, max 8 blocks, 63 two-block CMD18 chunks) and that the
+4-bit evidence covers only four 2-block reads over the first 4,096 bytes.
+The block core always chunks at 2 blocks, so the gap is larger driver
+subrequests and more bytes, not the CMD18 chunk shape. An 8-block 4-bit
+case is conditionally feasible only after a source-derived 4-bit per-case
+timing bound (the conservative 4,500 ms per 2-block chunk would put it at
+41,220 ms, above the watchdog); 16-block, 32-block and full six-range 4-bit
+coverage are NO-GO under the current 30,000 ms watchdog and report contract.
+No C2 design, candidate or hardware run is authorized.
+
+Status. N10.23 remains the only widthhold hardware result and N10.20 remains
+FAIL. All three N10.24 documents are host-only; no candidate, flash, boot,
+mount, write or commit is authorized. Findings:
+`docs/emmc-n10.24-widthpub-design-2026-11-12.md`,
+`docs/emmc-n10.24-widthhold-repeatability-protocol-2026-11-12.md` and
+`docs/emmc-n10.24-trackc-4bit-coverage-disposition-2026-11-12.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
