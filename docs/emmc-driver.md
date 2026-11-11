@@ -6618,6 +6618,27 @@ mount, write or commit is authorized. Findings:
 `docs/emmc-n10.24-widthhold-repeatability-protocol-2026-11-12.md` and
 `docs/emmc-n10.24-trackc-4bit-coverage-disposition-2026-11-12.md`.
 
+### 5.3.97 N10.24 widthhold repeatability owner observation (uncaptured, 2026-11-12)
+
+Owner-reported observation after the approved repeatability series on the
+unchanged installed N10.22 image. The owner executed the boots and reports
+that every boot repeated the N10.23 `WIDTHHOLD` success shape, including the
+matching `WIDTHHOLDREAD` digest and a successful manual return to TWRP; no
+non-pass was reported. The agent performed no device access, flash, boot,
+restore, mount, write, candidate build, driver change, QEMU run, commit or
+push while producing this record.
+
+The observation supplies no raw capture, normalized report lines, verifier
+log, cold/warm classification, per-attempt record or pre/post integrity hash,
+so it does not satisfy the protocol's PASS predicate and does not upgrade the
+evidence state. It is descriptive corroboration only: repeatability in the
+SHA-256-bound sense remains `[U]`, N10.23 remains the only captured widthhold
+hardware PASS, and N10.20 remains FAIL. The image hashes quoted in the record
+are inherited from the N10.23 flash record, not re-measured. No failure rate,
+initialization reliability, cold/warm correlation, arbitrary I/O, write,
+mount or publication-readiness claim is made. Findings:
+`docs/emmc-n10.24-widthhold-repeatability-observation-2026-11-12.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
