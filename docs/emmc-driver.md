@@ -101,11 +101,11 @@ interrupts and higher-speed modes.
 | `package/Gta4lEmmcBlockCore.c/.h` | Portable read-only block request helper: validation, per-block loop, bounce copy, counters |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO through the platform object, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 187 scenarios and 115 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 189 scenarios and 117 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 97 adapter scenarios and 23 adapter plus eight policy mutation controls against the host IOKit seam |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 285 adapter scenarios and 104 adapter/support plus 10 policy mutation controls against the host IOKit seam |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `configs/gta4l_defconfig` | Force-loads the SDHCI snapshot and both eMMC archives into the kernel |
@@ -6228,6 +6228,114 @@ observation.
 The one-boot budget is consumed; no retry, reflash, rollback, reset/repair,
 mount, commit or push was performed. Findings:
 `docs/emmc-n10.15-consume-hardware-run-2026-11-10.md`.
+
+### 5.3.91 N10.16 4-bit SDR width-mode host batch (2026-11-10)
+
+Follow-up to the N10.16 readiness audit. This section records the host-only
+implementation of the opt-in `gta4l-emmc-width=4` mode and its test batch; no
+candidate build, device access, flash or boot was performed.
+
+Selector and scope. The mode requires exactly one `gta4l-emmc-block=3` token
+and refuses an orphan, duplicate, malformed or non-4 width token, block
+tokens other than 3, and every combination with `partobs`, `partcmp`,
+`partread`, `deblock`, `breakup`, `sweep` or `consume`. With the token absent,
+the legacy 1-bit path and the production 64-block/32,768-byte/one-segment
+advertisement are unchanged.
+
+Sequence. After `initializeHardware()` returns and before the baseline read,
+the mode reads the 1-bit EXT_CSD baseline into a 512-byte buffer, reads the
+pinned BOOT window (LBA
+`GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES / 512` = 2,255,360, two blocks,
+1,024 bytes) at 1-bit through the block core and computes its SHA-256, then
+performs the verified 4-bit switch: CMD6 `BUS_WIDTH`, CMD13
+TRAN/READY_FOR_DATA wait, `HOST_CONTROL` apply/readback and the read-only
+EXT_CSD properties comparison against the baseline. The switch proof never
+compares byte 183 and issues no CMD19/CMD14. The baseline LBA 1 read and
+publication then run at 4-bit, and the report thread re-reads the same window
+through the block core, requires the same exact count and clean CMD12,
+compares all 1,024 bytes with the reference and computes the observed digest
+before reverting to 1-bit with `gta4l_emmc_set_bus_width_recover()` and the
+captured baseline.
+
+Failure semantics. A baseline, pre-read or switch failure stops before
+publication. A 4-bit read failure clears `online`, preserves the first
+failure through the core's `first_fail_valid`/`first_fail_error` record and
+fails closed without a retry or a smaller window. A comparison mismatch is a
+terminal `reason=5`; a revert failure after a passing 4-bit read is a
+terminal `reason=6` that retains both facts. The report uses `WIDTH` for the
+switch and revert fields, `WIDTHREAD` for the passing window with both digest
+prefixes, and `WIDTHFAIL` for the first terminal failure. Width mode
+suppresses the legacy `READ`/`QUAL`/`QUAL3` lines, and every non-width mode
+keeps its previous report form byte-for-byte. The three width lines are
+bounded at 513, 329 and 127 bytes and the whole width-mode report at 1,772
+bytes inside the 2,048-byte buffer. The success bound is 26,230 ms and the
+failed-switch bound 21,030 ms against the 30,000 ms watchdog; the report
+gate wait is explicitly bounded at 2,000 ms and a timeout is a terminal
+gate failure. The margin remains conditional and unmeasured.
+
+Host results. The block suite passes 48 core scenarios/38 mutation controls
+and 285 adapter scenarios with 104 adapter/support and 10 policy mutation
+controls, covering the absent token, all refusals, the full match,
+baseline/pre-read/switch/read/short/stop/mismatch/revert failures, the
+`ERR_WIDTH_RESTORE` terminal framing, budget, cancellation during the
+bounded gate wait and after the 4-bit read, the terminal watchdog
+interleaving, and the host-side packaged-digest rejection. The adapter mutations remove the
+switch guard, claim completion, skip the byte compare, skip the revert,
+credit a failed read, advertise the wrong limit/segments, truncate the
+reference digest and shift the pinned LBA. The core suite passes 189
+scenarios/117 mutation controls, the probe suite 196/100, and the
+evidence-count test re-derives and checks the documented counts. The
+diagnostic payload builder and packager suites also pass with the new
+`emmc-block-3-width4` personality, which requires the `fs-timer-hold`
+fixture and maps to exactly `gta4l-emmc-block=3 gta4l-emmc-width=4`; the
+checker refuses orphan, duplicate, malformed, non-4, block-1, duplicate
+block, probe and modifier-conflict tokens, and no other personality can
+smuggle the width token into an accepted mapping. That host batch built no
+payload or candidate image. Candidate, owner and hardware gates are tracked in
+`docs/emmc-n10.16-4bit-sdr-readiness-2026-11-10.md` §10.
+
+Corrective candidate. The 2026-11-11 pre-hardware review found that a slow
+64-block in-flight request could hold the controller gate past the
+30,000 ms watchdog before the width case started, and corrected the digest
+field to 16 bytes/32 hex characters. The host-only gate-fix batch then
+produced prelinked kernel `2be2eb06…` (51,470,336 bytes), a
+candidate-matched 190-slot/181-binding storage-ABI audit with 26 overrides
+and 0 unresolved original imports, a requalified block archive whose members
+match the archive linked into the kernel, payload `10ff7ee8…` (55/55
+contract, `emmc-block-3-width4`) and BOOT image `58352cd3…` (18/18 gate, only
+the ramdisk differs). The report gate is bounded at 2,000 ms; a timeout is
+terminal reason 8 with media offline and no revert claim. The width report is
+bound to the final image's first 1,024 bytes
+(`a6da82e356863d1ab7e31c21a8fd85fc…`), and
+`scripts/check-gta4l-width4-evidence.py` covers matching, changed, missing,
+malformed, truncated and wrong-shape host cases. This closes the gate finding
+at source and host-test level; the 13,010 ms pre-watchdog path remains a
+conditional design budget. Hardware result: the owner-approved one-boot run
+executed on 2026-11-11. The terminal report returned `rc=0 stop=0` with
+`WIDTH cases=1 passed=1 failed=0 reason=0 complete=1`,
+`switch=4 verified=1 hb=0 ha=2 rb=0 cmd6=1`,
+`reads=2 bytes=2048 blocks=4 subrequests=2 max=2 match=1`,
+`revert=1 rverified=1 rhb=2 rha=0 rcmd6=1` and
+`limit=64 seg=1 cap=61071360`; the WIDTHREAD digest and predigest both
+matched the image prefix `a6da82e3…`, and no `WIDTHFAIL` or watchdog report
+appeared. `rb=0` is the diagnostic byte-183 readback (W/E_P, not a completion
+condition) and `rcmd6=1` is first-attempt revert success; the terminal guard
+attests both at `package/Gta4lEmmcBlock.cpp:6052-6091`. The pre-flash BOOT
+image was restored and verified, with RECOVERY/EFS/sec_efs unchanged. Result:
+`docs/emmc-n10.16-width4-hardware-observation-2026-11-11.md`. Findings:
+`docs/emmc-n10.16-prehardware-review-2026-11-11.md`,
+`docs/emmc-n10.16-4bit-sdr-readiness-2026-11-10.md` §10 and
+`docs/emmc-n10.16-width4-gatefix-candidate-2026-11-11.md`.
+
+Status. F5 remains measured PASS at 1-bit SDR/400 kHz for one reported boot
+and F3 at 4-bit SDR/400 kHz for one reported boot; the width4 mode now has one
+measured cold-boot PASS of its own switch/read/compare/revert path. This is
+not a publication, repeatability, failure-rate or initialization-reliability
+result: no 4-bit publication exists and initialization reliability remains
+`[U]`. The one-boot budget is consumed and the result authorizes no retry,
+reflash, mount, write or extra boot. Deferred: CMD19/CMD14, 8-bit, HS200/HS400,
+DDR, higher clocks, DMA/CQE/ICE, mount/root, storage writes and any user-data
+path.
 
 ## 6. Expected report
 

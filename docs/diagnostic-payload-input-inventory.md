@@ -323,7 +323,15 @@ fixture, and the checker refuses an orphan, duplicate or non-1 consume token,
 a mismatched personality, a block-1 combination, and any consume+partobs,
 consume+partcmp, consume+partread, consume+deblock, consume+breakup or
 consume+sweep combination. N10.15 rebuilt no payload; candidate production is
-separately gated. The
+separately gated. The N10.16 host batch adds `emmc-block-3-width4`, which maps
+to `gta4l-emmc-block=3` plus `gta4l-emmc-width=4`; it requires the hold fixture,
+and the checker refuses an orphan, duplicate, malformed or non-4 width token, a
+block-1 or duplicate block token, a probe token, every combination with
+partobs, partcmp, partread, deblock, breakup, sweep or consume, and a width
+token smuggled into another personality. The separately approved N10.16
+candidate then built `emmc-block-3-width4` payload `fafca83a…` (55/55
+contract) and BOOT image `f18694b7…` (18/18 gate) with the same hold fixture;
+hardware remains separately gated. The
 stage-2
 image built on
 2026-10-31 is

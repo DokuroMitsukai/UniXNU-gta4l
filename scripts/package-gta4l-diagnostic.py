@@ -120,7 +120,8 @@ def main():
                                  'emmc-block-3-breakup',
                                  'emmc-block-1-sweep',
                                  'emmc-block-3-sweep',
-                                 'emmc-block-3-consume'),
+                                 'emmc-block-3-consume',
+                                 'emmc-block-3-width4'),
                         default='any',
                         help='require this board diagnostic argument in the payload')
     parser.add_argument('--force', action='store_true')

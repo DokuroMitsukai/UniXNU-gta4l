@@ -227,30 +227,32 @@ read. The terms below are the core's own timeouts, not measured timings:
 | Pre-switch 1-bit window read | two-block CMD18: data poll 1,000 + CMD12 entry 1,000 + CMD12 completion 1,000 | 3,000 ms |
 | Verified 4-bit switch | pre-switch EXT_CSD 2,000 + CMD6 1,000 + TRAN wait 10 x (100 + 1) + post-switch EXT_CSD 2,000 | 6,010 ms |
 | Existing baseline LBA 1 read | CMD17 command 1,000 + data 1,000 | 2,000 ms |
+| Bounded gate acquisition | try-lock loop, 10 ms step, 2,000 ms deadline | 2,000 ms |
 | 4-bit window read | two-block CMD18: 1,000 + 1,000 + 1,000 | 3,000 ms |
 | Verified 1-bit revert | two attempts x (reset 100 + CMD6 1,000 + TRAN 1,010 + EXT_CSD 2,000) | 8,220 ms |
-| **Total** | | **24,230 ms** |
+| **Total** | | **26,230 ms** |
 
 The pre-watchdog start path is the baseline, pre-read, switch and existing
 baseline read: 2,000 + 3,000 + 6,010 + 2,000 = **13,010 ms**. The
-watchdog-covered report path is the 4-bit read and the revert:
-3,000 + 8,220 = **11,220 ms**. The success total is 24,230 ms, leaving
-5,770 ms below the 30,000 ms `GTA4L_EMMC_BLOCK_WATCHDOG_MS`.
+watchdog-covered report path is the bounded gate, the 4-bit read and the
+revert: 2,000 + 3,000 + 8,220 = **13,220 ms**. The success total is
+26,230 ms, leaving 3,770 ms below the 30,000 ms
+`GTA4L_EMMC_BLOCK_WATCHDOG_MS`.
 
 A failed switch has a larger bound than a successful one because the
 verified helper's rollback can make two CMD6/TRAN/EXT_CSD passes:
 2,000 + 3,000 + (2,000 + 1,000 + 1,010 + 2,000 + 8,020) = **21,030 ms**.
 The mode fails closed there, so it does not run the existing baseline read,
 publication, the 4-bit case read, the success revert or an extra recovery
-sequence. That leaves 8,970 ms below the watchdog, so the success path's
-24,230 ms remains the overall bound.
+sequence. The success path's 26,230 ms is the overall bound.
 
-This is a conditional margin, not a path-condition proof. The 5,770 ms must
-also cover scheduling, pre-watchdog boot-path variance, gate acquisition
-before the 4-bit case read and any incidental request that holds the gate.
-The gate wait is bounded by the in-flight request's own timeouts but is not
-proven from the current code. The design does not extend the watchdog, the
-CMD/data timeouts or the chunk size. A watchdog fire is a no-go, not a pass.
+This is a conditional margin, not a path-condition proof. The 3,770 ms must
+also cover scheduling and pre-watchdog boot-path variance. The report gate
+wait is now explicitly bounded at 2,000 ms; a timeout is a terminal gate
+failure with media offline, no read, no revert claim and no watchdog wait.
+The pre-watchdog path remains a design budget rather than a source-derived
+sum. The design does not extend the watchdog, the CMD/data timeouts or the
+chunk size. A watchdog fire is a no-go, not a pass.
 
 ### 3.6 Report and terminal ownership
 
@@ -375,19 +377,28 @@ Success adds exactly two lines:
 
 ```
 GTA4L-EMMC P5 WIDTH: cases=1 passed=1 failed=0 reason=0 complete=1
-switch=4 verified=1 hb=0 ha=2 rb=1 cmd6=1 revert=1 rverified=1 rhb=2
-rha=0 rcmd6=2 reads=2 bytes=2048 blocks=4 subrequests=2 max=2 match=1
+switch=4 verified=1 hb=0 ha=2 rb=0 cmd6=1 revert=1 rverified=1 rhb=2
+rha=0 rcmd6=1 reads=2 bytes=2048 blocks=4 subrequests=2 max=2 match=1
 mismatches=0 fails=0 cancel=0 budget=0 limit=64 seg=1 cap=61071360
 GTA4L-EMMC P5 WIDTHREAD: index=0 lba=2255360 start=0 length=1024 span=1024
-actual=1024 status=0 subrequests=1 blocks=2 max=2 digest=<16 hex>
-predigest=<16 hex> match=1
+actual=1024 status=0 subrequests=1 blocks=2 max=2 digest=<32 hex>
+predigest=<32 hex> match=1
 ```
+
+`rb` is the diagnostic EXT_CSD byte-183 readback. Byte 183 is W/E_P and not
+readable, so hardware reports `0`; the host adapter model's `1` is a simulated
+value. `rcmd6` is `1` when the first revert attempt succeeds (the source
+accepts one or two attempts). The `complete` guard does not test `rb`, but it
+does require `rcmd6` in `[1,2]`. The 2026-11-11 hardware run measured these
+values; see `docs/emmc-n10.16-width4-hardware-observation-2026-11-11.md`.
 
 Failure adds `WIDTH` with `complete=0` and one `WIDTHFAIL` line carrying the
 first-failure stage (switch, pre-read, 4-bit read or revert), the raw
 error/status, the actual byte count and the observed digest when one exists.
 The `WIDTH`/`WIDTHREAD`/`WIDTHFAIL` caps and the worst-report
-`static_assert` are part of the implementation batch.
+`static_assert` are part of the implementation batch. The formatter passes
+`16u` to `gta4l_emmc_block_put_digest()` as a **byte count**, so each digest
+field is 16 bytes/32 hex characters, not 16 characters.
 
 ## 5. Host test and mutation plan
 
@@ -437,6 +448,14 @@ for it.
 
 ## 7. Go/no-go verdict and open items
 
+Superseding status (2026-11-11): conditions 1-6 below were satisfied for the
+gate-fix candidate, the owner approved the one-boot scope, and the executed
+boot passed the driver's `complete=1` guard. BOOT was restored and verified.
+The verdict text below is the historical 2026-11-10 assessment; the measured
+result and its bounded scope are in
+`docs/emmc-n10.16-width4-hardware-observation-2026-11-11.md` and §10.4.
+Initialization reliability and failure rates remain `[U]`.
+
 **GO for the host-only implementation and test batch (batch B)** under the
 contract in §4. The helpers, insertion point, validation, rollback, recovery
 and report shape are all established from the current source and the
@@ -461,8 +480,10 @@ Open items:
   the first three stopped pre-identification).
 - The pre-watchdog start path (baseline, pre-read, switch, existing baseline
   read) is bounded by core timeouts but not by the report watchdog.
-- Gate acquisition before the 4-bit case read is bounded by the in-flight
-  request's own timeouts, not proven from the current code.
+- Gate acquisition is now explicitly bounded at 2,000 ms with a terminal
+  reason-8 timeout; a held gate leaves the media offline with no read or
+  revert claim. The 13,010 ms pre-watchdog path remains a conditional design
+  budget.
 - The success-path revert leaves the card at 1-bit; a production 4-bit mode
   needs its own stop/shutdown revert or a proven reset path.
 - The 4-bit content evidence is one warm boot (H16/H17), not a reliability
@@ -489,3 +510,115 @@ integration, storage writes and any user-data path.
 - `scripts/test-gta4l-emmc.py`, `scripts/test-gta4l-emmc-probe.py`,
   `scripts/test-gta4l-emmc-block.py`,
   `scripts/sim-gta4l-emmc-block/` (host seams and mutation controls).
+
+## 9. Batch B host evidence (2026-11-10)
+
+Host-only implementation and test batch, no device access, candidate,
+flash or boot.
+
+- `scripts/test-gta4l-emmc-block.py`: 48 core scenarios/38 mutation
+  controls and 285 adapter scenarios with 104 adapter/support and 10
+  policy mutation controls. The width scenarios cover the absent token,
+  orphan/duplicate/value/block/conflict refusals, the full 4-bit match,
+  baseline/preread/switch/read/short/stop/mismatch/revert failures,
+  `ERR_WIDTH_RESTORE` terminal framing, budget, cancellation during the
+  bounded gate wait and after the 4-bit read, the terminal watchdog
+  interleaving, and the host-side digest rejection. The width mutation
+  controls remove the switch guard, claim completion, skip the byte
+  compare, skip the revert, credit a failed read, advertise the wrong
+  limit/segments, truncate the reference digest and shift the pinned LBA.
+- `scripts/test-gta4l-emmc.py`: 189 scenarios/117 mutation controls,
+  including the verified switch, rollback, byte-183 independence, the
+  recovery retry/second-attempt success, CMD6 failure and exhaustion paths,
+  and the properties-check and byte-183-proof mutation controls.
+- `scripts/test-gta4l-emmc-probe.py`: 196 scenarios/100 mutation
+  controls, 13 width-bound materializations and one oversized-report
+  control.
+- `scripts/test-gta4l-emmc-evidence-counts.py` re-derives the core,
+  probe and adapter counts from the sources and checks the live
+  summaries.
+- `scripts/test-gta4l-diagnostic-payload.py` and
+  `scripts/test-gta4l-diagnostic-package.py` pass with the new
+  `emmc-block-3-width4` personality. It maps to exactly
+  `gta4l-emmc-block=3 gta4l-emmc-width=4`, requires the
+  `fs-timer-hold` fixture, rejects the early-panic fixture, refuses an
+  orphan, duplicate, malformed or non-4 width token, a block-1 or
+  duplicate block token, a probe token, and every combination with
+  partobs, partcmp, partread, deblock, breakup, sweep or consume, and
+  cannot be smuggled into another personality's mapping. The builder and
+  packager self-tests pass. No payload or candidate image was built by this
+  host batch; the separately approved candidates are recorded in §10.2,
+  `docs/emmc-n10.16-width4-candidate-2026-11-10.md` and
+  `docs/emmc-n10.16-width4-gatefix-candidate-2026-11-11.md`.
+
+No `complete=1` device claim, timing-margin proof or hardware result is
+added by this batch.
+
+## 10. Candidate acceptance checklist (2026-11-10)
+
+This checklist separates host preparation from candidate, owner and
+hardware gates. It records status; it does not grant approval. Only the
+host-integration rows below are complete.
+
+### 10.1 Host integration
+
+| Check | Status |
+| --- | --- |
+| Opt-in selector and legacy path | DONE, host tests pass (48/38 core, 285 adapter/104 adapter-support + 10 policy, core 189/117, probe 196/100) |
+| `emmc-block-3-width4` mapping | DONE: `gta4l-emmc-block=3 gta4l-emmc-width=4` |
+| Fixture requirement | DONE: `fs-timer-hold` required; `fs-timer` rejected |
+| Token/refusal contract | DONE: orphan, duplicate, malformed, non-4, block-1, duplicate block, probe and all modifier conflicts rejected |
+| Personality isolation | DONE: width token cannot be smuggled into another accepted personality |
+| Payload builder/packager tests | DONE: host tests pass; candidate image recorded in §10.2 |
+| Report bounds | DONE host-side: 513/329/127 bytes, 1,772-byte report inside 2,048 |
+| Evidence-count reconciliation | DONE |
+
+### 10.2 Candidate qualification — complete for the gate-fix candidate
+
+| Gate | Status |
+| --- | --- |
+| Owner approval for a host-only candidate build batch | DONE: owner directed C2/C3; no hardware approval |
+| Kernel build and source/artifact hashes | DONE: `2be2eb06…`, 51,470,336 bytes |
+| Candidate-specific storage-ABI and import audit | DONE: 190 slots/181 bindings/26 overrides/0 unresolved |
+| Archive, prelink, packaged kernel and payload contract | DONE: requalified members match; payload `10ff7ee8…`, 55/55 |
+| BOOT-image 18/18 gate and provenance | DONE: `58352cd3…`, 18/18, only ramdisk differs |
+| Digest rebinding to the final packaged image first 1,024 bytes | DONE: full `a6da82e3…`, 16-byte prefix `a6da82e356863d1ab7e31c21a8fd85fc` |
+| Host content mismatch rejection against the rebound digest | DONE: `scripts/check-gta4l-width4-evidence.py` self-test and fixture |
+| Candidate report/line-bound confirmation | DONE host-side: 513/329/127 bytes, 1,772-byte report |
+| Bounded report gate | DONE: 2,000 ms try-lock; timeout is reason 8, media offline, no read/revert claim; held-gate, mid-wait release and deadline-boundary scenarios pass |
+
+Evidence: `docs/emmc-n10.16-width4-gatefix-candidate-2026-11-11.md`.
+
+### 10.3 Owner approvals — approved and exercised
+
+| Approval | Status |
+| --- | --- |
+| CMD6 `BUS_WIDTH` configuration writes and host width changes | APPROVED by owner 2026-11-11; exercised once |
+| Exact read scope: pinned two-block BOOT window at LBA 2,255,360 plus the existing baseline/publication reads | APPROVED by owner 2026-11-11; exercised once |
+| Conditional timing margin (26,230 ms success / 21,030 ms failed switch against 30,000 ms, including the 2,000 ms bounded gate) or a stronger bound | APPROVED as the conditional basis for one boot; not a timing proof |
+| Finite boot budget, transcription protocol and TWRP return | CONSUMED: one owner-controlled boot, TWRP return confirmed |
+
+### 10.4 Hardware execution — executed 2026-11-11
+
+The one approved controlled boot ran and the driver's terminal guard computed
+`complete=1`: verified 4-bit switch, two matching 1,024-byte reads of the
+pinned window, expected digest, verified return to 1-bit, no width failure and
+no watchdog report. The result, transcript provenance, protocol deviations
+(`rb`/`rcmd6`) and bounded scope are in
+`docs/emmc-n10.16-width4-hardware-observation-2026-11-11.md`. The pre-flash
+BOOT image was restored and verified; RECOVERY, EFS and sec_efs are unchanged.
+The boot budget is consumed and no retry, reflash, extension or additional
+boot is authorized.
+
+The startup path is bounded by core timeouts but not by the report watchdog.
+Report gate acquisition is explicitly bounded at 2,000 ms; a timeout is a
+terminal reason-8 failure with media offline and no revert claim. The
+2026-11-11 review found and the gate-fix candidate closed the unbounded gate
+wait at source and host-test level; the 13,010 ms pre-watchdog path remains a
+conditional design budget. F5 remains measured at 1-bit and F3 at 4-bit for
+one boot each; initialization reliability remains `[U]`.
+
+The host-preparation sequence is recorded in the planning notes as Batch C1;
+the gate-fix candidate is C3. The executed procedure, preflight, stop rules and
+TWRP return are in
+`docs/emmc-n10.16-width4-hardware-protocol-2026-11-11.md`.

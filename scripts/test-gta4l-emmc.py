@@ -168,6 +168,8 @@ SCENARIOS = [
     'bus-width-recover',
     'bus-width-recover-unproven',
     'bus-width-recover-mismatch',
+    'bus-width-recover-retry',
+    'bus-width-recover-cmd6-error',
     'bus-test-verified-crc',
     'bus-test-4',
     'bus-test-8',
@@ -1200,6 +1202,20 @@ def main() -> int:
              '\t\t    (uint8_t)previous_control);\n',
              '\t} else if (readback != code) {\n',
              'Gta4lEmmc.c', (), 'bus-width-stuck'),
+            ('bw-properties-skip',
+             '\tif (verify_readonly != 0) {\n'
+             '\t\tif (gta4l_emmc_ext_csd_properties_same(baseline,\n'
+             '\t\t    ext_csd) == 0) {\n',
+             '\tif (verify_readonly != 0) {\n'
+             '\t\tif (0) {\n',
+             'Gta4lEmmc.c', (), 'bus-width-verified-mismatch'),
+            ('bw-byte183-proof',
+             '\tif (verify_readonly != 0) {\n'
+             '\t\tif (gta4l_emmc_ext_csd_properties_same(baseline,\n'
+             '\t\t    ext_csd) == 0) {\n',
+             '\tif (verify_readonly != 0) {\n'
+             '\t\tif (readback != code) {\n',
+             'Gta4lEmmc.c', (), 'bus-width-verified-4'),
             ('bw-no-test-compare',
              '\t\t\tif ((uint8_t)(pattern[index] ^ actual[index]) !=\n'
              '\t\t\t    0xFFu) {\n',

@@ -340,6 +340,7 @@ struct sim {
 	int bus_width_rollback_fail;
 	int bus_width_readback_zero;
 	int bus_width_recover_mismatch;
+	int bus_width_recover_mismatch_once;
 	int bus_width_busy;
 	int bus_width_busy_polls;
 	int hs_timing_stuck;
@@ -1660,16 +1661,19 @@ sim_command(struct sim *sim, uint16_t command)
 					    1u << (8u *
 					    (GTA4L_EMMC_EXT_CSD_REV_OFF % 4u));
 				}
-				if ((sim->bus_width_recover_mismatch != 0) &&
+				if (((sim->bus_width_recover_mismatch != 0) ||
+				    (sim->bus_width_recover_mismatch_once != 0)) &&
 				    ((sim->sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
 				    (SIM_HOST_CONTROL_4BIT |
 				    SIM_HOST_CONTROL_8BIT)) == 0u)) {
 					/* The recovery verification read at
 					 * 1-bit does not carry the baseline
-					 * read-only identity. */
+					 * read-only identity. The once
+					 * form corrupts only the first attempt. */
 					sim->buffer_data[
 					    GTA4L_EMMC_EXT_CSD_PROPERTIES_OFF /
 					    4u] ^= 1u;
+					sim->bus_width_recover_mismatch_once = 0;
 				}
 				sim->normal_int |= GTA4L_EMMC_INT_BRR;
 			}
@@ -2781,7 +2785,9 @@ main(int argc, char **argv)
 		sim.bus_width_switch_error = 1;
 	} else if (scenario_is(scenario, "bus-width-recover") ||
 	    scenario_is(scenario, "bus-width-recover-unproven") ||
-	    scenario_is(scenario, "bus-width-recover-mismatch")) {
+	    scenario_is(scenario, "bus-width-recover-mismatch") ||
+	    scenario_is(scenario, "bus-width-recover-retry") ||
+	    scenario_is(scenario, "bus-width-recover-cmd6-error")) {
 		/* The scenario body injects the wedge after the verified
 		 * switch, so the setup needs no fault. */
 	} else if (scenario_is(scenario, "bus-width-busy")) {
@@ -2936,6 +2942,8 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "bus-width-recover") ||
 	    scenario_is(scenario, "bus-width-recover-unproven") ||
 	    scenario_is(scenario, "bus-width-recover-mismatch") ||
+	    scenario_is(scenario, "bus-width-recover-retry") ||
+	    scenario_is(scenario, "bus-width-recover-cmd6-error") ||
 	    scenario_is(scenario, "bus-width-busy") ||
 	    scenario_is(scenario, "bus-width-invalid") ||
 	    scenario_is(scenario, "bus-width-without-init") ||
@@ -3952,7 +3960,9 @@ main(int argc, char **argv)
 		    "the failed switch did not attempt both restore paths");
 	} else if (scenario_is(scenario, "bus-width-recover") ||
 	    scenario_is(scenario, "bus-width-recover-unproven") ||
-	    scenario_is(scenario, "bus-width-recover-mismatch")) {
+	    scenario_is(scenario, "bus-width-recover-mismatch") ||
+	    scenario_is(scenario, "bus-width-recover-retry") ||
+	    scenario_is(scenario, "bus-width-recover-cmd6-error")) {
 		result = gta4l_emmc_read_ext_csd(&host, ext);
 		check(result == GTA4L_EMMC_OK,
 		    "recover baseline read failed");
@@ -3967,6 +3977,14 @@ main(int argc, char **argv)
 		if (scenario_is(scenario,
 		    "bus-width-recover-mismatch")) {
 			sim.bus_width_recover_mismatch = 1;
+		}
+		if (scenario_is(scenario,
+		    "bus-width-recover-retry")) {
+			sim.bus_width_recover_mismatch_once = 1;
+		}
+		if (scenario_is(scenario,
+		    "bus-width-recover-cmd6-error")) {
+			sim.bus_width_switch_error = 1;
 		}
 		memset(&recover, 0, sizeof(recover));
 		result = gta4l_emmc_set_bus_width_recover(&host, 1u, ext,
@@ -3994,6 +4012,37 @@ main(int argc, char **argv)
 			    "the surviving inhibit did not stop before CMD6");
 			check(sim.cmd6_count == 1u,
 			    "an unproven recovery issued a CMD6");
+		} else if (scenario_is(scenario,
+		    "bus-width-recover-retry")) {
+			check(result == GTA4L_EMMC_OK,
+			    "the second recovery attempt did not pass");
+			check(recover.verified == 1u &&
+			    recover.cmd6_attempts == 2u,
+			    "the recovery retry did not verify on the "
+			    "second CMD6");
+			check(host.bus_width == 0u,
+			    "the recovery retry did not update the core "
+			    "width");
+			check(sim.cmd6_count == 3u,
+			    "the recovery retry did not issue two revert "
+			    "commands");
+		} else if (scenario_is(scenario,
+		    "bus-width-recover-cmd6-error")) {
+			check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+			    "a recovery CMD6 failure was reported as clean");
+			check(recover.cmd6_attempts == 1u &&
+			    recover.switch_result ==
+			    GTA4L_EMMC_ERR_CARD_STATUS,
+			    "the recovery CMD6 failure lost its status");
+			check(host.bus_width ==
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4,
+			    "the failed recovery changed the core width");
+			check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+			    (SIM_HOST_CONTROL_4BIT |
+			    SIM_HOST_CONTROL_8BIT)) ==
+			    SIM_HOST_CONTROL_4BIT,
+			    "the failed recovery did not return the host to "
+			    "the attempted width");
 		} else {
 			check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
 			    "a mismatched properties read was accepted");

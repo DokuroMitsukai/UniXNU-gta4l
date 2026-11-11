@@ -25,6 +25,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_BREAKUP_ARG "gta4l-emmc-breakup"
 #define GTA4L_EMMC_BLOCK_SWEEP_ARG "gta4l-emmc-sweep"
 #define GTA4L_EMMC_BLOCK_CONSUME_ARG "gta4l-emmc-consume"
+#define GTA4L_EMMC_BLOCK_WIDTH_ARG "gta4l-emmc-width"
 
 #define GTA4L_EMMC_BLOCK_MODE_OFF 0
 #define GTA4L_EMMC_BLOCK_MODE_REPORT 1
@@ -65,6 +66,10 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_CONSUME_OFF 0
 #define GTA4L_EMMC_BLOCK_CONSUME_ON 1
 #define GTA4L_EMMC_BLOCK_CONSUME_REFUSED (-1)
+
+#define GTA4L_EMMC_BLOCK_WIDTH_OFF 0
+#define GTA4L_EMMC_BLOCK_WIDTH_ON 1
+#define GTA4L_EMMC_BLOCK_WIDTH_REFUSED (-1)
 
 /* Bounded observation budgets. The media wait is the design's 20 s window;
  * the partition wait is an additional, non-fatal observation. The N8
@@ -254,6 +259,43 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_CONSUMEREAD_LINE_BYTES 352u
 #define GTA4L_EMMC_BLOCK_CONSUMEFAIL_LINE_BYTES 384u
 #define GTA4L_EMMC_BLOCK_CONSUME_REPORT_WORST_BYTES 1959u
+
+/* N10.16 opt-in staged 4-bit SDR width publication at the existing
+ * 400 kHz. The mode reads one pinned two-block BOOT window at 1-bit,
+ * switches the card and host to 4-bit with the verified helper, re-reads
+ * the same window, compares it byte-for-byte and reverts to 1-bit with the
+ * captured baseline. The clock, chunk shape, DMA/interrupt policy and the
+ * production request advertisement are unchanged. The 26,230 ms bound is
+ * the audit's conditional success sum: 1-bit EXT_CSD 2,000 + reference
+ * read 3,000 + verified switch 6,010 + existing LBA-1 baseline 2,000 +
+ * bounded gate 2,000 + 4-bit read 3,000 + verified revert 8,220. A failed
+ * switch fails closed at 21,030 ms; the success margin is not a
+ * path-condition proof. */
+#define GTA4L_EMMC_BLOCK_WIDTH_BITS_4 4u
+#define GTA4L_EMMC_BLOCK_WIDTH_CASES 1u
+#define GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS 2u
+#define GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES \
+	(GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS * \
+	GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_WIDTH_LBA \
+	(GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES / \
+	GTA4L_EMMC_BLOCK_PARTREAD_SECTOR_BYTES)
+#define GTA4L_EMMC_BLOCK_WIDTH_GATE_MS 2000u
+#define GTA4L_EMMC_BLOCK_WIDTH_GATE_STEP_MS 10u
+#define GTA4L_EMMC_BLOCK_WIDTH_WORST_MS 26230u
+#define GTA4L_EMMC_BLOCK_WIDTH_REPORT_MS 13220u
+#define GTA4L_EMMC_BLOCK_WIDTH_LINE_BYTES 513u
+#define GTA4L_EMMC_BLOCK_WIDTHREAD_LINE_BYTES 329u
+#define GTA4L_EMMC_BLOCK_WIDTHFAIL_LINE_BYTES 127u
+/* Exact worst-case sum of the lines the width mode can emit, measured from
+ * the formatter with every numeric field at its type maximum and the
+ * width-mode structural shape: P5 REPORT 171 + DRV 147 + XFER 223 + MEDIA
+ * 123 + WIDTH 513 + WIDTHREAD 329 + PART summary 105 + SNAP 37 + FAIL 115
+ * + 9 newlines = 1772. WIDTHREAD is the larger of the two mutually
+ * exclusive detail lines (WIDTHFAIL is 127). Width mode returns before
+ * media discovery, so no PART detail lines are emitted and the media
+ * scalars stay zero; the bound is therefore conservative. */
+#define GTA4L_EMMC_BLOCK_WIDTH_REPORT_WORST_BYTES 1772u
 
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2048u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
@@ -612,6 +654,60 @@ struct gta4l_emmc_block_report {
 	uint32_t consume_fail_requested;
 	uint32_t consume_fail_completed;
 	uint8_t consume_fail_digest[16];
+	/* Opt-in N10.16 staged 4-bit SDR width publication at the existing
+	 * 400 kHz. The mode reads one pinned two-block BOOT window at 1-bit,
+	 * switches the card and host to 4-bit with the verified helper,
+	 * re-reads the same window and compares it byte-for-byte, then
+	 * reverts to 1-bit with the captured baseline. No expected digest is
+	 * compiled in; the host compares both printed prefixes with the
+	 * packaged image after the run. */
+	uint32_t width;
+	uint32_t width_cases;
+	uint32_t width_passed;
+	uint32_t width_failed;
+	uint32_t width_reason;
+	uint32_t width_complete;
+	uint32_t width_switch;
+	uint32_t width_verified;
+	uint32_t width_hb;
+	uint32_t width_ha;
+	uint32_t width_rb;
+	uint32_t width_cmd6;
+	uint32_t width_revert;
+	uint32_t width_rverified;
+	uint32_t width_rhb;
+	uint32_t width_rha;
+	uint32_t width_rcmd6;
+	uint32_t width_reads;
+	uint32_t width_bytes;
+	uint32_t width_blocks;
+	uint32_t width_subrequests;
+	uint32_t width_max;
+	uint32_t width_match;
+	uint32_t width_mismatch;
+	uint32_t width_fails;
+	uint32_t width_cancel;
+	uint32_t width_budget;
+	uint32_t width_limit;
+	uint32_t width_segments;
+	uint32_t width_capacity;
+	uint32_t width_last_index;
+	uint64_t width_last_lba;
+	uint64_t width_last_start;
+	uint32_t width_last_length;
+	uint32_t width_last_span;
+	int32_t width_last_status;
+	uint64_t width_last_actual;
+	uint32_t width_last_subrequests;
+	uint32_t width_last_blocks;
+	uint32_t width_last_max;
+	uint8_t width_last_digest[16];
+	uint8_t width_last_predigest[16];
+	uint32_t width_last_match;
+	uint32_t width_fail_stage;
+	int32_t width_fail_status;
+	uint64_t width_fail_actual;
+	uint8_t width_fail_digest[16];
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -726,6 +822,18 @@ int gta4l_emmc_block_consume_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected);
+
+/* Select the opt-in staged 4-bit SDR width publication. The token is
+ * accepted only when exactly one gta4l-emmc-block=3 token is selected, the
+ * value is exactly 4, the token is not duplicated and none of the other
+ * partition/read/consumer instruments is selected in the same boot. A block
+ * mode 1 token is refused because the width case uses the two-block CMD18
+ * path. */
+int gta4l_emmc_block_width_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int consume_selected);
 
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
@@ -903,6 +1011,19 @@ int gta4l_emmc_block_breakup_geometry(uint64_t start, uint32_t length,
 #define GTA4L_EMMC_BLOCK_CONSUME_REASON_FOREIGN 13u
 #define GTA4L_EMMC_BLOCK_CONSUME_REASON_CLIENT 14u
 #define GTA4L_EMMC_BLOCK_CONSUME_REASON_CLOSE 15u
+
+/* WIDTH reason and first-failure stage codes. The same code is the summary
+ * reason and the WIDTHFAIL stage: the first failing stage latches and no
+ * later stage overwrites it. */
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_BASELINE 1u
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_PREREAD 2u
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_SWITCH 3u
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_READ 4u
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_MATCH 5u
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_REVERT 6u
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL 7u
+#define GTA4L_EMMC_BLOCK_WIDTH_REASON_GATE 8u
 
 #define GTA4L_EMMC_BLOCK_CONSUME_TARGET_BOOT 1u
 

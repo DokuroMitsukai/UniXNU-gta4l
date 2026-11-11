@@ -9,6 +9,7 @@ gta4l_test_media_read_fn gta4l_test_media_read_hook;
 gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;
 gta4l_test_breakup_sample_fn gta4l_test_breakup_hook;
 gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
+gta4l_test_width_sample_fn gta4l_test_width_hook;
 IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 int gta4l_test_media_count;
 IOService *gta4l_test_schemes[GTA4L_TEST_MAX_SCHEMES];
@@ -29,7 +30,10 @@ gta4l_test_reset(void)
 	gta4l_test.fail_read_at = -1;
 	gta4l_test.fail_multi_at = -1;
 	gta4l_test.multi_stop_attempted = 1;
+	gta4l_test.multi_stop_at = -1;
+	gta4l_test.multi_short_at = -1;
 	gta4l_test.multi_corrupt_at = -1;
+	gta4l_test.multi_corrupt_count = 1;
 	gta4l_test.multi_corrupt_block = 0;
 	gta4l_test.multi_corrupt_pair = 0;
 	gta4l_test.read_corrupt_at = -1;
@@ -77,10 +81,18 @@ gta4l_test_reset(void)
 	gta4l_test.sweep_reference_corrupt_count = 0;
 	gta4l_test.sweep_reference_corrupt_mode = 0;
 	gta4l_test.sweep_reference_short_at = -1;
+	gta4l_test.width_switch_verified = 1;
+	gta4l_test.width_switch_host_bit = 1;
+	gta4l_test.width_switch_switched = 1;
+	gta4l_test.width_switch_cmd6 = 1;
+	gta4l_test.width_recover_verified = 1;
+	gta4l_test.width_recover_host_clear = 1;
+	gta4l_test.width_recover_cmd6 = 2;
 	gta4l_test_media_read_hook = 0;
 	gta4l_test_deblock_hook = 0;
 	gta4l_test_breakup_hook = 0;
 	gta4l_test_partition_sample_hook = 0;
+	gta4l_test_width_hook = 0;
 	gta4l_test_media_count = 0;
 	gta4l_test_scheme_count = 0;
 }
@@ -261,6 +273,18 @@ IOSleep(unsigned milliseconds)
 	}
 	gta4l_test.sleeps++;
 	gta4l_test.now_ms += milliseconds;
+	if (gta4l_test.width_wait_active &&
+	    (gta4l_test.width_gate != 0) &&
+	    (gta4l_test.width_gate->depth != 0) &&
+	    (gta4l_test_width_hook != 0)) {
+		gta4l_test_width_hook(GTA4L_TEST_WIDTH_PHASE_GATE_WAIT);
+	}
+	if ((gta4l_test.width_gate != 0) &&
+	    (gta4l_test.width_gate_release_ms > 0) &&
+	    ((int)gta4l_test.now_ms >= gta4l_test.width_gate_release_ms)) {
+		gta4l_test.width_gate->depth = 0;
+		gta4l_test.width_gate_release_ms = 0;
+	}
 }
 
 void
@@ -472,7 +496,7 @@ gta4l_emmc_init(struct gta4l_emmc_host *host)
 	}
 	if (host != 0) {
 		host->capacity_blocks = gta4l_test.capacity_blocks;
-		host->bus_width = 1;
+		host->bus_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
 		host->initialized = 1;
 		host->last_step = 0;
 	}
@@ -554,8 +578,11 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 		    static_cast<uint8_t *>(buffer) +
 		    (index * GTA4L_EMMC_BLOCK_BYTES));
 		if ((gta4l_test.multi_corrupt_at >= 0) &&
-		    ((uint32_t)gta4l_test.multi_corrupt_at ==
-		    gta4l_test.multi_calls) &&
+		    (gta4l_test.multi_calls >=
+		    (uint32_t)gta4l_test.multi_corrupt_at) &&
+		    (gta4l_test.multi_calls <
+		    (uint32_t)gta4l_test.multi_corrupt_at +
+		    (uint32_t)gta4l_test.multi_corrupt_count) &&
 		    ((start_lba + index) ==
 		    gta4l_test.multi_corrupt_block)) {
 			uint8_t *bytes = static_cast<uint8_t *>(buffer) +
@@ -574,7 +601,10 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 		}
 	}
 	completed = count;
-	if (gta4l_test.multi_short_blocks > 0) {
+	if ((gta4l_test.multi_short_blocks > 0) &&
+	    ((gta4l_test.multi_short_at < 0) ||
+	    ((uint32_t)gta4l_test.multi_short_at ==
+	    gta4l_test.multi_calls))) {
 		if ((uint32_t)gta4l_test.multi_short_blocks >= count) {
 			completed = 0;
 		} else {
@@ -582,14 +612,137 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 			    (uint32_t)gta4l_test.multi_short_blocks;
 		}
 	}
-	gta4l_test.multi_calls++;
 	result->requested_blocks = count;
 	result->completed_blocks = completed;
-	result->stop_attempted = (gta4l_test.multi_stop_attempted != 0) ?
-	    1u : 0u;
-	result->stop_result = gta4l_test.multi_stop_result;
+	if ((gta4l_test.multi_stop_at < 0) ||
+	    ((uint32_t)gta4l_test.multi_stop_at == gta4l_test.multi_calls)) {
+		result->stop_attempted =
+		    (gta4l_test.multi_stop_attempted != 0) ? 1u : 0u;
+		result->stop_result = gta4l_test.multi_stop_result;
+	} else {
+		result->stop_attempted = 1;
+		result->stop_result = 0;
+	}
 	result->transport_result = gta4l_test.multi_data_result;
+	gta4l_test.multi_calls++;
 	return gta4l_test.multi_rc;
+}
+
+int
+gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer)
+{
+	if ((host == 0) || (buffer == 0) || (host->initialized == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	gta4l_test.width_ext_csd_calls++;
+	if (gta4l_test.width_ext_csd_fail != 0) {
+		return gta4l_test.width_ext_csd_fail;
+	}
+	/* The real helper compares the read-only properties segment against
+	 * the captured baseline. The model returns one stable image so the
+	 * block-level sequence observes only the helper's outcome. */
+	memset(buffer, 0, GTA4L_EMMC_EXT_CSD_BYTES);
+	return GTA4L_EMMC_OK;
+}
+
+int
+gta4l_emmc_set_bus_width_verified(struct gta4l_emmc_host *host, uint32_t bits,
+    struct gta4l_emmc_bus_result *result)
+{
+	uint32_t control;
+
+	if ((host == 0) || (host->initialized == 0) || (bits != 4u)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	gta4l_test.width_switch_calls++;
+	control = (uint32_t)gta4l_test.width_host_control;
+	if (result != 0) {
+		memset(result, 0, sizeof(*result));
+		result->requested = bits;
+		result->switch_result = GTA4L_EMMC_OK;
+		result->test_result = GTA4L_EMMC_OK;
+		result->host_before = (uint8_t)control;
+		result->host_after = (uint8_t)control;
+		result->host_control = control;
+	}
+	gta4l_test.now_ms += (uint32_t)gta4l_test.width_switch_advance_ms;
+	if (gta4l_test.width_switch_fail != 0) {
+		if (result != 0) {
+			result->switch_result = gta4l_test.width_switch_fail;
+			result->rollback_result = GTA4L_EMMC_OK;
+			result->verified = 0;
+			result->cmd6_attempts =
+			    (uint32_t)gta4l_test.width_switch_cmd6;
+		}
+		return gta4l_test.width_switch_fail;
+	}
+	control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT);
+	if (gta4l_test.width_switch_host_bit != 0) {
+		control |= GTA4L_EMMC_HOST_CONTROL_4BIT;
+	}
+	if (result != 0) {
+		result->host_after = (uint8_t)control;
+		result->host_control = control;
+		result->switched =
+		    (uint32_t)gta4l_test.width_switch_switched;
+		result->verified = (uint32_t)gta4l_test.width_switch_verified;
+		result->cmd6_attempts = (uint32_t)gta4l_test.width_switch_cmd6;
+	}
+	if (gta4l_test.width_switch_host_bit != 0) {
+		gta4l_test.width_host_control = control;
+		host->bus_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+	}
+	return GTA4L_EMMC_OK;
+}
+
+int
+gta4l_emmc_set_bus_width_recover(struct gta4l_emmc_host *host, uint32_t bits,
+    const uint8_t *baseline, struct gta4l_emmc_bus_result *result)
+{
+	uint32_t control;
+
+	if ((host == 0) || (host->initialized == 0) || (baseline == 0) ||
+	    (bits != 1u)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	gta4l_test.width_recover_calls++;
+	control = (uint32_t)gta4l_test.width_host_control;
+	if (result != 0) {
+		memset(result, 0, sizeof(*result));
+		result->requested = bits;
+		result->switch_result = GTA4L_EMMC_OK;
+		result->test_result = GTA4L_EMMC_OK;
+		result->host_before = (uint8_t)control;
+		result->host_after = (uint8_t)control;
+		result->host_control = control;
+	}
+	gta4l_test.now_ms += (uint32_t)gta4l_test.width_recover_advance_ms;
+	if (gta4l_test.width_recover_fail != 0) {
+		if (result != 0) {
+			result->switch_result = gta4l_test.width_recover_fail;
+			result->verified = 0;
+			result->cmd6_attempts =
+			    (uint32_t)gta4l_test.width_recover_cmd6;
+		}
+		return gta4l_test.width_recover_fail;
+	}
+	if (gta4l_test.width_recover_host_clear != 0) {
+		control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT);
+	}
+	if (result != 0) {
+		result->host_after = (uint8_t)control;
+		result->host_control = control;
+		result->switched = 0;
+		result->verified = (uint32_t)gta4l_test.width_recover_verified;
+		result->cmd6_attempts = (uint32_t)gta4l_test.width_recover_cmd6;
+	}
+	if (gta4l_test.width_recover_host_clear != 0) {
+		gta4l_test.width_host_control = control;
+		host->bus_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
+	}
+	return GTA4L_EMMC_OK;
 }
 
 IOMemoryDescriptor *

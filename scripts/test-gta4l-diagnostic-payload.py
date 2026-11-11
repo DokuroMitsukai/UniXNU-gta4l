@@ -336,7 +336,7 @@ def test_emmc_block_3(base):
 
 
 def check_observation_personality(base, personality, block_mode,
-                                  modifier='partobs'):
+                                  modifier='partobs', modifier_value='1'):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     record = base / 'argv.json'
     os.environ['FAKE_UNIXNU_RECORD'] = str(record)
@@ -358,9 +358,10 @@ def check_observation_personality(base, personality, block_mode,
     argv = json.loads(record.read_text())
     kernel_args = [argv[index + 1] for index, value in enumerate(argv)
                    if value == '--kernel-arg']
+    modifier_argument = f'gta4l-emmc-{modifier}={modifier_value}'
     assert kernel_args[-2:] == [f'gta4l-emmc-block={block_mode}',
-                                f'gta4l-emmc-{modifier}=1'], kernel_args
-    argument = f'gta4l-emmc-block={block_mode} gta4l-emmc-{modifier}=1'
+                                modifier_argument], kernel_args
+    argument = f'gta4l-emmc-block={block_mode} {modifier_argument}'
     manifest_record = json.loads(manifest.read_text())
     assert manifest_record['diagnostic_argument'] == argument
     assert manifest_record['data_ramdisk']['diagnostic'] == 'fs-timer-hold'
@@ -501,6 +502,10 @@ def test_emmc_block_3_sweep(base):
 
 def test_emmc_block_3_consume(base):
     check_observation_personality(base, 'emmc-block-3-consume', 3, 'consume')
+
+
+def test_emmc_block_3_width4(base):
+    check_observation_personality(base, 'emmc-block-3-width4', 3, 'width', 4)
 
 
 def test_partcmp_rejects_early_panic_fixture(base):
@@ -668,6 +673,34 @@ def test_consume_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS consume rejects the early-panic fs-timer fixture')
+
+
+def test_width4_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-width4'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for width4')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS width4 rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -924,6 +957,60 @@ def test_diagnostic_contract(_base):
     assert not plain_consume_expected['emmc-block-3_diagnostic_selected']
     missing_consume = checks('gta4l-emmc-block=3', 'emmc-block-3-consume')
     assert not missing_consume['emmc-block-3-consume_diagnostic_selected']
+    good_width = checks('gta4l-emmc-block=3 gta4l-emmc-width=4',
+                        'emmc-block-3-width4')
+    assert all(good_width.values()), good_width
+    orphan_width = checks('gta4l-emmc-probe=1 gta4l-emmc-width=4')
+    assert not orphan_width['no_width_token_outside_block_mode']
+    duplicate_width = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-width=4 gta4l-emmc-width=4',
+        'emmc-block-3-width4')
+    assert not duplicate_width['at_most_one_width_token']
+    for width in ('0', '1', '2', '3', '5', '8'):
+        bad_width_value = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-width={width}',
+            'emmc-block-3-width4')
+        assert not bad_width_value['width_value_four'], bad_width_value
+        assert not bad_width_value[
+            'emmc-block-3-width4_diagnostic_selected'], bad_width_value
+    width_block_one = checks('gta4l-emmc-block=1 gta4l-emmc-width=4',
+                             'emmc-block-3-width4')
+    assert not width_block_one['width_requires_block_three']
+    assert not width_block_one['emmc-block-3-width4_diagnostic_selected']
+    width_duplicate_block = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-block=3 gta4l-emmc-width=4',
+        'emmc-block-3-width4')
+    assert not width_duplicate_block['exactly_one_block_mode_token']
+    width_with_probe = checks(
+        'gta4l-emmc-probe=1 gta4l-emmc-block=3 gta4l-emmc-width=4',
+        'emmc-block-3-width4')
+    assert not width_with_probe['no_probe_token_in_block_mode']
+    assert not width_with_probe[
+        'emmc-block-3-width4_diagnostic_selected']
+    missing_width = checks('gta4l-emmc-block=3', 'emmc-block-3-width4')
+    assert not missing_width['emmc-block-3-width4_diagnostic_selected']
+    plain_width_expected = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-width=4', 'emmc-block-3')
+    assert not plain_width_expected['emmc-block-3_diagnostic_selected']
+    for modifier, key in (
+            ('partobs', 'width_partobs_exclusive'),
+            ('partcmp', 'width_partcmp_exclusive'),
+            ('partread', 'width_partread_exclusive'),
+            ('deblock', 'width_deblock_exclusive'),
+            ('breakup', 'width_breakup_exclusive'),
+            ('sweep', 'width_sweep_exclusive'),
+            ('consume', 'width_consume_exclusive')):
+        conflict = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-{modifier}=1 '
+            'gta4l-emmc-width=4', 'emmc-block-3-width4')
+        assert not conflict[key], conflict
+        assert not conflict[
+            'emmc-block-3-width4_diagnostic_selected'], conflict
+        smuggled = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-{modifier}=1 '
+            'gta4l-emmc-width=4', f'emmc-block-3-{modifier}')
+        assert not smuggled[
+            f'emmc-block-3-{modifier}_diagnostic_selected'], smuggled
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -943,7 +1030,7 @@ def main():
              test_emmc_block_1_deblock, test_emmc_block_3_deblock,
              test_emmc_block_1_breakup, test_emmc_block_3_breakup,
              test_emmc_block_1_sweep, test_emmc_block_3_sweep,
-             test_emmc_block_3_consume,
+             test_emmc_block_3_consume, test_emmc_block_3_width4,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,
@@ -951,6 +1038,7 @@ def main():
              test_breakup_rejects_early_panic_fixture,
              test_sweep_rejects_early_panic_fixture,
              test_consume_rejects_early_panic_fixture,
+             test_width4_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)

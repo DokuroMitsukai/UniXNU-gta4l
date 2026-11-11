@@ -958,7 +958,7 @@ partition layout, payload policy and packaging.
   [docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md](docs/emmc-n9.9-page-aligned-comparator-buffer-2026-11-08.md),
   [docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md](docs/emmc-n9.8-partcmp-readdetail-candidate-2026-11-08.md),
   [docs/emmc-n9.7-partcmp-observation-2026-11-07.md](docs/emmc-n9.7-partcmp-observation-2026-11-07.md)
-  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.90,
+  and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.66-§5.3.91,
   [docs/emmc-n9.6-partcmp-observation-2026-11-07.md](docs/emmc-n9.6-partcmp-observation-2026-11-07.md)
   and [docs/emmc-driver.md](docs/emmc-driver.md) §5.3.62-§5.3.65,
   [docs/emmc-n9.4-partcmp-observation-2026-11-07.md](docs/emmc-n9.4-partcmp-observation-2026-11-07.md),
@@ -975,21 +975,35 @@ partition layout, payload policy and packaging.
   production block driver, fixes the insertion point after
   `initializeHardware()` returns and before the baseline read/publication,
   keeps the 64-block/32,768-byte/one-segment advertisement and the legacy
-  1-bit path unchanged, and proposes an opt-in `gta4l-emmc-width=4` mode that
-  requires block token 3, reads the pinned BOOT window as the 1-bit
-  reference, switches to 4-bit, re-reads the same window through the
-  published path, verifies the read-only EXT_CSD properties and host
-  `HOST_CONTROL` readback (never byte-183 equality), reverts to 1-bit and
+  1-bit path unchanged, and the follow-on host-only batch implements the
+  opt-in `gta4l-emmc-width=4` mode that requires block token 3, reads the
+  pinned BOOT window as the 1-bit reference, switches to 4-bit, re-reads the
+  same window through the published path, verifies the read-only EXT_CSD
+  properties and host `HOST_CONTROL` readback (never byte-183 equality),
+  reverts to 1-bit and
   reports `WIDTH`/`WIDTHREAD`/`WIDTHFAIL` lines inside the 2,048-byte report.
-  The verdict is GO for a host-only implementation/test batch and NO-GO for
-  candidate production or hardware until the batch tests, CMD6-write and
-  read-scope approval, conditional timing acceptance, content-reference
-  rebinding, candidate ABI/packaging and finite-boot-budget gates close. The
-  success bound is 24,230 ms and the failed-switch bound is 21,030 ms against
-  the 30,000 ms watchdog; the margin remains conditional. Cold-boot
-  identification reliability, repeatability and failure rates remain `[U]`,
-  and no 4-bit publication result exists yet. See
-  [docs/emmc-n10.16-4bit-sdr-readiness-2026-11-10.md](docs/emmc-n10.16-4bit-sdr-readiness-2026-11-10.md).
+  The host batch passes the block, core, probe, packaging and evidence-count
+  suites, including the `emmc-block-3-width4` diagnostic personality. The
+  gate-fix host-only candidate then produced kernel `2be2eb06…`, payload
+  `10ff7ee8…` and BOOT `58352cd3…`, and bound the width report to the final
+  image's first 1,024 bytes (`a6da82e3…`). Candidate ABI/archive, payload and
+  BOOT gates pass. A pre-hardware review found an unbounded report gate wait
+  under a slow 64-block in-flight request; the gate-fix candidate bounds it
+  at 2,000 ms. The 26,230 ms success bound still contains a conditional
+  13,010 ms pre-watchdog path. The owner-approved one-boot run executed on
+  2026-11-11: the driver's terminal guard reported `complete=1` with the
+  verified 4-bit switch, two matching 1,024-byte reads and the verified
+  return to 1-bit; the WIDTHREAD digest matched the image. The pre-flash BOOT
+  image was restored and verified. This is a bounded single-boot result, not
+  a publication or reliability result. Cold-boot identification reliability,
+  repeatability and failure rates remain `[U]`, and no 4-bit publication
+  result exists yet. See
+  [docs/emmc-n10.16-4bit-sdr-readiness-2026-11-10.md](docs/emmc-n10.16-4bit-sdr-readiness-2026-11-10.md),
+  [docs/emmc-n10.16-width4-hardware-observation-2026-11-11.md](docs/emmc-n10.16-width4-hardware-observation-2026-11-11.md),
+  [docs/emmc-n10.16-width4-gatefix-candidate-2026-11-11.md](docs/emmc-n10.16-width4-gatefix-candidate-2026-11-11.md),
+  [docs/emmc-n10.16-prehardware-review-2026-11-11.md](docs/emmc-n10.16-prehardware-review-2026-11-11.md)
+  and
+  [docs/emmc-n10.16-width4-hardware-protocol-2026-11-11.md](docs/emmc-n10.16-width4-hardware-protocol-2026-11-11.md).
 - QEMU AppleImage4/AMFI findings are in `docs/qemu.md` and are cross-port
   input requirements, not gta4l hardware evidence.
 

@@ -465,7 +465,10 @@ struct gta4l_test_state {
 	int multi_short_blocks;
 	int multi_stop_attempted;
 	int multi_stop_result;
+	int multi_stop_at;
+	int multi_short_at;
 	int multi_corrupt_at;
+	int multi_corrupt_count;
 	uint64_t multi_corrupt_block;
 	int multi_corrupt_pair;
 	int read_corrupt_at;
@@ -548,11 +551,43 @@ struct gta4l_test_state {
 	uint64_t consume_free_size;
 	void *consume_alloc_address;
 	int consume_live_alloc;
+	/* N10.16 width-mode seam. The verified switch and the baseline-
+	 * captured recover helper are transport helpers, not part of the
+	 * portable core. The model fills the observed result fields and the
+	 * HOST_CONTROL model the adapter reads back. */
+	int width_ext_csd_fail;
+	int width_switch_fail;
+	int width_switch_verified;
+	int width_switch_host_bit;
+	int width_switch_switched;
+	int width_switch_cmd6;
+	int width_switch_advance_ms;
+	int width_recover_fail;
+	int width_recover_verified;
+	int width_recover_host_clear;
+	int width_recover_cmd6;
+	int width_recover_advance_ms;
+	int width_host_control;
+	IOLock *width_gate;
+	int width_gate_release_ms;
+	int width_wait_active;
+	uint32_t width_ext_csd_calls;
+	uint32_t width_switch_calls;
+	uint32_t width_recover_calls;
 };
 
 typedef void (*gta4l_test_partition_sample_fn)(uint32_t sample,
     uint32_t visible);
 extern gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
+
+/* Width-mode interleaving seam. The gate-wait phase fires from IOSleep while
+ * the bounded acquisition is polling; the after-read and before-terminal
+ * phases fire from the adapter at those exact boundaries. */
+#define GTA4L_TEST_WIDTH_PHASE_GATE_WAIT 0u
+#define GTA4L_TEST_WIDTH_PHASE_AFTER_READ 1u
+#define GTA4L_TEST_WIDTH_PHASE_BEFORE_TERMINAL 2u
+typedef void (*gta4l_test_width_sample_fn)(uint32_t phase);
+extern gta4l_test_width_sample_fn gta4l_test_width_hook;
 
 extern gta4l_test_state gta4l_test;
 

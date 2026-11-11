@@ -981,6 +981,77 @@ ADAPTER_MUTATIONS = [
        '\tbzero(report.consume_last_digest,\n'
        '\t    sizeof(report.consume_last_digest));\n')],
      'consume-match'),
+    ('width-switch-guard-skip',
+     [('\t\tif ((widthRc != GTA4L_EMMC_OK) ||\n'
+       '\t\t    (widthSwitch.verified != 1u) ||\n'
+       '\t\t    (widthSwitch.switch_result != GTA4L_EMMC_OK) ||\n'
+       '\t\t    ((widthSwitch.host_after &\n'
+       '\t\t    GTA4L_EMMC_HOST_CONTROL_4BIT) !=\n'
+       '\t\t    GTA4L_EMMC_HOST_CONTROL_4BIT) ||\n'
+       '\t\t    (host.bus_width !=\n'
+       '\t\t    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4)) {\n',
+       '\t\tif ((widthRc != GTA4L_EMMC_OK) &&\n'
+       '\t\t    (widthSwitch.verified == 2u)) {\n')],
+     'width-switch-failure'),
+    ('width-complete-claim',
+     [('\treport.width_complete = complete;\n',
+       '\treport.width_complete = complete | 1u;\n')],
+     'width-match-mismatch'),
+    ('width-match-skip',
+     [('\tif (readOk && (memcmp(widthReference, widthObserved,\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES) == 0)) {\n',
+       '\tif (readOk) {\n')],
+     'width-match-mismatch'),
+    ('width-revert-skip',
+     [('\trevertOk = widthAttemptRevert();\n',
+       '\trevertOk = true;\n')],
+     'width-match'),
+    ('width-read-credit',
+     [('\treport.width_fails = (readOk) ? 0u : 1u;\n',
+       '\treport.width_fails = 0u;\n')],
+     'width-read-failure'),
+    ('width-limit-advertise',
+     [('\treport.width_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;\n'
+       '\treport.width_segments = 1u;\n'
+       '\treport.width_capacity = capacityBlocks;\n'
+       '\tIOLockUnlock(reportLock);\n'
+       '\n'
+       '\tif (reportCancel) {\n',
+       '\treport.width_limit = GTA4L_EMMC_BLOCK_SWEEP_READ_BLOCKS;\n'
+       '\treport.width_segments = 1u;\n'
+       '\treport.width_capacity = capacityBlocks;\n'
+       '\tIOLockUnlock(reportLock);\n'
+       '\n'
+       '\tif (reportCancel) {\n')],
+     'width-match'),
+    ('width-segment-advertise',
+     [('\treport.width_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;\n'
+       '\treport.width_segments = 1u;\n'
+       '\treport.width_capacity = capacityBlocks;\n'
+       '\tIOLockUnlock(reportLock);\n'
+       '\n'
+       '\tif (reportCancel) {\n',
+       '\treport.width_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;\n'
+       '\treport.width_segments = 3u;\n'
+       '\treport.width_capacity = capacityBlocks;\n'
+       '\tIOLockUnlock(reportLock);\n'
+       '\n'
+       '\tif (reportCancel) {\n')],
+     'width-match'),
+    ('width-predigest-truncate',
+     [('\t\tgta4l_emmc_block_sha256(widthReference,\n'
+       '\t\t    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES,\n'
+       '\t\t    widthReferenceDigest);\n',
+       '\t\tgta4l_emmc_block_sha256(widthReference,\n'
+       '\t\t    GTA4L_EMMC_BLOCK_BYTES,\n'
+       '\t\t    widthReferenceDigest);\n')],
+     'width-match'),
+    ('width-reference-lba-shift',
+     [('\tresult = gta4l_emmc_block_read(&block,\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTH_LBA,\n',
+       '\tresult = gta4l_emmc_block_read(&block,\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTH_LBA + 1u,\n')],
+     'width-match'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -1065,7 +1136,7 @@ POLICY_MUTATIONS = [
        '{\n')],
      'partcmp-geometry'),
     ('consume-suppress-read',
-     [('\tif (report->consume == 0) {\n'
+     [('\tif ((report->consume == 0) && (report->width == 0)) {\n'
        '\t\tgta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");\n',
        '\tif (1) {\n'
        '\t\tgta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");\n')],
@@ -1223,6 +1294,34 @@ def check_adapter_source():
         'report media must never request writer access'
     assert '->write(' not in adapter and 'IOStorage::write' not in adapter, \
         'adapter must not issue media writes'
+    assert 'GTA4L_EMMC_BLOCK_WIDTH_ARG' in adapter, \
+        'adapter must parse the opt-in width token'
+    assert 'gta4l_emmc_block_width_select' in adapter, \
+        'adapter must use the shared width selector'
+    assert 'runWidth' in adapter, \
+        'adapter must implement the fixed 4-bit window'
+    assert 'GTA4L_EMMC_BLOCK_WIDTH_LBA' in adapter, \
+        'width window must use the pinned BOOT base'
+    assert 'gta4l_emmc_read_ext_csd(&host, widthBaseline)' in adapter, \
+        'width mode must capture a 1-bit EXT_CSD baseline'
+    assert 'gta4l_emmc_set_bus_width_verified(&host' in adapter, \
+        'width mode must use the verified 4-bit switch'
+    assert 'gta4l_emmc_set_bus_width_recover(&host, 1u' in adapter, \
+        'width mode must revert to 1-bit'
+    assert 'memcmp(widthReference, widthObserved' in adapter, \
+        'width mode must compare the whole reference window'
+    assert adapter.index('gta4l_emmc_read_ext_csd(&host') < \
+        adapter.index('gta4l_emmc_set_bus_width_verified(&host') < \
+        adapter.index('gta4l_emmc_set_bus_width_recover(&host'), \
+        'width sequence must baseline, switch and revert in order'
+    assert 'GTA4L_EMMC_BLOCK_WIDTH_WORST_MS <' in adapter, \
+        'width mode must keep its worst case below the watchdog'
+    assert 'GTA4L_EMMC_BLOCK_WIDTH_REPORT_WORST_BYTES <=' in adapter, \
+        'width report must fit the report buffer'
+    assert 'GTA4L-EMMC P5 WIDTHFAIL: ' in policy, \
+        'width failure must emit the first-failure detail line'
+    assert 'report->width == 0' in policy, \
+        'legacy READ/QUAL lines must stay suppressed in width mode'
     probe = CONSUMER_PROBE.read_text()
     assert 'IOMallocContiguous(' in probe and \
         'IOFreeContiguous(' in probe, \
@@ -1563,8 +1662,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 249, f'expected 249 adapter PASS lines, got {passes}'
-        print('PASS adapter: 248 scenarios against the host IOKit seam')
+        assert passes == 286, f'expected 286 adapter PASS lines, got {passes}'
+        print('PASS adapter: 285 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

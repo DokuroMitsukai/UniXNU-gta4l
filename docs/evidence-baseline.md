@@ -1461,25 +1461,25 @@ bytes of the previously booted image `[S]`.
 | SPMIDxe descriptor-base test | `scripts/test-gta4l-spmidxe-descriptor-base.py` | `c835ee091399eba8c236e0cf5c268bf5d5b418ed77438b41297bb274dace436d` |
 | Supplied-analysis audit | `docs/stock-firmware-analysis-audit.md` | `1185e1a702efa047a3e5b3e195ec126f1d62070a82d49397efa31ae0dd6f2dbf` |
 | Vendor SDHC power sequence | `docs/vendor-sdhc-power-sequence.md` | `73028c8c605d44245f9c57b339c22ddefc8ca41c35b45bfc234a916c2563c995` |
-| Repository README | `README.md` | `452aaac0fd8dfd60a81e27a6e6179b0309995be815e84b2329a5e94b6b34d82a` |
+| Repository README | `README.md` | `6b717cc3b7ef6e859dd5081f81afbf785370361a4d32e93c313c7c9bb6d29a5c` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `dca47bcba0bfaaa5358965d7fd002395b7161008f210924a2a9d835aca0d8630` |
+| Porting record | `porting.toml` | `b64129594c7c5b930555f6b68319f973e35af0269d92898603b80a60d3ad34f6` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `7452850089b671960def4ee2979bb6d7be3a32900c9353c9a65f5973008be479` |
+| eMMC driver record | `docs/emmc-driver.md` | `90073483d29d52185a066be175d46e5291cf395b48923ddfad983d9989b968aa` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
-| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `744330d9a5ed8684dabb2f60171eb695311fe9c6c587c29ccc7ec5383f52ec43` |
-| eMMC host test | `scripts/test-gta4l-emmc.py` | `a851d113da952d87aebf4776d819b213afaa580ab6a597e8407e0c3463d57bf8` |
+| eMMC simulator | `scripts/sim-gta4l-emmc/harness.c` | `7a2882e84fef417d85a0edfb04b5186cc4e88df3e5a7c8d7b3b5a0a336e958c7` |
+| eMMC host test | `scripts/test-gta4l-emmc.py` | `81634694705ef4a9e89ca1ee1eb9fa832a5765aff413c2c606070440473c2821` |
 | eMMC archive builder | `scripts/build-gta4l-emmc-probe.py` | `272db9f0fd02fe9f6960f647e017f4e7cc156f6cc53010bb8ec8d6a1c6137d7f` |
 | RAM-root fixture reproduction | `docs/ram-root-fixture-reproducibility.md` | `73ca21a8bebf91354be878f8aff6b912fca3e03dee7e7ac1e2c55525381adf9e` |
 | RAM-root fixture recipe test | `scripts/test-gta4l-ram-root-fixture-recipe.py` | `ebe98274007c554c3bb69293eefc1a606d68dddb3ce401efb57d0b3409ed891f` |
-| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `1d105fdb8e320b4582c63f3a20e1d53040aaa4a9a46d88ede03d0439fc53906d` |
+| Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `954a2b3dd84159af1d4b696914d01fff08de91f886effb4f7778622495f3baa2` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
-| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `103421cc0b0ee918c9141ef167643dcb5602f5851cb4a0fcf0646f8d62bff56e` |
+| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `9b692663dd3f5f94b899690f8730151daaf86e3b39b6b0fc23d71c5ef0e35884` |
 
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
@@ -2036,23 +2036,59 @@ audit maps the H15-H17 verified width-switch/recovery helpers onto the
 production block driver, fixes the insertion point after
 `initializeHardware()` returns and before the baseline read/publication,
 keeps the 64-block/32,768-byte/one-segment advertisement and the legacy
-1-bit path unchanged, and proposes an opt-in `gta4l-emmc-width=4` mode
-requiring block token 3. The mode reads the pinned BOOT-partition window
+1-bit path unchanged, and the follow-on host-only batch implements the
+opt-in `gta4l-emmc-width=4` mode requiring block token 3. The mode reads
+the pinned BOOT-partition window
 (device LBA 2,255,360, two blocks) at 1-bit, performs the verified 4-bit
 switch (CMD6, CMD13 TRAN wait, host width apply/readback, read-only EXT_CSD
 properties comparison), re-reads the same window at 4-bit through the
 published path, reverts to 1-bit with the baseline-based recovery helper and
 reports `WIDTH`/`WIDTHREAD`/`WIDTHFAIL` inside the 2,048-byte report. The
 switch proof never uses the unreadable byte 183; CMD19/CMD14 is excluded.
-The success bound is 24,230 ms and the failed-switch bound is 21,030 ms
-against the 30,000 ms watchdog, and the margin remains conditional. The
-verdict is GO for a host-only implementation/test batch and NO-GO for
-candidate production or hardware until the batch tests, owner CMD6-write and
-read-scope approval, timing acceptance, content-reference rebinding,
-candidate ABI/packaging and finite-boot-budget gates close. No
-implementation, candidate build, device access, flash or boot was performed;
-cold-boot identification reliability, repeatability and failure rates remain
-`[U]`, and no 4-bit publication result exists yet.
+The success bound is 26,230 ms and the failed-switch bound is 21,030 ms
+against the 30,000 ms watchdog; the report gate wait is bounded at 2,000 ms,
+and the margin remains conditional. The host
+batch passes, including the `emmc-block-3-width4` payload/packager mapping
+and its fixture and refusal controls. The 2026-11-11 pre-hardware review
+found that a slow 64-block in-flight request could hold the controller gate
+past the watchdog before the width case started, and corrected the digest
+field to 16 bytes/32 hex characters. The host-only gate-fix batch then
+produced prelinked kernel `2be2eb06…`, payload `10ff7ee8…` (55/55) and BOOT
+`58352cd3…` (18/18, only the ramdisk differs), with a
+190-slot/181-binding/26-override audit and 0 unresolved original imports; the
+requalified archive members match the linked archive and the width report is
+bound to the final image's first 1,024 bytes (`a6da82e3…`). The report gate is
+bounded at 2,000 ms, with a terminal reason-8 timeout, and the
+`width-gate-timeout` and `width-gate-release` scenarios cover it. The
+13,010 ms pre-watchdog path remains conditional. The owner approved one
+controlled boot on 2026-11-11; the gate-fix candidate was flashed to p69,
+booted once and returned to TWRP, and the driver's terminal guard computed
+`complete=1` with the verified 4-bit switch, two matching 1,024-byte reads
+and the verified return to 1-bit. The WIDTHREAD digest `a6da82e3…` matched
+the final image, `rb=0`/`rcmd6=1` are the hardware diagnostic/first-attempt
+values accepted by the guard (the earlier simulated `rb=1`/`rcmd6=2` values
+are corrected), and no WIDTHFAIL or watchdog report appeared. The pre-flash
+BOOT image was restored and verified with unchanged protected partitions.
+This is a bounded single-boot result: cold-boot identification reliability,
+repeatability and failure rates remain `[U]`, and no 4-bit publication result
+exists yet. Findings:
+`docs/emmc-n10.16-width4-hardware-observation-2026-11-11.md`,
+`docs/emmc-n10.16-width4-hardware-protocol-2026-11-11.md`,
+`docs/emmc-n10.16-width4-gatefix-candidate-2026-11-11.md`,
+`docs/emmc-n10.16-width4-candidate-2026-11-10.md` and
+`docs/emmc-n10.16-prehardware-review-2026-11-11.md`. The host-only packaging
+integration refreshed the `README.md`, `docs/emmc-driver.md`,
+`docs/diagnostic-payload-input-inventory.md`,
+`scripts/sim-gta4l-emmc/harness.c`, `scripts/test-gta4l-emmc.py`,
+`scripts/test-gta4l-diagnostic-payload.py` and `porting.toml` rows without
+adding a hash-table row; the integration scripts and readiness document are
+outside the table or not listed. The C2 and C3 candidates then refreshed the
+`README.md`, `docs/emmc-driver.md`,
+`docs/diagnostic-payload-input-inventory.md` and `porting.toml` rows without
+adding a hash-table row; the C2/C3 candidate documents, pre-hardware review,
+hardware protocol, hardware observation and width4 verifier are outside the
+table or not listed. Candidate, owner and hardware gates are tracked in the
+readiness document §10.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
@@ -2317,7 +2353,7 @@ terminal-read observation-boundary edits), run from
 
 | Check | Result |
 | --- | --- |
-| Current native eMMC core test | PASS: 187 simulator scenarios and 115 mutation controls, including the Stage-B1 4-bit/8-bit switch, CMD6 and bus-test error cases, the verified 4-bit switch (read-only properties comparison with the unreadable byte-183 value held at zero), the verified mismatch, failed-rollback and CMD6-error cases, the baseline-based recovery pass, surviving-inhibit and mismatched-properties cases, the corrected CMD14 CRC exemption and 1-bit two-bit pattern, the Stage-B2 HS enter/leave, ignored byte-185, SWITCH_ERROR and busy-RCG cases, the Stage-H9 CMD3 retry clean/pass/fail/status/later-failure cases plus the D12.5 timeline clean/timeout/stale-CC-clear-order/store-capacity-boundary/mixed-config/reinitialization/short-budget/saturation cases, the Stage-H13 data-reset clear/stuck, surviving-inhibit, CMD14 mismatch/read-timeout/read-CRC/read-status, non-wedged-write and non-timeout-write cases, and the Stage-H14 clean/silent/CMD13-CRC/exempt-inhibit/uninitialized post-write drain plus the rung-2 reset-plus-drain pass, record-only silent drain and surviving-inhibit cases |
+| Current native eMMC core test | PASS: 189 simulator scenarios and 117 mutation controls, including the Stage-B1 4-bit/8-bit switch, CMD6 and bus-test error cases, the verified 4-bit switch (read-only properties comparison with the unreadable byte-183 value held at zero), the verified mismatch, failed-rollback and CMD6-error cases, the baseline-based recovery pass, surviving-inhibit and mismatched-properties cases, the corrected CMD14 CRC exemption and 1-bit two-bit pattern, the Stage-B2 HS enter/leave, ignored byte-185, SWITCH_ERROR and busy-RCG cases, the Stage-H9 CMD3 retry clean/pass/fail/status/later-failure cases plus the D12.5 timeline clean/timeout/stale-CC-clear-order/store-capacity-boundary/mixed-config/reinitialization/short-budget/saturation cases, the Stage-H13 data-reset clear/stuck, surviving-inhibit, CMD14 mismatch/read-timeout/read-CRC/read-status, non-wedged-write and non-timeout-write cases, and the Stage-H14 clean/silent/CMD13-CRC/exempt-inhibit/uninitialized post-write drain plus the rung-2 reset-plus-drain pass, record-only silent drain and surviving-inhibit cases |
 | Current eMMC probe report test | PASS: 196 scenarios and 100 mutation controls, including the D10.4a acceptance barriers (short-request, long-request, recovery and overall success gate), the Stage-H15 verified 4-bit switch, the reproduced 4-bit write wedge with clean and unproven baseline-based recovery, the Stage-H16 content-only pass and divergence, ignored CMD14 pattern-CRC and content-divergence reports, field-wise width-bound failure, identification and full-probe reports (1093, 788 and 1493 bytes), thirteen width-bound materializations, two width-fixture narrowing controls, two full-probe block-read failure controls, the stage-A GPT gate and 21-sector array content phase, four stage-A loop mutation controls (duplicate LBA, continued error, block-count off-by-one, wrong last LBA), the D10 F2 short+long CMD18 success, middle/final-sector mismatch, reordered and checksum-preserving corruption, both short-request sector divergences, mid-transfer readiness stall, R1-error, block-0 and LBA-2 recovery transport/byte failures, the controlled acceptance seam, the mid-transfer failure, stop-timeout and bare-argument refusal cases, the post-bound drain TC/late-BRR/error/exhaustion cases with the `drain=` report field, a missing CMD18 Multi/Single Block Select bit, the Stage-B1 4-bit/8-bit success, stuck-width, zero-readback, host-width-stuck, 8-bit-stuck, bus-test-failure and content-divergence reports, the Stage-B1C success, continuation-pass, late-commit, continuation bus-test failure, continuation content mismatch and content/re-read errors, CMD6-error, empty-readback and lost-host-width reports, the B1 field-wise width bound with `bc`/`e183a`/`esa`, the Stage-B2 pass, ignored byte-185, busy-RCG, content-divergence, content-read, revert-failure, recovery-failure and pre-read scenarios, the TOUTVAL-only arm artifact, the Stage-H9 no-retry timeline mapping-failure, clock-failure, pre-CMD3 CMD1 failure, pre-CMD3 CMD2 failure, clean, timeout, status, error, later-failure, between-sample completion, at-sample completion, response-update-without-CC, no-update, preexisting-R1, identical-response, multiple-change, last-sample, terminal-only, late-CC, index-error, simultaneous-CC-and-error, in-sample error, post-read error, inhibit and stalled-counter `H9T` reports, the Stage-H10 pass, HS-ignored, busy-RCG, width-ignored, bus-test-timeout, bus-test-mismatch, content-divergence, content-read, width-revert-failure, HS-revert-failure and recovery-read reports, the Stage-H11 honored-pass, W4-replay, W4-mismatch, W8-divergence, W8-error, W4-anomaly, clock-busy, bus-test-timeout, bus-test-mismatch, content-read, content-divergence, width-revert-failure, HS-revert-failure and recovery-read reports, the Stage-H12 refused-pass, honored, DDR-error, DDR-paradox, DDR-empty, HS-ignored, clock-busy, width-revert-failure, HS-revert-failure, recovery-read and pre-read-failure reports, the Stage-H13 pass, reset-stuck, inhibit, mismatch, read-timeout, read-CRC, read-status, write-CRC, normal-write and recovery-read reports, the Stage-H14 pass, reset-stuck, inhibit, CMD12-silent, CMD12-CRC, CMD13-failure, mismatch, read-CRC, recovery-read, write-CRC and normal-write reports, and the oversized-report rejection control |
 | Stage-B1 bus-width/bus-test implementation | HOST-TESTED: CMD6 byte-183 switch to 4/8-bit with readback and `HOST_CONTROL` bits, CMD19/CMD14 pattern round trip, per-width stage-A content comparison, CMD6 status plus host-before/host-after and EXT_CSD readback sum, before/after pad-DLL samples, 2048-byte report bound; hardware run recorded in the next row |
 | Stage-B1 report-completeness audit (2026-11-02) | HOST-TESTED ONLY: `probe-b1-stuck-width` (card ignored the CMD6), `probe-b1-zero-readback` (empty EXT_CSD read) and `probe-b1-host-width-stuck` (lost `HOST_CONTROL` width) assert distinct `c6`/`hb`/`ha`/`es` tuples; the success case asserts each width's readback sum; the field-wise fixture still fits 2048 bytes. No build, flash or boot; F3 remains `[U]` |

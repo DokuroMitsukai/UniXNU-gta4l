@@ -48,10 +48,13 @@ completion_action(void *target, void *parameter, IOReturn status,
 }
 
 static int
-begin(const char *arguments)
+begin_with(const char *arguments, void (*configure)(void))
 {
 	gta4l_test_reset();
 	gta4l_test.boot_args = arguments;
+	if (configure != 0) {
+		configure();
+	}
 	g_self = new Gta4lEmmcBlock();
 	g_started = false;
 	g_panicked = 0;
@@ -61,6 +64,12 @@ begin(const char *arguments)
 	}
 	g_panicked = 1;
 	return 1;
+}
+
+static int
+begin(const char *arguments)
+{
+	return begin_with(arguments, 0);
 }
 
 static int
@@ -6680,6 +6689,994 @@ scenario_consume_watchdog(void)
 	return 0;
 }
 
+static void
+width_expected_digest(uint8_t *digest)
+{
+	static uint8_t scratch[GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES];
+	uint64_t first = GTA4L_EMMC_BLOCK_WIDTH_LBA;
+
+	gta4l_test_fill_sector(first, scratch);
+	gta4l_test_fill_sector(first + 1u,
+	    scratch + GTA4L_EMMC_BLOCK_BYTES);
+	gta4l_emmc_block_sha256(scratch,
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES, digest);
+}
+
+static void
+width_fail_line(char *text, size_t size, uint32_t stage, int32_t status,
+    uint64_t actual, const uint8_t *digest)
+{
+	static const uint8_t zero[16] = { 0 };
+	char digestText[33];
+
+	partread_digest_hex((digest != 0) ? digest : zero, digestText);
+	snprintf(text, size,
+	    "GTA4L-EMMC P5 WIDTHFAIL: stage=%u status=%u actual=%llu "
+	    "digest=%s", stage, (uint32_t)status,
+	    (unsigned long long)actual, digestText);
+}
+
+static int
+scenario_width_absent(void)
+{
+	begin("gta4l-emmc-block=1");
+	CHECK(g_started);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 REPORT:") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTH") == 0);
+	CHECK(gta4l_test.width_ext_csd_calls == 0);
+	CHECK(gta4l_test.width_switch_calls == 0);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_orphan(void)
+{
+	begin("gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-width requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_block1(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-width requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_value(void)
+{
+	static const int values[] = { 0, 1, 2, 3, 5, 8 };
+	char arguments[64];
+	unsigned int index;
+
+	for (index = 0; index < sizeof(values) / sizeof(values[0]);
+	    index++) {
+		snprintf(arguments, sizeof(arguments),
+		    "gta4l-emmc-block=3 gta4l-emmc-width=%d",
+		    values[index]);
+		begin(arguments);
+		CHECK(!g_started);
+		CHECK(gta4l_test.platform_maps == 0);
+		CHECK(gta4l_test.thread_count == 0);
+		CHECK(strstr(gta4l_test.log,
+		    "gta4l-emmc-width value must be 4") != 0);
+	}
+	return 0;
+}
+
+static int
+scenario_width_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-width=4 "
+	    "gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "duplicate gta4l-emmc-width token") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_partobs(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-partobs=1 "
+	    "gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-partobs and gta4l-emmc-width are mutually "
+	    "exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_partcmp(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-partcmp=1 "
+	    "gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-partcmp and gta4l-emmc-width are mutually "
+	    "exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_partread(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-partread=1 "
+	    "gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-partread and gta4l-emmc-width are mutually "
+	    "exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_deblock(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-deblock=1 "
+	    "gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-deblock and gta4l-emmc-width are mutually "
+	    "exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_breakup(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-breakup=1 "
+	    "gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-breakup and gta4l-emmc-width are mutually "
+	    "exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_sweep(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-sweep=1 "
+	    "gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-sweep and gta4l-emmc-width are mutually "
+	    "exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_width_refused_consume(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-consume=1 "
+	    "gta4l-emmc-width=4");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-consume and gta4l-emmc-width are mutually "
+	    "exclusive") != 0);
+	return 0;
+}
+
+static int
+scenario_width_match(void)
+{
+	uint8_t expected_digest[32];
+	char digest[33];
+	char expected[512];
+	OSNumber *property;
+
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	CHECK(!g_panicked);
+	CHECK(gta4l_test.registered == 1);
+	CHECK(gta4l_test.thread_count == 2);
+	CHECK(gta4l_test.width_ext_csd_calls == 1);
+	CHECK(gta4l_test.width_switch_calls == 1);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4);
+	CHECK(gta4l_test.width_host_control ==
+	    GTA4L_EMMC_HOST_CONTROL_4BIT);
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumBlockCountReadKey));
+	CHECK((property != 0) &&
+	    (property->unsigned64BitValue() == 64));
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumByteCountReadKey));
+	CHECK((property != 0) &&
+	    (property->unsigned64BitValue() == 32768));
+	property = OSDynamicCast(OSNumber,
+	    g_self->getProperty(kIOMaximumSegmentCountReadKey));
+	CHECK((property != 0) &&
+	    (property->unsigned64BitValue() == 1));
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=1 failed=0 reason=0 "
+	    "complete=1 switch=4 verified=1 hb=0 ha=2 rb=1 cmd6=1 "
+	    "revert=1 rverified=1 rhb=2 rha=0 rcmd6=2 reads=2 bytes=2048 "
+	    "blocks=4 subrequests=2 max=2 match=1 mismatches=0 fails=0 "
+	    "cancel=0 budget=0 limit=64 seg=1 cap=61071360") != 0);
+	width_expected_digest(expected_digest);
+	partread_digest_hex(expected_digest, digest);
+	snprintf(expected, sizeof(expected),
+	    "GTA4L-EMMC P5 WIDTHREAD: index=0 lba=2255360 start=0 "
+	    "length=1024 span=1024 actual=1024 status=0 subrequests=1 "
+	    "blocks=2 max=2 digest=%s predigest=%s match=1",
+	    digest, digest);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHFAIL") == 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 READ:") == 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 QUAL") == 0);
+	CHECK(strstr(gta4l_test.panic, "wid=0") != 0);
+	CHECK(g_self->report.width_complete == 1);
+	CHECK(g_self->report.width_match == 1);
+	CHECK(g_self->report.width_mismatch == 0);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(gta4l_test.width_host_control == 0);
+	CHECK(g_self->block.counters.cmd17_reads == 0);
+	CHECK(g_self->block.counters.cmd18_chunks == 2);
+	CHECK(g_self->block.counters.stop_failures == 0);
+	return 0;
+}
+
+static void
+width_baseline_fixture(void)
+{
+	gta4l_test.width_ext_csd_fail = -5;
+}
+
+static int
+scenario_width_baseline_failure(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_baseline_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.width_ext_csd_calls == 1);
+	CHECK(gta4l_test.width_switch_calls == 0);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(gta4l_test.multi_calls == 0);
+	CHECK(gta4l_test.read_calls == 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=1 "
+	    "complete=0 switch=0 verified=0 hb=0 ha=0 rb=0 cmd6=0 "
+	    "revert=0 rverified=0 rhb=0 rha=0 rcmd6=0 reads=0 bytes=0 "
+	    "blocks=0 subrequests=0 max=0 match=0 mismatches=0 fails=0 "
+	    "cancel=0 budget=0 limit=64 seg=1 cap=61071360") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_BASELINE, -5, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHREAD") == 0);
+	return 0;
+}
+
+static void
+width_preread_fixture(void)
+{
+	gta4l_test.fail_multi_at = 0;
+}
+
+static int
+scenario_width_preread_failure(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_preread_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.width_ext_csd_calls == 1);
+	CHECK(gta4l_test.width_switch_calls == 0);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(gta4l_test.multi_calls == 1);
+	CHECK(gta4l_test.read_calls == 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=2 "
+	    "complete=0") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_PREREAD, -5, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_switch_fixture(void)
+{
+	gta4l_test.width_switch_fail = GTA4L_EMMC_ERR_BUS_WIDTH;
+}
+
+static int
+scenario_width_switch_failure(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_switch_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.width_switch_calls == 1);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(gta4l_test.multi_calls == 1);
+	CHECK(gta4l_test.read_calls == 0);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=3 "
+	    "complete=0 switch=4 verified=0 hb=0 ha=0 rb=0 cmd6=1") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_SWITCH,
+	    GTA4L_EMMC_ERR_BUS_WIDTH, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_switch_unverified_fixture(void)
+{
+	gta4l_test.width_switch_verified = 0;
+}
+
+static int
+scenario_width_switch_unverified(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_switch_unverified_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.width_switch_calls == 1);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(gta4l_test.multi_calls == 1);
+	CHECK(gta4l_test.read_calls == 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=3 "
+	    "complete=0 switch=4 verified=0 hb=0 ha=2 rb=1 cmd6=1") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_SWITCH, 0, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_switch_host_fixture(void)
+{
+	gta4l_test.width_switch_host_bit = 0;
+}
+
+static int
+scenario_width_switch_host(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_switch_host_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.width_switch_calls == 1);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(gta4l_test.read_calls == 0);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=3 "
+	    "complete=0 switch=4 verified=1 hb=0 ha=0 rb=1 cmd6=1") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_SWITCH, 0, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_switch_restore_fixture(void)
+{
+	gta4l_test.width_switch_fail = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+}
+
+static int
+scenario_width_switch_restore(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_switch_restore_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.width_switch_calls == 1);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(gta4l_test.multi_calls == 1);
+	CHECK(gta4l_test.read_calls == 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_SWITCH,
+	    GTA4L_EMMC_ERR_WIDTH_RESTORE, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_baseline_read_fixture(void)
+{
+	gta4l_test.fail_read_at = 0;
+}
+
+static int
+scenario_width_baseline_read_failure(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_baseline_read_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.width_switch_calls == 1);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(gta4l_test.multi_calls == 1);
+	CHECK(gta4l_test.read_calls == 0);
+	CHECK(strstr(gta4l_test.panic, "stop=11") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=4 "
+	    "complete=0 switch=4 verified=1 hb=0 ha=2 rb=1 cmd6=1") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_READ, -5, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_read_fixture(void)
+{
+	gta4l_test.fail_multi_at = 1;
+}
+
+static int
+scenario_width_read_failure(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_read_fixture) == 0);
+	CHECK(g_started);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(gta4l_test.multi_calls == 2);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(!g_self->online);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=4 "
+	    "complete=0 switch=4 verified=1 hb=0 ha=2 rb=1 cmd6=1 "
+	    "revert=1 rverified=1 rhb=2 rha=0 rcmd6=2 reads=2 bytes=1024 "
+	    "blocks=2 subrequests=2 max=2 match=0 mismatches=0 fails=1 "
+	    "cancel=0 budget=0 limit=64 seg=1 cap=61071360") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_READ, -5, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHREAD") == 0);
+	return 0;
+}
+
+static void
+width_short_fixture(void)
+{
+	gta4l_test.multi_short_at = 1;
+	gta4l_test.multi_short_blocks = 1;
+}
+
+static int
+scenario_width_short_read(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_short_fixture) == 0);
+	CHECK(g_started);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(gta4l_test.multi_calls == 2);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(!g_self->online);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=4 complete=0") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_READ, -1, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_stop_fixture(void)
+{
+	gta4l_test.multi_stop_at = 1;
+	gta4l_test.multi_stop_result = -5;
+}
+
+static int
+scenario_width_stop_failure(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_stop_fixture) == 0);
+	CHECK(g_started);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(gta4l_test.multi_calls == 2);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->block.counters.stop_failures == 1);
+	CHECK(!g_self->online);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=4 complete=0") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_READ, -5, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_mismatch_fixture(void)
+{
+	gta4l_test.multi_corrupt_at = 1;
+	gta4l_test.multi_corrupt_block = GTA4L_EMMC_BLOCK_WIDTH_LBA;
+}
+
+static int
+scenario_width_match_mismatch(void)
+{
+	uint8_t observed[32];
+	uint8_t scratch[GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES];
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_mismatch_fixture) == 0);
+	CHECK(g_started);
+	CHECK(invoke_thread(0) == 1);
+	gta4l_test_fill_sector(GTA4L_EMMC_BLOCK_WIDTH_LBA, scratch);
+	gta4l_test_fill_sector(GTA4L_EMMC_BLOCK_WIDTH_LBA + 1u,
+	    scratch + GTA4L_EMMC_BLOCK_BYTES);
+	scratch[0] ^= 0x5a;
+	gta4l_emmc_block_sha256(scratch,
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES, observed);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(!g_self->online);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=5 "
+	    "complete=0 switch=4 verified=1 hb=0 ha=2 rb=1 cmd6=1 "
+	    "revert=1 rverified=1 rhb=2 rha=0 rcmd6=2 reads=2 bytes=2048 "
+	    "blocks=4 subrequests=2 max=2 match=0 mismatches=1 fails=0 "
+	    "cancel=0 budget=0 limit=64 seg=1 cap=61071360") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_MATCH, 0,
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES, observed);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHREAD") == 0);
+	return 0;
+}
+
+static void
+width_corrupted_digest(uint8_t *digest)
+{
+	static uint8_t scratch[GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES];
+
+	gta4l_test_fill_sector(GTA4L_EMMC_BLOCK_WIDTH_LBA, scratch);
+	gta4l_test_fill_sector(GTA4L_EMMC_BLOCK_WIDTH_LBA + 1u,
+	    scratch + GTA4L_EMMC_BLOCK_BYTES);
+	scratch[0] ^= 0x5a;
+	gta4l_emmc_block_sha256(scratch,
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES, digest);
+}
+
+static void
+width_host_digest_fixture(void)
+{
+	gta4l_test.multi_corrupt_at = 0;
+	gta4l_test.multi_corrupt_count = 2;
+	gta4l_test.multi_corrupt_block = GTA4L_EMMC_BLOCK_WIDTH_LBA;
+}
+
+static int
+scenario_width_host_digest_mismatch(void)
+{
+	uint8_t expected_digest[32];
+	uint8_t observed_digest[32];
+	char expected[512];
+	char digest[33];
+	char packaged[33];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_host_digest_fixture) == 0);
+	CHECK(g_started);
+	CHECK(invoke_thread(0) == 1);
+	/* Both on-device reads see the same corrupted window, so the
+	 * driver's byte compare passes and it reports complete=1. The
+	 * host comparison against the packaged image still rejects it. */
+	width_expected_digest(expected_digest);
+	width_corrupted_digest(observed_digest);
+	CHECK(memcmp(observed_digest, expected_digest,
+	    sizeof(observed_digest)) != 0);
+	partread_digest_hex(observed_digest, digest);
+	snprintf(expected, sizeof(expected),
+	    "GTA4L-EMMC P5 WIDTHREAD: index=0 lba=2255360 start=0 "
+	    "length=1024 span=1024 actual=1024 status=0 subrequests=1 "
+	    "blocks=2 max=2 digest=%s predigest=%s match=1",
+	    digest, digest);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=1 failed=0 reason=0 "
+	    "complete=1") != 0);
+	CHECK(g_self->report.width_complete == 1);
+	CHECK(g_self->report.width_match == 1);
+	CHECK(strstr(gta4l_test.panic, "WIDTHFAIL") == 0);
+	partread_digest_hex(expected_digest, packaged);
+	CHECK(strstr(gta4l_test.panic, packaged) == 0);
+	return 0;
+}
+
+static void
+width_revert_fixture(void)
+{
+	gta4l_test.width_recover_fail = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+}
+
+static int
+scenario_width_revert_failure(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_revert_fixture) == 0);
+	CHECK(g_started);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(!g_self->online);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=6 "
+	    "complete=0 switch=4 verified=1 hb=0 ha=2 rb=1 cmd6=1 "
+	    "revert=1 rverified=0 rhb=2 rha=2 rcmd6=2 reads=2 bytes=2048 "
+	    "blocks=4 subrequests=2 max=2 match=1 mismatches=0 fails=0 "
+	    "cancel=0 budget=0 limit=64 seg=1 cap=61071360") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_REVERT,
+	    GTA4L_EMMC_ERR_WIDTH_RESTORE, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static void
+width_revert_unverified_fixture(void)
+{
+	gta4l_test.width_recover_verified = 0;
+}
+
+static int
+scenario_width_revert_unverified(void)
+{
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-width=4",
+	    width_revert_unverified_fixture) == 0);
+	CHECK(g_started);
+	CHECK(invoke_thread(0) == 1);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(!g_self->online);
+	CHECK(strstr(gta4l_test.panic,
+	    "reason=6 complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "rverified=0 rhb=2 rha=0") != 0);
+	width_fail_line(expected, sizeof(expected),
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_REVERT, 0, 0, 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static int
+scenario_width_budget(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	gta4l_test.width_recover_advance_ms =
+	    (int)GTA4L_EMMC_BLOCK_WIDTH_REPORT_MS;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=1 failed=0 reason=0 "
+	    "complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "budget=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTHREAD:") != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHFAIL") == 0);
+	CHECK(g_self->report.width_complete == 0);
+	return 0;
+}
+
+static int
+scenario_width_cancel(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	g_self->reportCancel = true;
+	CHECK(invoke_thread(0) == 0);
+	CHECK(!gta4l_test.panicked);
+	CHECK(gta4l_test.panic[0] == 0);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(g_self->report.width_cancel == 1);
+	CHECK(g_self->report.width_reason ==
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL);
+	CHECK(g_self->report.width_fail_stage ==
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL);
+	CHECK(g_self->report.width_complete == 0);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(gta4l_test.multi_calls == 1);
+	return 0;
+}
+
+static int
+scenario_width_watchdog(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic, "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=0 reason=0 "
+	    "complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "wid=1") != 0);
+	return 0;
+}
+
+static void
+width_cancel_wait_hook(uint32_t phase)
+{
+	(void)phase;
+	/* Cancellation requested while the bounded gate acquisition sleeps. */
+	g_self->reportCancel = true;
+}
+
+static void
+width_cancel_after_read_hook(uint32_t phase)
+{
+	if (phase == GTA4L_TEST_WIDTH_PHASE_AFTER_READ) {
+		g_self->reportCancel = true;
+	}
+}
+
+static int
+scenario_width_cancel_gate_wait(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	/* The gate is released only after the cancellation hook has fired, so
+	 * the run continues through the read and the verified revert and then
+	 * latches cancellation without a completion claim. */
+	g_self->gate->depth = 1;
+	gta4l_test.width_gate = g_self->gate;
+	gta4l_test.width_gate_release_ms = 50;
+	gta4l_test.width_wait_active = 1;
+	gta4l_test_width_hook = width_cancel_wait_hook;
+	CHECK(invoke_thread(0) == 0);
+	gta4l_test_width_hook = 0;
+	gta4l_test.width_wait_active = 0;
+	gta4l_test.width_gate = 0;
+	CHECK(!gta4l_test.panicked);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(g_self->report.width_cancel == 1);
+	CHECK(g_self->report.width_complete == 0);
+	CHECK(g_self->report.width_reason ==
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL);
+	CHECK(g_self->report.width_fail_stage ==
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL);
+	CHECK(g_self->report.width_reads == 2);
+	CHECK(g_self->report.width_match == 1);
+	CHECK(g_self->report.width_revert == 1);
+	CHECK(g_self->report.width_rverified == 1);
+	CHECK(gta4l_test.width_switch_calls == 1);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	return 0;
+}
+
+static int
+scenario_width_cancel_after_read(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	/* Cancellation is requested exactly after the 4-bit read and revert
+	 * released the gate, before the terminal report is claimed. */
+	gta4l_test_width_hook = width_cancel_after_read_hook;
+	CHECK(invoke_thread(0) == 0);
+	gta4l_test_width_hook = 0;
+	CHECK(!gta4l_test.panicked);
+	CHECK(g_self->reportDone);
+	CHECK(!g_self->terminalClaimed);
+	CHECK(g_self->report.width_cancel == 1);
+	CHECK(g_self->report.width_complete == 0);
+	CHECK(g_self->report.width_reason ==
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL);
+	CHECK(g_self->report.width_reads == 2);
+	CHECK(g_self->report.width_match == 1);
+	CHECK(g_self->report.width_revert == 1);
+	CHECK(g_self->report.width_rverified == 1);
+	CHECK(gta4l_test.width_switch_calls == 1);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	return 0;
+}
+
+static int g_width_terminal_hook_fired;
+
+static void
+width_terminal_watchdog_hook(uint32_t phase)
+{
+	if (phase != GTA4L_TEST_WIDTH_PHASE_BEFORE_TERMINAL) {
+		return;
+	}
+	if (g_width_terminal_hook_fired != 0) {
+		return;
+	}
+	g_width_terminal_hook_fired = 1;
+	/* Simulate an intervening request that still owns the controller gate
+	 * when the width path reaches its terminal report. The watchdog then
+	 * takes the only terminal claim before the report thread can. */
+	g_self->gate->depth = 1;
+	(void)invoke_thread(1);
+}
+
+static int
+scenario_width_terminal_watchdog(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	g_width_terminal_hook_fired = 0;
+	gta4l_test_width_hook = width_terminal_watchdog_hook;
+	CHECK(invoke_thread(0) == 0);
+	gta4l_test_width_hook = 0;
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic, "stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SNAP: locked=0") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=0 reason=0 "
+	    "complete=0") != 0);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	g_self->gate->depth = 0;
+	return 0;
+}
+
+static int
+scenario_width_gate_release(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	g_self->gate->depth = 1;
+	gta4l_test.width_gate = g_self->gate;
+	gta4l_test.width_gate_release_ms = 50;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=1 failed=0 reason=0 "
+	    "complete=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTHREAD:") != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHFAIL") == 0);
+	CHECK(g_self->report.width_complete == 1);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	gta4l_test.width_gate = 0;
+	return 0;
+}
+
+static int
+scenario_width_gate_timeout(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	/* Simulate an in-flight request holding the controller gate for the
+	 * whole bounded acquisition window. */
+	g_self->gate->depth = 1;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=8 "
+	    "complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTHFAIL: stage=8 status=0 actual=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTHREAD:") == 0);
+	CHECK(g_self->report.width_complete == 0);
+	CHECK(g_self->report.width_reason ==
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_GATE);
+	CHECK(g_self->report.width_fail_stage ==
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_GATE);
+	CHECK(g_self->online == false);
+	CHECK(g_self->report.width_reads == 0);
+	CHECK(g_self->report.width_bytes == 0);
+	CHECK(g_self->report.width_revert == 0);
+	CHECK(g_self->report.width_last_actual == 0);
+	CHECK(g_self->block.counters.cmd18_chunks == 1);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4);
+	/* The report owns the terminal claim; a later watchdog pass must
+	 * return without a second panic or report. */
+	CHECK(invoke_thread(1) == 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=8 "
+	    "complete=0") != 0);
+	g_self->gate->depth = 0;
+	return 0;
+}
+
+static int
+scenario_width_gate_deadline_release(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	g_self->gate->depth = 1;
+	gta4l_test.width_gate = g_self->gate;
+	gta4l_test.width_gate_release_ms =
+	    (int)GTA4L_EMMC_BLOCK_WIDTH_GATE_MS;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=1 failed=0 reason=0 "
+	    "complete=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTHREAD:") != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHFAIL") == 0);
+	CHECK(g_self->report.width_complete == 1);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	gta4l_test.width_gate = 0;
+	return 0;
+}
+
+static int
+scenario_width_gate_deadline_miss(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-width=4") == 0);
+	CHECK(g_started);
+	g_self->gate->depth = 1;
+	gta4l_test.width_gate = g_self->gate;
+	gta4l_test.width_gate_release_ms =
+	    (int)GTA4L_EMMC_BLOCK_WIDTH_GATE_MS + 10;
+	CHECK(invoke_thread(0) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WIDTH: cases=1 passed=0 failed=1 reason=8 "
+	    "complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTHREAD:") == 0);
+	CHECK(g_self->report.width_reads == 0);
+	CHECK(g_self->report.width_revert == 0);
+	CHECK(g_self->online == false);
+	CHECK(g_self->block.counters.cmd18_chunks == 1);
+	CHECK(gta4l_test.width_recover_calls == 0);
+	gta4l_test.width_gate = 0;
+	g_self->gate->depth = 0;
+	return 0;
+}
+
 static int
 scenario_policy(void)
 {
@@ -6692,11 +7689,11 @@ scenario_policy(void)
 	uint32_t length;
 	uint32_t index;
 
-	CHECK(gta4l_emmc_block_token_count("a=1 gta4l-emmc-block=1", 
+	CHECK(gta4l_emmc_block_token_count("a=1 gta4l-emmc-block=1",
 	    GTA4L_EMMC_BLOCK_BOOT_ARG) == 1);
-	CHECK(gta4l_emmc_block_token_count("xgta4l-emmc-block=1", 
+	CHECK(gta4l_emmc_block_token_count("xgta4l-emmc-block=1",
 	    GTA4L_EMMC_BLOCK_BOOT_ARG) == 0);
-	CHECK(gta4l_emmc_block_token_count("gta4l-emmc-block=1x", 
+	CHECK(gta4l_emmc_block_token_count("gta4l-emmc-block=1x",
 	    GTA4L_EMMC_BLOCK_BOOT_ARG) == 1);
 	CHECK(gta4l_emmc_block_mode_select(1, -1, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_SELECT_REFUSED);
@@ -6782,6 +7779,34 @@ scenario_policy(void)
 	    0, 0, 0, 0, 1, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
 	    0, 0, 0, 0, 0, 1) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(0, 0, 0, 0, 0,
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_OFF);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_ON);
+	CHECK(gta4l_emmc_block_width_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 1, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 0, 3,
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 1,
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 2,
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    1, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    0, 1, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    0, 0, 1, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    0, 0, 0, 1, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    0, 0, 0, 0, 1, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    0, 0, 0, 0, 0, 1, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 1) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_consume_validate(0,
 	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES,
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) == 0);
@@ -7335,6 +8360,110 @@ scenario_policy(void)
 	    &report);
 	CHECK(length > 0);
 	CHECK(strstr(buffer, "CONSUME") == 0);
+
+	memset(&report, 0, sizeof(report));
+	report.width = 1;
+	report.width_cases = 1;
+	report.width_passed = 1;
+	report.width_failed = 0;
+	report.width_reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE;
+	report.width_complete = 1;
+	report.width_switch = GTA4L_EMMC_BLOCK_WIDTH_BITS_4;
+	report.width_verified = 1;
+	report.width_hb = 0;
+	report.width_ha = GTA4L_EMMC_HOST_CONTROL_4BIT;
+	report.width_rb = 1;
+	report.width_cmd6 = 1;
+	report.width_revert = 1;
+	report.width_rverified = 1;
+	report.width_rhb = GTA4L_EMMC_HOST_CONTROL_4BIT;
+	report.width_rha = 0;
+	report.width_rcmd6 = 2;
+	report.width_reads = 2;
+	report.width_bytes = 2048;
+	report.width_blocks = 4;
+	report.width_subrequests = 2;
+	report.width_max = 2;
+	report.width_match = 1;
+	report.width_mismatch = 0;
+	report.width_fails = 0;
+	report.width_cancel = 0;
+	report.width_budget = 0;
+	report.width_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
+	report.width_segments = 1;
+	report.width_capacity = 61071360;
+	report.width_last_index = 0;
+	report.width_last_lba = GTA4L_EMMC_BLOCK_WIDTH_LBA;
+	report.width_last_start = 0;
+	report.width_last_length = GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES;
+	report.width_last_span = GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES;
+	report.width_last_actual = GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES;
+	report.width_last_status = 0;
+	report.width_last_subrequests = 1;
+	report.width_last_blocks = GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS;
+	report.width_last_max = GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS;
+	memset(report.width_last_digest, 0xab,
+	    sizeof(report.width_last_digest));
+	memset(report.width_last_predigest, 0xcd,
+	    sizeof(report.width_last_predigest));
+	report.width_last_match = 1;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 WIDTH: cases=1 passed=1 "
+	    "failed=0 reason=0 complete=1 switch=4 verified=1 hb=0 ha=2 "
+	    "rb=1 cmd6=1 revert=1 rverified=1 rhb=2 rha=0 rcmd6=2 "
+	    "reads=2 bytes=2048 blocks=4 subrequests=2 max=2 match=1 "
+	    "mismatches=0 fails=0 cancel=0 budget=0 limit=64 seg=1 "
+	    "cap=61071360") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 WIDTHREAD: index=0 "
+	    "lba=2255360 start=0 length=1024 span=1024 actual=1024 "
+	    "status=0 subrequests=1 blocks=2 max=2 "
+	    "digest=abababababababababababababababab "
+	    "predigest=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd match=1") != 0);
+	line = strstr(buffer, "GTA4L-EMMC P5 WIDTH: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_WIDTH_LINE_BYTES);
+	line = strstr(buffer, "GTA4L-EMMC P5 WIDTHREAD: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_WIDTHREAD_LINE_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 READ:") == 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 QUAL") == 0);
+	report.width_passed = 0;
+	report.width_failed = 1;
+	report.width_complete = 0;
+	report.width_reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_READ;
+	report.width_fail_stage = GTA4L_EMMC_BLOCK_WIDTH_REASON_READ;
+	report.width_fail_status = -5;
+	report.width_fail_actual = 0;
+	memset(report.width_fail_digest, 0,
+	    sizeof(report.width_fail_digest));
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 WIDTHFAIL: stage=4 "
+	    "status=4294967291 actual=0 "
+	    "digest=00000000000000000000000000000000") != 0);
+	line = strstr(buffer, "GTA4L-EMMC P5 WIDTHFAIL: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) <=
+	    GTA4L_EMMC_BLOCK_WIDTHFAIL_LINE_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 WIDTHREAD:") == 0);
+	report.width = 0;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(strstr(buffer, "WIDTH") == 0);
 	return 0;
 }
 
@@ -7605,6 +8734,44 @@ static const struct scenario_entry scenarios[] = {
 	{ "consume-budget", scenario_consume_budget },
 	{ "consume-cancel", scenario_consume_cancel },
 	{ "consume-watchdog", scenario_consume_watchdog },
+	{ "width-absent", scenario_width_absent },
+	{ "width-refused-orphan", scenario_width_refused_orphan },
+	{ "width-refused-block1", scenario_width_refused_block1 },
+	{ "width-refused-value", scenario_width_refused_value },
+	{ "width-refused-duplicate", scenario_width_refused_duplicate },
+	{ "width-refused-partobs", scenario_width_refused_partobs },
+	{ "width-refused-partcmp", scenario_width_refused_partcmp },
+	{ "width-refused-partread", scenario_width_refused_partread },
+	{ "width-refused-deblock", scenario_width_refused_deblock },
+	{ "width-refused-breakup", scenario_width_refused_breakup },
+	{ "width-refused-sweep", scenario_width_refused_sweep },
+	{ "width-refused-consume", scenario_width_refused_consume },
+	{ "width-match", scenario_width_match },
+	{ "width-baseline-failure", scenario_width_baseline_failure },
+	{ "width-preread-failure", scenario_width_preread_failure },
+	{ "width-switch-failure", scenario_width_switch_failure },
+	{ "width-switch-unverified", scenario_width_switch_unverified },
+	{ "width-switch-host", scenario_width_switch_host },
+	{ "width-switch-restore", scenario_width_switch_restore },
+	{ "width-baseline-read-failure",
+	  scenario_width_baseline_read_failure },
+	{ "width-read-failure", scenario_width_read_failure },
+	{ "width-short-read", scenario_width_short_read },
+	{ "width-stop-failure", scenario_width_stop_failure },
+	{ "width-match-mismatch", scenario_width_match_mismatch },
+	{ "width-host-digest-mismatch", scenario_width_host_digest_mismatch },
+	{ "width-revert-failure", scenario_width_revert_failure },
+	{ "width-revert-unverified", scenario_width_revert_unverified },
+	{ "width-budget", scenario_width_budget },
+	{ "width-cancel", scenario_width_cancel },
+	{ "width-gate-release", scenario_width_gate_release },
+	{ "width-gate-timeout", scenario_width_gate_timeout },
+	{ "width-gate-deadline-release", scenario_width_gate_deadline_release },
+	{ "width-gate-deadline-miss", scenario_width_gate_deadline_miss },
+	{ "width-watchdog", scenario_width_watchdog },
+	{ "width-cancel-gate-wait", scenario_width_cancel_gate_wait },
+	{ "width-cancel-after-read", scenario_width_cancel_after_read },
+	{ "width-terminal-watchdog", scenario_width_terminal_watchdog },
 	{ "policy", scenario_policy },
 };
 

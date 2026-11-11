@@ -160,6 +160,36 @@ static_assert(GTA4L_EMMC_BLOCK_CONSUMEFAIL_LINE_BYTES <=
 static_assert(GTA4L_EMMC_BLOCK_CONSUME_REPORT_WORST_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "CONSUME worst report must fit the report buffer");
+static_assert(GTA4L_EMMC_BLOCK_WIDTH_WORST_MS <
+    GTA4L_EMMC_BLOCK_WATCHDOG_MS,
+    "WIDTH worst case must stay below the watchdog");
+static_assert(GTA4L_EMMC_BLOCK_WIDTH_REPORT_MS <
+    GTA4L_EMMC_BLOCK_WIDTH_WORST_MS,
+    "WIDTH report budget must be inside the worst-case bound");
+static_assert(GTA4L_EMMC_BLOCK_WIDTH_REPORT_MS + 13010u ==
+    GTA4L_EMMC_BLOCK_WIDTH_WORST_MS,
+    "WIDTH report budget plus the pre-watchdog path must equal the bound");
+static_assert(GTA4L_EMMC_BLOCK_WIDTHFAIL_LINE_BYTES <
+    GTA4L_EMMC_BLOCK_WIDTHREAD_LINE_BYTES,
+    "WIDTHFAIL must stay smaller than the WIDTHREAD worst-case line");
+static_assert(GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES <=
+    GTA4L_EMMC_BLOCK_MAX_BYTES,
+    "WIDTH case must stay inside the 64-block request limit");
+static_assert(GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS ==
+    GTA4L_EMMC_BLOCK_CHUNK_BLOCKS,
+    "WIDTH case must use the production two-block chunk");
+static_assert(GTA4L_EMMC_BLOCK_WIDTH_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "WIDTH summary line must fit the report buffer");
+static_assert(GTA4L_EMMC_BLOCK_WIDTHREAD_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "WIDTHREAD detail line must fit the report buffer");
+static_assert(GTA4L_EMMC_BLOCK_WIDTHFAIL_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "WIDTHFAIL detail line must fit the report buffer");
+static_assert(GTA4L_EMMC_BLOCK_WIDTH_REPORT_WORST_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "WIDTH worst report must fit the report buffer");
 
 /* The exact comparator needs a 16 KiB GPT array plus both validated copies
  * and two media snapshots. Keeping that state in the driver object would
@@ -356,6 +386,9 @@ private:
 	bool initializeHardware(void);
 	bool claimTerminal(void);
 	void panicWithReport(void);
+	void panicWithReportNoGate(void);
+	void finishReport(bool wait);
+	bool acquireWidthGate(uint32_t timeoutMs);
 	void fillDriverReport(void);
 	void fillWatchdogReport(void);
 	bool snapshotReport(struct gta4l_emmc_block_report *target, bool wait);
@@ -413,6 +446,16 @@ private:
 	bool consumeObserve(IOMemoryDescriptor *buffer, UInt64 block,
 	    UInt64 nblks);
 	uint64_t consumeElapsedMs(void);
+	void runWidth(void);
+	bool readWidthWindow(uint8_t *target, uint32_t *status,
+	    uint64_t *actual, uint32_t *subrequests, uint32_t *blocks,
+	    uint32_t *max, bool *stopOk);
+	void widthRecordSwitch(const struct gta4l_emmc_bus_result *bus);
+	void widthRecordRevert(const struct gta4l_emmc_bus_result *bus);
+	void widthLatchFailure(uint32_t stage, int32_t status,
+	    uint64_t actual, const uint8_t *digest);
+	void widthReportCancel(void);
+	bool widthAttemptRevert(void);
 	IOMedia *findWholeMedia(void);
 	uint32_t countPartitions(void);
 	bool ancestryContains(IOService *service) const;
@@ -517,6 +560,29 @@ private:
 	uint32_t consumeCreditedC18b = 0;
 	uint32_t consumeCreditedStops = 0;
 	uint64_t consumeReadStart = 0;
+	bool widthMode = false;
+	bool widthCaptureActive = false;
+	uint8_t *widthCaptureBuffer = nullptr;
+	uint32_t widthCaptureCopied = 0;
+	uint8_t widthBaseline[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint8_t *widthReference = nullptr;
+	uint8_t *widthObserved = nullptr;
+	uint8_t widthReferenceDigest[32];
+	uint8_t widthObservedDigest[32];
+	struct gta4l_emmc_bus_result widthSwitch;
+	struct gta4l_emmc_bus_result widthRevert;
+	int32_t widthRevertStatus = 0;
+	uint32_t widthRefStatus = 0;
+	uint64_t widthRefActual = 0;
+	uint32_t widthRefSubrequests = 0;
+	uint32_t widthRefBlocks = 0;
+	uint32_t widthRefMax = 0;
+	bool widthRefStopOk = false;
+	uint32_t widthFailStage =
+	    GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE;
+	int32_t widthFailStatus = 0;
+	uint64_t widthFailActual = 0;
+	uint8_t widthFailDigest[16];
 	bool registered = false;
 	bool reportStarted = false;
 	thread_t reportThread = nullptr;
@@ -700,6 +766,26 @@ Gta4lEmmcBlock::copyOutCallback(void *context, uint32_t offset,
 {
 	Gta4lEmmcBlock *self = static_cast<Gta4lEmmcBlock *>(context);
 	IOByteCount copied;
+	uint32_t widthCopied;
+
+	if (self->widthCaptureActive) {
+		widthCopied = 0;
+		if ((source != nullptr) &&
+		    (offset < GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES)) {
+			widthCopied = length;
+			if (widthCopied >
+			    (GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES - offset)) {
+				widthCopied =
+				    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES - offset;
+			}
+			if (self->widthCaptureBuffer != nullptr) {
+				memcpy(self->widthCaptureBuffer + offset,
+				    source, widthCopied);
+			}
+		}
+		self->widthCaptureCopied += widthCopied;
+		return widthCopied;
+	}
 
 	if (self->qualCapture.active && (source != nullptr)) {
 		const uint8_t *bytes = static_cast<const uint8_t *>(source);
@@ -831,6 +917,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t breakupTokens;
 	uint32_t sweepTokens;
 	uint32_t consumeTokens;
+	uint32_t widthTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
@@ -839,6 +926,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int breakupValue = 0;
 	int sweepValue = 0;
 	int consumeValue = 0;
+	int widthValue = 0;
 	int parsed;
 	int partobsParsed;
 	int partcmpParsed;
@@ -847,6 +935,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int breakupParsed;
 	int sweepParsed;
 	int consumeParsed;
+	int widthParsed;
 	int mode;
 	int partobs;
 	int partcmp;
@@ -855,6 +944,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int breakup;
 	int sweep;
 	int consume;
+	int width;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -876,6 +966,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_SWEEP_ARG);
 	consumeTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_CONSUME_ARG);
+	widthTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_WIDTH_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -921,6 +1013,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	if ((consumeParsed == 0) && (consumeTokens != 0)) {
 		consumeValue = -1;
 	}
+	widthParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_WIDTH_ARG,
+	    &widthValue, sizeof(widthValue));
+	if ((widthParsed == 0) && (widthTokens != 0)) {
+		widthValue = -1;
+	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
 	if (mode == GTA4L_EMMC_BLOCK_SELECT_INERT) {
@@ -957,6 +1054,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 		if (consumeTokens != 0) {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-consume requires "
+			    "gta4l-emmc-block=3\n");
+		}
+		if (widthTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-width requires "
 			    "gta4l-emmc-block=3\n");
 		}
 		return false;
@@ -1180,6 +1282,80 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	consumeMode = (consume == GTA4L_EMMC_BLOCK_CONSUME_ON);
+	width = gta4l_emmc_block_width_select(widthTokens != 0, widthValue,
+	    widthTokens > 1u, 1, value,
+	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
+	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
+	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
+	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON,
+	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON,
+	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON,
+	    consume == GTA4L_EMMC_BLOCK_CONSUME_ON);
+	if (width == GTA4L_EMMC_BLOCK_WIDTH_REFUSED) {
+		if (widthTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-width token\n");
+		} else if (value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-width "
+			    "requires gta4l-emmc-block=3\n");
+		} else if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partobs "
+			    "and gta4l-emmc-width are mutually "
+			    "exclusive\n");
+		} else if (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partcmp "
+			    "and gta4l-emmc-width are mutually "
+			    "exclusive\n");
+		} else if (partread == GTA4L_EMMC_BLOCK_PARTREAD_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partread "
+			    "and gta4l-emmc-width are mutually "
+			    "exclusive\n");
+		} else if (deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-deblock "
+			    "and gta4l-emmc-width are mutually "
+			    "exclusive\n");
+		} else if (breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-breakup "
+			    "and gta4l-emmc-width are mutually "
+			    "exclusive\n");
+		} else if (sweep == GTA4L_EMMC_BLOCK_SWEEP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-sweep "
+			    "and gta4l-emmc-width are mutually "
+			    "exclusive\n");
+		} else if (consume == GTA4L_EMMC_BLOCK_CONSUME_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-consume "
+			    "and gta4l-emmc-width are mutually "
+			    "exclusive\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-width "
+			    "value must be 4; 1-bit is the absence of the "
+			    "token\n");
+		}
+		return false;
+	}
+	widthMode = (width == GTA4L_EMMC_BLOCK_WIDTH_ON);
+	if (widthMode) {
+		/* The reference and observed copies never alias: the reference
+		 * is filled only by the pre-switch 1-bit read, the observed
+		 * copy only by the post-switch 4-bit read. Both are copied out
+		 * of the block core, so no descriptor is built from them. */
+		widthReference = (uint8_t *)IOMallocAligned(
+		    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES, PAGE_SIZE);
+		if (widthReference == nullptr) {
+			IOLog("GTA4L-EMMC P5 FAILED: width reference "
+			    "buffer allocation\n");
+			return false;
+		}
+		widthObserved = (uint8_t *)IOMallocAligned(
+		    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES, PAGE_SIZE);
+		if (widthObserved == nullptr) {
+			IOLog("GTA4L-EMMC P5 FAILED: width observed "
+			    "buffer allocation\n");
+			return false;
+		}
+		bzero(widthReference, GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES);
+		bzero(widthObserved, GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES);
+	}
 	if (partReadMode) {
 		/* Every case is copied through one page-aligned buffer so the
 		 * descriptor never straddles a page boundary and every
@@ -1294,6 +1470,70 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 
+	if (widthMode) {
+		int widthRc;
+
+		/* N10.16 pre-watchdog sequence: 1-bit EXT_CSD baseline,
+		 * 1-bit reference read of the pinned BOOT window, then the
+		 * verified 4-bit switch. Any failure stops before
+		 * publication. ERR_WIDTH_RESTORE is terminal unknown
+		 * framing: no further read and no extra recovery. */
+		IOLockLock(reportLock);
+		report.width = 1;
+		report.width_cases = GTA4L_EMMC_BLOCK_WIDTH_CASES;
+		report.width_complete = 0;
+		report.width_reason =
+		    GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE;
+		report.width_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
+		report.width_segments = 1u;
+		report.width_capacity = capacityBlocks;
+		IOLockUnlock(reportLock);
+		IOLockLock(gate);
+		widthRc = gta4l_emmc_read_ext_csd(&host, widthBaseline);
+		if (widthRc != GTA4L_EMMC_OK) {
+			IOLockUnlock(gate);
+			widthLatchFailure(
+			    GTA4L_EMMC_BLOCK_WIDTH_REASON_BASELINE,
+			    widthRc, 0, nullptr);
+			panicWithReport();
+			return false;
+		}
+		if (!readWidthWindow(widthReference, &widthRefStatus,
+		    &widthRefActual, &widthRefSubrequests, &widthRefBlocks,
+		    &widthRefMax, &widthRefStopOk)) {
+			IOLockUnlock(gate);
+			widthLatchFailure(
+			    GTA4L_EMMC_BLOCK_WIDTH_REASON_PREREAD,
+			    (int32_t)widthRefStatus, widthRefActual,
+			    nullptr);
+			panicWithReport();
+			return false;
+		}
+		gta4l_emmc_block_sha256(widthReference,
+		    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES,
+		    widthReferenceDigest);
+		bzero(&widthSwitch, sizeof(widthSwitch));
+		widthRc = gta4l_emmc_set_bus_width_verified(&host,
+		    GTA4L_EMMC_BLOCK_WIDTH_BITS_4, &widthSwitch);
+		widthRecordSwitch(&widthSwitch);
+		IOLockUnlock(gate);
+		if ((widthRc != GTA4L_EMMC_OK) ||
+		    (widthSwitch.verified != 1u) ||
+		    (widthSwitch.switch_result != GTA4L_EMMC_OK) ||
+		    ((widthSwitch.host_after &
+		    GTA4L_EMMC_HOST_CONTROL_4BIT) !=
+		    GTA4L_EMMC_HOST_CONTROL_4BIT) ||
+		    (host.bus_width !=
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4)) {
+			widthLatchFailure(
+			    GTA4L_EMMC_BLOCK_WIDTH_REASON_SWITCH,
+			    (widthRc != GTA4L_EMMC_OK) ? widthRc :
+			    widthSwitch.switch_result, 0, nullptr);
+			panicWithReport();
+			return false;
+		}
+	}
+
 	IOLockLock(gate);
 	baselineResult = gta4l_emmc_read_block(&host,
 	    GTA4L_EMMC_BLOCK_REPORT_LBA, baseline);
@@ -1304,6 +1544,14 @@ Gta4lEmmcBlock::start(IOService *provider)
 	}
 	IOLockUnlock(gate);
 	if (baselineResult != 0) {
+		if (widthMode) {
+			/* The existing baseline read runs at the new width. A
+			 * failure here is a 4-bit read failure: fail closed
+			 * and preserve the first width-stage failure. */
+			widthLatchFailure(
+			    GTA4L_EMMC_BLOCK_WIDTH_REASON_READ,
+			    baselineResult, 0, nullptr);
+		}
 		report.rc = (uint32_t)baselineResult;
 		report.stop = 11;
 		report.fail_valid = 1;
@@ -1419,6 +1667,16 @@ Gta4lEmmcBlock::free()
 		IOFreeAligned(sweepReference,
 		    GTA4L_EMMC_BLOCK_SWEEP_MAX_BYTES);
 		sweepReference = nullptr;
+	}
+	if (widthObserved != nullptr) {
+		IOFreeAligned(widthObserved,
+		    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES);
+		widthObserved = nullptr;
+	}
+	if (widthReference != nullptr) {
+		IOFreeAligned(widthReference,
+		    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES);
+		widthReference = nullptr;
 	}
 	if (partmapDma != nullptr) {
 		IOFreeAligned(partmapDma,
@@ -2158,6 +2416,60 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		memcpy(target->consume_fail_digest,
 		    report.consume_fail_digest,
 		    sizeof(target->consume_fail_digest));
+		target->width = report.width;
+		target->width_cases = report.width_cases;
+		target->width_passed = report.width_passed;
+		target->width_failed = report.width_failed;
+		target->width_reason = report.width_reason;
+		target->width_complete = report.width_complete;
+		target->width_switch = report.width_switch;
+		target->width_verified = report.width_verified;
+		target->width_hb = report.width_hb;
+		target->width_ha = report.width_ha;
+		target->width_rb = report.width_rb;
+		target->width_cmd6 = report.width_cmd6;
+		target->width_revert = report.width_revert;
+		target->width_rverified = report.width_rverified;
+		target->width_rhb = report.width_rhb;
+		target->width_rha = report.width_rha;
+		target->width_rcmd6 = report.width_rcmd6;
+		target->width_reads = report.width_reads;
+		target->width_bytes = report.width_bytes;
+		target->width_blocks = report.width_blocks;
+		target->width_subrequests = report.width_subrequests;
+		target->width_max = report.width_max;
+		target->width_match = report.width_match;
+		target->width_mismatch = report.width_mismatch;
+		target->width_fails = report.width_fails;
+		target->width_cancel = report.width_cancel;
+		target->width_budget = report.width_budget;
+		target->width_limit = report.width_limit;
+		target->width_segments = report.width_segments;
+		target->width_capacity = report.width_capacity;
+		target->width_last_index = report.width_last_index;
+		target->width_last_lba = report.width_last_lba;
+		target->width_last_start = report.width_last_start;
+		target->width_last_length = report.width_last_length;
+		target->width_last_span = report.width_last_span;
+		target->width_last_status = report.width_last_status;
+		target->width_last_actual = report.width_last_actual;
+		target->width_last_subrequests =
+		    report.width_last_subrequests;
+		target->width_last_blocks = report.width_last_blocks;
+		target->width_last_max = report.width_last_max;
+		memcpy(target->width_last_digest,
+		    report.width_last_digest,
+		    sizeof(target->width_last_digest));
+		memcpy(target->width_last_predigest,
+		    report.width_last_predigest,
+		    sizeof(target->width_last_predigest));
+		target->width_last_match = report.width_last_match;
+		target->width_fail_stage = report.width_fail_stage;
+		target->width_fail_status = report.width_fail_status;
+		target->width_fail_actual = report.width_fail_actual;
+		memcpy(target->width_fail_digest,
+		    report.width_fail_digest,
+		    sizeof(target->width_fail_digest));
 		IOLockUnlock(reportLock);
 	}
 	return locked;
@@ -5391,6 +5703,410 @@ Gta4lEmmcBlock::consumeObserve(IOMemoryDescriptor *buffer, UInt64 block,
 	return true;
 }
 
+bool
+Gta4lEmmcBlock::readWidthWindow(uint8_t *target, uint32_t *status,
+    uint64_t *actual, uint32_t *subrequests, uint32_t *blocks,
+    uint32_t *max, bool *stopOk)
+{
+	struct gta4l_emmc_block_counters before;
+	struct gta4l_emmc_block_counters after;
+	uint64_t completed = 0;
+	uint32_t chunkDelta;
+	uint32_t blockDelta;
+	uint32_t stopDelta;
+	uint32_t stopFailDelta;
+	int32_t rawStatus;
+	int result;
+
+	if ((target == nullptr) || (status == nullptr) || (actual == nullptr) ||
+	    (subrequests == nullptr) || (blocks == nullptr) ||
+	    (max == nullptr) || (stopOk == nullptr)) {
+		return false;
+	}
+	*status = 0;
+	*actual = 0;
+	*subrequests = 0;
+	*blocks = 0;
+	*max = 0;
+	*stopOk = false;
+	before = block.counters;
+	widthCaptureBuffer = target;
+	widthCaptureCopied = 0;
+	widthCaptureActive = true;
+	result = gta4l_emmc_block_read(&block,
+	    GTA4L_EMMC_BLOCK_WIDTH_LBA,
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS,
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES,
+	    GTA4L_EMMC_BLOCK_READ, &completed);
+	widthCaptureActive = false;
+	after = block.counters;
+	chunkDelta = (after.cmd18_chunks >= before.cmd18_chunks) ?
+	    (uint32_t)(after.cmd18_chunks - before.cmd18_chunks) : 0u;
+	blockDelta = (after.blocks >= before.blocks) ?
+	    (uint32_t)(after.blocks - before.blocks) : 0u;
+	stopDelta = (after.stop_attempts >= before.stop_attempts) ?
+	    (uint32_t)(after.stop_attempts - before.stop_attempts) : 0u;
+	stopFailDelta = (after.stop_failures >= before.stop_failures) ?
+	    (uint32_t)(after.stop_failures - before.stop_failures) : 0u;
+	rawStatus = result;
+	if ((result != GTA4L_EMMC_BLOCK_OK) &&
+	    (block.counters.first_fail_valid != 0) &&
+	    (block.counters.first_fail_block >= GTA4L_EMMC_BLOCK_WIDTH_LBA) &&
+	    (block.counters.first_fail_block <
+	    GTA4L_EMMC_BLOCK_WIDTH_LBA +
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS)) {
+		rawStatus = block.counters.first_fail_error;
+	}
+	*status = (uint32_t)rawStatus;
+	*actual = completed;
+	*subrequests = (after.requests >= before.requests) ?
+	    (uint32_t)(after.requests - before.requests) : 0u;
+	*blocks = blockDelta;
+	/* The production core issues the two-block case as exactly one
+	 * CMD18 chunk, so the largest observed subrequest is the chunk. */
+	*max = (chunkDelta == 1u) ?
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS : 0u;
+	*stopOk = (result == GTA4L_EMMC_BLOCK_OK) && (chunkDelta == 1u) &&
+	    (blockDelta == GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS) &&
+	    (stopDelta == 1u) && (stopFailDelta == 0u) &&
+	    (after.last_stop_result == 0);
+	return (result == GTA4L_EMMC_BLOCK_OK) &&
+	    (completed == GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES) &&
+	    (*subrequests == 1u) &&
+	    (*blocks == GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS) &&
+	    (*max == GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS) && *stopOk;
+}
+
+void
+Gta4lEmmcBlock::widthRecordSwitch(
+    const struct gta4l_emmc_bus_result *bus)
+{
+	if (bus == nullptr) {
+		return;
+	}
+	IOLockLock(reportLock);
+	report.width_switch = bus->requested;
+	report.width_verified = bus->verified;
+	report.width_hb = bus->host_before;
+	report.width_ha = bus->host_after;
+	report.width_rb = bus->switched;
+	report.width_cmd6 = bus->cmd6_attempts;
+	IOLockUnlock(reportLock);
+}
+
+void
+Gta4lEmmcBlock::widthRecordRevert(
+    const struct gta4l_emmc_bus_result *bus)
+{
+	if (bus == nullptr) {
+		return;
+	}
+	IOLockLock(reportLock);
+	report.width_revert = bus->requested;
+	report.width_rverified = bus->verified;
+	report.width_rhb = bus->host_before;
+	report.width_rha = bus->host_after;
+	report.width_rcmd6 = bus->cmd6_attempts;
+	IOLockUnlock(reportLock);
+}
+
+void
+Gta4lEmmcBlock::widthLatchFailure(uint32_t stage, int32_t status,
+    uint64_t actual, const uint8_t *digest)
+{
+	IOLockLock(reportLock);
+	if (widthFailStage == GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE) {
+		widthFailStage = stage;
+		widthFailStatus = status;
+		widthFailActual = actual;
+		if (digest != nullptr) {
+			memcpy(widthFailDigest, digest,
+			    sizeof(widthFailDigest));
+		} else {
+			bzero(widthFailDigest, sizeof(widthFailDigest));
+		}
+	}
+	report.width_passed = 0;
+	report.width_failed = 1;
+	report.width_reason = widthFailStage;
+	report.width_fail_stage = widthFailStage;
+	report.width_fail_status = widthFailStatus;
+	report.width_fail_actual = widthFailActual;
+	memcpy(report.width_fail_digest, widthFailDigest,
+	    sizeof(report.width_fail_digest));
+	report.width = 1;
+	report.width_cases = GTA4L_EMMC_BLOCK_WIDTH_CASES;
+	report.width_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
+	report.width_segments = 1u;
+	report.width_capacity = capacityBlocks;
+	report.width_complete = 0;
+	IOLockUnlock(reportLock);
+}
+
+void
+Gta4lEmmcBlock::widthReportCancel()
+{
+	widthLatchFailure(GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL, 0, 0,
+	    nullptr);
+	IOLockLock(reportLock);
+	report.width_cancel = 1;
+	report.width_reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_CANCEL;
+	report.width_complete = 0;
+	IOLockUnlock(reportLock);
+	reportDone = true;
+}
+
+bool
+Gta4lEmmcBlock::widthAttemptRevert()
+{
+	int result;
+
+	bzero(&widthRevert, sizeof(widthRevert));
+	result = gta4l_emmc_set_bus_width_recover(&host, 1u,
+	    widthBaseline, &widthRevert);
+	widthRevertStatus = result;
+	widthRecordRevert(&widthRevert);
+	return (result == GTA4L_EMMC_OK) &&
+	    (widthRevert.verified == 1u) &&
+	    (host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1) &&
+	    ((widthRevert.host_after &
+	    (GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT)) == 0u);
+}
+
+bool
+Gta4lEmmcBlock::acquireWidthGate(uint32_t timeoutMs)
+{
+	uint64_t start;
+	uint64_t hz;
+	uint64_t deadline;
+
+	if (gate == nullptr) {
+		return false;
+	}
+	hz = gta4l_emmc_platform_counter_hz();
+	if (hz == 0u) {
+		return false;
+	}
+	start = gta4l_emmc_platform_counter();
+	deadline = ((uint64_t)timeoutMs * hz) / 1000u;
+	while (!IOLockTryLock(gate)) {
+		if ((gta4l_emmc_platform_counter() - start) >= deadline) {
+			return false;
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_WIDTH_GATE_STEP_MS);
+	}
+	return true;
+}
+
+void
+Gta4lEmmcBlock::runWidth()
+{
+	uint32_t status = 0;
+	uint64_t actual = 0;
+	uint32_t subrequests = 0;
+	uint32_t blocks = 0;
+	uint32_t max = 0;
+	bool stopOk = false;
+	bool readOk;
+	bool revertOk;
+	uint32_t reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE;
+	uint32_t complete;
+	uint32_t match = 0;
+	uint64_t startTicks;
+	uint64_t elapsedMs = 0;
+	uint64_t hz;
+	uint64_t ticksPerMs;
+
+	IOLockLock(reportLock);
+	report.width = 1;
+	report.width_cases = GTA4L_EMMC_BLOCK_WIDTH_CASES;
+	report.width_complete = 0;
+	report.width_reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE;
+	report.width_switch = widthSwitch.requested;
+	report.width_verified = widthSwitch.verified;
+	report.width_hb = widthSwitch.host_before;
+	report.width_ha = widthSwitch.host_after;
+	report.width_rb = widthSwitch.switched;
+	report.width_cmd6 = widthSwitch.cmd6_attempts;
+	report.width_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
+	report.width_segments = 1u;
+	report.width_capacity = capacityBlocks;
+	IOLockUnlock(reportLock);
+
+	if (reportCancel) {
+		widthReportCancel();
+		return;
+	}
+
+	startTicks = gta4l_emmc_platform_counter();
+	bzero(widthObserved, GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES);
+	if (!acquireWidthGate(GTA4L_EMMC_BLOCK_WIDTH_GATE_MS)) {
+		hz = gta4l_emmc_platform_counter_hz();
+		ticksPerMs = hz / 1000u;
+		if (ticksPerMs != 0) {
+			elapsedMs =
+			    (gta4l_emmc_platform_counter() - startTicks) /
+			    ticksPerMs;
+		}
+		/* The in-flight request still owns the gate. Leave the card
+		 * at the switched width, take media offline and report a
+		 * terminal gate failure without claiming a revert. */
+		online = false;
+		widthLatchFailure(GTA4L_EMMC_BLOCK_WIDTH_REASON_GATE,
+		    0, 0, nullptr);
+		IOLockLock(reportLock);
+		report.width_budget = (elapsedMs >=
+		    GTA4L_EMMC_BLOCK_WIDTH_REPORT_MS) ? 1u : 0u;
+		IOLockUnlock(reportLock);
+		panicWithReportNoGate();
+		return;
+	}
+	readOk = readWidthWindow(widthObserved, &status, &actual,
+	    &subrequests, &blocks, &max, &stopOk);
+	if (actual != 0) {
+		gta4l_emmc_block_sha256(widthObserved,
+		    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES,
+		    widthObservedDigest);
+	} else {
+		bzero(widthObservedDigest, sizeof(widthObservedDigest));
+	}
+	if (readOk && (memcmp(widthReference, widthObserved,
+	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES) == 0)) {
+		match = 1;
+	}
+	if (!readOk) {
+		reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_READ;
+	} else if (match == 0u) {
+		reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_MATCH;
+	}
+	/* The revert runs under the same gate as the 4-bit read, including
+	 * after a failed or mismatched read. */
+	revertOk = widthAttemptRevert();
+	if (!revertOk && (reason == GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE)) {
+		reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_REVERT;
+	}
+	/* Any failed 4-bit read, comparison or revert takes the media
+	 * offline before the terminal report, matching the read callback
+	 * failure contract. The success path stays online for publication. */
+	if (reason != GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE) {
+		online = false;
+	}
+	IOLockUnlock(gate);
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+	if (gta4l_test_width_hook != nullptr) {
+		gta4l_test_width_hook(GTA4L_TEST_WIDTH_PHASE_AFTER_READ);
+	}
+#endif
+	hz = gta4l_emmc_platform_counter_hz();
+	ticksPerMs = hz / 1000u;
+	if (ticksPerMs != 0) {
+		elapsedMs = (gta4l_emmc_platform_counter() - startTicks) /
+		    ticksPerMs;
+	}
+
+	IOLockLock(reportLock);
+	report.width_reads = 2;
+	report.width_bytes = (uint32_t)(widthRefActual + actual);
+	report.width_blocks = widthRefBlocks + blocks;
+	report.width_subrequests = widthRefSubrequests + subrequests;
+	report.width_max = (max > widthRefMax) ? max : widthRefMax;
+	report.width_match = match;
+	report.width_mismatch = (readOk && (match == 0u)) ? 1u : 0u;
+	report.width_fails = (readOk) ? 0u : 1u;
+	report.width_budget = (elapsedMs >=
+	    GTA4L_EMMC_BLOCK_WIDTH_REPORT_MS) ? 1u : 0u;
+	report.width_last_index = 0;
+	report.width_last_lba = GTA4L_EMMC_BLOCK_WIDTH_LBA;
+	report.width_last_start = 0;
+	report.width_last_length = GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES;
+	report.width_last_span = GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES;
+	report.width_last_actual = actual;
+	report.width_last_status = (int32_t)status;
+	report.width_last_subrequests = subrequests;
+	report.width_last_blocks = blocks;
+	report.width_last_max = max;
+	memcpy(report.width_last_digest, widthObservedDigest,
+	    sizeof(report.width_last_digest));
+	memcpy(report.width_last_predigest, widthReferenceDigest,
+	    sizeof(report.width_last_predigest));
+	report.width_last_match = match;
+	IOLockUnlock(reportLock);
+
+	if (reportCancel) {
+		widthReportCancel();
+		return;
+	}
+	if (reason == GTA4L_EMMC_BLOCK_WIDTH_REASON_REVERT) {
+		widthLatchFailure(reason, widthRevertStatus, 0, nullptr);
+	} else if (reason != GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE) {
+		widthLatchFailure(reason, (int32_t)status, actual,
+		    (actual != 0) ? widthObservedDigest : nullptr);
+	}
+
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+	/* Interleaving seam: the first-failure latch is already preserved, but
+	 * the success/failure commit and complete computation have not run. */
+	if (gta4l_test_width_hook != nullptr) {
+		gta4l_test_width_hook(GTA4L_TEST_WIDTH_PHASE_BEFORE_TERMINAL);
+	}
+#endif
+
+	IOLockLock(reportLock);
+	if (reason == GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE) {
+		report.width_passed = GTA4L_EMMC_BLOCK_WIDTH_CASES;
+		report.width_failed = 0;
+		report.width_reason = GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE;
+	} else {
+		report.width_passed = 0;
+		report.width_failed = 1;
+		report.width_reason = reason;
+	}
+	complete = ((report.width_cases ==
+	    GTA4L_EMMC_BLOCK_WIDTH_CASES) &&
+	    (report.width_passed == GTA4L_EMMC_BLOCK_WIDTH_CASES) &&
+	    (report.width_failed == 0u) &&
+	    (report.width_reason == GTA4L_EMMC_BLOCK_WIDTH_REASON_NONE) &&
+	    (report.width_switch == GTA4L_EMMC_BLOCK_WIDTH_BITS_4) &&
+	    (report.width_verified == 1u) &&
+	    ((report.width_hb & GTA4L_EMMC_HOST_CONTROL_4BIT) == 0u) &&
+	    ((report.width_ha & GTA4L_EMMC_HOST_CONTROL_4BIT) ==
+	    GTA4L_EMMC_HOST_CONTROL_4BIT) &&
+	    (report.width_cmd6 == 1u) &&
+	    (report.width_reads == 2u) &&
+	    (report.width_bytes ==
+	    (uint32_t)(GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES * 2u)) &&
+	    (report.width_blocks ==
+	    (uint32_t)(GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS * 2u)) &&
+	    (report.width_subrequests == 2u) &&
+	    (report.width_max == GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS) &&
+	    (report.width_match == 1u) &&
+	    (report.width_mismatch == 0u) &&
+	    (report.width_fails == 0u) &&
+	    (report.width_cancel == 0u) &&
+	    (report.width_budget == 0u) &&
+	    (report.width_revert == 1u) &&
+	    (report.width_rverified == 1u) &&
+	    ((report.width_rhb & GTA4L_EMMC_HOST_CONTROL_4BIT) ==
+	    GTA4L_EMMC_HOST_CONTROL_4BIT) &&
+	    ((report.width_rha &
+	    (GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT)) == 0u) &&
+	    (report.width_rcmd6 >= 1u) && (report.width_rcmd6 <= 2u) &&
+	    (report.width_limit == GTA4L_EMMC_BLOCK_MAX_BLOCKS) &&
+	    (report.width_segments == 1u) &&
+	    (report.width_capacity == capacityBlocks) &&
+	    (widthRefStatus == 0u) &&
+	    (widthRefActual == GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES) &&
+	    (widthRefSubrequests == 1u) &&
+	    (widthRefBlocks == GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS) &&
+	    (widthRefMax == GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS) &&
+	    (widthRefStopOk) && stopOk) ? 1u : 0u;
+	report.width_complete = complete;
+	IOLockUnlock(reportLock);
+	panicWithReport();
+}
+
 void
 Gta4lEmmcBlock::runPartitionComparison()
 {
@@ -5695,14 +6411,21 @@ Gta4lEmmcBlock::runPartitionComparison()
 }
 
 void
-Gta4lEmmcBlock::panicWithReport()
+Gta4lEmmcBlock::finishReport(bool wait)
 {
 	uint32_t length;
 
 	if (!claimTerminal()) {
 		return;
 	}
-	fillDriverReport();
+	if (wait) {
+		fillDriverReport();
+	} else {
+		/* The width gate timed out because another request still
+		 * owns it. Never block the terminal report on that gate:
+		 * take the bounded try-lock snapshot instead. */
+		(void)snapshotReport(&report, false);
+	}
 	/* Reporting is complete only after the coherent snapshot has been
 	 * taken. The watchdog defers while this terminal owner is active. */
 	reportDone = true;
@@ -5717,6 +6440,18 @@ Gta4lEmmcBlock::panicWithReport()
 		return;
 	}
 	panic("%s", reportBuffer);
+}
+
+void
+Gta4lEmmcBlock::panicWithReport()
+{
+	finishReport(true);
+}
+
+void
+Gta4lEmmcBlock::panicWithReportNoGate()
+{
+	finishReport(false);
 }
 
 bool
@@ -6002,6 +6737,33 @@ Gta4lEmmcBlock::runReport()
 	report.consume_segments = GTA4L_EMMC_BLOCK_CONSUME_SEGMENTS;
 	report.consume_limit = GTA4L_EMMC_BLOCK_CONSUME_MAX_BLOCKS;
 	report.consume_capacity = capacityBlocks;
+	report.width = widthMode ? 1u : 0u;
+	report.width_cases = GTA4L_EMMC_BLOCK_WIDTH_CASES;
+	report.width_complete = 0;
+	report.width_reason = widthFailStage;
+	report.width_switch = widthSwitch.requested;
+	report.width_verified = widthSwitch.verified;
+	report.width_hb = widthSwitch.host_before;
+	report.width_ha = widthSwitch.host_after;
+	report.width_rb = widthSwitch.switched;
+	report.width_cmd6 = widthSwitch.cmd6_attempts;
+	report.width_revert = widthRevert.requested;
+	report.width_rverified = widthRevert.verified;
+	report.width_rhb = widthRevert.host_before;
+	report.width_rha = widthRevert.host_after;
+	report.width_rcmd6 = widthRevert.cmd6_attempts;
+	report.width_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
+	report.width_segments = 1u;
+	report.width_capacity = capacityBlocks;
+	report.width_fail_stage = widthFailStage;
+	report.width_fail_status = widthFailStatus;
+	report.width_fail_actual = widthFailActual;
+	memcpy(report.width_fail_digest, widthFailDigest,
+	    sizeof(report.width_fail_digest));
+	if (widthMode) {
+		runWidth();
+		return;
+	}
 	if (consumeMode) {
 		runConsume();
 		return;
