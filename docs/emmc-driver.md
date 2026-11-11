@@ -6440,6 +6440,111 @@ continuation is authorized. Findings:
 `docs/emmc-n10.20-widthhold-observation-2026-11-11.md` and
 `docs/emmc-n10.21-widthhold-partdiag-candidate-2026-11-11.md`.
 
+### 5.3.94 N10.22 widthhold candidate production (host-only, 2026-11-12)
+
+Follow-up to N10.21. A fresh host-only candidate was built from the corrected
+source at `6b7dd95`; this record does not qualify the N10.19 image and does
+not reinterpret N10.20, which stays **FAIL**.
+
+Source and build. The linked kernel `04ae57f6f565` (51,527,680 bytes) was
+built from `Gta4lEmmcBlock.c` `c4feb2d4...`, `Gta4lEmmcBlock.cpp` `6cc17c2a...`
+and `Gta4lEmmcBlock.h` `16edd86e...`; the build tree's `kits/gta4l` link
+resolved to the corrected device package, and the linked kernel contains the
+`partdiag` key and `widthholdLatchPartDiag` symbol. The candidate storage-ABI
+audit is `out/gta4l/storage-abi-04ae57f6f565/` (gdb-stop `d30ad460`,
+interface-audit `f56e3f9e`, provenance `50f697f7`, run `91c9ac96`; 190 slots,
+181 bindings, 26 overrides, 0 unresolved original imports, vtable
+`fffffff005cb44c0`, service metaclass `fffffff007b2b5b8`). The block archive
+`0c7e2df2...` is byte-identical between the linked and requalified runs;
+members are `Gta4lEmmcBlock.o` `7662aa44...`, `Gta4lEmmcBlockCpp.o`
+`3f40c53d...` and `original-bindings.o` `3e53b66d...`. The at-link report
+retains the bootstrap audit binding; the requalified report binds
+`candidate_sha256` `04ae57f6...` and the candidate interface audit, with no
+linked-byte change.
+
+Image. Payload `64914089...` (83,886,080 bytes; 66/66 contract,
+`emmc-block-3-widthhold`, fs-timer-hold fixture, packaged kernel
+`50168139...`) and BOOT image `b4d63be7...` (85,688,320 bytes; 18/18 gate,
+only the ramdisk differs from the `ce4d76e8...` v5 baseline; header ID
+`00eaac92...`). Final-image bindings: first-4,096-byte SHA-256
+`417cdef0f05bceafea13119a3b9f1ff5dab52be86ab0173dfe6d563c57368400`
+(prefix `417cdef0f05bceafea13119a3b9f1ff5`), first-1,024-byte
+`338ebbe6ab3da764f0ad87e30c2785742ea250e321b1a78bb63f914490b506f1`, and
+last-case slice at offset 3,072
+`5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef`.
+
+Host results. Block 48 core scenarios/38 mutation controls and 351 adapter
+scenarios with 125 adapter/support and 15 policy mutation controls; core
+189/117; probe 196/100; payload and package regressions, builder/checker
+self-tests, storage ABI, evidence counts, fixture recipe, inventory and
+packaging checks pass; the widthhold checker passes on the final image and a
+labeled synthetic `partdiag=0` fixture and rejects changed content, nonzero,
+missing, duplicated and malformed `partdiag`, and `WIDTHHOLDFAIL`.
+
+Status. Host-qualified candidate only; no N10.22 hardware result exists,
+initialization reliability remains `[U]`, and the N10.19 image must not be
+booted again without a new finite budget. A hardware protocol, current
+p69/protected-partition checks and owner approval remain separate gates.
+Findings:
+`docs/emmc-n10.22-widthhold-candidate-production-2026-11-12.md`.
+
+### 5.3.95 N10.23 widthhold hardware run (2026-11-12)
+
+First hardware run of the corrected candidate. One owner-approved BOOT-only
+write and one owner-triggered diagnostic boot; the one-boot budget is consumed
+(1/1). **PASS** on the bounded width-hold read qualification.
+
+Preflight and write. TWRP 3.7.1 (`gta4l`), battery Full, verified boot state
+`orange`, no slot suffix; `boot`=`p69` (100,663,296 bytes), `recovery`=`p70`,
+`efs`=`p64`, `sec_efs`=`p63`. Pre-flash p69
+`f0940421acedba4498cf69631fdac45ffab83abf65e47b56559926e87a0a1e7d` with
+prefix `7f5455d6…` (N10.19 image still installed) matched the N10.20
+post-flash records; RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs
+`3a265d58…` were unchanged. Verified full backups of BOOT/RECOVERY/EFS/sec_efs
+were taken to the owner's private store and matched the device reads. The
+N10.22 image `b4d63be7…` (85,688,320 bytes) was hash-verified before an exact
+20,920 × 4,096-byte write to p69; no wipe, repartition, tail zeroing or other
+partition write. Post-write prefix `b4d63be7…`, full p69
+`7260ad75caf7522b1e6ff7ccb63979b2096dd7d68fd580b1844574e3419a34cb`
+(new, expected), tail `a28b4ea2…`, last 1 KiB `a4f065b4…` and the three
+protected partitions unchanged.
+
+Report. `REPORT: rc=0 stop=0 mode=3 … clk=400000`; `DRV: online=1 wp=1
+reads=14 blocks=45 fails=0 max=8`; `XFER: req=45 c17=7 c18=19 c18b=38
+cfail=0 stops=19 sfail=0 last_stop=0`; `MEDIA: whole=1 base=0
+size=31268536320 content=GUID_partition_scheme writable=0`; `WIDTHHOLD:
+cases=4 passed=4 failed=0 reason=0 complete=1 switch=4 verified=1 hb=0 ha=2
+rb=0 cmd6=1 refs=1 refbytes=4096 refblocks=8 refstatus=0 refchunks=4
+refstops=4 refstopfail=0 refdigest=417cdef0f05bceafea13119a3b9f1ff5 reads=4
+bytes=4096 blocks=8 subrequests=4 max=2 c18=4 stops=4 stopfail=0 match=1
+mismatches=0 fails=0 foreign=0 cancel=0 budget=0
+obsdigest=417cdef0f05bceafea13119a3b9f1ff5 partbase=1154744320
+partsize=100663296 partro=1 partdiag=0 revert=1 rverified=1 rhb=2 rha=0
+rcmd6=1 rstatus=0 limit=64 seg=1 cap=61071360`; `WIDTHHOLDREAD: index=3
+lba=2255366 start=3072 length=1024 span=1024 actual=1024 status=0
+subrequests=1 blocks=2 max=2 digest=5f70bf18a086007016e948b04aed3b82
+predigest=5f70bf18a086007016e948b04aed3b82 match=1`; `SNAP: locked=1`;
+terminal `FAIL: valid=0 stage=0 code=0` (intentional report stop). Owner
+transcription wrapping was normalized separately; `@Gta41EmmcBlock.cpp:8024`
+keeps its `l`/`1` ambiguity. `wid=0` is the post-revert width.
+
+Verification and integrity. `scripts/check-gta4l-widthhold-evidence.py`
+passes against the exact final image and the normalized lines, including
+`partdiag=0` and the amended success predicates; its self-test passes. The
+device `refdigest`/`obsdigest` match the host-recomputed first-4,096-byte
+prefix and the `WIDTHHOLDREAD` digest matches the 1,024-byte slice at offset
+3,072 (`338ebbe6…` is the 1 KiB image hash). Post-boot read-only re-measure
+matched all post-flash values, so no unintended BOOT, tail or protected
+change exists.
+
+Status. N10.20 stays FAIL and is not reinterpreted; the only discriminator is
+the N10.21 structural Content check plus `partdiag`, and this run latched no
+PART category. One PASS establishes only this bounded boot: repeatability,
+initialization reliability, arbitrary I/O and general 4-bit publication
+remain `[U]`. BOOT stays as written (N10.22) and must not be booted again
+without a new finite budget; restore is a separate owner decision. Findings:
+`docs/emmc-n10.23-widthhold-hardware-run-2026-11-12.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:
