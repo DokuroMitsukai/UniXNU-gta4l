@@ -1046,6 +1046,8 @@ IOMedia::IOMedia()
       writable_value(false),
       content_value(0),
       property_faults(0),
+      base_reads(0),
+      size_reads(0),
       open_value(false),
       open_refuse(false),
       open_calls(0),
@@ -1103,7 +1105,12 @@ IOMedia::getProperty(const char *key) const
 		return const_cast<OSBoolean *>(&whole_object);
 	}
 	if (strcmp(key, kIOMediaBaseKey) == 0) {
-		if ((property_faults & GTA4L_TEST_PROP_BASE_MISSING) != 0) {
+		uint32_t reads = const_cast<IOMedia *>(this)->base_reads++;
+
+		if ((property_faults & GTA4L_TEST_PROP_BASE_MISSING) != 0 ||
+		    (((property_faults &
+		    GTA4L_TEST_PROP_BASE_MISSING_LATE) != 0) &&
+		    (reads >= 2u))) {
 			return 0;
 		}
 		if ((property_faults & GTA4L_TEST_PROP_BASE_WRONG) != 0) {
@@ -1113,10 +1120,15 @@ IOMedia::getProperty(const char *key) const
 		return const_cast<OSNumber *>(&base_object);
 	}
 	if (strcmp(key, kIOMediaSizeKey) == 0) {
+		uint32_t reads = const_cast<IOMedia *>(this)->size_reads++;
+
 		if ((property_faults & GTA4L_TEST_PROP_SIZE_MISSING) != 0) {
 			return 0;
 		}
-		if ((property_faults & GTA4L_TEST_PROP_SIZE_WRONG) != 0) {
+		if (((property_faults & GTA4L_TEST_PROP_SIZE_WRONG) != 0) ||
+		    (((property_faults &
+		    GTA4L_TEST_PROP_SIZE_WRONG_LATE) != 0) &&
+		    (reads >= 2u))) {
 			return const_cast<OSString *>(&content_object);
 		}
 		const_cast<IOMedia *>(this)->size_object.setValue(size_value);

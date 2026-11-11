@@ -6398,6 +6398,48 @@ not authorized by this batch. Findings:
 `docs/emmc-n10.17-sustained-width-read-design-2026-11-11.md` and
 `docs/emmc-n10.19-widthhold-candidate-2026-11-11.md`.
 
+### 5.3.93 N10.20 widthhold failure and N10.21 PART diagnostics (2026-11-11)
+
+Follow-up to N10.19. The N10.20 BOOT-only flash and one approved boot were
+executed; the run failed at BOOT-partition discovery with `reason=5` (`PART`)
+before any case read, after a verified 4-bit switch, a matching 1-bit
+reference and a verified revert. All partition fields were zero in the old
+schema, so the failing category could not be identified. No new device
+action, flash, boot, mount or write occurred in this host-only batch.
+
+Correction. The BOOT Content check is now structural: the property must be
+present as an `OSString`, and its value is deliberately not compared. The
+stock partition scheme publishes a type-GUID string and an attached storage
+client may install its Content Mask, so the previous exact `Apple_Boot`
+equality was not a valid acceptance rule. Actual bytes remain protected by
+the same-boot reference comparison and the final-image host digest binding.
+
+Diagnostic. A widthhold-only u32 `partdiag` captures the first failing PART
+category as fixed bits: not-found, duplicate, size, base, Writable, Content.
+It is reset per run, latched once (never accumulated), copied through report
+copy/snapshot and printed after `partro`; zero means no PART failure. It is
+not a reason code and does not claim every check ran. `partbase`, `partsize`
+and `partro` stay zero unless all checks pass. The formatter-exact bounds are
+922/913 bytes for the summary failure/success shape, 303 for `WIDTHHOLDREAD`
+and 133 for `WIDTHHOLDFAIL`, with a 2,066-byte read-path and 1,896-byte
+fail-path worst report inside 2,560 bytes.
+
+Host results. The block suite passes 48 core scenarios/38 mutation controls
+and 351 adapter scenarios with 122 adapter, 3 support and 15 policy mutation
+controls, including the new PART category, late base/size, structural Content
+acceptance, lost-latch, lost-reset, reintroduced-name and omitted-field
+controls. `scripts/check-gta4l-widthhold-evidence.py` requires `partdiag=0`
+on a success line and rejects nonzero, missing, duplicated, malformed or
+unknown fields. Core 189/117, probe 196/100 and the evidence-count check pass.
+
+Status. The N10.20 run stays FAIL and is not reinterpreted. The N10.19 image
+remains as last written and must not be booted again without a new finite
+budget. A new source-bound candidate build, storage-ABI audit, rebound image,
+hardware protocol and owner approval are separate gates; no hardware
+continuation is authorized. Findings:
+`docs/emmc-n10.20-widthhold-observation-2026-11-11.md` and
+`docs/emmc-n10.21-widthhold-partdiag-candidate-2026-11-11.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

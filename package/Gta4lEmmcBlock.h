@@ -331,14 +331,17 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_MS 2000u
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_STEP_MS 10u
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_WORST_MS 27720u
-#define GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES 905u
-#define GTA4L_EMMC_BLOCK_WIDTHHOLDREAD_LINE_BYTES 335u
-#define GTA4L_EMMC_BLOCK_WIDTHHOLDFAIL_LINE_BYTES 227u
-/* Exact formatter worst case with every new numeric field capped at u32:
- * base REPORT/DRV/XFER/MEDIA/SNAP/FAIL 838 (7 newlines) + WIDTHHOLD 905 +
- * WIDTHHOLDREAD 335 = 2,078 on the success path; the failure path replaces
- * the read line with the 227-byte WIDTHHOLDFAIL line and totals 1,970. */
-#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REPORT_WORST_BYTES 2078u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES 922u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLDREAD_LINE_BYTES 303u
+#define GTA4L_EMMC_BLOCK_WIDTHHOLDFAIL_LINE_BYTES 133u
+/* Formatter-exact maxima with every numeric field holding its largest u32 and
+ * 16-byte digests filled: WIDTHHOLD 922 (failure shape; the success shape is
+ * 913 because failed=0), WIDTHHOLDREAD 303 and WIDTHHOLDFAIL 133. The
+ * established base REPORT/DRV/XFER/MEDIA/SNAP/FAIL bound is 838, so the
+ * success worst case is 838 + 922 + 303 + two newlines + NUL = 2,066; the
+ * failure path replaces the read line with WIDTHHOLDFAIL and totals 1,896.
+ * The summary bound uses the larger 922 line so it covers both shapes. */
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_REPORT_WORST_BYTES 2066u
 
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2560u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
@@ -793,6 +796,7 @@ struct gta4l_emmc_block_report {
 	uint32_t widthhold_partbase;
 	uint32_t widthhold_partsize;
 	uint32_t widthhold_partro;
+	uint32_t widthhold_partdiag;
 	uint32_t widthhold_revert;
 	uint32_t widthhold_rverified;
 	uint32_t widthhold_rhb;
@@ -1176,6 +1180,17 @@ int gta4l_emmc_block_breakup_geometry(uint64_t start, uint32_t length,
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ADVERT 19u
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_THREAD 20u
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC 21u
+
+/* WIDTHHOLD BOOT-partition qualification diagnostics. The first failing
+ * category is latched with reason PART and printed in the summary; zero
+ * means no PART failure was latched. The bits never carry a raw Content
+ * string, GUID or label. */
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_NOTFOUND (1u << 0)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_DUPLICATE (1u << 1)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_SIZE (1u << 2)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_BASE (1u << 3)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_WRITABLE (1u << 4)
+#define GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_CONTENT (1u << 5)
 
 #define GTA4L_EMMC_BLOCK_CONSUME_TARGET_BOOT 1u
 

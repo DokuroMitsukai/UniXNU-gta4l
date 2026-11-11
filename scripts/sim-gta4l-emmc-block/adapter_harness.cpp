@@ -6804,8 +6804,8 @@ scenario_widthhold_match(void)
 	    "stops=4 stopfail=0 match=1 mismatches=0 fails=0 "
 	    "foreign=0 cancel=0 budget=0 obsdigest=%s "
 	    "partbase=1154744320 partsize=100663296 partro=1 "
-	    "revert=1 rverified=1 rhb=2 rha=0 rcmd6=2 rstatus=0 "
-	    "limit=64 seg=1 cap=61071360",
+	    "partdiag=0 revert=1 rverified=1 rhb=2 rha=0 rcmd6=2 "
+	    "rstatus=0 limit=64 seg=1 cap=61071360",
 	    referenceText, referenceText);
 	CHECK(strstr(gta4l_test.panic, expected) != 0);
 	snprintf(expected, sizeof(expected),
@@ -6824,6 +6824,7 @@ scenario_widthhold_match(void)
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 QUAL") == 0);
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 QUAL3") == 0);
 	CHECK(g_self->report.widthhold_complete == 1);
+	CHECK(g_self->report.widthhold_partdiag == 0u);
 	CHECK(gta4l_test.width_switch_calls == 1);
 	CHECK(gta4l_test.width_recover_calls == 1);
 	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
@@ -7472,31 +7473,57 @@ scenario_widthhold_media_two_whole(void)
 }
 
 static int
+widthhold_part_failed(uint32_t diag)
+{
+	char expected[32];
+
+	snprintf(expected, sizeof(expected), "partdiag=%u ", diag);
+	CHECK(strstr(gta4l_test.panic, "reason=5 complete=0") != 0);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "partbase=0 partsize=0 partro=0") != 0);
+	CHECK(g_self->report.widthhold_partdiag == diag);
+	CHECK(g_self->report.widthhold_reads == 0u);
+	CHECK(g_self->report.widthhold_failed == 1u);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=1") != 0);
+	return 0;
+}
+
+static int
 scenario_widthhold_part_absent(void)
 {
 	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
 	CHECK(g_started);
 	widthhold_setup(true, false);
 	CHECK(invoke_thread(1) == 1);
-	CHECK(strstr(gta4l_test.panic,
-	    "reason=5 complete=0") != 0);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_NOTFOUND) == 0);
+	CHECK(gta4l_test.multi_calls == 4);
 	CHECK(g_widthhold_whole_media->open_calls == 0);
+	CHECK(gta4l_test.now_ms >=
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_DEADLINE_MS);
 	return 0;
 }
 
 static int
 scenario_widthhold_part_duplicate(void)
 {
+	IOMedia *boot;
+
 	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
 	CHECK(g_started);
 	widthhold_setup(true, true);
-	(void)add_media(false,
+	boot = add_media(false,
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
 	    false, "Apple_Boot", true);
 	CHECK(invoke_thread(1) == 1);
-	CHECK(strstr(gta4l_test.panic,
-	    "reason=5 complete=0") != 0);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_DUPLICATE) == 0);
+	CHECK(g_widthhold_boot_media->open_calls == 0);
+	CHECK(boot->open_calls == 0);
 	return 0;
 }
 
@@ -7512,8 +7539,8 @@ scenario_widthhold_part_wrong_base(void)
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
 	    false, "Apple_Boot", true);
 	CHECK(invoke_thread(1) == 1);
-	CHECK(strstr(gta4l_test.panic,
-	    "reason=5 complete=0") != 0);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_NOTFOUND) == 0);
 	return 0;
 }
 
@@ -7529,8 +7556,48 @@ scenario_widthhold_part_wrong_size(void)
 	    GTA4L_EMMC_BLOCK_BYTES,
 	    false, "Apple_Boot", true);
 	CHECK(invoke_thread(1) == 1);
-	CHECK(strstr(gta4l_test.panic,
-	    "reason=5 complete=0") != 0);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_NOTFOUND) == 0);
+	return 0;
+}
+
+static int
+scenario_widthhold_part_base_late(void)
+{
+	IOMedia *boot;
+
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	boot = add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	boot->property_faults = GTA4L_TEST_PROP_BASE_MISSING_LATE;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_BASE) == 0);
+	CHECK(boot->open_calls == 0);
+	return 0;
+}
+
+static int
+scenario_widthhold_part_size_late(void)
+{
+	IOMedia *boot;
+
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	boot = add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	boot->property_faults = GTA4L_TEST_PROP_SIZE_WRONG_LATE;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_SIZE) == 0);
+	CHECK(boot->open_calls == 0);
 	return 0;
 }
 
@@ -7545,24 +7612,8 @@ scenario_widthhold_part_writable(void)
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
 	    true, "Apple_Boot", true);
 	CHECK(invoke_thread(1) == 1);
-	CHECK(strstr(gta4l_test.panic,
-	    "reason=5 complete=0") != 0);
-	return 0;
-}
-
-static int
-scenario_widthhold_part_content(void)
-{
-	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
-	CHECK(g_started);
-	widthhold_setup(true, false);
-	(void)add_media(false,
-	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
-	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
-	    false, "Apple_HFS", true);
-	CHECK(invoke_thread(1) == 1);
-	CHECK(strstr(gta4l_test.panic,
-	    "reason=5 complete=0") != 0);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_WRITABLE) == 0);
 	return 0;
 }
 
@@ -7580,10 +7631,107 @@ scenario_widthhold_part_writable_missing(void)
 	    false, "Apple_Boot", true);
 	boot->property_faults = GTA4L_TEST_PROP_WRITABLE_MISSING;
 	CHECK(invoke_thread(1) == 1);
-	CHECK(strstr(gta4l_test.panic,
-	    "reason=5 complete=0") != 0);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_WRITABLE) == 0);
 	CHECK(boot->open_calls == 0);
 	return 0;
+}
+
+static int
+scenario_widthhold_part_writable_wrong(void)
+{
+	IOMedia *boot;
+
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	boot = add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	boot->property_faults = GTA4L_TEST_PROP_WRITABLE_WRONG;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_WRITABLE) == 0);
+	CHECK(boot->open_calls == 0);
+	return 0;
+}
+
+static int
+scenario_widthhold_part_content_missing(void)
+{
+	IOMedia *boot;
+
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	boot = add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	boot->property_faults = GTA4L_TEST_PROP_CONTENT_MISSING;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_CONTENT) == 0);
+	CHECK(boot->open_calls == 0);
+	return 0;
+}
+
+static int
+scenario_widthhold_part_content_wrong(void)
+{
+	IOMedia *boot;
+
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	boot = add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	boot->property_faults = GTA4L_TEST_PROP_CONTENT_WRONG;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(widthhold_part_failed(
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_CONTENT) == 0);
+	CHECK(boot->open_calls == 0);
+	return 0;
+}
+
+static int
+widthhold_content_accepted(const char *content)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	(void)add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, content, true);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(strstr(gta4l_test.panic,
+	    "WIDTHHOLD: cases=4 passed=4 failed=0 reason=0 "
+	    "complete=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "partdiag=0 ") != 0);
+	CHECK(strstr(gta4l_test.panic, "partro=1 partdiag=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHHOLDFAIL") == 0);
+	CHECK(g_self->report.widthhold_partdiag == 0u);
+	CHECK(gta4l_test.width_recover_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	return 0;
+}
+
+static int
+scenario_widthhold_part_content_name(void)
+{
+	return widthhold_content_accepted("Apple_Boot");
+}
+
+static int
+scenario_widthhold_part_content_guid(void)
+{
+	/* Synthetic, deliberately non-device type-GUID string. */
+	return widthhold_content_accepted(
+	    "11111111-2222-4333-8444-555555555555");
 }
 
 static int
@@ -9836,6 +9984,243 @@ scenario_policy(void)
 	return 0;
 }
 
+static uint32_t
+report_line_bytes(const char *buffer, const char *label)
+{
+	const char *line = strstr(buffer, label);
+	const char *end;
+
+	if (line == 0) {
+		return 0;
+	}
+	end = strchr(line, '\n');
+	return (uint32_t)((end != 0) ? (end - line) : strlen(line));
+}
+
+static void
+widthhold_report_realistic(struct gta4l_emmc_block_report *report,
+    uint32_t failed)
+{
+	memset(report, 0, sizeof(*report));
+	report->widthhold = 1;
+	report->widthhold_cases = GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES;
+	report->widthhold_passed =
+	    (failed == 0u) ? GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES : 0u;
+	report->widthhold_failed = failed;
+	report->widthhold_reason = (failed == 0u) ?
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE :
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
+	report->widthhold_complete = (failed == 0u) ? 1u : 0u;
+	report->widthhold_switch = GTA4L_EMMC_BLOCK_WIDTHHOLD_BITS_4;
+	report->widthhold_verified = 1;
+	report->widthhold_hb = 0;
+	report->widthhold_ha = GTA4L_EMMC_HOST_CONTROL_4BIT;
+	report->widthhold_rb = 0;
+	report->widthhold_cmd6 = 1;
+	report->widthhold_refs = 1;
+	report->widthhold_refbytes =
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES;
+	report->widthhold_refblocks =
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS;
+	report->widthhold_refchunks = 4;
+	report->widthhold_refstops = 4;
+	memset(report->widthhold_refdigest, 0xa5,
+	    sizeof(report->widthhold_refdigest));
+	report->widthhold_reads = (failed == 0u) ?
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES : 0u;
+	report->widthhold_bytes = (failed == 0u) ?
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES : 0u;
+	report->widthhold_blocks = (failed == 0u) ?
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS : 0u;
+	report->widthhold_subrequests = (failed == 0u) ?
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES : 0u;
+	report->widthhold_max = (failed == 0u) ?
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS : 0u;
+	report->widthhold_c18 = (failed == 0u) ?
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES : 0u;
+	report->widthhold_stops = (failed == 0u) ?
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES : 0u;
+	report->widthhold_match = (failed == 0u) ? 1u : 0u;
+	memset(report->widthhold_obsdigest, 0xa5,
+	    sizeof(report->widthhold_obsdigest));
+	report->widthhold_partbase =
+	    (failed == 0u) ? GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES : 0u;
+	report->widthhold_partsize =
+	    (failed == 0u) ? GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES : 0u;
+	report->widthhold_partro = (failed == 0u) ? 1u : 0u;
+	report->widthhold_partdiag = (failed == 0u) ? 0u :
+	    (GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_NOTFOUND |
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_DUPLICATE |
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_SIZE |
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_BASE |
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_WRITABLE |
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_CONTENT);
+	report->widthhold_fail_index =
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES - 1u;
+	report->widthhold_revert = 1;
+	report->widthhold_rverified = 1;
+	report->widthhold_rhb = GTA4L_EMMC_HOST_CONTROL_4BIT;
+	report->widthhold_rcmd6 = 1;
+	report->widthhold_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
+	report->widthhold_segments = 1;
+	report->widthhold_capacity = 61071360;
+	report->widthhold_last_index = GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES - 1u;
+	report->widthhold_last_lba = (uint32_t)GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+	    (GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES - 1u) *
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS;
+	report->widthhold_last_start = (uint32_t)
+	    ((GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES - 1u) *
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES);
+	report->widthhold_last_length =
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES;
+	report->widthhold_last_span =
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES;
+	report->widthhold_last_actual =
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES;
+	report->widthhold_last_subrequests = 1;
+	report->widthhold_last_blocks =
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS;
+	report->widthhold_last_max =
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS;
+	report->widthhold_last_match = 1;
+	memset(report->widthhold_last_digest, 0x5a,
+	    sizeof(report->widthhold_last_digest));
+	memset(report->widthhold_last_predigest, 0x5a,
+	    sizeof(report->widthhold_last_predigest));
+}
+
+static void
+widthhold_report_worst(struct gta4l_emmc_block_report *report,
+    uint32_t failed)
+{
+	memset(report, 0, sizeof(*report));
+	report->widthhold = 0xffffffffu;
+	report->widthhold_cases = 0xffffffffu;
+	report->widthhold_passed = 0xffffffffu;
+	report->widthhold_failed = failed;
+	report->widthhold_reason = 0xffffffffu;
+	report->widthhold_complete = 0xffffffffu;
+	report->widthhold_switch = 0xffffffffu;
+	report->widthhold_verified = 0xffffffffu;
+	report->widthhold_hb = 0xffffffffu;
+	report->widthhold_ha = 0xffffffffu;
+	report->widthhold_rb = 0xffffffffu;
+	report->widthhold_cmd6 = 0xffffffffu;
+	report->widthhold_refs = 0xffffffffu;
+	report->widthhold_refbytes = 0xffffffffu;
+	report->widthhold_refblocks = 0xffffffffu;
+	report->widthhold_refstatus = -1;
+	report->widthhold_refchunks = 0xffffffffu;
+	report->widthhold_refstops = 0xffffffffu;
+	report->widthhold_refstopfail = 0xffffffffu;
+	memset(report->widthhold_refdigest, 0xff,
+	    sizeof(report->widthhold_refdigest));
+	report->widthhold_reads = 0xffffffffu;
+	report->widthhold_bytes = 0xffffffffu;
+	report->widthhold_blocks = 0xffffffffu;
+	report->widthhold_subrequests = 0xffffffffu;
+	report->widthhold_max = 0xffffffffu;
+	report->widthhold_c18 = 0xffffffffu;
+	report->widthhold_stops = 0xffffffffu;
+	report->widthhold_stopfail = 0xffffffffu;
+	report->widthhold_match = 0xffffffffu;
+	report->widthhold_mismatch = 0xffffffffu;
+	report->widthhold_fails = 0xffffffffu;
+	report->widthhold_foreign = 0xffffffffu;
+	report->widthhold_cancel = 0xffffffffu;
+	report->widthhold_budget = 0xffffffffu;
+	memset(report->widthhold_obsdigest, 0xff,
+	    sizeof(report->widthhold_obsdigest));
+	report->widthhold_partbase = 0xffffffffu;
+	report->widthhold_partsize = 0xffffffffu;
+	report->widthhold_partro = 0xffffffffu;
+	report->widthhold_partdiag = 0xffffffffu;
+	report->widthhold_revert = 0xffffffffu;
+	report->widthhold_rverified = 0xffffffffu;
+	report->widthhold_rhb = 0xffffffffu;
+	report->widthhold_rha = 0xffffffffu;
+	report->widthhold_rcmd6 = 0xffffffffu;
+	report->widthhold_rstatus = -1;
+	report->widthhold_limit = 0xffffffffu;
+	report->widthhold_segments = 0xffffffffu;
+	report->widthhold_capacity = 0xffffffffu;
+	report->widthhold_last_index = 0xffffffffu;
+	report->widthhold_last_lba = 0xffffffffu;
+	report->widthhold_last_start = 0xffffffffu;
+	report->widthhold_last_length = 0xffffffffu;
+	report->widthhold_last_span = 0xffffffffu;
+	report->widthhold_last_actual = 0xffffffffu;
+	report->widthhold_last_status = -1;
+	report->widthhold_last_subrequests = 0xffffffffu;
+	report->widthhold_last_blocks = 0xffffffffu;
+	report->widthhold_last_max = 0xffffffffu;
+	report->widthhold_last_match = 0xffffffffu;
+	memset(report->widthhold_last_digest, 0xff,
+	    sizeof(report->widthhold_last_digest));
+	memset(report->widthhold_last_predigest, 0xff,
+	    sizeof(report->widthhold_last_predigest));
+}
+
+static int
+scenario_widthhold_report(void)
+{
+	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	struct gta4l_emmc_block_report report;
+	uint32_t length;
+
+	widthhold_report_realistic(&report, 0u);
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 WIDTHHOLD: cases=4 passed=4 "
+	    "failed=0 reason=0 complete=1") != 0);
+	CHECK(strstr(buffer, "partro=1 partdiag=0 revert=1 rverified=1") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 WIDTHHOLDREAD: index=3 "
+	    "lba=2255366 start=3072 length=1024 span=1024 actual=1024 "
+	    "status=0 subrequests=1 blocks=2 max=2 "
+	    "digest=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a "
+	    "predigest=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a match=1") != 0);
+	CHECK(strstr(buffer, "WIDTHHOLDFAIL") == 0);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WIDTHHOLD: ") <=
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WIDTHHOLDREAD: ") <=
+	    GTA4L_EMMC_BLOCK_WIDTHHOLDREAD_LINE_BYTES);
+
+	widthhold_report_realistic(&report, 1u);
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(strstr(buffer, "reason=5 complete=0") != 0);
+	CHECK(strstr(buffer, "partdiag=63 revert=") != 0);
+	CHECK(strstr(buffer, "partbase=0 partsize=0 partro=0") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 WIDTHHOLDFAIL: index=3") != 0);
+	CHECK(strstr(buffer, "WIDTHHOLDREAD") == 0);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WIDTHHOLDFAIL: ") <=
+	    GTA4L_EMMC_BLOCK_WIDTHHOLDFAIL_LINE_BYTES);
+
+	widthhold_report_worst(&report, 0u);
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	/* Success shape: failed=0 is one character shorter than the cap. */
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WIDTHHOLD: ") == 913u);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WIDTHHOLDREAD: ") ==
+	    GTA4L_EMMC_BLOCK_WIDTHHOLDREAD_LINE_BYTES);
+
+	widthhold_report_worst(&report, 0xffffffffu);
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length > 0);
+	CHECK(length < GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WIDTHHOLD: ") ==
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WIDTHHOLDFAIL: ") ==
+	    GTA4L_EMMC_BLOCK_WIDTHHOLDFAIL_LINE_BYTES);
+	return 0;
+}
+
 static int
 run(const char *name, int (*scenario)(void))
 {
@@ -10142,6 +10527,7 @@ static const struct scenario_entry scenarios[] = {
 	{ "width-cancel-after-read", scenario_width_cancel_after_read },
 	{ "width-terminal-watchdog", scenario_width_terminal_watchdog },
 	{ "widthhold-match", scenario_widthhold_match },
+	{ "widthhold-report", scenario_widthhold_report },
 	{ "widthhold-absent", scenario_widthhold_absent },
 	{ "widthhold-refused-orphan", scenario_widthhold_refused_orphan },
 	{ "widthhold-refused-block", scenario_widthhold_refused_block },
@@ -10173,9 +10559,21 @@ static const struct scenario_entry scenarios[] = {
 	{ "widthhold-part-duplicate", scenario_widthhold_part_duplicate },
 	{ "widthhold-part-wrong-base", scenario_widthhold_part_wrong_base },
 	{ "widthhold-part-wrong-size", scenario_widthhold_part_wrong_size },
+	{ "widthhold-part-base-late", scenario_widthhold_part_base_late },
+	{ "widthhold-part-size-late", scenario_widthhold_part_size_late },
 	{ "widthhold-part-writable", scenario_widthhold_part_writable },
-	{ "widthhold-part-content", scenario_widthhold_part_content },
-	{ "widthhold-part-writable-missing", scenario_widthhold_part_writable_missing },
+	{ "widthhold-part-writable-missing",
+	  scenario_widthhold_part_writable_missing },
+	{ "widthhold-part-writable-wrong",
+	  scenario_widthhold_part_writable_wrong },
+	{ "widthhold-part-content-missing",
+	  scenario_widthhold_part_content_missing },
+	{ "widthhold-part-content-wrong",
+	  scenario_widthhold_part_content_wrong },
+	{ "widthhold-part-content-name",
+	  scenario_widthhold_part_content_name },
+	{ "widthhold-part-content-guid",
+	  scenario_widthhold_part_content_guid },
 	{ "widthhold-open-refused", scenario_widthhold_open_refused },
 	{ "widthhold-alloc-case", scenario_widthhold_alloc_case },
 	{ "widthhold-descriptor", scenario_widthhold_descriptor },

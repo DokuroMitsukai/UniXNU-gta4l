@@ -411,6 +411,8 @@ public:
 	bool writable_value;
 	const char *content_value;
 	uint32_t property_faults;
+	uint32_t base_reads;
+	uint32_t size_reads;
 	bool open_value;
 	bool open_refuse;
 	int open_calls;
@@ -640,6 +642,13 @@ extern int gta4l_test_scheme_count;
 #define GTA4L_TEST_PROP_CONTENT_WRONG 0x80u
 #define GTA4L_TEST_PROP_WRITABLE_MISSING 0x100u
 #define GTA4L_TEST_PROP_WRITABLE_WRONG 0x200u
+/* Faults that only fire after the first two reads of that property. The
+ * whole-media scan reads base/size once on every candidate and the
+ * partition lookup reads them once more, so the third read models a
+ * property that changes after selection and reaches the post-selection
+ * discovery checks. */
+#define GTA4L_TEST_PROP_BASE_MISSING_LATE 0x400u
+#define GTA4L_TEST_PROP_SIZE_WRONG_LATE 0x800u
 
 void gta4l_test_reset(void);
 void gta4l_test_media_reset(void);

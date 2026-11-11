@@ -8,6 +8,16 @@ a push. The implementation batch (working label N10.18), candidate production
 (working label N10.19) and any hardware run (working label N10.20) are
 separately gated; the plan assigns the final labels.
 
+**N10.21 amendment (2026-11-11):** the N10.20 hardware run failed at BOOT
+partition discovery (`reason=5`, `reads=0`, `partdiag` did not yet exist). The
+closeout is in `docs/emmc-n10.20-widthhold-observation-2026-11-11.md`. This
+amendment supersedes the conflicting wording in sections 4.5, 4.8, 4.9, 4.10,
+6.3, 6.6 and 8: the BPART Content check is structural (`OSString` present,
+value not compared), a widthhold-only `partdiag` bitmask identifies the first
+failing PART category, and the formatter-exact line/total maxima are recomputed
+with that field. Transport, timing, recovery, read ranges, counts and reason
+numbers are unchanged. No device action is authorized by this amendment.
+
 This revision is reconciled with the owner-approved four-case scope: four
 sequential two-block reads at the N10.16-qualified request shape, covering the
 first eight blocks (4,096 bytes) of the pinned BOOT partition. Larger 8-block
@@ -502,12 +512,33 @@ stop failures and the last stop result zero, in addition to
   size `GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES`.
 - Require the BOOT media size property to equal the pinned size, the base to
   equal the pinned base, the writable property to be present and false, and
-  the content/geometry check to pass. The existing `findPartitionMedia`
-  helper matches whole/base/size only and ignores writability
-  (`package/Gta4lEmmcBlock.cpp:2850-2907`); the implementation batch must
-  extend the BOOT lookup (or add a side check on the returned media) so
-  `partro=1` is derived from a real property read, and the host harness must
-  cover both a writable-true and a writable-absent refusal.
+  the Content property to be present as an `OSString`. The existing
+  `findPartitionMedia` helper matches whole/base/size only and ignores
+  writability and Content (`package/Gta4lEmmcBlock.cpp:2850-2907`); the
+  implementation extends the BOOT checks on the returned media so `partro=1`
+  is derived from a real property read. The host harness covers writable-true,
+  writable-absent, writable-wrong-typed, Content-absent and
+  Content-wrong-typed refusals.
+- **N10.21 Content semantics:** the check is structural media qualification,
+  not filesystem or type authentication. The property must exist and be typed
+  `OSString`; its string value, GUID format and length are not compared. The
+  stock partition scheme publishes a type-GUID string and an attached storage
+  client can replace Content with its Content Mask, so a friendly-name
+  equality is not a valid acceptance rule. Actual bytes remain protected by
+  the same-boot reference comparison and the final-image host binding. Raw
+  Content, GUIDs and labels never enter a report.
+- **N10.21 PART diagnostics:** `widthholdDiscoverMedia()` latches the first
+  failing category in a widthhold-only u32 `partdiag` bitmask: bit 0
+  not-found, bit 1 duplicate, bit 2 size, bit 3 base, bit 4 Writable, bit 5
+  Content. Missing/wrong-typed and wrong-valued properties share their
+  category, and zero means no PART failure was latched. Existing lookup
+  filters malformed geometry before returning a candidate, so that path
+  reports not-found rather than an invented base/size failure; the
+  post-selection size and base checks keep their own bits. The mask is a
+  first-failure category, not a claim that every check ran, and it is not
+  accumulated across unrelated later errors. It survives cancellation,
+  recovery, report copy and snapshot, and `partbase`/`partsize`/`partro`
+  remain zero unless every check passed.
 - A missing, duplicate or malformed media is a `MEDIA`/`PART` failure. The
   read set is skipped and recovery still runs.
 - The whole media is discovered but not opened. Only the BOOT partition is
@@ -583,8 +614,9 @@ adds a bounded `widthhold_*` field set, including:
 - reference: `refs=1`, `refbytes=4096`, `refblocks=8`, `refstatus`,
   `refchunks=4`, `refstops=4`, `refstopfail=0`, `refdigest`;
 - media: the base `MEDIA` line carries the whole-media geometry and
-  writability; the `WIDTHHOLD` summary carries `partbase`, `partsize` and
-  `partro` (1 when the BOOT media reports writable false). The widthhold
+  writability; the `WIDTHHOLD` summary carries `partbase`, `partsize`,
+  `partro` (1 when the BOOT media reports writable false) and `partdiag`
+  (zero on success, or the latched first PART failure bit). The widthhold
   family suppresses the base `PART` summary and the three `PART1`-`PART3`
   detail lines: the summary's `part_count`/`part_expected` are populated only
   by the default `countPartitions()`/GPT path, are zero in this mode, and the
@@ -621,7 +653,7 @@ switch=4 verified=1 hb=0 ha=2 rb=0 cmd6=1 refs=1 refbytes=4096 refblocks=8
 refstatus=0 refchunks=4 refstops=4 refstopfail=0 refdigest=<32 hex>
 reads=4 bytes=4096 blocks=8 subrequests=4 max=2 c18=4 stops=4 stopfail=0
 match=1 mismatches=0 fails=0 foreign=0 cancel=0 budget=0 obsdigest=<32 hex>
-partbase=1154744320 partsize=100663296 partro=1
+partbase=1154744320 partsize=100663296 partro=1 partdiag=0
 revert=1 rverified=1 rhb=2 rha=0 rcmd6=1 limit=64 seg=1 cap=61071360
 GTA4L-EMMC P5 WIDTHHOLDREAD: index=3 lba=2255366 start=3072 length=1024
 span=1024 actual=1024 status=0 subrequests=1 blocks=2 max=2
@@ -640,24 +672,26 @@ geometry and writability; the `WIDTHHOLD` summary's `partbase`/`partsize`/
 completion guard; `rcmd6` is accepted in `[1, 2]`. Host tests must not pin
 `rb`: the adapter model emits `rb=1`, while hardware carries `rb=0`.
 
-Report-buffer sizing: the current buffer is
-`GTA4L_EMMC_BLOCK_REPORT_BYTES` 2,048 bytes
-(`package/Gta4lEmmcBlock.h:300`). The formatter-exact widthhold worst case,
-recomputed from the per-line shape with new numeric fields capped at u32, is
-**2,078 bytes** on the success path (838 base + 905 summary + 335
-WIDTHHOLDREAD) and **1,970 bytes** on the failure path (838 base + 905 + 227
-WIDTHHOLDFAIL). Four versus eight cases is byte-identical because only the
-last-case fields are printed. The widthhold family suppresses the base
-`PART` summary, `PART1`-`PART3`, and legacy READ/QUAL/QUAL3, so none enters
-the bound. 2,078 exceeds the current 2,048, so the implementation batch
-raises `GTA4L_EMMC_BLOCK_REPORT_BYTES` to 2,560 and adds
-`WIDTHHOLD_REPORT_WORST_BYTES <= GTA4L_EMMC_BLOCK_REPORT_BYTES` plus
-per-line static asserts. New numeric fields must be capped at u32; an
-all-u64 variant with a signed status field recomputes to 2,599 and would not
-fit 2,560. The existing WIDTH caps (513/329/127, worst 1,772) are not
-literal type-max exact (the WIDTH summary text recomputes to 522), so the
-widthhold caps must be derived fresh rather than copied. The existing WIDTH,
-CONSUME and other worst-case asserts remain valid at the larger buffer.
+Report-buffer sizing: the widthhold family uses the 2,560-byte
+`GTA4L_EMMC_BLOCK_REPORT_BYTES` raised by the N10.18 implementation. The
+N10.21 formatter-exact maxima, recomputed from the per-line shape with every
+numeric field capped at its largest u32 value, 16-byte digests filled and the
+terminating NUL counted separately, are: `WIDTHHOLD` **922 bytes** in the
+failure shape (913 in the success shape because `failed=0` is one character
+shorter), `WIDTHHOLDREAD` **303 bytes** and `WIDTHHOLDFAIL` **133 bytes**. The
+established base REPORT/DRV/XFER/MEDIA/SNAP/FAIL bound is 838 bytes including
+its line separators, so the success worst case is 838 + 922 + 303 + two
+newlines + NUL = **2,066 bytes** and the failure path is 838 + 922 + 133 + two
+newlines + NUL = **1,896 bytes**. The summary cap uses the larger 922-byte
+shape, so one constant covers both. These values supersede the pre-N10.21
+905/335/227 and 2,078/1,970 figures, which were not formatter-exact. The
+widthhold family suppresses the base `PART` summary, `PART1`-`PART3`, and
+legacy READ/QUAL/QUAL3, so none enters the bound.
+`WIDTHHOLD_REPORT_WORST_BYTES <= GTA4L_EMMC_BLOCK_REPORT_BYTES` and the
+per-line static asserts remain required. New numeric fields must stay u32;
+`widthhold_partbase`, `widthhold_partsize` and `widthhold_partdiag` carry
+compile-time u32 assertions. The existing WIDTH, CONSUME and other worst-case
+asserts remain valid at this buffer size.
 
 ### 4.9 Success predicate
 
@@ -680,8 +714,9 @@ CONSUME and other worst-case asserts remain valid at the larger buffer.
 - whole media present with the expected geometry and `writable=0` (base
   `MEDIA` line); exactly one BOOT media discovered (the one opened) with
   `partbase == GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES`,
-  `partsize == GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES` and `partro=1`,
-  where `partro` is read from that media's writable property;
+  `partsize == GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES`, `partro=1`, where
+  `partro` is read from that media's writable property, `partdiag=0`, and the
+  Content property present as `OSString` (value not compared);
 - no watchdog report.
 
 A missing/extra case, wrong advertisement, foreign request, short transfer,
@@ -722,6 +757,26 @@ vice versa):
 
 The first failure is latched and never overwritten. The report always carries
 the first failure's index, status, actual length and digest where available.
+
+**N10.21 PART sub-diagnostics.** `partdiag` is a separate u32 field, not a
+reason code. Bit values are fixed:
+
+| Bit | Name | Meaning |
+| ---: | --- | --- |
+| 0 | NOTFOUND | lookup returned no qualifying BOOT media |
+| 1 | DUPLICATE | lookup returned more than one qualifying BOOT media |
+| 2 | SIZE | post-selection size property missing, wrong-typed or wrong value |
+| 3 | BASE | post-selection base property missing, wrong-typed or wrong value |
+| 4 | WRITABLE | Writable property missing, wrong-typed or true |
+| 5 | CONTENT | Content property missing or not an `OSString` |
+
+Zero means no PART failure was latched. The mask records the first failing
+category only, is never accumulated across later errors, and is not a claim
+that every check ran. Lookup filters malformed geometry before returning a
+candidate, so that path reports NOTFOUND rather than an invented size/base
+bit; the post-selection size/base checks keep their own bits. The mask
+survives cancellation, recovery, report copy and snapshot, and is zero on a
+successful run. Raw Content, GUID and label strings never appear in a report.
 
 ## 5. Timing
 
@@ -828,6 +883,13 @@ The implementation batch must add, and pass, at least:
 
 - Whole media missing, duplicate, wrong geometry, wrong writable/content.
 - BOOT partition missing, duplicate, wrong base, wrong size, writable.
+- N10.21: post-selection base/size refusals reachable through the test seam
+  (a property that changes after lookup), Writable absent/wrong-typed/true,
+  Content absent/wrong-typed, and synthetic non-identifying type-GUID plus
+  friendly-name Content values accepted when correctly typed. Success reports
+  `partdiag=0`; each refusal reports its fixed bit while
+  `partbase`/`partsize`/`partro` stay zero and no case read occurs. Cover
+  first-failure preservation and verified recovery on these PART exits.
 - Open failure; descriptor allocation failure.
 - Each of the four cases: success; read error; short actual; content
   mismatch; mismatch offset; wrong tag; wrong first block; non-contiguous
@@ -884,11 +946,20 @@ Mutation controls must reject:
 - Missing/duplicate lines cannot format a successful report.
 - Host tests must not pin `rb`; hardware carries `rb=0`, the adapter model
   `rb=1`.
-- A host verifier test (for example `scripts/check-gta4l-widthhold-evidence.py`)
-  binds `refdigest` and `obsdigest` to the packaged image's first 4,096 bytes
-  and the last-case `digest`/`predigest` to the last 1,024-byte slice, with a
+- A host verifier test (`scripts/check-gta4l-widthhold-evidence.py`) binds
+  `refdigest` and `obsdigest` to the packaged image's first 4,096 bytes and
+  the last-case `digest`/`predigest` to the last 1,024-byte slice, with a
   one-byte-changed negative fixture and a digest-truncation self-test. A host
-  mismatch is rejection even when `complete=1`.
+  mismatch is rejection even when `complete=1`. Under the N10.21 schema the
+  success line must also carry `partdiag=0`; nonzero, missing, duplicated,
+  malformed or unknown `partdiag` fields are rejected. The original N10.19
+  artifacts and their schema stay historical evidence and are not
+  reinterpreted as N10.21 passes.
+- N10.21 mutation controls must reject a lost `partdiag` latch, a lost
+  per-run reset, a removed Content-presence guard, a reintroduced
+  friendly-name equality, a removed Writable guard and an omitted `partdiag`
+  report field, in addition to the existing false-completion, skipped-revert
+  and ignored-foreign controls.
 
 ## 7. Candidate, packaging and hardware gates
 
@@ -913,6 +984,17 @@ None of this is authorized by the design.
    verification. No CMD19/CMD14, no writes, no mount, no extra boot and no
    retry without a new protocol.
 
+**N10.20 outcome and N10.21 correction.** The N10.20 BOOT-only flash and one
+approved cold boot were executed. The run failed at BOOT partition discovery
+before any case read (`reason=5 PART`, all read/case counters zero) with a
+matching 1-bit reference digest and a verified switch and revert; see
+`docs/emmc-n10.20-widthhold-observation-2026-11-11.md`. The exact failing check
+was not identifiable from the old schema, so N10.21 is a host-only corrective
+batch: structural Content qualification plus the bounded `partdiag` field.
+Producing a new candidate and any further flash/boot are separate gates; the
+N10.19 image is left untouched and must not be booted again without a new
+finite budget.
+
 The candidate must not enable widthhold by default. It must not include
 CMD19/CMD14, 8-bit, HS/DDR, a faster clock, DMA/CQE/ICE, filesystem
 mount/repair, user-data reads or storage writes.
@@ -929,8 +1011,8 @@ are fixed inputs to the N10.18 implementation:
    27,720 ms, leaving a 2,280 ms watchdog margin.
 3. Media wait: 8,000 ms for the 2,280 ms margin. No measured media-ready
    latency exists; the candidate must record it.
-4. Report buffer: 2,560 bytes, with the formatter-exact worst case 2,078
-   (read path) / 1,970 (fail path), u32 field caps and static asserts.
+4. Report buffer: 2,560 bytes, with the N10.21 formatter-exact worst case
+   2,066 (read path) / 1,896 (fail path), u32 field caps and static asserts.
 5. Foreign-traffic policy: strict failure.
 6. Whole-media discovery is required for geometry and writability, but only
    the BOOT partition is opened.
@@ -965,11 +1047,22 @@ repeatability remain unknown. The first sustained rung, even if it passes,
 would show only that a finite repeated media-path sequence completed once with
 verified recovery, not a failure rate or arbitrary-I/O readiness.
 
+**N10.21 status:** the N10.20 run consumed its one-boot budget and failed at
+PART discovery. This amendment is **GO for the host-only corrective batch**
+(structural Content check, first-failure `partdiag`, recomputed formatter
+bounds and verifier/tests). It remains **NO-GO for hardware**: a new candidate
+requires a fresh source-bound build and ABI audit, and any flash/boot requires
+separate owner approval, a current p69/backup state check and a new finite
+budget.
+
 ## 10. References
 
 - `docs/emmc-n10.16-4bit-sdr-readiness-2026-11-10.md`
 - `docs/emmc-n10.16-width4-hardware-observation-2026-11-11.md`
 - `docs/emmc-n10.16-width4-gatefix-candidate-2026-11-11.md`
+- `docs/emmc-n10.19-widthhold-candidate-2026-11-11.md`
+- `docs/emmc-n10.20-widthhold-observation-2026-11-11.md`
+- `docs/emmc-n10.21-widthhold-partdiag-candidate-2026-11-11.md`
 - `docs/emmc-n10.14-sweep-hardware-run-2026-11-10.md`
 - `docs/emmc-n10.15-read-only-consumer-design-2026-11-10.md`
 - `docs/emmc-n10.11-bounded-read-sweep-design-2026-11-09.md`

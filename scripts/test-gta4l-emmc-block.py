@@ -1249,6 +1249,10 @@ ADAPTER_MUTATIONS = [
      [('\treport.widthhold_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;\n'
        '\treport.widthhold_segments = 1u;\n'
        '\treport.widthhold_capacity = capacityBlocks;\n'
+       '\treport.widthhold_partbase = 0u;\n'
+       '\treport.widthhold_partsize = 0u;\n'
+       '\treport.widthhold_partro = 0u;\n'
+       '\treport.widthhold_partdiag = 0u;\n'
        '\tIOLockUnlock(reportLock);\n'
        '\n'
        '\tif (reportCancel) {\n',
@@ -1256,6 +1260,10 @@ ADAPTER_MUTATIONS = [
        '\t    GTA4L_EMMC_BLOCK_MAX_BLOCKS + 1u;\n'
        '\treport.widthhold_segments = 2u;\n'
        '\treport.widthhold_capacity = capacityBlocks - 1u;\n'
+       '\treport.widthhold_partbase = 0u;\n'
+       '\treport.widthhold_partsize = 0u;\n'
+       '\treport.widthhold_partro = 0u;\n'
+       '\treport.widthhold_partdiag = 0u;\n'
        '\tIOLockUnlock(reportLock);\n'
        '\n'
        '\tif (reportCancel) {\n')],
@@ -1274,6 +1282,44 @@ ADAPTER_MUTATIONS = [
        '\tIOLockUnlock(reportLock);\n'
        '\treturn claimed;\n')],
      'widthhold-watchdog-after-revert'),
+    ('widthhold-partdiag-lost',
+     [('\tIOLockLock(reportLock);\n'
+       '\tif (report.widthhold_partdiag == 0u) {\n'
+       '\t\treport.widthhold_partdiag = diag;\n'
+       '\t}\n'
+       '\tIOLockUnlock(reportLock);\n',
+       '\tIOLockLock(reportLock);\n'
+       '\treport.widthhold_partdiag = diag & 0u;\n'
+       '\tIOLockUnlock(reportLock);\n')],
+     'widthhold-part-absent'),
+    ('widthhold-partdiag-reset',
+     [('\treport.widthhold_partdiag = 0u;\n',
+       '\treport.widthhold_partdiag = 2u;\n')],
+     'widthhold-part-absent'),
+    ('widthhold-part-content-guard',
+     [('\tif (contentProperty == nullptr) {\n'
+       '\t\twidthholdLatchPartDiag(\n'
+       '\t\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_CONTENT);\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;\n'
+       '\t}\n',
+       '\tif ((0) && (contentProperty == nullptr)) {\n'
+       '\t\twidthholdLatchPartDiag(\n'
+       '\t\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_CONTENT);\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;\n'
+       '\t}\n')],
+     'widthhold-part-content-missing'),
+    ('widthhold-part-content-name',
+     [('\tif (contentProperty == nullptr) {\n',
+       '\tif ((contentProperty == nullptr) ||\n'
+       '\t    !gta4l_emmc_block_text_equal(\n'
+       '\t    contentProperty->getCStringNoCopy(), "Apple_Boot")) {\n')],
+     'widthhold-part-content-guid'),
+    ('widthhold-part-writable-guard',
+     [('\tif ((writableProperty == nullptr) ||\n'
+       '\t    writableProperty->getValue()) {\n',
+       '\tif ((0) && ((writableProperty == nullptr) ||\n'
+       '\t    writableProperty->getValue())) {\n')],
+     'widthhold-part-writable'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -1431,6 +1477,13 @@ POLICY_MUTATIONS = [
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
        '\t}\n')],
      'widthhold-refused-conflicts'),
+    ('widthhold-partdiag-omitted',
+     [('\t\tgta4l_emmc_block_put_key(&writer, "partdiag");\n'
+       '\t\tgta4l_emmc_block_put_u64(&writer,\n'
+       '\t\t    report->widthhold_partdiag);\n'
+       '\t\tgta4l_emmc_block_put_char(&writer, \' \');\n',
+       '')],
+     'widthhold-part-absent'),
 ]
 
 
@@ -1648,6 +1701,19 @@ def check_adapter_source():
         'widthhold budget must have a distinct reason'
     assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC 21u' in policy_header, \
         'widthhold allocation failure must have a distinct reason'
+    for bit, name in ((0, 'NOTFOUND'), (1, 'DUPLICATE'), (2, 'SIZE'),
+                      (3, 'BASE'), (4, 'WRITABLE'), (5, 'CONTENT')):
+        assert f'#define GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_{name} (1u << {bit})' \
+            in policy_header, \
+            f'widthhold PART {name} diagnostic bit must stay fixed'
+    assert 'widthholdLatchPartDiag' in adapter and \
+        'report.widthhold_partdiag = 0u;' in adapter, \
+        'widthhold PART diagnostics must be latched and reset per run'
+    assert 'Structural Content qualification only' in adapter, \
+        'widthhold Content qualification must stay structural'
+    assert 'partdiag' in policy and \
+        'widthhold_partdiag) == 4u' in policy, \
+        'widthhold PART diagnostics must be reported as a u32 field'
     probe = CONSUMER_PROBE.read_text()
     assert 'IOMallocContiguous(' in probe and \
         'IOFreeContiguous(' in probe, \
@@ -1988,8 +2054,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 345, f'expected 345 adapter PASS lines, got {passes}'
-        print('PASS adapter: 344 scenarios against the host IOKit seam')
+        assert passes == 352, f'expected 352 adapter PASS lines, got {passes}'
+        print('PASS adapter: 351 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

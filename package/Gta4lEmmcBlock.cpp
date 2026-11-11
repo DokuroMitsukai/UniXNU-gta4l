@@ -547,6 +547,7 @@ private:
 	void widthholdRecordRevert(const struct gta4l_emmc_bus_result *bus);
 	void widthholdLatchFailure(uint32_t stage, int32_t status,
 	    uint64_t actual, const uint8_t *digest);
+	void widthholdLatchPartDiag(uint32_t diag);
 	void widthholdFatal(uint32_t reason, int32_t status);
 	void widthholdReportCancel(void);
 	bool widthholdAttemptRevert(void);
@@ -2961,6 +2962,7 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		target->widthhold_partbase = report.widthhold_partbase;
 		target->widthhold_partsize = report.widthhold_partsize;
 		target->widthhold_partro = report.widthhold_partro;
+		target->widthhold_partdiag = report.widthhold_partdiag;
 		target->widthhold_revert = report.widthhold_revert;
 		target->widthhold_rverified = report.widthhold_rverified;
 		target->widthhold_rhb = report.widthhold_rhb;
@@ -6875,6 +6877,8 @@ Gta4lEmmcBlock::widthholdDiscoverMedia()
 		    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
 		    &partCount);
 		if (partCount > 1u) {
+			widthholdLatchPartDiag(
+			    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_DUPLICATE);
 			return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
 		}
 		if ((widthholdBoot != nullptr) && (partCount == 1u)) {
@@ -6888,37 +6892,58 @@ Gta4lEmmcBlock::widthholdDiscoverMedia()
 		waited += GTA4L_EMMC_BLOCK_WIDTHHOLD_STEP_MS;
 	}
 	if (widthholdBoot == nullptr) {
+		widthholdLatchPartDiag(
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_NOTFOUND);
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
 	}
 	numberProperty = OSDynamicCast(OSNumber,
 	    widthholdBoot->getProperty(kIOMediaSizeKey));
 	if (numberProperty == nullptr) {
+		widthholdLatchPartDiag(
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_SIZE);
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
 	}
 	bootSize = numberProperty->unsigned64BitValue();
 	if (bootSize != GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) {
+		widthholdLatchPartDiag(
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_SIZE);
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
 	}
 	numberProperty = OSDynamicCast(OSNumber,
 	    widthholdBoot->getProperty(kIOMediaBaseKey));
 	if (numberProperty == nullptr) {
+		widthholdLatchPartDiag(
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_BASE);
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
 	}
 	bootBase = numberProperty->unsigned64BitValue();
 	if (bootBase != GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES) {
+		widthholdLatchPartDiag(
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_BASE);
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
 	}
 	writableProperty = OSDynamicCast(OSBoolean,
 	    widthholdBoot->getProperty(kIOMediaWritableKey));
 	if ((writableProperty == nullptr) ||
 	    writableProperty->getValue()) {
+		widthholdLatchPartDiag(
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_WRITABLE);
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
 	}
+	/*
+	 * Structural Content qualification only: the property must be present
+	 * as an OSString. Its value is deliberately not compared. The stock
+	 * partition scheme publishes a type-GUID string, and an attached
+	 * storage client can replace Content with its Content Mask, so a
+	 * friendly-name equality would reject valid media. Actual bytes stay
+	 * protected by the same-boot reference comparison and the final-image
+	 * host binding.
+	 */
 	contentProperty = OSDynamicCast(OSString,
 	    widthholdBoot->getProperty(kIOMediaContentKey));
-	if ((contentProperty == nullptr) ||
-	    !gta4l_emmc_block_text_equal(
-	    contentProperty->getCStringNoCopy(), "Apple_Boot")) {
+	if (contentProperty == nullptr) {
+		widthholdLatchPartDiag(
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_CONTENT);
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART;
 	}
 	IOLockLock(reportLock);
@@ -7109,6 +7134,16 @@ Gta4lEmmcBlock::widthholdLatchFailure(uint32_t stage, int32_t status,
 }
 
 void
+Gta4lEmmcBlock::widthholdLatchPartDiag(uint32_t diag)
+{
+	IOLockLock(reportLock);
+	if (report.widthhold_partdiag == 0u) {
+		report.widthhold_partdiag = diag;
+	}
+	IOLockUnlock(reportLock);
+}
+
+void
 Gta4lEmmcBlock::widthholdFatal(uint32_t reason, int32_t status)
 {
 	online = false;
@@ -7275,6 +7310,10 @@ Gta4lEmmcBlock::runWidthhold()
 	report.widthhold_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
 	report.widthhold_segments = 1u;
 	report.widthhold_capacity = capacityBlocks;
+	report.widthhold_partbase = 0u;
+	report.widthhold_partsize = 0u;
+	report.widthhold_partro = 0u;
+	report.widthhold_partdiag = 0u;
 	IOLockUnlock(reportLock);
 
 	if (reportCancel) {

@@ -6,7 +6,10 @@ the concatenated 4-bit window, the 1-bit reference window and the last case's
 observed/reference slices. This host-only checker recomputes those prefixes
 from the final packaged BOOT image, requires the success-line shape and
 content agreement, and rejects a report whose digest or one-byte-changed
-image does not match. It never reads a device, firmware or a candidate kernel.
+image does not match. The amended contract also requires `partdiag=0` on the
+success line; an N10.19-schema report without that field is rejected rather
+than reinterpreted as an N10.21 pass. It never reads a device, firmware or a
+candidate kernel.
 """
 import argparse
 import hashlib
@@ -27,8 +30,8 @@ SUMMARY_FIELDS = (
     'refchunks', 'refstops', 'refstopfail', 'refdigest', 'reads', 'bytes',
     'blocks', 'subrequests', 'max', 'c18', 'stops', 'stopfail', 'match',
     'mismatches', 'fails', 'foreign', 'cancel', 'budget', 'obsdigest',
-    'partbase', 'partsize', 'partro', 'revert', 'rverified', 'rhb', 'rha',
-    'rcmd6', 'rstatus', 'limit', 'seg', 'cap')
+    'partbase', 'partsize', 'partro', 'partdiag', 'revert', 'rverified',
+    'rhb', 'rha', 'rcmd6', 'rstatus', 'limit', 'seg', 'cap')
 READ_FIELDS = (
     'index', 'lba', 'start', 'length', 'span', 'actual', 'status',
     'subrequests', 'blocks', 'max', 'digest', 'predigest', 'match')
@@ -44,8 +47,8 @@ SUMMARY_FIXED = {
     'max': '2', 'c18': '4', 'stops': '4', 'stopfail': '0', 'match': '1',
     'mismatches': '0', 'fails': '0', 'foreign': '0', 'cancel': '0',
     'budget': '0', 'partbase': '1154744320', 'partsize': '100663296',
-    'partro': '1', 'revert': '1', 'rverified': '1', 'rstatus': '0',
-    'limit': '64', 'seg': '1',
+    'partro': '1', 'partdiag': '0', 'revert': '1', 'rverified': '1',
+    'rstatus': '0', 'limit': '64', 'seg': '1',
 }
 READ_FIXED = {
     'index': str(CASE_INDEX), 'lba': str(CASE_LBA), 'start': str(CASE_START),
@@ -207,8 +210,8 @@ def self_test():
             'subrequests=4 max=2 c18=4 stops=4 stopfail=0 match=1 '
             f'mismatches=0 fails=0 foreign=0 cancel=0 budget=0 '
             f'obsdigest={window} partbase=1154744320 partsize=100663296 '
-            'partro=1 revert=1 rverified=1 rhb=2 rha=0 rcmd6=1 rstatus=0 '
-            'limit=64 seg=1 cap=61071360')
+            'partro=1 partdiag=0 revert=1 rverified=1 rhb=2 rha=0 rcmd6=1 '
+            'rstatus=0 limit=64 seg=1 cap=61071360')
         read = (
             f'{READ_LABEL}index={CASE_INDEX} lba={CASE_LBA} '
             f'start={CASE_START} length={CASE_BYTES} span={CASE_BYTES} '
@@ -243,6 +246,18 @@ def self_test():
         assert check_summary_errors(summary.replace('rcmd6=1', 'rcmd6=0'), window)
         assert check_summary_errors(summary.replace('rcmd6=1', 'rcmd6=3'), window)
         assert check_summary_errors(summary.replace('hb=0', 'hb=x'), window)
+        assert check_summary_errors(
+            summary.replace('partdiag=0', 'partdiag=8'), window)
+        assert check_summary_errors(
+            summary.replace('partdiag=0', 'partdiag=x'), window)
+        assert check_summary_errors(
+            summary.replace('partdiag=0', 'partdiag=00'), window)
+        assert check_summary_errors(
+            summary.replace('partdiag=0 ', ''), window)
+        assert check_summary_errors(
+            summary.replace('partdiag=0', 'partdiag=0 partdiag=0'), window)
+        assert check_summary_errors(
+            summary.replace('partdiag=0', 'partdiag=0 partdiagx=0'), window)
         assert check_read_errors(read.replace('match=1', 'match=0'), case)
         assert check_read_errors(read.replace(f'index={CASE_INDEX}', 'index=2'), case)
         assert check_read_errors(read.replace(f'lba={CASE_LBA}', 'lba=0'), case)

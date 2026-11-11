@@ -39,6 +39,8 @@ _Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
 _Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
     widthhold_partsize) == 4u, "WIDTHHOLD partsize must stay u32");
 _Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
+    widthhold_partdiag) == 4u, "WIDTHHOLD partdiag must stay u32");
+_Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
     widthhold_last_lba) == 4u, "WIDTHHOLD last_lba must stay u32");
 _Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
     widthhold_last_start) == 4u, "WIDTHHOLD last_start must stay u32");
@@ -2911,6 +2913,10 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "partro");
 		gta4l_emmc_block_put_u64(&writer, report->widthhold_partro);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "partdiag");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->widthhold_partdiag);
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "revert");
 		gta4l_emmc_block_put_u64(&writer, report->widthhold_revert);
