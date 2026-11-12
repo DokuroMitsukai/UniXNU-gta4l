@@ -14,9 +14,11 @@ value or token is reported, not repaired.
         --output out/gta4l/report-normalized.txt \\
         --log out/gta4l/report-joins.log --width 80
 
-The normalizer is intentionally conservative: a continuation is joined only
-when the previous physical line reaches the wrapping width and the next line
-does not start a new report, a kernel log record or a shell prompt.
+Width detection is conservative. A width is accepted only when at least two
+physical lines have the same length in the 40..200 column range. If no width
+is confident, no line is joined and a warning is recorded; pass --width when
+the transcript is known to be wrapped at one width. Known continuation
+lookalikes (`frames`, `pages`, `free`, `panic`, `debug`) start a new record.
 """
 import argparse
 import re
@@ -26,7 +28,8 @@ from pathlib import Path
 
 LABEL = re.compile(r'^GTA4L-EMMC(?: [A-Z0-9]+)+: ')
 NEW_RECORD = re.compile(
-    r'^\s*(?:GTA4L-EMMC |\[|<|dmesg|console:|.*[#$] )')
+    r'^\s*(?:GTA4L-EMMC |frames\b|pages\b|free\b|panic\b|debug\b|'
+    r'dmesg\b|\[|<|console:|.*[#$] )')
 VALUE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=\S+$')
 
 
@@ -53,27 +56,35 @@ def check_line(line):
         errors.append('report line has no fields')
     for token in tokens:
         if '=' not in token:
+            if not token.startswith('@'):
+                errors.append(f'bare field {token!r}')
             continue
         if not VALUE.match(token):
             errors.append(f'malformed field {token!r}')
     return errors
 
 
-def auto_width(lines):
-    lengths = [len(line.rstrip('\n')) for line in lines
-               if report_start(line.rstrip('\n'))]
-    longest = max(lengths, default=0)
-    if longest >= 120:
-        return 120
-    if longest >= 80:
-        return 80
-    return longest
+def detect_width(lines):
+    counts = {}
+    for line in lines:
+        length = len(line.rstrip('\n'))
+        if 40 <= length <= 200:
+            counts[length] = counts.get(length, 0) + 1
+    confident = [(length, count) for length, count in counts.items()
+                 if count >= 2]
+    if not confident:
+        return None
+    return max(confident)[0]
 
 
 def normalize(lines, width):
     output = []
     joins = []
     warnings = []
+    if width is None:
+        warnings.append('ambiguous wrapping width; no lines joined '
+                        '(pass --width when the wrap width is known)')
+        return [line.rstrip('\n') for line in lines], joins, warnings
     index = 0
     while index < len(lines):
         line = lines[index].rstrip('\n')
@@ -126,7 +137,7 @@ def self_test():
         base = Path(tmp)
         logical = ('GTA4L-EMMC P5 WIDTHPUB: cases=8 passed=8 failed=0 '
                    'reason=0 complete=1 pub=1 refdigest=0123456789abcdef')
-        width = 31
+        width = 40
         physical = [logical[i:i + width] for i in range(0, len(logical), width)]
         raw = base / 'raw.txt'
         raw.write_text('\n'.join(physical + [
@@ -134,7 +145,9 @@ def self_test():
             '[  12.345678] unrelated kernel line',
         ]) + '\n')
         lines = raw.read_text().splitlines()
-        output, joins, warnings = normalize(lines, width)
+        detected = detect_width(lines)
+        assert detected == width, detected
+        output, joins, warnings = normalize(lines, detected)
         assert output[0] == logical, output[0]
         assert len(joins) == 1, joins
         assert warnings == [], warnings
@@ -145,14 +158,21 @@ def self_test():
         bad.write_text('GTA4L-EMMC P5 WIDTHPUB: cases=\n')
         _, _, bad_warnings = normalize(bad.read_text().splitlines(), 80)
         assert bad_warnings, 'a malformed field was accepted'
-        assert auto_width(lines[:len(physical)]) == width
+        bare = 'GTA4L-EMMC P5 SPEED: hs=1 bogus'
+        assert check_line(bare), 'a bare field was accepted'
+        long_line = 'GTA4L-EMMC P5 REPORT: value=' + '1' * 60
+        frames = 'frames deadbeef'
+        assert detect_width([long_line, frames]) is None
+        output, joins, warnings = normalize([long_line, frames], None)
+        assert output == [long_line, frames], output
+        assert joins == [] and warnings, (joins, warnings)
+        output, joins, _ = normalize([long_line, frames], 70)
+        assert output == [long_line, frames], 'a frames line was joined'
+        assert joins == []
         write_outputs(output, joins, warnings, base / 'out.txt', base / 'log')
-        written = (base / 'out.txt').read_text().splitlines()
-        assert written[0] == logical
         log = (base / 'log').read_text()
-        assert 'join lines=1-' in log, log
-        assert 'summary joins=1 warnings=0' in log, log
-    print('PASS: normalizer joins wrapped reports, logs joins and keeps values')
+        assert 'summary joins=0 warnings=1' in log, log
+    print('PASS: normalizer joins wrapped reports and refuses ambiguous cuts')
 
 
 def main():
@@ -174,9 +194,7 @@ def main():
     else:
         parser.error('--input is required (or pipe the transcript)')
         return 2
-    width = args.width if args.width else auto_width(lines)
-    if width is None or width < 8:
-        parser.error('could not detect a wrapping width; pass --width')
+    width = args.width if args.width else detect_width(lines)
     output, joins, warnings = normalize(lines, width)
     write_outputs(output, joins, warnings, args.output, args.log)
     if args.log is None:
