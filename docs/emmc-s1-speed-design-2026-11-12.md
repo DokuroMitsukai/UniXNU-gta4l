@@ -1,11 +1,13 @@
 # gta4l S1 speed design and record (2026-11-12)
 
-Status: design plus host helper, host-only. The combined width/timing
-revert helper now exists and is host-tested; the S1 block-driver mode is not
-implemented. No candidate has been built, flashed or booted. This document
-is the rung record for S1: the design sections below are corrected after the
-2026-11-12 audit; the candidate, run and verdict sections are appended after
-the implementation batch and the owner boot.
+Status: design plus host helper and selector, host-only. The combined
+width/timing revert helper and the S1 block-driver selector now exist and
+are host-tested; the S1 start path, report thread, formatter, deep adapter
+scenarios and diagnostic personality are not implemented. No candidate has
+been built, flashed or booted. This document is the rung record for S1: the
+design sections below are corrected after the 2026-11-12 audit; the
+candidate, run and verdict sections are appended after the implementation
+batch and the owner boot.
 
 Risk class R1: a new combination of measured modes (HS timing plus a wider
 bus) with reference support and a verified pre-report revert. Standing owner
@@ -264,8 +266,9 @@ reads and two clock/CMD operations. Neither bound was supportable.
 
 - The combined width/timing revert helper exists and passes the core
   scenarios. Its S1 budget is now enforced by a shared deadline. The S1
-  block-driver mode and adapter scenarios are the next batch; do not flash
-  until they pass.
+  block-driver selector is implemented and host-tested; the start path,
+  report thread, formatter and deep adapter scenarios are the next batch;
+  do not flash until they pass.
 - `HISPD` remains unset in the primary image; S1b is the fallback.
 - The 8-bit / 50 MHz timing margin, pad state and DLL state are unmeasured
   until the boot.
@@ -273,7 +276,7 @@ reads and two clock/CMD operations. Neither bound was supportable.
 - Sustained throughput is S2 and needs a transport or deadline change; it
   is not part of S1.
 
-## 8. Host helper batch
+## 8. Host helper and selector batches
 
 The 2026-11-12 helper batch adds
 `gta4l_emmc_recover_width_and_timing()` and eighteen core scenarios:
@@ -285,5 +288,19 @@ The 2026-11-12 helper batch adds
 `recover-deadline-inhibit`, `recover-deadline-tran`,
 `recover-deadline-read`, `recover-deadline-clock`,
 `recover-deadline-reset`, `recover-deadline-cmd6` and `recover-both-arg`.
-The core suite passes 207 scenarios and 126 mutation controls. The S1 mode,
-adapter scenarios, candidate, run and verdict are still to come.
+The core suite passes 207 scenarios and 126 mutation controls.
+
+The selector batch adds `GTA4L_EMMC_BLOCK_SPEED_ARG "gta4l-emmc-speed"`,
+OFF/ON/REFUSED and `gta4l_emmc_block_speed_select()`. The token is accepted
+only with exactly one `gta4l-emmc-block=3` token, value 1, no duplicate and
+no other partition, read, consumer or width instrument; all ten existing
+selectors take a `speed_selected` argument and refuse the combination. The
+adapter adds `speed-accepted`, `speed-absent`, `speed-refused-orphan`,
+`speed-refused-block`, `speed-refused-value`, `speed-refused-duplicate` and
+`speed-refused-conflicts`, plus value-, duplicate-, block- and per-selector
+conflict-accepted policy controls. The block suite passes 48 core scenarios
+with 38 mutation controls and 377 adapter scenarios (378 PASS lines) with
+128 adapter, 3 support and 31 policy mutation controls; core is 207/126 and
+probe 196/100. The selector is inert until the start path consumes it: no
+HS entry, wider bus, `SPEED` report line, candidate, run or verdict exists
+yet.

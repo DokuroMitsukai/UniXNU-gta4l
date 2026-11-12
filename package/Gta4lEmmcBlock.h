@@ -379,6 +379,15 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_WIDTHPUBFAIL_LINE_BYTES 132u
 #define GTA4L_EMMC_BLOCK_WIDTHPUB_REPORT_WORST_BYTES 2079u
 
+/* S1 staged 4-bit/50 MHz speed qualification. The token is accepted only
+ * with exactly one gta4l-emmc-block=3 token, the value 1, no duplicate and
+ * none of the partition, read, consumer or width instruments selected in
+ * the same boot. B1 plumbs the selector; the S1 start path consumes it. */
+#define GTA4L_EMMC_BLOCK_SPEED_ARG "gta4l-emmc-speed"
+#define GTA4L_EMMC_BLOCK_SPEED_OFF 0
+#define GTA4L_EMMC_BLOCK_SPEED_ON 1
+#define GTA4L_EMMC_BLOCK_SPEED_REFUSED (-1)
+
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2560u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u
@@ -932,14 +941,15 @@ int gta4l_emmc_block_mode_select(int arg_present, int arg_value,
  * selection is refused, not inert, so a mistyped diagnostic cannot silently
  * fall back to the legacy reporter. */
 int gta4l_emmc_block_partobs_select(int token_present, int token_value,
-    int duplicate_tokens, int block_selected);
+    int duplicate_tokens, int block_selected, int speed_selected);
 
 /* Select the orthogonal GPT-to-IOMedia comparator. The token is accepted
  * only when exactly one block mode 1/3 token is selected, the token value is
  * exactly 1, the token is not duplicated and the N8 count observation is not
  * selected in the same boot. */
 int gta4l_emmc_block_partcmp_select(int token_present, int token_value,
-    int duplicate_tokens, int block_selected, int partobs_selected);
+    int duplicate_tokens, int block_selected, int partobs_selected,
+    int speed_selected);
 
 /* Select the orthogonal read-only IOMedia content qualification. The token
  * is accepted only when exactly one block mode 1/3 token is selected, the
@@ -947,7 +957,7 @@ int gta4l_emmc_block_partcmp_select(int token_present, int token_value,
  * observation is selected in the same boot. */
 int gta4l_emmc_block_partread_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
-    int partcmp_selected);
+    int partcmp_selected, int speed_selected);
 
 /* Select the orthogonal read-only unaligned IOMedia qualification. The token
  * is accepted only when exactly one block mode 1/3 token is selected, the
@@ -955,7 +965,7 @@ int gta4l_emmc_block_partread_select(int token_present, int token_value,
  * partition/read instruments is selected in the same boot. */
 int gta4l_emmc_block_deblock_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
-    int partcmp_selected, int partread_selected);
+    int partcmp_selected, int partread_selected, int speed_selected);
 
 /* Select the deterministic breakup qualification. The token is accepted only
  * when exactly one block mode 1/3 token is selected, the value is exactly 1,
@@ -963,7 +973,8 @@ int gta4l_emmc_block_deblock_select(int token_present, int token_value,
  * instruments (including deblock) is selected in the same boot. */
 int gta4l_emmc_block_breakup_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
-    int partcmp_selected, int partread_selected, int deblock_selected);
+    int partcmp_selected, int partread_selected, int deblock_selected,
+    int speed_selected);
 
 /* Select the bounded aligned read sweep. The token is accepted only when
  * exactly one block mode 1/3 token is selected, the value is exactly 1, the
@@ -972,7 +983,7 @@ int gta4l_emmc_block_breakup_select(int token_present, int token_value,
 int gta4l_emmc_block_sweep_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
     int partcmp_selected, int partread_selected, int deblock_selected,
-    int breakup_selected);
+    int breakup_selected, int speed_selected);
 
 /* Select the single-window read-only consumer. The token is accepted only
  * when exactly one gta4l-emmc-block=3 token is selected, the value is
@@ -982,7 +993,8 @@ int gta4l_emmc_block_sweep_select(int token_present, int token_value,
 int gta4l_emmc_block_consume_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
-    int deblock_selected, int breakup_selected, int sweep_selected);
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int speed_selected);
 
 /* Select the opt-in staged 4-bit SDR width publication. The token is
  * accepted only when exactly one gta4l-emmc-block=3 token is selected, the
@@ -994,7 +1006,7 @@ int gta4l_emmc_block_width_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected,
-    int consume_selected);
+    int consume_selected, int speed_selected);
 
 /* Select the opt-in sustained 4-bit published-media qualification. The token
  * is accepted only when exactly one gta4l-emmc-block=3 token is selected, the
@@ -1004,7 +1016,7 @@ int gta4l_emmc_block_widthhold_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected,
-    int consume_selected, int width_selected);
+    int consume_selected, int width_selected, int speed_selected);
 
 /* Select the opt-in bounded published-media read qualification. The token is
  * accepted only when exactly one gta4l-emmc-block=3 token is selected, the
@@ -1014,7 +1026,19 @@ int gta4l_emmc_block_widthpub_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected,
-    int consume_selected, int width_selected, int widthhold_selected);
+    int consume_selected, int width_selected, int widthhold_selected,
+    int speed_selected);
+
+/* Select the opt-in staged S1 speed qualification. The token is accepted
+ * only when exactly one gta4l-emmc-block=3 token is selected, the value is
+ * exactly 1, the token is not duplicated and none of the partition, read,
+ * consumer or width instruments is selected in the same boot. */
+int gta4l_emmc_block_speed_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int consume_selected, int width_selected, int widthhold_selected,
+    int widthpub_selected);
 
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u

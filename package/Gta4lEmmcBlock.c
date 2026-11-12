@@ -150,12 +150,13 @@ gta4l_emmc_block_mode_select(int arg_present, int arg_value,
 
 int
 gta4l_emmc_block_partobs_select(int token_present, int token_value,
-    int duplicate_tokens, int block_selected)
+    int duplicate_tokens, int block_selected, int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_PARTOBS_OFF;
 	}
-	if ((duplicate_tokens != 0) || (block_selected == 0)) {
+	if ((duplicate_tokens != 0) || (block_selected == 0) ||
+	    (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_PARTOBS_REFUSED;
 	}
 	if (token_value != 1) {
@@ -166,13 +167,14 @@ gta4l_emmc_block_partobs_select(int token_present, int token_value,
 
 int
 gta4l_emmc_block_partcmp_select(int token_present, int token_value,
-    int duplicate_tokens, int block_selected, int partobs_selected)
+    int duplicate_tokens, int block_selected, int partobs_selected,
+    int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_PARTCMP_OFF;
 	}
 	if ((duplicate_tokens != 0) || (block_selected == 0) ||
-	    (partobs_selected != 0)) {
+	    (partobs_selected != 0) || (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_PARTCMP_REFUSED;
 	}
 	if (token_value != 1) {
@@ -184,13 +186,14 @@ gta4l_emmc_block_partcmp_select(int token_present, int token_value,
 int
 gta4l_emmc_block_partread_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
-    int partcmp_selected)
+    int partcmp_selected, int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_PARTREAD_OFF;
 	}
 	if ((duplicate_tokens != 0) || (block_selected == 0) ||
-	    (partobs_selected != 0) || (partcmp_selected != 0)) {
+	    (partobs_selected != 0) || (partcmp_selected != 0) ||
+	    (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_PARTREAD_REFUSED;
 	}
 	if (token_value != 1) {
@@ -202,14 +205,14 @@ gta4l_emmc_block_partread_select(int token_present, int token_value,
 int
 gta4l_emmc_block_deblock_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
-    int partcmp_selected, int partread_selected)
+    int partcmp_selected, int partread_selected, int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_DEBLOCK_OFF;
 	}
 	if ((duplicate_tokens != 0) || (block_selected == 0) ||
 	    (partobs_selected != 0) || (partcmp_selected != 0) ||
-	    (partread_selected != 0)) {
+	    (partread_selected != 0) || (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_DEBLOCK_REFUSED;
 	}
 	if (token_value != 1) {
@@ -221,14 +224,16 @@ gta4l_emmc_block_deblock_select(int token_present, int token_value,
 int
 gta4l_emmc_block_breakup_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
-    int partcmp_selected, int partread_selected, int deblock_selected)
+    int partcmp_selected, int partread_selected, int deblock_selected,
+    int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_BREAKUP_OFF;
 	}
 	if ((duplicate_tokens != 0) || (block_selected == 0) ||
 	    (partobs_selected != 0) || (partcmp_selected != 0) ||
-	    (partread_selected != 0) || (deblock_selected != 0)) {
+	    (partread_selected != 0) || (deblock_selected != 0) ||
+	    (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_BREAKUP_REFUSED;
 	}
 	if (token_value != 1) {
@@ -241,7 +246,7 @@ int
 gta4l_emmc_block_sweep_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int partobs_selected,
     int partcmp_selected, int partread_selected, int deblock_selected,
-    int breakup_selected)
+    int breakup_selected, int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_SWEEP_OFF;
@@ -249,7 +254,7 @@ gta4l_emmc_block_sweep_select(int token_present, int token_value,
 	if ((duplicate_tokens != 0) || (block_selected == 0) ||
 	    (partobs_selected != 0) || (partcmp_selected != 0) ||
 	    (partread_selected != 0) || (deblock_selected != 0) ||
-	    (breakup_selected != 0)) {
+	    (breakup_selected != 0) || (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_SWEEP_REFUSED;
 	}
 	if (token_value != 1) {
@@ -262,7 +267,8 @@ int
 gta4l_emmc_block_consume_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
-    int deblock_selected, int breakup_selected, int sweep_selected)
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_CONSUME_OFF;
@@ -271,7 +277,8 @@ gta4l_emmc_block_consume_select(int token_present, int token_value,
 	    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||
 	    (partobs_selected != 0) || (partcmp_selected != 0) ||
 	    (partread_selected != 0) || (deblock_selected != 0) ||
-	    (breakup_selected != 0) || (sweep_selected != 0)) {
+	    (breakup_selected != 0) || (sweep_selected != 0) ||
+	    (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_CONSUME_REFUSED;
 	}
 	if (token_value != 1) {
@@ -285,7 +292,7 @@ gta4l_emmc_block_width_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected,
-    int consume_selected)
+    int consume_selected, int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_WIDTH_OFF;
@@ -295,7 +302,7 @@ gta4l_emmc_block_width_select(int token_present, int token_value,
 	    (partobs_selected != 0) || (partcmp_selected != 0) ||
 	    (partread_selected != 0) || (deblock_selected != 0) ||
 	    (breakup_selected != 0) || (sweep_selected != 0) ||
-	    (consume_selected != 0)) {
+	    (consume_selected != 0) || (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_WIDTH_REFUSED;
 	}
 	if (token_value != (int)GTA4L_EMMC_BLOCK_WIDTH_BITS_4) {
@@ -309,7 +316,7 @@ gta4l_emmc_block_widthhold_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected,
-    int consume_selected, int width_selected)
+    int consume_selected, int width_selected, int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_OFF;
@@ -319,7 +326,8 @@ gta4l_emmc_block_widthhold_select(int token_present, int token_value,
 	    (partobs_selected != 0) || (partcmp_selected != 0) ||
 	    (partread_selected != 0) || (deblock_selected != 0) ||
 	    (breakup_selected != 0) || (sweep_selected != 0) ||
-	    (consume_selected != 0) || (width_selected != 0)) {
+	    (consume_selected != 0) || (width_selected != 0) ||
+	    (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;
 	}
 	if (token_value != (int)GTA4L_EMMC_BLOCK_WIDTHHOLD_ON) {
@@ -333,7 +341,8 @@ gta4l_emmc_block_widthpub_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected,
-    int consume_selected, int width_selected, int widthhold_selected)
+    int consume_selected, int width_selected, int widthhold_selected,
+    int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_WIDTHPUB_OFF;
@@ -344,13 +353,39 @@ gta4l_emmc_block_widthpub_select(int token_present, int token_value,
 	    (partread_selected != 0) || (deblock_selected != 0) ||
 	    (breakup_selected != 0) || (sweep_selected != 0) ||
 	    (consume_selected != 0) || (width_selected != 0) ||
-	    (widthhold_selected != 0)) {
+	    (widthhold_selected != 0) || (speed_selected != 0)) {
 		return GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;
 	}
 	if (token_value != (int)GTA4L_EMMC_BLOCK_WIDTHPUB_ON) {
 		return GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;
 	}
 	return GTA4L_EMMC_BLOCK_WIDTHPUB_ON;
+}
+
+int
+gta4l_emmc_block_speed_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int consume_selected, int width_selected, int widthhold_selected,
+    int widthpub_selected)
+{
+	if (token_present == 0) {
+		return GTA4L_EMMC_BLOCK_SPEED_OFF;
+	}
+	if ((duplicate_tokens != 0) || (block_selected == 0) ||
+	    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||
+	    (partobs_selected != 0) || (partcmp_selected != 0) ||
+	    (partread_selected != 0) || (deblock_selected != 0) ||
+	    (breakup_selected != 0) || (sweep_selected != 0) ||
+	    (consume_selected != 0) || (width_selected != 0) ||
+	    (widthhold_selected != 0) || (widthpub_selected != 0)) {
+		return GTA4L_EMMC_BLOCK_SPEED_REFUSED;
+	}
+	if (token_value != (int)GTA4L_EMMC_BLOCK_SPEED_ON) {
+		return GTA4L_EMMC_BLOCK_SPEED_REFUSED;
+	}
+	return GTA4L_EMMC_BLOCK_SPEED_ON;
 }
 
 static struct gta4l_emmc_block_deblock_case gta4l_emmc_block_deblock_cases[] = {

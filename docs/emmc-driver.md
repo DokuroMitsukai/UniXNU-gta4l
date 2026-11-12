@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 285 adapter scenarios and 104 adapter/support plus 10 policy mutation controls against the host IOKit seam |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 377 adapter scenarios and 131 adapter/support plus 31 policy mutation controls against the host IOKit seam |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -6652,13 +6652,13 @@ shared case budget + 4,500 in-flight two-block case + 2,000 revert gate +
 bounds are conditional and exclude scheduler stalls.
 
 Host results and checker. The block suite passes 48 core scenarios with 38
-mutation controls and 370 adapter scenarios (371 PASS lines) with the
+mutation controls and 377 adapter scenarios (378 PASS lines) with the
 widthpub full-pass, publication, budget, read/short/match/foreign/cancel/
 gate/revert/baseline/switch failures, media-absent and selector-refusal
 cases, plus adapter/support controls for single-pass, window-collapse,
 pub-cleared, pub-before-discovery, offline-missing and offline-latch and
 policy controls for value-accepted, duplicate-accepted and
-widthhold-conflict-accepted; core 189/117, probe 196/100 and the documented
+widthhold-conflict-accepted; core 207/126, probe 196/100 and the documented
 evidence counts pass. The new host-only `scripts/check-gta4l-widthpub-evidence.py`
 recomputes the window and last-case slice prefixes from the final packaged
 BOOT image, requires the success shape, `pub=1`, `partdiag=0` and a verified
@@ -6681,6 +6681,46 @@ and N10.20 remains FAIL; general 4-bit publication, sustained or arbitrary
 I/O, repeatability and initialization reliability remain `[U]`. Findings:
 `docs/emmc-n10.24-widthpub-design-2026-11-12.md` and
 `docs/emmc-n10.24-widthpub-hardware-run-2026-11-12.md`.
+
+### 5.3.99 S1 speed selector host batch (host-only, 2026-11-12)
+
+Follow-up to §5.3.98 and the S1 design
+(`docs/emmc-s1-speed-design-2026-11-12.md` §3 and §5). This batch adds only
+the selector and boot-argument plumbing for `gta4l-emmc-speed=1`; the S1
+start path, report thread, report formatter, diagnostic personality and
+device candidate are not implemented.
+
+Selector. `package/Gta4lEmmcBlock.h` adds
+`GTA4L_EMMC_BLOCK_SPEED_ARG "gta4l-emmc-speed"`, the OFF/ON/REFUSED values
+and the `gta4l_emmc_block_speed_select()` prototype. The token is accepted
+only when exactly one `gta4l-emmc-block=3` token is present, the token is not
+duplicated, the parsed value is exactly 1, and none of `partobs`, `partcmp`,
+`partread`, `deblock`, `breakup`, `sweep`, `consume`, `width`, `widthhold` or
+`widthpub` is selected. An absent token returns OFF and leaves the legacy
+paths unchanged. All ten existing selectors take a `speed_selected` argument
+and return REFUSED when it is set, so no other instrument can coexist with
+S1. `Gta4lEmmcBlock.cpp` parses the token, threads the flag into each
+selector, and records `speedMode` after a successful selection; the same
+batch corrects the ten adapter refusal messages so each names the conflicting
+selector, and a `speed` orphan or non-3 block value logs the block-mode
+requirement before the selector runs.
+
+Host results. The block suite passes 48 core scenarios with 38 mutation
+controls and 377 adapter scenarios (378 PASS lines) with 128 adapter, 3
+support and 31 policy mutation controls. The new scenarios are
+`speed-accepted`, `speed-absent`, `speed-refused-orphan`,
+`speed-refused-block`, `speed-refused-value`, `speed-refused-duplicate` and
+`speed-refused-conflicts`; the new policy controls cover value-accepted,
+duplicate-accepted, block-accepted and each conflicting-selector-accepted
+case. Core 207/126, probe 196/100 and the documented evidence counts pass.
+Host-only; no device access, flash or boot.
+
+Status. The selector is reachable but the mode is inert: the start path does
+not enter HS timing or a wider bus, and the report formatter emits no
+`GTA4L-EMMC P5 SPEED` line. The start path (B2), report thread (B3),
+formatter (B4) and deep adapter/device gates (B5/B6) remain. S1 is not
+device-qualified, and the measured driver remains 1-bit/4-bit SDR at
+400 kHz.
 
 ## 6. Expected report
 

@@ -690,6 +690,7 @@ private:
 	uint8_t widthFailDigest[16];
 	bool widthholdMode = false;
 	bool widthpubMode = false;
+	bool speedMode = false;
 	bool offlineNotified = false;
 	uint8_t *widthholdReference = nullptr;
 	uint8_t *widthholdObserved = nullptr;
@@ -1085,6 +1086,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t widthTokens;
 	uint32_t widthholdTokens;
 	uint32_t widthpubTokens;
+	uint32_t speedTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
@@ -1096,6 +1098,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int widthValue = 0;
 	int widthholdValue = 0;
 	int widthpubValue = 0;
+	int speedValue = 0;
 	int parsed;
 	int partobsParsed;
 	int partcmpParsed;
@@ -1107,6 +1110,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int widthParsed;
 	int widthholdParsed;
 	int widthpubParsed;
+	int speedParsed;
 	int mode;
 	int partobs;
 	int partcmp;
@@ -1118,6 +1122,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int width;
 	int widthhold;
 	int widthpub;
+	int speed;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -1145,6 +1150,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_ARG);
 	widthpubTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_WIDTHPUB_ARG);
+	speedTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_SPEED_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -1205,6 +1212,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	if ((widthpubParsed == 0) && (widthpubTokens != 0)) {
 		widthpubValue = -1;
 	}
+	speedParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_SPEED_ARG,
+	    &speedValue, sizeof(speedValue));
+	if ((speedParsed == 0) && (speedTokens != 0)) {
+		speedValue = -1;
+	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
 	if (mode == GTA4L_EMMC_BLOCK_SELECT_INERT) {
@@ -1258,6 +1270,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 			    "gta4l-emmc-widthpub requires "
 			    "gta4l-emmc-block=3\n");
 		}
+		if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-speed requires "
+			    "gta4l-emmc-block=3\n");
+		}
 		return false;
 	}
 	if ((mode != GTA4L_EMMC_BLOCK_SELECT_REPORT) &&
@@ -1281,11 +1298,15 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	partobs = gta4l_emmc_block_partobs_select(partobsTokens != 0,
-	    partValue, partobsTokens > 1u, 1);
+	    partValue, partobsTokens > 1u, 1, speedTokens != 0);
 	if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_REFUSED) {
 		if (partobsTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
 			    "gta4l-emmc-partobs token\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partobs "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
 			    "gta4l-emmc-partobs value\n");
@@ -1295,7 +1316,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	partObsMode = (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON);
 	partcmp = gta4l_emmc_block_partcmp_select(partcmpTokens != 0,
 	    partcmpValue, partcmpTokens > 1u, 1,
-	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON);
+	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON, speedTokens != 0);
 	if (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_REFUSED) {
 		if (partcmpTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1303,6 +1324,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 		} else if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON) {
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partobs "
 			    "and gta4l-emmc-partcmp are mutually "
+			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partcmp "
+			    "and gta4l-emmc-speed are mutually "
 			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
@@ -1314,7 +1339,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	partread = gta4l_emmc_block_partread_select(partreadTokens != 0,
 	    partreadValue, partreadTokens > 1u, 1,
 	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
-	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON);
+	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
+	    speedTokens != 0);
 	if (partread == GTA4L_EMMC_BLOCK_PARTREAD_REFUSED) {
 		if (partreadTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1327,6 +1353,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partcmp "
 			    "and gta4l-emmc-partread are mutually "
 			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partread "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
 			    "gta4l-emmc-partread value\n");
@@ -1338,7 +1368,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    deblockValue, deblockTokens > 1u, 1,
 	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
 	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
-	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON);
+	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
+	    speedTokens != 0);
 	if (deblock == GTA4L_EMMC_BLOCK_DEBLOCK_REFUSED) {
 		if (deblockTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1355,6 +1386,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partread "
 			    "and gta4l-emmc-deblock are mutually "
 			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-deblock "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
 			    "gta4l-emmc-deblock value\n");
@@ -1367,7 +1402,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
 	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
 	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
-	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON);
+	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON, speedTokens != 0);
 	if (breakup == GTA4L_EMMC_BLOCK_BREAKUP_REFUSED) {
 		if (breakupTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1388,6 +1423,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-deblock "
 			    "and gta4l-emmc-breakup are mutually "
 			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-breakup "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
 			    "gta4l-emmc-breakup value\n");
@@ -1401,7 +1440,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
 	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
 	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON,
-	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON);
+	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON, speedTokens != 0);
 	if (sweep == GTA4L_EMMC_BLOCK_SWEEP_REFUSED) {
 		if (sweepTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1426,6 +1465,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-breakup "
 			    "and gta4l-emmc-sweep are mutually "
 			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-sweep "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
 			    "gta4l-emmc-sweep value\n");
@@ -1440,7 +1483,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
 	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON,
 	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON,
-	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON);
+	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON, speedTokens != 0);
 	if (consume == GTA4L_EMMC_BLOCK_CONSUME_REFUSED) {
 		if (consumeTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1472,6 +1515,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-sweep "
 			    "and gta4l-emmc-consume are mutually "
 			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-consume "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: malformed "
 			    "gta4l-emmc-consume value\n");
@@ -1487,7 +1534,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON,
 	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON,
 	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON,
-	    consume == GTA4L_EMMC_BLOCK_CONSUME_ON);
+	    consume == GTA4L_EMMC_BLOCK_CONSUME_ON, speedTokens != 0);
 	if (width == GTA4L_EMMC_BLOCK_WIDTH_REFUSED) {
 		if (widthTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1523,6 +1570,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-consume "
 			    "and gta4l-emmc-width are mutually "
 			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-width "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-width "
 			    "value must be 4; 1-bit is the absence of the "
@@ -1541,7 +1592,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON,
 	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON,
 	    consume == GTA4L_EMMC_BLOCK_CONSUME_ON,
-	    width == GTA4L_EMMC_BLOCK_WIDTH_ON);
+	    width == GTA4L_EMMC_BLOCK_WIDTH_ON, speedTokens != 0);
 	if (widthhold == GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED) {
 		if (widthholdTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1582,6 +1633,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-width "
 			    "and gta4l-emmc-widthhold are mutually "
 			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-widthhold "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-widthhold value must be 1; "
@@ -1602,7 +1657,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON,
 	    consume == GTA4L_EMMC_BLOCK_CONSUME_ON,
 	    width == GTA4L_EMMC_BLOCK_WIDTH_ON,
-	    widthhold == GTA4L_EMMC_BLOCK_WIDTHHOLD_ON);
+	    widthhold == GTA4L_EMMC_BLOCK_WIDTHHOLD_ON,
+	    speedTokens != 0);
 	if (widthpub == GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED) {
 		if (widthpubTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -1648,6 +1704,10 @@ Gta4lEmmcBlock::start(IOService *provider)
 			    "gta4l-emmc-widthhold and "
 			    "gta4l-emmc-widthpub are mutually "
 			    "exclusive\n");
+		} else if (speedTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-widthpub "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-widthpub value must be 1; "
@@ -1657,6 +1717,78 @@ Gta4lEmmcBlock::start(IOService *provider)
 	}
 	widthpubMode =
 	    (widthpub == GTA4L_EMMC_BLOCK_WIDTHPUB_ON);
+
+	speed = gta4l_emmc_block_speed_select(
+	    speedTokens != 0, speedValue, speedTokens > 1u,
+	    1, value,
+	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
+	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
+	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
+	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON,
+	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON,
+	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON,
+	    consume == GTA4L_EMMC_BLOCK_CONSUME_ON,
+	    width == GTA4L_EMMC_BLOCK_WIDTH_ON,
+	    widthhold == GTA4L_EMMC_BLOCK_WIDTHHOLD_ON,
+	    widthpub == GTA4L_EMMC_BLOCK_WIDTHPUB_ON);
+	if (speed == GTA4L_EMMC_BLOCK_SPEED_REFUSED) {
+		if (speedTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-speed token\n");
+		} else if (value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-speed requires "
+			    "gta4l-emmc-block=3\n");
+		} else if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partobs "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partcmp "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (partread == GTA4L_EMMC_BLOCK_PARTREAD_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partread "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-deblock "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-breakup "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (sweep == GTA4L_EMMC_BLOCK_SWEEP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-sweep "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (consume == GTA4L_EMMC_BLOCK_CONSUME_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-consume "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (width == GTA4L_EMMC_BLOCK_WIDTH_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-width "
+			    "and gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (widthhold == GTA4L_EMMC_BLOCK_WIDTHHOLD_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-widthhold and "
+			    "gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else if (widthpub == GTA4L_EMMC_BLOCK_WIDTHPUB_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-widthpub and "
+			    "gta4l-emmc-speed are mutually "
+			    "exclusive\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-speed value must be 1; "
+			    "1-bit is the absence of the token\n");
+		}
+		return false;
+	}
+	speedMode = (speed == GTA4L_EMMC_BLOCK_SPEED_ON);
 	if (widthMode) {
 		/* The reference and observed copies never alias: the reference
 		 * is filled only by the pre-switch 1-bit read, the observed

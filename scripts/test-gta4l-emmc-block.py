@@ -1390,18 +1390,22 @@ SUPPORT_MUTATIONS = [
 
 POLICY_MUTATIONS = [
     ('partobs-value-accepted',
-     [('\tif ((duplicate_tokens != 0) || (block_selected == 0)) {\n'
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_PARTOBS_REFUSED;\n'
        '\t}\n'
        '\tif (token_value != 1) {\n',
-       '\tif ((duplicate_tokens != 0) || (block_selected == 0)) {\n'
+       '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_PARTOBS_REFUSED;\n'
        '\t}\n'
        '\tif ((token_value != 1) && 0) {\n')],
      'policy'),
     ('partobs-block-required',
-     [('\tif ((duplicate_tokens != 0) || (block_selected == 0)) {\n',
-       '\tif ((duplicate_tokens != 0) || ((block_selected == 0) && 0)) {\n')],
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (speed_selected != 0)) {\n',
+       '\tif ((duplicate_tokens != 0) || ((block_selected == 0) && 0) ||\n'
+       '\t    (speed_selected != 0)) {\n')],
      'policy'),
     ('partobs-width-overflow',
      [('\t\tgta4l_emmc_block_put_string(&writer,\n'
@@ -1411,21 +1415,21 @@ POLICY_MUTATIONS = [
      'policy'),
     ('partcmp-value-accepted',
      [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
-       '\t    (partobs_selected != 0)) {\n'
+       '\t    (partobs_selected != 0) || (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_PARTCMP_REFUSED;\n'
        '\t}\n'
        '\tif (token_value != 1) {\n',
        '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
-       '\t    (partobs_selected != 0)) {\n'
+       '\t    (partobs_selected != 0) || (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_PARTCMP_REFUSED;\n'
        '\t}\n'
        '\tif ((token_value != 1) && 0) {\n')],
      'partcmp-refused-value'),
     ('partcmp-partobs-exclusive',
      [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
-       '\t    (partobs_selected != 0)) {\n',
+       '\t    (partobs_selected != 0) || (speed_selected != 0)) {\n',
        '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
-       '\t    ((partobs_selected != 0) && 0)) {\n')],
+       '\t    ((partobs_selected != 0) && 0) || (speed_selected != 0)) {\n')],
      'partcmp-refused-partobs'),
     ('partcmp-pmbr-skip',
      [('\tif (gta4l_emmc_block_pmbr_valid(pmbr, capacity_blocks) == 0) {\n',
@@ -1469,7 +1473,8 @@ POLICY_MUTATIONS = [
        '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
        '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
        '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
-       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
        '\t}\n',
        '\tif (((duplicate_tokens != 0) && 0) || (block_selected == 0) ||\n'
@@ -1477,7 +1482,8 @@ POLICY_MUTATIONS = [
        '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
        '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
        '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
-       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
        '\t}\n')],
      'widthhold-refused-duplicate'),
@@ -1487,7 +1493,8 @@ POLICY_MUTATIONS = [
        '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
        '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
        '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
-       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
        '\t}\n',
        '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
@@ -1496,7 +1503,8 @@ POLICY_MUTATIONS = [
        '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
        '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
        '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
-       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
        '\t}\n')],
      'widthhold-refused-block'),
@@ -1506,7 +1514,8 @@ POLICY_MUTATIONS = [
        '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
        '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
        '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
-       '\t    (consume_selected != 0) || (width_selected != 0)) {\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
        '\t}\n',
        '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
@@ -1515,7 +1524,8 @@ POLICY_MUTATIONS = [
        '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
        '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
        '\t    (consume_selected != 0) ||\n'
-       '\t    ((width_selected != 0) && 0)) {\n'
+       '\t    ((width_selected != 0) && 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;\n'
        '\t}\n')],
      'widthhold-refused-conflicts'),
@@ -1538,7 +1548,7 @@ POLICY_MUTATIONS = [
        '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
        '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
        '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
-       '\t    (widthhold_selected != 0)) {\n'
+       '\t    (widthhold_selected != 0) || (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;\n'
        '\t}\n',
        '\tif (((duplicate_tokens != 0) && 0) ||\n'
@@ -1548,18 +1558,176 @@ POLICY_MUTATIONS = [
        '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
        '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
        '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
-       '\t    (widthhold_selected != 0)) {\n'
+       '\t    (widthhold_selected != 0) || (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;\n'
        '\t}\n')],
      'widthpub-refused-duplicate'),
     ('widthpub-widthhold-conflict-accepted',
      [('\t    (consume_selected != 0) || (width_selected != 0) ||\n'
-       '\t    (widthhold_selected != 0)) {\n'
+       '\t    (widthhold_selected != 0) || (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;\n',
        '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
-       '\t    ((widthhold_selected != 0) && 0)) {\n'
+       '\t    ((widthhold_selected != 0) && 0) ||\n'
+       '\t    (speed_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;\n')],
      'widthpub-refused-conflicts'),
+    ('speed-value-accepted',
+     [('\tif (token_value != (int)GTA4L_EMMC_BLOCK_SPEED_ON) {\n',
+       '\tif ((token_value != (int)GTA4L_EMMC_BLOCK_SPEED_ON) && 0) {\n')],
+     'speed-refused-value'),
+    ('speed-duplicate-accepted',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n'
+       '\t}\n',
+       '\tif (((duplicate_tokens != 0) && 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n'
+       '\t}\n')],
+     'speed-refused-duplicate'),
+    ('speed-block-accepted',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n'
+       '\t}\n',
+       '\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    ((block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) &&\n'
+       '\t    0) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n'
+       '\t}\n')],
+     'speed-refused-block'),
+    ('speed-partobs-conflict-accepted',
+     [('\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    ((partobs_selected != 0) && 0) ||\n'
+       '\t    (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-widthpub-conflict-accepted',
+     [('\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    (widthhold_selected != 0) ||\n'
+       '\t    ((widthpub_selected != 0) && 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-partcmp-conflict-accepted',
+     [(
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    (partobs_selected != 0) ||\n'
+       '\t    ((partcmp_selected != 0) && 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-partread-conflict-accepted',
+     [(
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    ((partread_selected != 0) && 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-deblock-conflict-accepted',
+     [(
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    (partread_selected != 0) || ((deblock_selected != 0) && 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-breakup-conflict-accepted',
+     [(
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    ((breakup_selected != 0) && 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-sweep-conflict-accepted',
+     [(
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    (breakup_selected != 0) || ((sweep_selected != 0) && 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-consume-conflict-accepted',
+     [(
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    ((consume_selected != 0) && 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-width-conflict-accepted',
+     [(
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    (consume_selected != 0) || ((width_selected != 0) && 0) ||\n'
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
+    ('speed-widthhold-conflict-accepted',
+     [(
+       '\t    (widthhold_selected != 0) || (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n',
+       '\t    ((widthhold_selected != 0) && 0) ||\n'
+       '\t    (widthpub_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
+     'policy'),
 ]
 
 
@@ -2130,8 +2298,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 371, f'expected 371 adapter PASS lines, got {passes}'
-        print('PASS adapter: 370 scenarios against the host IOKit seam')
+        assert passes == 378, f'expected 378 adapter PASS lines, got {passes}'
+        print('PASS adapter: 377 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

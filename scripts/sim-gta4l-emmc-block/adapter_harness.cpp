@@ -8714,6 +8714,146 @@ scenario_widthpub_switch_failure(void)
 }
 
 static int
+scenario_speed_accepted(void)
+{
+	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-speed=1") == 0);
+	CHECK(g_started);
+	CHECK(g_self->speedMode);
+	CHECK(!g_self->widthpubMode);
+	CHECK(!g_self->widthholdMode);
+	CHECK(g_self->report.widthpub == 0);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 REPORT:") != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHPUB") == 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHHOLD") == 0);
+	return 0;
+}
+
+static int
+scenario_speed_absent(void)
+{
+	CHECK(begin("gta4l-emmc-block=3") == 0);
+	CHECK(g_started);
+	CHECK(!g_self->speedMode);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 REPORT:") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_refused_orphan(void)
+{
+	begin("gta4l-emmc-speed=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-speed requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_refused_block(void)
+{
+	static const char *arguments[] = {
+		"gta4l-emmc-speed=1",
+		"gta4l-emmc-block=1 gta4l-emmc-speed=1",
+		"gta4l-emmc-block=2 gta4l-emmc-speed=1",
+		"gta4l-emmc-block=4 gta4l-emmc-speed=1",
+	};
+	unsigned int index;
+
+	for (index = 0;
+	    index < sizeof(arguments) / sizeof(arguments[0]); index++) {
+		begin(arguments[index]);
+		CHECK(!g_started);
+		CHECK(gta4l_test.platform_maps == 0);
+		CHECK(gta4l_test.thread_count == 0);
+		CHECK((strstr(gta4l_test.log,
+		    "requires gta4l-emmc-block=3") != 0) ||
+		    (strstr(gta4l_test.log,
+		    "malformed gta4l-emmc-block value") != 0) ||
+		    (strstr(gta4l_test.log,
+		    "publish-only mode 2 is deferred") != 0));
+	}
+	return 0;
+}
+
+static int
+scenario_speed_refused_value(void)
+{
+	static const int values[] = { 0, 2 };
+	char arguments[64];
+	unsigned int index;
+
+	for (index = 0;
+	    index < sizeof(values) / sizeof(values[0]); index++) {
+		snprintf(arguments, sizeof(arguments),
+		    "gta4l-emmc-block=3 gta4l-emmc-speed=%d",
+		    values[index]);
+		begin(arguments);
+		CHECK(!g_started);
+		CHECK(gta4l_test.platform_maps == 0);
+		CHECK(gta4l_test.thread_count == 0);
+		CHECK(strstr(gta4l_test.log,
+		    "gta4l-emmc-speed value must be 1") != 0);
+	}
+	return 0;
+}
+
+static int
+scenario_speed_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-speed=1 "
+	    "gta4l-emmc-speed=1");
+	CHECK(!g_started);
+	CHECK(gta4l_test.platform_maps == 0);
+	CHECK(gta4l_test.thread_count == 0);
+	CHECK(strstr(gta4l_test.log,
+	    "duplicate gta4l-emmc-speed token") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_refused_conflicts(void)
+{
+	static const struct {
+		const char *token;
+		const char *name;
+	} conflicts[] = {
+		{ "gta4l-emmc-partobs=1", "partobs" },
+		{ "gta4l-emmc-partcmp=1", "partcmp" },
+		{ "gta4l-emmc-partread=1", "partread" },
+		{ "gta4l-emmc-deblock=1", "deblock" },
+		{ "gta4l-emmc-breakup=1", "breakup" },
+		{ "gta4l-emmc-sweep=1", "sweep" },
+		{ "gta4l-emmc-consume=1", "consume" },
+		{ "gta4l-emmc-width=4", "width" },
+		{ "gta4l-emmc-widthhold=1", "widthhold" },
+		{ "gta4l-emmc-widthpub=1", "widthpub" },
+	};
+	char arguments[128];
+	char expected[128];
+	unsigned int index;
+
+	for (index = 0;
+	    index < sizeof(conflicts) / sizeof(conflicts[0]); index++) {
+		snprintf(arguments, sizeof(arguments),
+		    "gta4l-emmc-block=3 %s gta4l-emmc-speed=1",
+		    conflicts[index].token);
+		snprintf(expected, sizeof(expected),
+		    "gta4l-emmc-%s and gta4l-emmc-speed are mutually "
+		    "exclusive", conflicts[index].name);
+		begin(arguments);
+		CHECK(!g_started);
+		CHECK(gta4l_test.platform_maps == 0);
+		CHECK(gta4l_test.thread_count == 0);
+		CHECK(strstr(gta4l_test.log, expected) != 0);
+	}
+	return 0;
+}
+
+static int
 scenario_width_absent(void)
 {
 	begin("gta4l-emmc-block=1");
@@ -9714,96 +9854,157 @@ scenario_policy(void)
 	    GTA4L_EMMC_BLOCK_SELECT_REFUSED);
 	CHECK(gta4l_emmc_block_mode_select(1, 3, 0, 0, 1) ==
 	    GTA4L_EMMC_BLOCK_SELECT_REFUSED);
-	CHECK(gta4l_emmc_block_partobs_select(0, 0, 0, 0) ==
+	CHECK(gta4l_emmc_block_partobs_select(0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTOBS_OFF);
-	CHECK(gta4l_emmc_block_partobs_select(1, 1, 0, 1) ==
+	CHECK(gta4l_emmc_block_partobs_select(1, 1, 0, 1, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTOBS_ON);
-	CHECK(gta4l_emmc_block_partobs_select(1, 1, 1, 1) ==
+	CHECK(gta4l_emmc_block_partobs_select(1, 1, 1, 1, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
-	CHECK(gta4l_emmc_block_partobs_select(1, 2, 0, 1) ==
+	CHECK(gta4l_emmc_block_partobs_select(1, 2, 0, 1, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
-	CHECK(gta4l_emmc_block_partobs_select(1, 1, 0, 0) ==
+	CHECK(gta4l_emmc_block_partobs_select(1, 1, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
-	CHECK(gta4l_emmc_block_partcmp_select(0, 0, 0, 0, 0) ==
+	CHECK(gta4l_emmc_block_partobs_select(1, 1, 0, 1, 1) ==
+	    GTA4L_EMMC_BLOCK_PARTOBS_REFUSED);
+	CHECK(gta4l_emmc_block_partcmp_select(0, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTCMP_OFF);
-	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 1, 0) ==
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 1, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTCMP_ON);
-	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 1, 1, 0) ==
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 1, 1, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
-	CHECK(gta4l_emmc_block_partcmp_select(1, 2, 0, 1, 0) ==
+	CHECK(gta4l_emmc_block_partcmp_select(1, 2, 0, 1, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
-	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 0, 0) ==
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
-	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 1, 1) ==
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 1, 1, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
-	CHECK(gta4l_emmc_block_partread_select(0, 0, 0, 0, 0, 0) ==
+	CHECK(gta4l_emmc_block_partcmp_select(1, 1, 0, 1, 0, 1) ==
+	    GTA4L_EMMC_BLOCK_PARTCMP_REFUSED);
+	CHECK(gta4l_emmc_block_partread_select(0, 0, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTREAD_OFF);
-	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 0, 0) ==
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTREAD_ON);
-	CHECK(gta4l_emmc_block_partread_select(1, 1, 1, 1, 0, 0) ==
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 1, 1, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
-	CHECK(gta4l_emmc_block_partread_select(1, 2, 0, 1, 0, 0) ==
+	CHECK(gta4l_emmc_block_partread_select(1, 2, 0, 1, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
-	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 0, 0, 0) ==
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
-	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 1, 0) ==
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 1, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
-	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 0, 1) ==
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 0, 1, 0) ==
+	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
+	CHECK(gta4l_emmc_block_partread_select(1, 1, 0, 1, 0, 0, 1) ==
 	    GTA4L_EMMC_BLOCK_PARTREAD_REFUSED);
 	CHECK(gta4l_emmc_block_partread_case_count() == 14);
 	CHECK(gta4l_emmc_block_partread_case_at(14) == 0);
 	CHECK(gta4l_emmc_block_consume_select(0, 0, 0, 0, 0,
-	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_OFF);
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_OFF);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
-	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_ON);
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_ON);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 0, 3,
-	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 1,
-	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 1, 1, 3,
-	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 2, 0, 1, 3,
-	    0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
-	    1, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    1, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
-	    0, 1, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 1, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
-	    0, 0, 1, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 0, 1, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
-	    0, 0, 0, 1, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 0, 0, 1, 0, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
-	    0, 0, 0, 0, 1, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 0, 0, 0, 1, 0, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
-	    0, 0, 0, 0, 0, 1) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	    0, 0, 0, 0, 0, 1, 0) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
+	CHECK(gta4l_emmc_block_consume_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 1) == GTA4L_EMMC_BLOCK_CONSUME_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(0, 0, 0, 0, 0,
-	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_OFF);
+	    0, 0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_OFF);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
-	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_ON);
+	    0, 0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_ON);
 	CHECK(gta4l_emmc_block_width_select(1, 1, 0, 1, 3,
-	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 1, 1, 3,
-	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 0, 3,
-	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 1,
-	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 2,
-	    0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
-	    1, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    1, 0, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
-	    0, 1, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 1, 0, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
-	    0, 0, 1, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 1, 0, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
-	    0, 0, 0, 1, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 1, 0, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
-	    0, 0, 0, 0, 1, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 0, 1, 0, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
-	    0, 0, 0, 0, 0, 1, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 0, 0, 1, 0, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
 	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
-	    0, 0, 0, 0, 0, 0, 1) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	    0, 0, 0, 0, 0, 0, 1, 0) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_width_select(1, 4, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0, 1) == GTA4L_EMMC_BLOCK_WIDTH_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(0, 0, 0, 0, 0,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_OFF);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_ON);
+	CHECK(gta4l_emmc_block_speed_select(1, 0, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 2, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 1, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 0, 3,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 1,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    1, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 1, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 1, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 1, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 1, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 1, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0, 1, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0, 0, 1, 0) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
+	CHECK(gta4l_emmc_block_speed_select(1, 1, 0, 1, 3,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 1) ==
+	    GTA4L_EMMC_BLOCK_SPEED_REFUSED);
 	CHECK(gta4l_emmc_block_consume_validate(0,
 	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES,
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) == 0);
@@ -11097,6 +11298,13 @@ static const struct scenario_entry scenarios[] = {
 	{ "widthpub-revert-failure", scenario_widthpub_revert_failure },
 	{ "widthpub-baseline-failure", scenario_widthpub_baseline_failure },
 	{ "widthpub-switch-failure", scenario_widthpub_switch_failure },
+	{ "speed-accepted", scenario_speed_accepted },
+	{ "speed-absent", scenario_speed_absent },
+	{ "speed-refused-orphan", scenario_speed_refused_orphan },
+	{ "speed-refused-block", scenario_speed_refused_block },
+	{ "speed-refused-value", scenario_speed_refused_value },
+	{ "speed-refused-duplicate", scenario_speed_refused_duplicate },
+	{ "speed-refused-conflicts", scenario_speed_refused_conflicts },
 	{ "policy", scenario_policy },
 };
 
