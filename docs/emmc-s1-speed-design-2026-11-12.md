@@ -1,9 +1,9 @@
 # gta4l S1 speed design and record (2026-11-12)
 
-Status: design plus host helper and selector, host-only. The combined
-width/timing revert helper and the S1 block-driver selector now exist and
-are host-tested; the S1 start path, report thread, formatter, deep adapter
-scenarios and diagnostic personality are not implemented. No candidate has
+Status: start path, report thread and formatter implemented, host-only. The
+combined width/timing revert helper and the S1 block-driver selector exist
+and are host-tested; the S1 start path, report thread, formatter and speed
+diagnostic personality are in the current host batch. No candidate has
 been built, flashed or booted. The start-path budget is fixed at 25,000 ms
 and the combined revert budget at 9,500 ms (worst pre-watchdog path
 34,500 ms). This document is the rung record for S1: the
@@ -97,7 +97,7 @@ width with a data CRC or timeout. S1 never mixes both configurations.
      with the advertised `limit=64` blocks and `seg=1`;
    - four requests per pass, eight requests total;
    - hash the 4 KiB pass after the fourth request;
-   - check the 3,000 ms shared loop budget between requests;
+   - check the 2,000 ms shared loop budget between requests;
    - stop at the first request error, short transfer or cancellation.
 4. Re-read the same window (pass 2) and hash it independently.
 5. Acquire the gate within 2,000 ms.
@@ -137,8 +137,11 @@ hsrevert=1 hsverified=1 rhsb=1 rhs=0 rclk=400000 limit=64 seg=1 cap=61071360
 
 `wfall=1` records that 8-bit verification failed and 4-bit won. `ticks` are
 the platform counter deltas and `hz` is `gta4l_emmc_platform_counter_hz()`.
-The formatter-exact maximum is derived from the source constants and
-recorded in the code.
+`hispd` is the raw HOST_CONTROL byte sampled immediately after HS entry and
+**before** the bus-width switch, so its 4/8-bit bits are expected clear; the
+checker rejects both the wide-width bits and bit 2 (the primary S1
+configuration keeps high-speed enable clear). The formatter-exact maximum is
+derived from the source constants and recorded in the code.
 
 ### 3.5 Success predicate
 
@@ -244,9 +247,13 @@ The revert budget is **enforced**, not estimated: the helper arms one
 shared elapsed-time deadline before the clock switch and checks it in every
 wait, including the command-inhibit wait inside each TRAN poll. The S1
 budget is **9,500 ms**, so the report thread is at most **28,000 ms** and
-the margin against the 30,000 ms watchdog is **2,000 ms**. Expiry is a
-terminal revert failure (`hsrevert=0`, `rverified=0`), reported and not
-retried.
+the margin against the 30,000 ms watchdog is **2,000 ms**. The 4,500 ms
+in-flight term is the sum of the 1,000 ms command-inhibit wait, the 1,000 ms
+CMD18 data poll, the 500 ms secondary drain and the 1,000 ms CMD12 entry and
+completion waits; the adapter's `static_assert` ties it to
+`GTA4L_EMMC_CMD_TIMEOUT_US`, `GTA4L_EMMC_DATA_TIMEOUT_US` and
+`GTA4L_EMMC_DATA_DRAIN_US`. Expiry is a terminal revert failure
+(`hsrevert=0`, `rverified=0`), reported and not retried.
 
 The earlier 1 MiB / 27,220 ms draft is withdrawn. It assumed one in-flight
 bound for a 32 KiB request, but `GTA4L_EMMC_BLOCK_CHUNK_BLOCKS` is two, so
@@ -295,13 +302,18 @@ reads and two clock/CMD operations. Neither bound was supportable.
 
 ## 7. Open items
 
+- The S1 start path, report thread, formatter, selector and the
+  `emmc-block-3-speed` diagnostic personality are implemented and covered by
+  the host report-thread batch recorded in §8.5. Do not flash until every
+  host gate passes.
 - The combined width/timing revert helper exists and passes the core
-  scenarios. Its S1 budget is now enforced by a shared deadline. The S1
-  block-driver selector is implemented and host-tested; the start path,
-  report thread, formatter and deep adapter scenarios are the next batch;
-  do not flash until they pass. The arm/check/clear deadline API is exported
-  for the start path, and the combined revert keeps its separate 9,500 ms
-  budget.
+  scenarios. Its S1 budget is enforced by a shared 9,500 ms deadline and the
+  report-thread worst case is statically tied to the 30,000 ms watchdog with
+  a 2,000 ms margin.
+- The speed archive compiles with the kernel toolchain and the consumer probe
+  still imports exactly 187 symbols, but archive generation refuses the stale
+  storage-ABI audit (`candidate does not match kernel.macho`). B6 rebuilds
+  the candidate and re-audits it before any archive or boot image is used.
 - `HISPD` remains unset in the primary image; S1b is the fallback.
 - The 8-bit / 50 MHz timing margin, pad state and DLL state are unmeasured
   until the boot.
@@ -354,3 +366,107 @@ combined revert at **9,500 ms**, so the worst pre-watchdog path is
 carries the enforced figures and keeps the per-step iteration bounds only as
 the no-deadline regression reference. No code path consumes the budget yet;
 B2 arms it after `initializeHardware()` and clears it before publication.
+
+### 8.5 S1 host report-thread batch (2026-11-13)
+
+The report-thread batch closes the host side of B5. It changes no hardware
+input and records no run.
+
+Code findings resolved before the scenarios:
+
+- The report-thread worst case is now a compile-time sum:
+  8,000 ms media wait + 2,000 ms BOOT deadline + 2,000 ms shared loop budget
+  + 4,500 ms in-flight case + 2,000 ms gate + 9,500 ms combined revert =
+  **28,000 ms**, leaving the fixed **2,000 ms** margin under the 30,000 ms
+  watchdog. The source `static_assert` checks both the total and the 4,500 ms
+  case term against the 1,000/1,000/500/1,000/1,000 ms transport constants.
+- `widthholdElapsedMs()` starts at `widthholdReadStart`, which is set after
+  the BOOT media open, not before discovery; discovery keeps the independent
+  8,000 ms whole-media and 2,000 ms BOOT deadlines. The 28,000 ms sum is
+  therefore reachable only as a bound, not as an actual report path.
+- The formatter bound was corrected from 756/1,596 to **746/1,586** by
+  counting the fields by type (31 u32, two u64, one i32, six fixed hex and
+  two 32-hex digests). `speed-format-max` formats every speed field at its
+  type maximum and asserts the line is exactly 746 bytes and fits 2,560.
+- `hispd` is defined as the raw HOST_CONTROL byte after HS entry and before
+  the width switch. The checker example is `hispd=00` and now rejects both
+  bit 2 and the 4/8-bit width bits at that point.
+- The speed case constants are statically tied to the shared widthhold
+  two-block case, the eight-block reference and the 4 KiB window. The speed
+  tag is `0x53504545 + index` and `widthholdObserve()` accepts it only by
+  exact equality, so a widthhold tag is foreign.
+- `speedFallback` and `speedSwitch` are explicitly cleared before the 8-bit
+  attempt; `wroll` keeps its documented equivalence to `wfall` because the
+  fallback is reachable only after a verified rollback. `rhsb` is provably 1
+  on the report path because `start()` never registers the report thread
+  before HS entry succeeds, so a constant there is equivalent and is not a
+  mutation target. The media, BOOT and gate poll loops can overshoot their
+  nominal bound by one 50 ms or 10 ms step; the 2,000 ms watchdog margin
+  absorbs that case.
+- Every start-path stage latch now has a per-exit budget-clear check: the
+  source test verifies the clear before BASELINE/HS/WIDTH/FALLBACK/BASE, the
+  arm after ALLOC, the clear before publication, and no latch before the arm.
+  Each new failure scenario also asserts `!host.deadline_active`.
+- An unexpected widthhold reason maps to the new `STAGE_UNKNOWN` (23) rather
+  than looking like a data READ failure.
+- The first report-thread failure scenario found a duplicate offline
+  notification: a failed case read sent `messageClients()` directly and the
+  report thread then sent through `notifyOfflineOnce()`. The async path now
+  uses the shared latch for speed mode as well, so a failure notifies
+  exactly once. The scenarios assert one message on failure and none on
+  success.
+- The checker now requires `cmd6>=1` in addition to `rcmd6>=2`; the
+  self-test mutates every FIXED field and the conditional width/tick cases.
+
+Host coverage added:
+
+- 31 report-thread adapter scenarios: `speed-match-8bit`,
+  `speed-match-4bit`, `speed-read-crc`, `speed-read-timeout`,
+  `speed-short`, `speed-budget`, `speed-budget-boundary`,
+  `speed-cancel-before`, `speed-cancel-during`, `speed-media-absent`,
+  `speed-part-absent`, `speed-part-duplicate`, `speed-part-wrong-base`,
+  `speed-part-writable`, `speed-desc`, `speed-open-fail`,
+  `speed-foreign-tag`, `speed-order`, `speed-digest-mismatch`,
+  `speed-gate-timeout`, `speed-revert-fail`, `speed-revert-unverified`,
+  `speed-revert-budget`, `speed-revert-hs-stuck`, `speed-revert-clock`,
+  `speed-revert-host-wide`, `speed-first-failure-latch`,
+  `speed-watchdog`, `speed-thread-start`, `speed-alloc` and
+  `speed-format-max`.
+- The adapter prints the success line and the crossed-digest line; the block
+  host test feeds both to `check-gta4l-speed-evidence.py --line` against a
+  synthetic 4 KiB BOOT window. The success line passes and the crossed line
+  is rejected for disagreement. This binds the formatter and checker.
+- 22 report-path adapter mutation controls plus six formatter policy
+  controls cover the budget, cancel, digest placement, request/failure
+  counters, `partial`, early `pub`, `partdiag`, revert call and result,
+  media release, offline latch, revert budget, first-failure latch, stage
+  map, HS revert, RCG clock, `rverified`, winning width, `hz`, and the
+  formatter fields/prefixes.
+- `test-gta4l-emmc-evidence.py` runs a synthetic `--mode speed` dispatch
+  case; `test-gta4l-emmc-evidence-counts.py` now derives and checks the
+  block scenario/mutation counts; the normalizer self-test joins a wrapped
+  746-byte SPEED line at 80 and 120 columns.
+
+Source re-read. Every `start()` speed exit clears the start budget before
+its one first-latched stage and runs the combined revert only after HS was
+attempted; `speedRecover()` re-arms 9,500 ms and records all four revert
+fields even when the revert fails; `runSpeed()` hashes only after a complete
+pass, keeps the first failure stage, and reports the measured pass bytes,
+ticks, digests, request/failure counters and discovery diagnostic; the
+watchdog formats the same struct under the 1,586-byte bound. The report sum
+matches the static asserts and the 30,000 ms watchdog margin.
+
+Build readiness: both block sources compile with the kernel compile records
+and qualified storage headers. The consumer probe still has **187** imports,
+and `PROBE_IMPORTS`/the section split are unchanged. Archive generation
+stops at the expected stale storage-ABI audit: the recorded candidate does
+not match the current `kernel.macho`. The current candidate also does not
+export the three core symbols the adapter now references
+(`gta4l_emmc_deadline_arm`, `gta4l_emmc_deadline_clear`,
+`gta4l_emmc_recover_width_and_timing`), so the archive import check waits for
+the same B6 candidate rebuild. B6 rebuilds the candidate, re-runs the audit
+and reconciles the archive; no archive from this batch is used for a boot.
+
+The block suite result for this batch is recorded with the B5 gates in
+`docs/emmc-driver.md` §5.3.102 and `porting.toml`. All work in this
+subsection is host-only: no candidate build, flash, device access or boot.

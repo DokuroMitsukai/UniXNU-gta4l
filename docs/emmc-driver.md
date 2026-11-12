@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 377 adapter scenarios and 131 adapter/support plus 31 policy mutation controls against the host IOKit seam |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls against the host IOKit seam. The block adapter test runs 419 scenarios with 157 adapter mutations, 3 support mutations and 37 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -6936,3 +6936,63 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
 - **microSD/SDHC2 is out of scope.** Only SDHC1/eMMC is implemented.
 - **Vendor correspondence is open.** The exact vendor source/binary
   correspondence and the firmware runtime slot table remain `[U]`.
+
+### 5.3.102 S1 report-thread host batch (host-only, 2026-11-13)
+
+Follow-up to §5.3.101 and S1 design §8.5. This batch covers the watchdog-
+covered report path and closes the B5 host side. It changes the SPEED
+constants, the start-path fallback initialisation, the shared offline latch,
+the adapter simulator, the evidence checkers and the records. It adds no
+hardware input, candidate, device access, flash or boot.
+
+Findings. The report-thread worst case is a compile-time sum of 8,000 ms
+media wait, 2,000 ms BOOT deadline, 2,000 ms shared loop budget, 4,500 ms
+in-flight case, 2,000 ms gate and 9,500 ms combined revert = **28,000 ms**,
+which leaves exactly 2,000 ms under the 30,000 ms watchdog; a source
+`static_assert` also ties the 4,500 ms term to the command, data, drain and
+CMD12 constants. The formatter bound was corrected to **746** bytes per line
+and **1,586** bytes for the whole report by counting fields by type, and the
+`speed-format-max` scenario formats every field at its maximum and asserts
+the exact line length. `hispd` is now defined as HOST_CONTROL after HS entry
+and before the width switch; the checker example is `hispd=00` and rejects
+width bits there. The speed case, window and tag constants are statically
+tied to the shared widthhold geometry, the fallback is explicitly cleared
+before the 8-bit attempt, and an unexpected widthhold reason maps to
+`STAGE_UNKNOWN` instead of READ. The checker also requires `cmd6>=1`.
+
+Duplicate notification. The first report-thread failure scenarios found that
+a failed case read called `messageClients()` from `doAsyncReadWrite()` and
+then the report thread called `notifyOfflineOnce()`, producing two offline
+messages. Speed mode now uses the shared latch on the async path as widthpub
+does; failure notifies exactly once and success notifies none. The scenarios
+assert both.
+
+Coverage. Thirty-one report-thread scenarios cover 8-bit and 4-bit success, CRC
+and timeout read failures, short transfer, loop budget and its 1,999 ms
+boundary, cancellation before and during a case, media and partition
+failure diagnostics, descriptor and open failures, foreign tag, order, a
+crossed digest, gate timeout, all four revert outcomes, first-failure latch,
+watchdog, thread-start failure, window allocation failure and the formatter
+maximum. The success and crossed-digest lines are fed to
+`check-gta4l-speed-evidence.py --line` against a synthetic 4 KiB BOOT window,
+so the formatter and checker cannot drift. Twenty-two report-path adapter
+mutations and six formatter policy mutations reject the corresponding
+checks. The evidence dispatcher test adds a synthetic `--mode speed` case,
+the counts test derives and checks the block scenario/mutation counts, and
+the normalizer self-test joins a wrapped 746-byte SPEED line at 80 and 120
+columns.
+
+Build readiness. Both block sources compile with the kernel compile records
+and qualified storage headers; the consumer probe still has **187** imports
+and `PROBE_IMPORTS` is unchanged. Archive generation stops at the expected
+stale storage-ABI audit (`candidate does not match kernel.macho`), and the
+current candidate does not yet export the three new core symbols the adapter
+references. B6 rebuilds the candidate, re-audits it and reconciles the
+archive; no archive from this batch is used for a boot.
+
+Host results. The core suite passes 211 scenarios and 128 mutation controls;
+the probe suite passes 196 and 100; the block suite passes 48 core scenarios
+with 38 mutation controls, 419 adapter scenarios (420 PASS lines), 157
+adapter, 3 support and 37 policy mutation controls, including all
+report-thread and formatter controls. Host-only; no candidate, device access,
+flash or boot.

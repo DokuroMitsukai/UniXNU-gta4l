@@ -1464,10 +1464,10 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `158c30b8ecf349977e24871e9ae2746a903099480d44fe6cf04584d66c1bd8aa` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `b9fed26a3245283ea398c01759f79c4cb88a1ffc1702d577d0d9dacb8ea281a7` |
+| Porting record | `porting.toml` | `5754ec9ab3c5c69d82e6330637d27383d76beba011695bc791515fa06172f481` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `e3659c0530ef8c3a1140b818acf6874d223f76b00a3119b5712e49779ee792ec` |
+| eMMC driver record | `docs/emmc-driver.md` | `8c876f4bc6837713657ff046a15ceff4c13306973b43c9f9f5bb9286a583da8f` |
 | eMMC core header | `package/Gta4lEmmc.h` | `1d42f282efd38f6564e6dbe9a2a9dabb6126a8c025e28d13f0c4a11b6180ef8d` |
 | eMMC core source | `package/Gta4lEmmc.c` | `2539601df708d5a0493574ba1f5514b683a17862a5b2af47fae8c590b2c12af4` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1479,7 +1479,7 @@ bytes of the previously booted image `[S]`.
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `c7c9b4b99a21121b966a5c9a02f918c54fc00a11bc40480c684a3a501c0d0d44` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
-| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `4ee7f2388352348a8ab9c2572274e2c96f065df586d62bab3bbe590b326bf6a1` |
+| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `0a5f110c7582e95d7a88d89473377c22e13586877885ac8cc6add3528c97c02d` |
 
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
