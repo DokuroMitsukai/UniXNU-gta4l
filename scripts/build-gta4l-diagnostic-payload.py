@@ -12,7 +12,8 @@ breakup, sweep, consume and width personalities additionally require
 early-success-panic RAM-root fixture cannot be repackaged for the observation.
 The widthhold personality maps to gta4l-emmc-block=3 gta4l-emmc-widthhold=1
 and the widthpub personality maps to gta4l-emmc-block=3
-gta4l-emmc-widthpub=1.
+gta4l-emmc-widthpub=1. The speed personality maps to gta4l-emmc-block=3
+gta4l-emmc-speed=1 and also requires the fs-timer-hold fixture.
 """
 import argparse
 import datetime
@@ -67,6 +68,7 @@ DIAGNOSTICS = {
     'emmc-block-3-width4': 'gta4l-emmc-block=3 gta4l-emmc-width=4',
     'emmc-block-3-widthhold': 'gta4l-emmc-block=3 gta4l-emmc-widthhold=1',
     'emmc-block-3-widthpub': 'gta4l-emmc-block=3 gta4l-emmc-widthpub=1',
+    'emmc-block-3-speed': 'gta4l-emmc-block=3 gta4l-emmc-speed=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
@@ -78,12 +80,14 @@ CONSUME_DIAGNOSTICS = ('emmc-block-3-consume',)
 WIDTH_DIAGNOSTICS = ('emmc-block-3-width4',)
 WIDTHHOLD_DIAGNOSTICS = ('emmc-block-3-widthhold',)
 WIDTHPUB_DIAGNOSTICS = ('emmc-block-3-widthpub',)
+SPEED_DIAGNOSTICS = ('emmc-block-3-speed',)
 PARTITION_DIAGNOSTICS = (PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS +
                          PARTREAD_DIAGNOSTICS)
 OBSERVATION_DIAGNOSTICS = (PARTITION_DIAGNOSTICS + DEBLOCK_DIAGNOSTICS +
                            BREAKUP_DIAGNOSTICS + SWEEP_DIAGNOSTICS +
                            CONSUME_DIAGNOSTICS + WIDTH_DIAGNOSTICS +
-                           WIDTHHOLD_DIAGNOSTICS + WIDTHPUB_DIAGNOSTICS)
+                           WIDTHHOLD_DIAGNOSTICS + WIDTHPUB_DIAGNOSTICS +
+                           SPEED_DIAGNOSTICS)
 DATA_RAMDISK_DIAGNOSTICS = ('report', 'fs-timer', 'fs-timer-hold')
 
 

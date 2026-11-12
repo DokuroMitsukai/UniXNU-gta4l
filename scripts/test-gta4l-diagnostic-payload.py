@@ -518,6 +518,10 @@ def test_emmc_block_3_widthpub(base):
                                   'widthpub')
 
 
+def test_emmc_block_3_speed(base):
+    check_observation_personality(base, 'emmc-block-3-speed', 3, 'speed')
+
+
 def test_partcmp_rejects_early_panic_fixture(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
@@ -767,6 +771,34 @@ def test_widthpub_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS widthpub rejects the early-panic fs-timer fixture')
+
+
+def test_speed_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-speed'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for speed')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS speed rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -1230,6 +1262,85 @@ def test_diagnostic_contract(_base):
         'gta4l-emmc-widthpub=1', 'emmc-block-3-widthhold')
     assert not widthhold_with_widthpub[
         'emmc-block-3-widthhold_diagnostic_selected']
+    good_speed = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-speed=1', 'emmc-block-3-speed')
+    assert all(good_speed.values()), good_speed
+    orphan_speed = checks(
+        'gta4l-emmc-probe=1 gta4l-emmc-speed=1')
+    assert not orphan_speed['no_speed_token_outside_block_mode']
+    duplicate_speed = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-speed=1 '
+        'gta4l-emmc-speed=1', 'emmc-block-3-speed')
+    assert not duplicate_speed['at_most_one_speed_token']
+    for value in ('0', '2', '-1', '', 'true'):
+        bad_speed_value = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-speed={value}',
+            'emmc-block-3-speed')
+        assert not bad_speed_value['speed_value_one'], bad_speed_value
+        assert not bad_speed_value[
+            'emmc-block-3-speed_diagnostic_selected'], bad_speed_value
+    speed_block_one = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-speed=1',
+        'emmc-block-3-speed')
+    assert not speed_block_one['speed_requires_block_three']
+    assert not speed_block_one['emmc-block-3-speed_diagnostic_selected']
+    speed_duplicate_block = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-block=3 '
+        'gta4l-emmc-speed=1', 'emmc-block-3-speed')
+    assert not speed_duplicate_block['exactly_one_block_mode_token']
+    speed_with_probe = checks(
+        'gta4l-emmc-probe=1 gta4l-emmc-block=3 gta4l-emmc-speed=1',
+        'emmc-block-3-speed')
+    assert not speed_with_probe['no_probe_token_in_block_mode']
+    assert not speed_with_probe[
+        'emmc-block-3-speed_diagnostic_selected']
+    missing_speed = checks(
+        'gta4l-emmc-block=3', 'emmc-block-3-speed')
+    assert not missing_speed['emmc-block-3-speed_diagnostic_selected']
+    plain_speed_expected = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-speed=1', 'emmc-block-3')
+    assert not plain_speed_expected['emmc-block-3_diagnostic_selected']
+    for modifier in ('partobs', 'partcmp', 'partread', 'deblock', 'breakup',
+                     'sweep', 'consume'):
+        key = f'speed_{modifier}_exclusive'
+        conflict = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-{modifier}=1 '
+            'gta4l-emmc-speed=1', 'emmc-block-3-speed')
+        assert not conflict[key], conflict
+        assert not conflict[
+            'emmc-block-3-speed_diagnostic_selected'], conflict
+        smuggled = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-{modifier}=1 '
+            'gta4l-emmc-speed=1', f'emmc-block-3-{modifier}')
+        assert not smuggled[
+            f'emmc-block-3-{modifier}_diagnostic_selected'], smuggled
+    speed_width_conflict = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-width=4 '
+        'gta4l-emmc-speed=1', 'emmc-block-3-speed')
+    assert not speed_width_conflict['speed_width_exclusive']
+    speed_width_conflict_two = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-width=4 '
+        'gta4l-emmc-speed=1', 'emmc-block-3-width4')
+    assert not speed_width_conflict_two[
+        'emmc-block-3-width4_diagnostic_selected']
+    speed_widthhold_conflict = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthhold=1 '
+        'gta4l-emmc-speed=1', 'emmc-block-3-speed')
+    assert not speed_widthhold_conflict['speed_widthhold_exclusive']
+    speed_widthpub_conflict = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthpub=1 '
+        'gta4l-emmc-speed=1', 'emmc-block-3-speed')
+    assert not speed_widthpub_conflict['speed_widthpub_exclusive']
+    widthpub_with_speed = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthpub=1 '
+        'gta4l-emmc-speed=1', 'emmc-block-3-widthpub')
+    assert not widthpub_with_speed[
+        'emmc-block-3-widthpub_diagnostic_selected']
+    widthhold_with_speed = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthhold=1 '
+        'gta4l-emmc-speed=1', 'emmc-block-3-widthhold')
+    assert not widthhold_with_speed[
+        'emmc-block-3-widthhold_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -1251,6 +1362,7 @@ def main():
              test_emmc_block_1_sweep, test_emmc_block_3_sweep,
              test_emmc_block_3_consume, test_emmc_block_3_width4,
              test_emmc_block_3_widthhold, test_emmc_block_3_widthpub,
+             test_emmc_block_3_speed,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,
@@ -1261,6 +1373,7 @@ def main():
              test_width4_rejects_early_panic_fixture,
              test_widthhold_rejects_early_panic_fixture,
              test_widthpub_rejects_early_panic_fixture,
+             test_speed_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)
