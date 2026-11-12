@@ -41,7 +41,7 @@ source = "device:dts/gta4l.dts"
 include_dirs = ["soc:dts"]
 
 [userdata]
-first_lba = 0xe74000
+first_lba = 0xe7fc00
 last_lba = 0x3a3dfde
 lba_bytes = 512
 windows = [

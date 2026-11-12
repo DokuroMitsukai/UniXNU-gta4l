@@ -1,95 +1,28 @@
 # gta4l native SDHCI v5 / eMMC core
 
-Status: host-tested implementation `[S]`; stage 2 (controller/host init only)
-ran on the tablet and reported success `[C]`; stage 3 (identification) ran and
-stopped at a command CRC error with no identification report in the first run
-`[C]`; the later `cmd2window` run completed CMD2 and stopped at a CMD3
-completion timeout, still with no identification report `[C]`; the later
-`fmt=2` run completed CMD2, CMD3 and CMD9 and stopped at a CMD7 R1b completion
-timeout, still with no identification report `[C]`; the 2026-11-01 `fmt=4`
-fail-closed runs (first on an SM-T505, then on the owner's SM-T505N, per the
-owner) failed at CMD2 with the same `-8` record as the first current-source
-run, so the CMD7 capture was not exercised `[C]`; the 2026-11-01 `cmd1gap`
-candidate added only an 8-us post-ready-CMD1 delay and completed full stage-3
-identification on the owner's SM-T505N and two owner-reported SM-T505s,
-including the CMD7 CC+TC capture `[C]`. The 2026-11-02 stage-1 image then
-completed identification and both read-only `CMD17` reads (blocks 0 and 1) on
-the owner's SM-T505N and one of those SM-T505s `[C]`; the corrected A2/F2
-attempt then reached block ordinal 20 in one open-ended `CMD18` before the
-data bound expired `[C]`, and the §5.3.8 bounded drain reproduced the same
-stall on a later boot without resolving it `[C]`. Stage B1 (§5.3.9) is
-implemented and host-tested; the first B1 image was flashed and booted three
-times (§5.3.10), and only one boot reached B1 before stopping at the 4-bit
-byte-183 readback. The B1R2 report-completeness re-run (§5.3.12) then booted
-the rebuilt image five times: two boots reproduced the 4-bit stop with the
-new fields and three stopped before B1, so F3 remains `[U]`. The B1C
-continuation and the 1-bit discriminator then timed out in the CMD19 write
-phase before any CMD6 (§5.3.14, §5.3.16), and the B1C-2 audit found no
-controller data-timeout in either hang class (§5.3.18). The Stage-B2
-HS-timing image then booted four times (§5.3.20): two warm boots accepted
-`HS_TIMING=1`, matched the full stage-A content pass at the 50 MHz floor
-and reverted cleanly, so F4 is measured PASS at 1-bit/50 MHz `[C]`; the
-cold boot and one warm boot stopped pre-B2 at the H8 CMD3 timeout. Card
-identification,
-single-block sector reads and
-a partial multi-block data phase are therefore observed; one owner-reported
-cold boot of the D10.5 candidate also completed both bounded CMD18 requests
-with every sector byte-validated (§5.3.41), so a complete multi-block read is
-measured for that one boot `[C]`. Multi-block repeatability/reliability,
-multi-block publication, a filesystem and DMA/CQE/ICE remain `[U]`, and F3 is
-measured only at 4-bit SDR (`[C]`, §5.3.34) with 8-bit untried. The 2026-11-04 protocol correction (§1a) withdraws the
-byte-183 refusal, H12 DDR, stage-7 timeout and H13 CMD14-CRC causal claims
-and fixes the underlying width, bus-test, timeout and CMD18-readiness logic.
-The corrected width rung is H15 (`gta4l-emmc-probe=15`). Its first cold boot
-(§5.3.31) verified the 4-bit SDR switch (`vf=1`, host `00→02`) and then hit
-the CMD19 write-phase timeout at 4-bit, after which the old revert was blocked
-by a latched DAT inhibit and no CMD6 was issued. The report and recovery are
-fixed and a content-only H16 rung is added; its first boot (§5.3.32) returned
-`rc=0 stop=0` with the verified 4-bit switch, the full 4-bit content pass, the
-verified revert and the block-0 recovery read, so 4-bit SDR reads are measured
-`[C]` and the remaining barrier was the CMD19 completion rule. Stage H17
-(`gta4l-emmc-probe=17`, §5.3.33) applies the reference rule — tolerate the
-expected CMD19 data timeout, reset the data circuit, let CMD14 decide — after
-the 4-bit content pass. Its fourth boot (cold, then three warm; §5.3.34)
-returned `rc=0 stop=0` with the recorded CMD19 timeout (`wrc=-11`), a clean
-bounded data reset (`rst=0`), the CMD14 pattern match (`trc=0`,
-`tw=te=000000a5`), the matching 4-bit content pass, the verified revert and
-the recovery read, so **F3 is measured PASS at 4-bit SDR, 400 kHz `[C]`**.
-The 8-bit width is untried and stays open separately. H14 remains paused. The
-D10.5 F2 candidate's owner-reported first cold boot (§5.3.41, 2026-11-05)
-completed both CMD18 requests and their explicit CMD12 stops with every
-requested sector byte-validated against the same-boot CMD17 reference, so
-**F2 is measured PASS for that one cold boot at 1-bit SDR, 400 kHz `[C]`**.
-Repeatability, cold-start reliability and multi-block publication remain open.
-The core is
-opt-in. The runs were made under the owner's approval for each exact procedure,
-with verified EFS/SEC_EFS backups and a known-good BOOT restoration image. The
-`sdhc-bus-power-activation` NO-GO still applies to any operation not separately
-approved. The 2026-11-08 N10.1 read-only content qualification then completed
-six pinned range reads on one owner-reported cold boot with `complete=1`, plus
-an independent read-only post-boot content and protected-partition comparison
-(§5.3.75) `[C]`; it qualifies only those ranges, not arbitrary I/O, mount,
-writes, wider/faster modes, DMA/CQE/ICE or initialization reliability. The
-2026-11-08 N10.2 expansion then completed fourteen pinned range reads on one
-owner-reported cold boot with `complete=1`, plus an independent read-only
-post-boot content and protected-partition comparison (§5.3.78) `[C]`; it
-qualifies only those ranges, not arbitrary I/O, mount, writes, wider/faster
-modes, DMA/CQE/ICE or initialization reliability. The 2026-11-08 N10.6
-unaligned deblock run then completed eleven pinned byte-unaligned reads on one
-owner-reported cold boot with `complete=1` and every digest matched, through
-the real `IOMedia`/`IOBlockStorageDriver`/`IODeblocker` path (§5.3.81) `[C]`.
-Its whole-boot counters show a 24-block maximum subrequest, exactly three
-4 KiB physical segments, so the real `IOBreaker`/`breakUpRequest()` split path
-was entered rather than the direct `executeRequest()` short-circuit. No
-post-boot readback was taken; the report is bound through the pre-boot flash
-readback and the pinned digest. It qualifies only those eleven ranges and the
-deblock/breakup path on that one boot, not arbitrary I/O, mount, writes,
-wider/faster modes, DMA/CQE/ICE or initialization reliability.
+Status: host-tested core with hardware-verified read-only stages `[S]/[C]`.
+Section 5.3 is the chronological hardware record. This summary replaces the
+older status prose; a capability is `[C]` only for the ranges and modes the
+cited run measured.
 
-This document records the native eMMC implementation. It is deliberately small:
-one-bit bus, legacy timing, polling, single 512-byte PIO reads and no card
-writes. It is the host-testable base for later block-device publication, DMA,
-interrupts and higher-speed modes.
+Measured on the tablet:
+- Controller and host initialization, and identification `[C]` (5.3.4).
+- F1 single-block content `[C]` (5.3.6); F2 CMD18 with an explicit CMD12 stop
+  `[C]` on one reported cold boot (5.3.41).
+- 4-bit SDR at 400 kHz `[C]` (5.3.32, 5.3.34, 5.3.91 to 5.3.98).
+- HS_TIMING at 1-bit and the 50 MHz clock in the probe path `[C]` (5.3.20);
+  high-speed timing in the block driver `[U]`.
+- Whole-media publication `[C]` (5.3.37), and published-partition reads with
+  a verified 4-bit width switch and revert `[C]` (5.3.91 to 5.3.98).
+
+Not measured: 8-bit, DDR, HS200, HS400, DMA, interrupts, CQE, ICE, tuning, a
+filesystem, a mount, a root switch and card writes are all `[U]`.
+
+The implementation is no longer limited to the original 1-bit / 400 kHz PIO
+path. The core now includes the verified width switch, the probe high-speed
+path, and the block driver's read-only publication and partition adapter.
+Section 5.3 keeps the full history, including the withdrawn byte-183 width
+criterion and every failed or partial rung.
 
 ## 1. Files
 
@@ -107,6 +40,12 @@ interrupts and higher-speed modes.
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
 | `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 285 adapter scenarios and 104 adapter/support plus 10 policy mutation controls against the host IOKit seam |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
+| `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`) and passes every argument through |
+| `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
+| `scripts/test-gta4l-board-userdata.py` | Compares `board.toml [userdata]` with the captured GPT and runs mutation controls |
+| `scripts/copy-gta4l-reference-sources.py` | Copies the pinned reference sources into gitignored `out/` with a SHA-256 manifest |
+| `scripts/test-gta4l-emmc-evidence.py` | Runs the normalizer and dispatcher self-tests, then re-runs the historical width4, widthhold and widthpub verdicts when their private evidence is present |
+| `docs/emmc-rung-record-template.md` | Record template for one rung |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `configs/gta4l_defconfig` | Force-loads the SDHCI snapshot and both eMMC archives into the kernel |
 
@@ -679,7 +618,8 @@ and the extended failure report. It was built through UniXNU with the Linux
 toolchain prefix and the Python 3.11 shim:
 
 ```sh
-export PATH=/tmp/opencode/py311/bin:$PATH
+# The /tmp/opencode/py311 shim used at the time is gone; the host
+# /usr/bin/python3.11 provides the same interpreter.
 export UNIXNU_TOOLCHAIN=<prefix from scripts/linux/setup-toolchain.py>
 cd ../UniXNU
 python3.11 ./unixnu build kernel -D ../UniXNU-gta4l -j 8
@@ -6822,129 +6762,43 @@ stage-3 capture block is `fmt=4`; it appends the CMD7 fields described in
 
 ## 7. Limits and residual risks
 
-- Stage 2 ran on the tablet `[C]`; stage 3 ran and stopped at a command CRC
-  error in the first run `[C]`; the later `cmd2window` run completed CMD2 and
-  stopped at a CMD3 completion timeout `[C]`; the later `fmt=2` run completed
-  CMD2, CMD3 and CMD9 and stopped at a CMD7 R1b completion timeout `[C]`; the
-  2026-11-01 `fmt=4` runs failed at CMD2 with the same `-8` record, so they did
-  not exercise the CMD7 capture `[C]`; the 2026-11-01 `cmd1gap` candidate
-  completed identification, including CC+TC on CMD7, on three units `[C]`; the
-  2026-11-02 stage-1 image completed identification and the read-only block 0
-  and block 1 `CMD17` reads on the owner's SM-T505N and one SM-T505 `[C]`; the
-  §5.3.6 stage-A image then read the full 84-entry GPT array, the first usable
-  sector and the last sector on the owner's SM-T505N, and every sum matched a
-  same-session live recovery readback `[C]`; the §5.3.7 attempt 2 then
-  stopped at block ordinal 20 in one open-ended `CMD18` (at least 20 of 21
-  blocks drained) before the data bound expired, but the transfer and the
-  `CMD12` stop did not complete `[C]`; the §5.3.8 attempt 3 was flashed and
-  booted and, on later boots of the same image, reached the MD phase, where
-  the bounded drain exhausted its window without draining another block or
-  seeing `TC` and the `CMD12` stop again timed out `[C]`. A
-  complete multi-block transfer, a filesystem, block-device publication and a
-  reliability test had not run at that point `[U]`; the later D10.5 F2 run
-  (§5.3.41) and p5b run (§5.3.37) supplied the first multi-block transfer and
-  whole-device publication, while a filesystem, repeatability and reliability
-  remain `[U]`.
-- The port uses retained rails. It does not measure L22/L5/L24/L11 or the pad
-  levels, and it does not prove retention across suspend or shutdown `[U]`.
-- The 1.8 V signalling and pad-switch selection is a documented board policy
-  derived from the L11 rail range; it is not a measurement `[S]/[U]`. It is a
-  deliberate departure from the mainline gta4l DT-derived state, where no SDHC1
-  `vqmmc` consumer exists, `caps == 0`, and `sdhci_msm_set_regulator_caps()`
-  leaves both vendor pad bits at the `0xa9c` POR value. The policy follows the
-  sdhci-msm fixed-1.8 V comment (keep the pad switch set so the pads reflect the
-  actual rail) rather than that DT-derived state. A first test should treat a
-  pad-related failure as a policy question, not as proof that the rail is wrong
-  `[S]/[U]`.
-- The power acknowledgement is a controller-local software ack; `BUS_SUCCESS`
-  does not prove the rail voltage. The core now requires an observed `BUS_ON`
-  completion and completion of the IO transition requested through
-  `HOST_CONTROL2`, and it fails if the power loop is exhausted. A *new* power
-  request raised after both completions and after the card clock starts still
-  has no interrupt path `[U]`.
-- No DMA, SMMU programming, CQE, ICE or tuning exists `[U]`. High-speed
-  timing is measured PASS at 1-bit/50 MHz (§5.3.20) `[C]`, but no high-speed
-  data, multi-bit, DMA or interrupt result exists `[U]`.
-  The Stage-B1 4/8-bit bus-width switch and CMD19/CMD14 bus test are
-  implemented and host-tested (§5.3.9) and ran on 2026-11-02 (§5.3.10); the
-  only boot that reached B1 stopped at the 4-bit byte-183 readback, so F3
-  remains `[U]` and no write path exists. The optional A2/F2 multi-block mode is implemented and
-  host-tested (5.3.7); its corrected 2026-11-02 attempt reached the MD phase
-  and stopped at block ordinal 20 in one `CMD18` before the data bound
-  expired, and the `CMD12` stop did not report `CC` or `TC`, so a complete
-  multi-block transfer result still does not exist `[C]/[S]/[U]`. Attempt 3
-  (5.3.8) adds a bounded post-bound drain and host simulator coverage; it was
-  flashed and booted three times. The drain ran on the second boot and did
-  not resolve the stall (no additional blocks, no `TC`, timed-out stop), and
-  the third boot failed earlier in the stage-A `CMD17` read, so F2 remained
-  `[U]` at that point. The later D10.5 F2 run (§5.3.41) completed both CMD18
-  requests with clean CMD12 stops and byte-validated sectors on one reported
-  cold boot, so F2 is measured PASS for that boot `[C]`; repeatability,
-  cold-start reliability and multi-block publication remain `[U]`.
-- An 8-us CMD1-to-CMD2 timing candidate is specified in
-  `docs/emmc-cmd1-gap-candidate.md` and was built, flashed and run on
-  2026-11-01; it completed identification on three units (5.3.4) `[C]`. The
-  8-us delay is not proven necessary, because earlier builds passed CMD2
-  without it, and it is not adopted as a general fix `[S]/[U]`.
-- A read-only block-device publication adapter exists and is host-tested
-  (§5.3.35). The p5b candidate published the whole `IOMedia` and passed one
-  media-path CMD17 read on 2026-11-05 (§5.3.37), so F5 is measured PASS for
-  that reported boot `[C]`; repeatability, other widths/timings, a mount, a
-  root switch and a persistent Data path remain absent `[U]`.
-- microSD/SDHC2 is not implemented; only SDHC1/eMMC is in scope `[U]`.
-- The exact vendor source/binary correspondence and the firmware runtime slot
-  table remain `[U]`.
-
-Stage 2 is complete. Stage 3 now completes identification on the §5.3.4
-candidate; the historical stage-3 transcript still bounds the older CMD2
-`CMD_CRC` error only to a CRC-checked command after `CMD0`, and the cause of
-that earlier failure remains open. The current code records the terminal
-command index, argument, encoded command register, interrupt/error status,
-present state and last completed step before clearing the latches, and gates
-its SDHCI diagnostics on the branch clocks. The follow-up audits added
-retirement of recovered `CMD1` timeouts, simulator coverage for failed
-branch-clock enables, recovered and exhausted `CMD1` timeouts, the reset pulse,
-branch-clock ordering and the DLL reset-before-power-down sequence, and a host
-test that executes the probe failure report with simulated MMIO and requires
-zero SDHCI accesses when the clocks are off. The `fmt=2` missing-CC CMD7
-timeout did not reproduce on the candidate: the CMD7 poll/response capture
-completed with CC and TC on three units, so the capture gap is closed but the
-historical timeout is still unexplained. The stage-A extended content read is
-complete: repeated CMD17 reads covered the GPT header and the full 84-entry
-primary array, and the live recovery readback bound every sum. The A2/F2
-multi-block rung remains partial after the attempt-3 runs (§5.3.8): the
-open-ended CMD18 is proven beyond one block, but the ordinal-20 stall
-reproduced and the bounded drain did not resolve it, so F2 was not
-established at that point. The D10 F2 host batch (§5.3.39) implements the
-plan's short+long CMD18 qualification with per-request validation, explicit
-stops and post-transfer CMD17 recovery reads; it was host-tested only, no
-candidate was built or booted, and F2 remained `[U]` until the later D10.5
-device run (§5.3.41), which is measured PASS for one reported cold boot.
-The ladder's next rung is Stage B (bus width and speed); the Stage-B1
-bus-width rung is implemented and host-tested (§5.3.9) and ran on 2026-11-02
-(§5.3.10). The B1R2 report-completeness re-run (§5.3.12) then booted the
-rebuilt image five times: two boots reproduced the 4-bit stop with a clean
-CMD6 R1, the host width bit set and an EXT_CSD readback still at 1-bit, and
-three stopped before B1 (two TC-only CMD17 timeouts, one CMD3 timeout), so
-F3 remains unestablished. The B1C continuation (§5.3.13.1) was then flashed
-BOOT-only and booted seven times (§5.3.14): both boots that reached the
-continuation timed out in the CMD19 write phase (CC + BufferWriteReady
-latched, no TC, no error), so the data-write direction is now the blocking
-observation and F3 remains `[U]`. The stage-6 1-bit CMD19/CMD14 discriminator
-(§5.3.15) was flashed and booted thirteen times (§5.3.16); both boots that
-reached the rung timed out in the 1-bit CMD19 write phase before any CMD6, so
-the write failure is width-independent and F3 remains `[U]`. The Stage-B1C-2
-data-timeout audit (§5.3.17–5.3.18) then found that the controller never
-raises data-timeout in either hang class: five DTO boots were silent while
-data streamed past the armed minimum. The Stage-B2 HS-timing rung (§5.3.19)
-was built, flashed BOOT-only and booted four times (§5.3.20); two warm boots
-accepted `HS_TIMING=1`, matched the full stage-A content pass at the 50 MHz
-floor and reverted cleanly, so F4 is measured PASS at 1-bit/50 MHz `[C]`
-(content-level only), while the cold boot and one warm boot stopped pre-B2
-at the H8 CMD3 timeout. F3 remains `[U]`, the pre-B1 H8/CMD17 stops remain
-open, and any further ladder step is owner-gated. The read-only block
-publication adapter is implemented and host-tested (§5.3.35); the later p5b
-run observed whole-device publication and one media-path CMD17 read
-(§5.3.37), so F5 is measured PASS for that reported boot `[C]`. No filesystem,
-multi-block IOMedia read, mount, storage write, DMA, CQE or ICE result exists
-yet.
+- **Every hardware run is owner-gated.** Each run was made under the owner's
+  approval for that exact procedure, with verified EFS/sec_efs backups and a
+  known-good BOOT restoration image. The `sdhc-bus-power-activation` NO-GO
+  still applies to any operation that has not been separately approved.
+- **Initialization reliability is not established.** Pre-identification
+  stops (the H8 CMD3 class) occurred in many probe boots and remain
+  unexplained; the post-2026-11-05 N-series images have not shown one in a
+  captured record, but the sample is small. A rung's verdict counts a boot
+  only when the image reaches its report path.
+- **Most results are single-boot observations.** N10.1 repeated its read set
+  on four cold boots; other repeatability claims are owner-reported and
+  uncaptured. Sustained, arbitrary and concurrent I/O are `[U]`.
+- **The measured width is 4-bit SDR at 400 kHz.** 8-bit is untried in the
+  port even though TWRP runs this eMMC at HS400 Enhanced Strobe; DDR, HS200,
+  HS400 and tuning do not exist.
+- **HS_TIMING is probe-only and 1-bit.** The 50 MHz floor passed a content
+  comparison and reverted cleanly in the probe (5.3.20). The block driver
+  still runs at 400 kHz with no high-speed entry, and the controller's HISPD
+  bit is not set anywhere in the port.
+- **No DMA, SMMU programming, CQE, ICE or interrupt completion exists.**
+  Every transfer is polled PIO. The DMA/SMMU ownership question is open.
+- **Publication is bounded.** Only the tested GPT and partition windows are
+  qualified; the driver does not establish a filesystem, a root volume, an
+  APFS container or a mount.
+- **No card writes exist.** CMD24/CMD25, erase, cache and reliable write are
+  absent, so no persistence claim can be made.
+- **Power and pads are policy, not measurement.** The port uses retained
+  rails and does not measure L22/L5/L24/L11, the pad levels, or retention
+  across suspend and shutdown. 1.8 V signalling follows the documented board
+  policy derived from the L11 range. A pad-related failure is a policy
+  question first, not proof that the rail is wrong. The power acknowledgement
+  is controller-local: `BUS_SUCCESS` does not prove the rail voltage, and a
+  new request raised after both completions and after the card clock starts
+  still has no interrupt path.
+- **The diagnostic window is short.** The report path is bounded by a 30,000
+  ms watchdog. At 400 kHz a megabyte-scale read cannot fit, and an iPadOS
+  root cannot mount in practice, so speed is on the critical path.
+- **microSD/SDHC2 is out of scope.** Only SDHC1/eMMC is implemented.
+- **Vendor correspondence is open.** The exact vendor source/binary
+  correspondence and the firmware runtime slot table remain `[U]`.
