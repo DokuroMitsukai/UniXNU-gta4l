@@ -1086,18 +1086,22 @@ ADAPTER_MUTATIONS = [
        '\treport.widthhold_complete = complete;\n')],
      'widthhold-short'),
     ('widthhold-bytes-skip',
-     [('\tif (memcmp(slice, widthholdReference + start,\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0) {\n'
+     [('\tif (!speedMode &&\n'
+       '\t    (memcmp(slice, widthholdReference + start,\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH;\n'
        '\t}\n',
-       '\tif ((0) && (memcmp(slice, widthholdReference + start,\n'
+       '\tif ((0) && !speedMode &&\n'
+       '\t    (memcmp(slice, widthholdReference + start,\n'
        '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH;\n'
        '\t}\n')],
      'widthhold-match-mismatch'),
     ('widthhold-prefix-compare',
-     [('\tif (memcmp(slice, widthholdReference + start,\n',
-       '\tif (memcmp(slice, widthholdReference,\n')],
+     [('\tif (!speedMode &&\n'
+       '\t    (memcmp(slice, widthholdReference + start,\n',
+       '\tif (!speedMode &&\n'
+       '\t    (memcmp(slice, widthholdReference,\n')],
      'widthhold-match'),
     ('widthhold-rb-proof',
      [('\t\tif ((widthholdRc != GTA4L_EMMC_OK) ||\n'
@@ -1340,10 +1344,12 @@ ADAPTER_MUTATIONS = [
      'widthpub-match'),
     ('widthpub-pub-before-discovery',
      [('\t\treason = widthholdDiscoverMedia();\n'
-       '\t\tif (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {\n',
+       '\t\tif (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {\n'
+       '\t\t\tif (widthpubMode) {\n',
        '\t\treason = widthholdDiscoverMedia();\n'
        '\t\treport.widthpub_pub = 1u;\n'
-       '\t\tif (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {\n')],
+       '\t\tif (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {\n'
+       '\t\t\tif (widthpubMode) {\n')],
      'widthpub-media-absent'),
     ('widthpub-offline-missing',
      [('\tif (complete == 0u) {\n'
@@ -1362,6 +1368,174 @@ ADAPTER_MUTATIONS = [
        '\t\tsend = true;\n'
        '\t}\n')],
      'widthpub-read-error'),
+    ('speed-start-budget-dropped',
+     [('\t\tgta4l_emmc_deadline_arm(&host,\n'
+       '\t\t    GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS);\n',
+       '\t\tgta4l_emmc_deadline_clear(&host);\n')],
+     'speed-start-8bit'),
+    ('speed-hs-skipped',
+     [('\t\tspeedRc = gta4l_emmc_set_hs_timing(&host, 1u,\n'
+       '\t\t    &speedHs);\n',
+       '\t\tspeedRc = GTA4L_EMMC_OK;\n')],
+     'speed-start-8bit'),
+    ('speed-fallback-unverified',
+     [('\t\t\tif ((speedSwitch.cmd6_attempts < 1u) ||\n'
+       '\t\t\t    (speedSwitch.rollback_result !=\n'
+       '\t\t\t    GTA4L_EMMC_OK)) {\n',
+       '\t\t\tif (0) {\n')],
+     'speed-start-width-restore'),
+    ('speed-wroll-cleared',
+     [('\t\t\treport.speed_wroll = 1u;\n',
+       '\t\t\treport.speed_wroll = 0u;\n')],
+     'speed-start-fallback'),
+    ('speed-start-budget-uncleared',
+     [('\t\tgta4l_emmc_deadline_clear(&host);\n'
+       '\t\tIOLockLock(reportLock);\n'
+       '\t\treport.speed_base = 1u;\n',
+       '\t\tIOLockLock(reportLock);\n'
+       '\t\treport.speed_base = 1u;\n')],
+     'speed-start-8bit'),
+    ('speed-hs-stage-misreported',
+     [('\t\t\tspeedLatchFailure(\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_SPEED_STAGE_HS,\n',
+       '\t\t\tspeedLatchFailure(\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_SPEED_STAGE_WIDTH,\n')],
+     'speed-start-hs-fail'),
+    ('speed-hispd-masked',
+     [('\tspeedControl = control & 0xffu;\n',
+       '\tspeedControl = control & 0u;\n')],
+     'speed-start-hispd-record'),
+    ('speed-report-budget-dropped',
+     [('\t\t\t\t\t\tif (widthholdElapsedMs() >=\n'
+       '\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_SPEED_READ_BUDGET_MS) {\n',
+       '\t\t\t\t\t\tif (0) {\n')],
+     'speed-budget'),
+    ('speed-report-cancel-dropped',
+     [('\t\t\t\t\t\tif (reportCancel) {\n'
+       '\t\t\t\t\t\t\tcancel = 1;\n'
+       '\t\t\t\t\t\t\treason =\n'
+       '\t\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL;\n'
+       '\t\t\t\t\t\t\tbreak;\n'
+       '\t\t\t\t\t\t}\n',
+       '\t\t\t\t\t\tif (0) {\n'
+       '\t\t\t\t\t\t\tbreak;\n'
+       '\t\t\t\t\t\t}\n')],
+     'speed-cancel-during'),
+    ('speed-report-digest-swapped',
+     [('\t\t\t\t\t\t\tmemcpy(\n'
+       '\t\t\t\t\t\t\t    report.speed_dig1,\n'
+       '\t\t\t\t\t\t\t    digest,\n'
+       '\t\t\t\t\t\t\t    16u);\n',
+       '\t\t\t\t\t\t\tmemcpy(\n'
+       '\t\t\t\t\t\t\t    report.speed_dig2,\n'
+       '\t\t\t\t\t\t\t    digest,\n'
+       '\t\t\t\t\t\t\t    16u);\n')],
+     'speed-match-8bit'),
+    ('speed-report-hash-early',
+     [('\t\t\t\t\tif ((windowIndex ==\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_SPEED_CASE_OFFSETS) &&\n',
+       '\t\t\t\t\tif ((windowIndex == 0u) &&\n')],
+     'speed-match-8bit'),
+    ('speed-report-requests-dropped',
+     [('\t\t\t\t\t\t\trequests++;\n',
+       '\t\t\t\t\t\t\t;\n')],
+     'speed-match-8bit'),
+    ('speed-report-fails-dropped',
+     [('\t\t\t\t\t\t\tfails++;\n',
+       '\t\t\t\t\t\t\t;\n')],
+     'speed-read-crc'),
+    ('speed-report-partial-dropped',
+     [('\t\t\t\t\t\t\tpartial = 1;\n',
+       '\t\t\t\t\t\t\tpartial = 0;\n')],
+     'speed-short'),
+    ('speed-report-pub-early',
+     [('\tuint32_t published = 0;\n',
+       '\tuint32_t published = 1;\n')],
+     'speed-media-absent'),
+    ('speed-report-partdiag-dropped',
+     [('\treport.speed_partdiag = report.widthhold_partdiag;\n',
+       '\treport.speed_partdiag = 0u;\n')],
+     'speed-part-writable'),
+    ('speed-report-success-no-revert',
+     [('\trevertOk = speedRecover();\n',
+       '\trevertOk = true;\n')],
+     'speed-match-8bit'),
+    ('speed-report-revert-ignored',
+     [('\tif (!revertOk) {\n'
+       '\t\tonline = false;\n'
+       '\t}\n'
+       '\treleaseWidthholdMedia();\n',
+       '\tif (0) {\n'
+       '\t\tonline = false;\n'
+       '\t}\n'
+       '\treleaseWidthholdMedia();\n')],
+     'speed-revert-fail'),
+    ('speed-report-media-not-released',
+     [('\treleaseWidthholdMedia();\n'
+       '\n'
+       '\tIOLockLock(reportLock);\n'
+       '\treport.speed_req = requests;\n',
+       '\tIOLockLock(reportLock);\n'
+       '\treport.speed_req = requests;\n')],
+     'speed-match-8bit'),
+    ('speed-report-offline-skipped',
+     [('\tif ((reason != GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) ||\n'
+       '\t    !revertOk) {\n'
+       '\t\tnotifyOfflineOnce();\n'
+       '\t}\n',
+       '\tif (0) {\n'
+       '\t\tnotifyOfflineOnce();\n'
+       '\t}\n')],
+     'speed-media-absent'),
+    ('speed-report-offline-always',
+     [('\tif ((reason != GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) ||\n'
+       '\t    !revertOk) {\n'
+       '\t\tnotifyOfflineOnce();\n'
+       '\t}\n',
+       '\tif (1) {\n'
+       '\t\tnotifyOfflineOnce();\n'
+       '\t}\n')],
+     'speed-match-8bit'),
+    ('speed-report-revert-budget',
+     [('\t    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS);\n',
+       '\t    GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS);\n')],
+     'speed-revert-budget'),
+    ('speed-report-latch-overwrites',
+     [('\tif (speedFailStage == GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE) {\n',
+       '\tif (1) {\n')],
+     'speed-first-failure-latch'),
+    ('speed-report-stage-swapped',
+     [('\tcase GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_READ:\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_STAGE_READ;\n',
+       '\tcase GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_READ:\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SPEED_STAGE_SHORT;\n')],
+     'speed-read-crc'),
+    ('speed-report-hsrevert-unchecked',
+     [('\t    (speedRevert.hs_after == 0u)) ? 1u : 0u;\n',
+       '\t    (1u)) ? 1u : 0u;\n')],
+     'speed-revert-hs-stuck'),
+    ('speed-report-rclk-unchecked',
+     [('\treport.speed_rclk = ((speedRevert.clock_result == GTA4L_EMMC_OK) &&\n'
+       '\t    ((speedRevert.rcg_after & mask) ==\n'
+       '\t    (GTA4L_EMMC_RCG_400K_CFG & mask))) ?\n'
+       '\t    GTA4L_EMMC_BLOCK_CLOCK_HZ : 0u;\n',
+       '\treport.speed_rclk = GTA4L_EMMC_BLOCK_CLOCK_HZ;\n'
+       '\t(void)mask;\n')],
+     'speed-revert-clock'),
+    ('speed-report-rverified-from-status',
+     [('\treport.speed_rverified = speedRevert.verified;\n',
+       '\treport.speed_rverified =\n'
+       '\t    (speedRecoverStatus == GTA4L_EMMC_OK) ? 1u : 0u;\n')],
+     'speed-revert-unverified'),
+    ('speed-report-winning-width',
+     [('\t\t    (speedFallback.requested != 0u) ? &speedFallback :\n'
+       '\t\t    &speedSwitch;\n',
+       '\t\t    &speedSwitch;\n')],
+     'speed-match-4bit'),
+    ('speed-report-hz-zero',
+     [('\treport.speed_hz = (uint32_t)gta4l_emmc_platform_counter_hz();\n',
+       '\treport.speed_hz = 0u;\n')],
+     'speed-match-8bit'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -1451,7 +1625,7 @@ POLICY_MUTATIONS = [
      'partcmp-geometry'),
     ('consume-suppress-read',
      [('\tif ((report->consume == 0) && (report->width == 0) &&\n'
-       '\t    (report->widthhold == 0)) {\n'
+       '\t    (report->widthhold == 0) && (report->speed == 0)) {\n'
        '\t\tgta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");\n',
        '\tif (1) {\n'
        '\t\tgta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 READ: ");\n')],
@@ -1728,6 +1902,34 @@ POLICY_MUTATIONS = [
        '\t    (widthpub_selected != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
      'policy'),
+    ('speed-formatter-dig1-dropped',
+     [('\t\tgta4l_emmc_block_put_key(&writer, "dig1");\n'
+       '\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig1, 16u);\n'
+       '\t\tgta4l_emmc_block_put_char(&writer, \' \');\n',
+       '\t\tgta4l_emmc_block_put_char(&writer, \' \');\n')],
+     'speed-match-8bit'),
+    ('speed-formatter-digest-swapped',
+     [('\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig1, 16u);\n',
+       '\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig2, 16u);\n')],
+     'speed-digest-mismatch'),
+    ('speed-formatter-rcg-decimal',
+     [('\t\tgta4l_emmc_block_put_hex(&writer, report->speed_rcg, 8u);\n',
+       '\t\tgta4l_emmc_block_put_u64(&writer, report->speed_rcg);\n')],
+     'speed-match-8bit'),
+    ('speed-formatter-hispd-short',
+     [('\t\tgta4l_emmc_block_put_hex(&writer, report->speed_hispd, 2u);\n',
+       '\t\tgta4l_emmc_block_put_hex(&writer, report->speed_hispd, 1u);\n')],
+     'speed-match-8bit'),
+    ('speed-formatter-part-line',
+     [('\t} else if ((report->widthhold == 0) && (report->speed == 0)) {\n',
+       '\t} else if (report->widthhold == 0) {\n')],
+     'speed-match-8bit'),
+    ('speed-formatter-read-line',
+     [('\tif ((report->consume == 0) && (report->width == 0) &&\n'
+       '\t    (report->widthhold == 0) && (report->speed == 0)) {\n',
+       '\tif ((report->consume == 0) && (report->width == 0) &&\n'
+       '\t    (report->widthhold == 0)) {\n')],
+     'speed-match-8bit'),
 ]
 
 
@@ -1958,6 +2160,87 @@ def check_adapter_source():
     assert 'partdiag' in policy and \
         'widthhold_partdiag) == 4u' in policy, \
         'widthhold PART diagnostics must be reported as a u32 field'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS 25000u' in \
+        policy_header, 'speed start budget must stay fixed at 25,000 ms'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS 9500u' in \
+        policy_header, 'speed combined revert must stay at 9,500 ms'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_WINDOW_BLOCKS 8u' in \
+        policy_header, 'speed window must stay at eight blocks'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_CLOCK_HZ 50000000u' in \
+        policy_header, 'speed clock must stay at 50 MHz'
+    for index, name in enumerate(('NONE', 'ALLOC', 'BASELINE', 'HS',
+                                  'WIDTH', 'FALLBACK', 'BASE', 'ADVERT',
+                                  'GATE', 'REVERT')):
+        assert f'#define GTA4L_EMMC_BLOCK_SPEED_STAGE_{name} {index}u' in \
+            policy_header, f'speed stage {name} must stay fixed'
+    assert 'IOMallocContiguous(' in adapter and \
+        'GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES' in adapter, \
+        'speed mode must allocate one contiguous window'
+    assert 'IOFreeContiguous(speedWindow' in adapter, \
+        'speed window must be freed'
+    assert 'gta4l_emmc_deadline_arm(&host,\n\t\t    ' \
+        'GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS)' in adapter, \
+        'speed start must arm the fixed budget once'
+    speed_baseline_at = adapter.index(
+        'gta4l_emmc_read_ext_csd(&host, speedBaseline)')
+    speed_hs_at = adapter.index('gta4l_emmc_set_hs_timing(&host')
+    speed_w8_at = adapter.index(
+        'GTA4L_EMMC_BLOCK_SPEED_BITS_8, &speedSwitch)')
+    assert speed_baseline_at < speed_hs_at < speed_w8_at, \
+        'speed sequence must baseline, enter HS and switch width in order'
+    speed_start_at = adapter.index(
+        'if (speedMode) {', adapter.index('Gta4lEmmcBlock::start('))
+    speed_start = adapter[speed_start_at:adapter.index(
+        '\n\tif (widthholdMode || widthpubMode) {', speed_start_at)]
+    speed_arm_at = speed_start.index('gta4l_emmc_deadline_arm')
+    assert speed_start.index('GTA4L_EMMC_BLOCK_SPEED_STAGE_ALLOC') < \
+        speed_arm_at, 'speed allocation failure must precede the budget arm'
+    for stage in ('BASELINE', 'HS', 'WIDTH', 'FALLBACK'):
+        latch_at = speed_start.index(
+            f'GTA4L_EMMC_BLOCK_SPEED_STAGE_{stage},')
+        window = speed_start[max(0, latch_at - 300):latch_at]
+        assert 'gta4l_emmc_deadline_clear(&host);' in window, \
+            f'speed {stage} failure must clear the start budget first'
+    base_latch_at = adapter.index('GTA4L_EMMC_BLOCK_SPEED_STAGE_BASE,')
+    assert 'gta4l_emmc_deadline_clear(&host);' in \
+        adapter[max(0, base_latch_at - 400):base_latch_at], \
+        'speed BASE failure must clear the start budget first'
+    assert adapter.index(
+        'gta4l_emmc_deadline_clear(&host);\n\t\tIOLockLock('
+        'reportLock);\n\t\treport.speed_base = 1u;') < \
+        adapter.index('GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT,'), \
+        'speed publication exits must run after the budget is cleared'
+    assert 'GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_MS +' in adapter and \
+        'GTA4L_EMMC_BLOCK_SPEED_REPORT_MARGIN_MS <=' in adapter, \
+        'speed report worst case must be checked against the watchdog'
+    assert 'GTA4L_EMMC_BLOCK_SPEED_CASE_WORST_MS ==' in adapter, \
+        'speed in-flight case bound must be tied to the transport timeouts'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_STAGE_UNKNOWN 23u' in \
+        policy_header, 'an unknown speed reason must have a distinct stage'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES 746u' in \
+        policy_header, 'the SPEED formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u' in \
+        policy_header, 'the SPEED report bound must match the base block'
+    assert adapter.index(
+        'bzero(&speedFallback, sizeof(speedFallback));') < \
+        adapter.index('GTA4L_EMMC_BLOCK_SPEED_BITS_8, &speedSwitch)'), \
+        'speedFallback must be cleared before the first width attempt'
+    assert 'tag = (speedMode ? GTA4L_EMMC_BLOCK_SPEED_TAG :' in adapter \
+        and 'tag != widthholdActiveTag' in adapter, \
+        'speed tags must be exact and foreign tags rejected'
+    assert 'speedSwitch.rollback_result' in adapter and \
+        'speedSwitch.cmd6_attempts < 1u' in adapter, \
+        'speed fallback must require a verified rollback and an issued CMD6'
+    assert 'gta4l_emmc_recover_width_and_timing(&host,' in adapter and \
+        'GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS' in adapter, \
+        'speed failures must use the combined revert with its own budget'
+    assert 'speedControl = control & 0xffu;' in adapter, \
+        'speed report must record the HOST_CONTROL HISPD value'
+    assert 'report.speed_wid = bits;' in adapter, \
+        'speed report must record the winning width'
+    assert 'report.speed_wfall = 1u;' in adapter and \
+        'report.speed_wroll = 1u;' in adapter, \
+        'speed report must record the fallback and its verified rollback'
     probe = CONSUMER_PROBE.read_text()
     assert 'IOMallocContiguous(' in probe and \
         'IOFreeContiguous(' in probe, \
@@ -2252,6 +2535,46 @@ def compile_policy_mutation(compiler, cxx, temp, name, replacements,
                           capture_output=True), linked
 
 
+def check_speed_report_roundtrip(stdout, temp):
+    """Bind the adapter's SPEED line to the host evidence checker.
+
+    The adapter covers the 4 KiB BOOT window at LBA 2255360 with the same
+    deterministic sector pattern the host model uses, so the checker must
+    accept the line against a synthetic image built from that pattern. The
+    mismatch scenario keeps dig1 clean and must be rejected for disagreement.
+    """
+    match = re.search(r'^SPEEDMATCH (GTA4L-EMMC P5 SPEED: .*)$',
+                      stdout, re.M)
+    assert match, 'speed-match-8bit did not print a SPEED line'
+    line = match.group(1)
+    mismatch = re.search(r'^SPEEDMISMATCH (GTA4L-EMMC P5 SPEED: .*)$',
+                         stdout, re.M)
+    assert mismatch, 'speed-digest-mismatch did not print a SPEED line'
+    lba = 2255360
+    image = temp / 'speed-window.img'
+    data = bytearray()
+    for block in range(lba, lba + 8):
+        data.extend(bytes((block + index) & 0xff for index in range(512)))
+    assert len(data) == 4096
+    image.write_bytes(bytes(data))
+    checker = ROOT / 'scripts' / 'check-gta4l-speed-evidence.py'
+    passed = subprocess.run(
+        [sys.executable, str(checker), '--image', str(image),
+         '--line', line], text=True, capture_output=True)
+    assert passed.returncode == 0, \
+        'speed checker rejected the adapter line:\n' + \
+        (passed.stdout + passed.stderr)
+    assert 'PASS' in passed.stdout, passed.stdout
+    rejected = subprocess.run(
+        [sys.executable, str(checker), '--image', str(image),
+         '--line', mismatch.group(1)], text=True, capture_output=True)
+    assert rejected.returncode != 0, \
+        'speed checker accepted a digest mismatch'
+    assert 'disagree' in (rejected.stdout + rejected.stderr), \
+        rejected.stdout + rejected.stderr
+    print('PASS speed checker roundtrip: adapter line and mismatch binding')
+
+
 def main():
     compiler = shutil.which('gcc') or shutil.which('clang')
     if not compiler:
@@ -2298,8 +2621,9 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 378, f'expected 378 adapter PASS lines, got {passes}'
-        print('PASS adapter: 377 scenarios against the host IOKit seam')
+        assert passes == 420, f'expected 420 adapter PASS lines, got {passes}'
+        print('PASS adapter: 419 scenarios against the host IOKit seam')
+        check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

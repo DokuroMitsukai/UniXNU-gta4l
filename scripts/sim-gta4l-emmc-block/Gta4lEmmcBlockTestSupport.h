@@ -585,6 +585,49 @@ struct gta4l_test_state {
 	uint32_t width_ext_csd_calls;
 	uint32_t width_switch_calls;
 	uint32_t width_recover_calls;
+	/* S1 speed-mode seam. The HS entry, the verified 8-bit then 4-bit
+	 * switch and the combined width/timing revert are transport helpers.
+	 * The speed-active flag selects the speed knobs for the shared
+	 * verified-switch mock so width-mode scenarios keep their model. */
+	int speed_active;
+	int speed_hispd;
+	int speed_ext_csd_fail;
+	int speed_hs_rc;
+	int speed_hs_before;
+	int speed_hs_after;
+	int speed_hs_clock_rc;
+	int speed_hs_rcg_after;
+	int speed_hs_advance_ms;
+	int speed_switch8_rc;
+	int speed_switch8_verified;
+	int speed_switch8_rollback;
+	int speed_switch8_host_bit;
+	int speed_switch8_cmd6;
+	int speed_switch8_advance_ms;
+	int speed_switch4_rc;
+	int speed_switch4_verified;
+	int speed_switch4_rollback;
+	int speed_switch4_host_bit;
+	int speed_switch4_cmd6;
+	int speed_switch4_advance_ms;
+	int speed_recover_rc;
+	int speed_recover_verified;
+	int speed_recover_host_clear;
+	int speed_recover_card_keep;
+	int speed_recover_hs_after;
+	int speed_recover_clock_rc;
+	int speed_recover_hs_rc;
+	int speed_recover_width_rc;
+	int speed_recover_cmd6;
+	int speed_recover_advance_ms;
+	uint32_t speed_hs_calls;
+	uint32_t speed_switch8_calls;
+	uint32_t speed_switch4_calls;
+	uint32_t speed_recover_calls;
+	uint32_t speed_recover_budget_ms;
+	uint32_t deadline_arm_calls;
+	uint32_t deadline_clear_calls;
+	uint32_t deadline_last_budget_ms;
 };
 
 typedef void (*gta4l_test_partition_sample_fn)(uint32_t sample,
@@ -607,6 +650,13 @@ extern gta4l_test_width_sample_fn gta4l_test_width_hook;
 #define GTA4L_TEST_WIDTHHOLD_PHASE_AFTER_REVERT 1u
 typedef void (*gta4l_test_widthhold_sample_fn)(uint32_t phase);
 extern gta4l_test_widthhold_sample_fn gta4l_test_widthhold_hook;
+
+/* S1 speed start-path seam. The start phase fires from start() after the
+ * report marker is set and before the first HS operation, so a scenario can
+ * interleave a competing request or release the controller gate. */
+#define GTA4L_TEST_SPEED_PHASE_START 0u
+typedef void (*gta4l_test_speed_sample_fn)(uint32_t phase);
+extern gta4l_test_speed_sample_fn gta4l_test_speed_hook;
 
 extern gta4l_test_state gta4l_test;
 

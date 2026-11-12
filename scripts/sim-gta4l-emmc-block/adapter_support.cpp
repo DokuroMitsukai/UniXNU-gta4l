@@ -12,6 +12,7 @@ gta4l_test_multi_sample_fn gta4l_test_multi_hook;
 gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 gta4l_test_width_sample_fn gta4l_test_width_hook;
 gta4l_test_widthhold_sample_fn gta4l_test_widthhold_hook;
+gta4l_test_speed_sample_fn gta4l_test_speed_hook;
 IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 int gta4l_test_media_count;
 IOService *gta4l_test_schemes[GTA4L_TEST_MAX_SCHEMES];
@@ -93,6 +94,24 @@ gta4l_test_reset(void)
 	gta4l_test.width_recover_host_clear = 1;
 	gta4l_test.width_recover_card_keep = 0;
 	gta4l_test.width_recover_cmd6 = 2;
+	gta4l_test.speed_active = 0;
+	gta4l_test.speed_hispd = 0;
+	gta4l_test.speed_hs_before = 0;
+	gta4l_test.speed_hs_after = 1;
+	gta4l_test.speed_hs_rcg_after =
+	    (int)GTA4L_EMMC_RCG_50M_CFG;
+	gta4l_test.speed_switch8_verified = 1;
+	gta4l_test.speed_switch8_rollback = GTA4L_EMMC_OK;
+	gta4l_test.speed_switch8_host_bit = 1;
+	gta4l_test.speed_switch8_cmd6 = 1;
+	gta4l_test.speed_switch4_verified = 1;
+	gta4l_test.speed_switch4_rollback = GTA4L_EMMC_OK;
+	gta4l_test.speed_switch4_host_bit = 1;
+	gta4l_test.speed_switch4_cmd6 = 1;
+	gta4l_test.speed_recover_verified = 1;
+	gta4l_test.speed_recover_host_clear = 1;
+	gta4l_test.speed_recover_hs_after = 0;
+	gta4l_test.speed_recover_cmd6 = 2;
 	gta4l_test.property_fail_at = -1;
 	gta4l_test.widthhold_media_tag_delta = 0;
 	gta4l_test.widthhold_media_block_delta = 0;
@@ -104,6 +123,7 @@ gta4l_test_reset(void)
 	gta4l_test_partition_sample_hook = 0;
 	gta4l_test_width_hook = 0;
 	gta4l_test_widthhold_hook = 0;
+	gta4l_test_speed_hook = 0;
 	gta4l_test_media_count = 0;
 	gta4l_test_scheme_count = 0;
 }
@@ -434,8 +454,11 @@ gta4l_emmc_platform_read8(const struct gta4l_emmc_platform *platform,
     uint32_t space, uint32_t offset)
 {
 	(void)platform;
-	(void)space;
-	(void)offset;
+	if ((space == GTA4L_EMMC_SPACE_SDHCI) &&
+	    (offset == GTA4L_EMMC_REG_HOST_CONTROL) &&
+	    (gta4l_test.speed_active != 0)) {
+		return (uint8_t)gta4l_test.speed_hispd;
+	}
 	return 0;
 }
 
@@ -656,6 +679,9 @@ gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer)
 	if (gta4l_test.width_ext_csd_fail != 0) {
 		return gta4l_test.width_ext_csd_fail;
 	}
+	if (gta4l_test.speed_ext_csd_fail != 0) {
+		return gta4l_test.speed_ext_csd_fail;
+	}
 	/* The real helper compares the read-only properties segment against
 	 * the captured baseline. The model returns one stable image so the
 	 * block-level sequence observes only the helper's outcome. */
@@ -668,6 +694,72 @@ gta4l_emmc_set_bus_width_verified(struct gta4l_emmc_host *host, uint32_t bits,
     struct gta4l_emmc_bus_result *result)
 {
 	uint32_t control;
+
+	if (gta4l_test.speed_active != 0) {
+		int rc;
+		int verified;
+		int rollback;
+		int host_bit;
+		int cmd6;
+		int advance;
+		uint32_t code;
+
+		if ((host == 0) || (host->initialized == 0) ||
+		    ((bits != 4u) && (bits != 8u))) {
+			return GTA4L_EMMC_ERR_ARG;
+		}
+		gta4l_test.width_switch_calls++;
+		control = (uint32_t)gta4l_test.width_host_control;
+		if (bits == 8u) {
+			gta4l_test.speed_switch8_calls++;
+			rc = gta4l_test.speed_switch8_rc;
+			verified = gta4l_test.speed_switch8_verified;
+			rollback = gta4l_test.speed_switch8_rollback;
+			host_bit = gta4l_test.speed_switch8_host_bit;
+			cmd6 = gta4l_test.speed_switch8_cmd6;
+			advance = gta4l_test.speed_switch8_advance_ms;
+			code = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8;
+		} else {
+			gta4l_test.speed_switch4_calls++;
+			rc = gta4l_test.speed_switch4_rc;
+			verified = gta4l_test.speed_switch4_verified;
+			rollback = gta4l_test.speed_switch4_rollback;
+			host_bit = gta4l_test.speed_switch4_host_bit;
+			cmd6 = gta4l_test.speed_switch4_cmd6;
+			advance = gta4l_test.speed_switch4_advance_ms;
+			code = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4;
+		}
+		gta4l_test.now_ms += (uint32_t)advance;
+		if (result != 0) {
+			memset(result, 0, sizeof(*result));
+			result->requested = bits;
+			result->switch_result = rc;
+			result->rollback_result = rollback;
+			result->verified = (uint32_t)verified;
+			result->cmd6_attempts = (uint32_t)cmd6;
+			result->host_before = (uint8_t)control;
+			result->host_after = (uint8_t)control;
+			result->host_control = control;
+		}
+		if (rc != GTA4L_EMMC_OK) {
+			return rc;
+		}
+		control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT);
+		if (host_bit != 0) {
+			control |= (bits == 8u) ?
+			    GTA4L_EMMC_HOST_CONTROL_8BIT :
+			    GTA4L_EMMC_HOST_CONTROL_4BIT;
+			gta4l_test.width_host_control = control;
+			host->bus_width = (uint8_t)code;
+		}
+		if (result != 0) {
+			result->host_after = (uint8_t)control;
+			result->host_control = control;
+			result->switched = code;
+		}
+		return GTA4L_EMMC_OK;
+	}
 
 	if ((host == 0) || (host->initialized == 0) || (bits != 4u)) {
 		return GTA4L_EMMC_ERR_ARG;
@@ -763,6 +855,165 @@ gta4l_emmc_set_bus_width_recover(struct gta4l_emmc_host *host, uint32_t bits,
 		}
 	}
 	return GTA4L_EMMC_OK;
+}
+
+static uint64_t
+gta4l_test_counter(struct gta4l_emmc_host *host)
+{
+	if ((host != 0) && (host->ops != 0) &&
+	    (host->ops->counter != 0)) {
+		return host->ops->counter(host->context);
+	}
+	return 0;
+}
+
+void
+gta4l_emmc_deadline_arm(struct gta4l_emmc_host *host, uint32_t budget_ms)
+{
+	gta4l_test.deadline_arm_calls++;
+	gta4l_test.deadline_last_budget_ms = budget_ms;
+	if (host == 0) {
+		return;
+	}
+	host->deadline_active = 0;
+	host->deadline_ticks = 0;
+	if ((budget_ms == 0u) || (host->counter_hz == 0u) ||
+	    (host->ops == 0) || (host->ops->counter == 0)) {
+		return;
+	}
+	host->deadline_ticks = gta4l_test_counter(host) +
+	    ((uint64_t)budget_ms * host->counter_hz) / 1000u;
+	host->deadline_active = 1;
+}
+
+int
+gta4l_emmc_deadline_check(struct gta4l_emmc_host *host)
+{
+	if ((host == 0) || (host->deadline_active == 0)) {
+		return GTA4L_EMMC_OK;
+	}
+	if (gta4l_test_counter(host) >= host->deadline_ticks) {
+		return GTA4L_EMMC_ERR_DEADLINE;
+	}
+	return GTA4L_EMMC_OK;
+}
+
+void
+gta4l_emmc_deadline_clear(struct gta4l_emmc_host *host)
+{
+	gta4l_test.deadline_clear_calls++;
+	if (host == 0) {
+		return;
+	}
+	host->deadline_active = 0;
+	host->deadline_ticks = 0;
+}
+
+int
+gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
+    struct gta4l_emmc_hs_result *result)
+{
+	int rc;
+
+	if ((host == 0) || (host->initialized == 0) || (timing > 1u)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	gta4l_test.speed_hs_calls++;
+	rc = gta4l_test.speed_hs_rc;
+	if (result != 0) {
+		memset(result, 0, sizeof(*result));
+		result->timing = timing;
+		result->hs_before =
+		    (uint32_t)gta4l_test.speed_hs_before;
+		result->hs_after =
+		    (uint32_t)gta4l_test.speed_hs_after;
+		result->rcg_before = GTA4L_EMMC_RCG_400K_CFG;
+		result->rcg_after =
+		    (uint32_t)gta4l_test.speed_hs_rcg_after;
+		result->clock = (timing != 0u) ? 1u : 0u;
+		result->switch_status = GTA4L_EMMC_OK;
+		result->switch_result = rc;
+		result->clock_result =
+		    (gta4l_test.speed_hs_clock_rc != 0) ?
+		    gta4l_test.speed_hs_clock_rc : GTA4L_EMMC_OK;
+	}
+	gta4l_test.now_ms += (uint32_t)gta4l_test.speed_hs_advance_ms;
+	if ((rc == GTA4L_EMMC_OK) &&
+	    (gta4l_test.speed_hs_clock_rc != 0)) {
+		rc = gta4l_test.speed_hs_clock_rc;
+	}
+	return rc;
+}
+
+int
+gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
+    const uint8_t *baseline, struct gta4l_emmc_recover_result *result,
+    uint32_t budget_ms)
+{
+	uint32_t control;
+	uint64_t start;
+	int rc;
+
+	if ((host == 0) || (host->initialized == 0) || (baseline == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	gta4l_test.speed_recover_calls++;
+	gta4l_test.speed_recover_budget_ms = budget_ms;
+	start = gta4l_test_counter(host);
+	gta4l_emmc_deadline_arm(host, budget_ms);
+	control = (uint32_t)gta4l_test.width_host_control;
+	if (result != 0) {
+		memset(result, 0, sizeof(*result));
+		result->host_before = (uint8_t)control;
+	}
+	gta4l_test.now_ms += (uint32_t)gta4l_test.speed_recover_advance_ms;
+	rc = gta4l_test.speed_recover_rc;
+	if ((rc == GTA4L_EMMC_OK) &&
+	    (gta4l_test.speed_recover_clock_rc != 0)) {
+		rc = gta4l_test.speed_recover_clock_rc;
+	}
+	if ((rc == GTA4L_EMMC_OK) &&
+	    (gta4l_test.speed_recover_hs_rc != 0)) {
+		rc = gta4l_test.speed_recover_hs_rc;
+	}
+	if ((rc == GTA4L_EMMC_OK) &&
+	    (gta4l_test.speed_recover_width_rc != 0)) {
+		rc = gta4l_test.speed_recover_width_rc;
+	}
+	if (gta4l_test.speed_recover_host_clear != 0) {
+		control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT);
+	}
+	if (result != 0) {
+		result->host_after = (uint8_t)control;
+		result->hs_after =
+		    (uint32_t)gta4l_test.speed_recover_hs_after;
+		result->rcg_after = GTA4L_EMMC_RCG_400K_CFG;
+		result->clock_result =
+		    (gta4l_test.speed_recover_clock_rc != 0) ?
+		    gta4l_test.speed_recover_clock_rc : GTA4L_EMMC_OK;
+		result->hs_result =
+		    (gta4l_test.speed_recover_hs_rc != 0) ?
+		    gta4l_test.speed_recover_hs_rc : GTA4L_EMMC_OK;
+		result->width_result =
+		    (gta4l_test.speed_recover_width_rc != 0) ?
+		    gta4l_test.speed_recover_width_rc : GTA4L_EMMC_OK;
+		result->cmd6_attempts =
+		    (uint32_t)gta4l_test.speed_recover_cmd6;
+		result->verified = (rc == GTA4L_EMMC_OK) ?
+		    (uint32_t)gta4l_test.speed_recover_verified : 0u;
+		result->result = (rc == GTA4L_EMMC_OK) ?
+		    GTA4L_EMMC_OK : GTA4L_EMMC_ERR_WIDTH_RESTORE;
+		result->elapsed_ticks = gta4l_test_counter(host) - start;
+	}
+	if (gta4l_test.speed_recover_host_clear != 0) {
+		gta4l_test.width_host_control = control;
+		if (gta4l_test.speed_recover_card_keep == 0) {
+			host->bus_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
+		}
+	}
+	gta4l_emmc_deadline_clear(host);
+	return rc;
 }
 
 IOMemoryDescriptor *

@@ -8713,19 +8713,183 @@ scenario_widthpub_switch_failure(void)
 	return 0;
 }
 
-static int
-scenario_speed_accepted(void)
+static void
+speed_default_multi_hook(uint32_t call)
 {
-	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-speed=1") == 0);
+	(void)call;
+	/* A report pass must record a non-zero platform-counter delta even
+	 * when the host model never sleeps; one millisecond per case keeps
+	 * the eight-case loop far inside its 2,000 ms budget. */
+	gta4l_test.now_ms += 1u;
+}
+
+static void
+speed_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test_multi_hook = speed_default_multi_hook;
+}
+
+static void
+speed_print_line(const char *tag)
+{
+	const char *start = strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SPEED: ");
+	const char *end;
+
+	if (start == 0) {
+		return;
+	}
+	end = strchr(start, '\n');
+	if (end == 0) {
+		end = start + strlen(start);
+	}
+	printf("%s %.*s\n", tag, (int)(end - start), start);
+}
+
+static void
+speed_window_expected_digest(uint8_t *digest)
+{
+	static uint8_t scratch[GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES];
+	uint64_t first = GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES /
+	    GTA4L_EMMC_BLOCK_BYTES;
+	uint32_t index;
+
+	for (index = 0; index < GTA4L_EMMC_BLOCK_SPEED_WINDOW_BLOCKS;
+	    index++) {
+		gta4l_test_fill_sector(first + index,
+		    scratch + (index * GTA4L_EMMC_BLOCK_BYTES));
+	}
+	gta4l_emmc_block_sha256(scratch, sizeof(scratch), digest);
+}
+
+static int
+speed_counter_positive(const char *key)
+{
+	const char *found = strstr(gta4l_test.panic, key);
+	unsigned long long value;
+
+	if (found == 0) {
+		return 0;
+	}
+	if (sscanf(found + strlen(key), "%llu", &value) != 1) {
+		return 0;
+	}
+	return value > 0u;
+}
+
+static IOReturn
+speed_short_read_hook(IOMedia *media, UInt64 byteStart,
+    IOMemoryDescriptor *buffer, UInt64 *actualByteCount)
+{
+	uint64_t absolute = media->base_value + byteStart;
+	uint64_t block = absolute / GTA4L_EMMC_BLOCK_BYTES;
+	uint8_t *target = static_cast<uint8_t *>(buffer->address());
+	uint32_t offset;
+
+	for (offset = 0; offset < buffer->getLength();
+	    offset += GTA4L_EMMC_BLOCK_BYTES) {
+		gta4l_test_fill_sector(block +
+		    (offset / GTA4L_EMMC_BLOCK_BYTES), target + offset);
+	}
+	if (actualByteCount != 0) {
+		*actualByteCount = buffer->getLength() - 1u;
+	}
+	return kIOReturnSuccess;
+}
+
+static void
+speed_crc_hook(uint32_t call)
+{
+	gta4l_test.now_ms += 1u;
+	if (call == 3u) {
+		gta4l_test.multi_data_result = GTA4L_EMMC_ERR_DATA_CRC;
+	}
+}
+
+static void
+speed_timeout_hook(uint32_t call)
+{
+	gta4l_test.now_ms += 1u;
+	if (call == 6u) {
+		gta4l_test.multi_data_result = GTA4L_EMMC_ERR_DATA_TIMEOUT;
+	}
+}
+
+static void
+speed_fallback_report_fixture(void)
+{
+	speed_fixture();
+	gta4l_test.speed_switch8_rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+	gta4l_test.speed_switch8_verified = 0;
+	gta4l_test.speed_switch8_host_bit = 0;
+}
+
+static int
+scenario_speed_match_8bit(void)
+{
+	uint8_t digest[32];
+	char digestText[33];
+	char expected[512];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
 	CHECK(g_started);
 	CHECK(g_self->speedMode);
 	CHECK(!g_self->widthpubMode);
 	CHECK(!g_self->widthholdMode);
 	CHECK(g_self->report.widthpub == 0);
+	widthhold_setup(true, true);
 	CHECK(invoke_thread(1) == 1);
-	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 REPORT:") != 0);
-	CHECK(strstr(gta4l_test.panic, "WIDTHPUB") == 0);
-	CHECK(strstr(gta4l_test.panic, "WIDTHHOLD") == 0);
+	CHECK(gta4l_test.panic != 0);
+	speed_window_expected_digest(digest);
+	partread_digest_hex(digest, digestText);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SPEED: hs=1 hsrb=0 hsa=1 rcg=0000020b "
+	    "hispd=00 wtry=8 wfall=0 wroll=0 wid=8 verified=1 hb=00 "
+	    "ha=20 cmd6=1 base=1 bytes1=4096 ticks1=") != 0);
+	snprintf(expected, sizeof(expected),
+	    " hz=1000000 dig1=%s bytes2=4096 ticks2=", digestText);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	snprintf(expected, sizeof(expected),
+	    " dig2=%s req=8 fails=0 cancel=0 budget=0 partial=0 pub=1 "
+	    "partdiag=0 revert=1 rverified=1 rhb=20 rha=00 rcmd6=2 "
+	    "rstatus=0 hsrevert=1 hsverified=1 rhsb=1 rhs=0 rclk=400000 "
+	    "limit=64 seg=1 cap=61071360", digestText);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PART:") == 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 READ:") == 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTHHOLD") == 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTHPUB") == 0);
+	CHECK(speed_counter_positive("ticks1="));
+	CHECK(speed_counter_positive("ticks2="));
+	CHECK(g_self->report.speed == 1u);
+	CHECK(g_self->report.speed_wid == 8u);
+	CHECK(g_self->report.speed_wfall == 0u);
+	CHECK(g_self->report.speed_wroll == 0u);
+	CHECK(g_self->report.speed_req == 8u);
+	CHECK(g_self->report.speed_fails == 0u);
+	CHECK(g_self->report.speed_bytes1 == 4096u);
+	CHECK(g_self->report.speed_bytes2 == 4096u);
+	CHECK(g_self->report.speed_pub == 1u);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(gta4l_test.speed_recover_budget_ms ==
+	    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(!g_self->host.deadline_active);
+	CHECK(gta4l_test.message_count == 0);
+	CHECK(!g_self->offlineNotified);
+	CHECK(g_widthhold_boot_media != 0);
+	CHECK(g_widthhold_boot_media->open_calls == 1);
+	CHECK(g_widthhold_boot_media->close_calls == 1);
+	CHECK(g_widthhold_boot_media->open_access ==
+	    kIOStorageAccessReader);
+	CHECK(g_self->widthholdBoot == 0);
+	CHECK(g_self->widthholdWhole == 0);
+	CHECK(g_self->widthholdClient == 0);
+	speed_print_line("SPEEDMATCH");
 	return 0;
 }
 
@@ -8850,6 +9014,1063 @@ scenario_speed_refused_conflicts(void)
 		CHECK(gta4l_test.thread_count == 0);
 		CHECK(strstr(gta4l_test.log, expected) != 0);
 	}
+	return 0;
+}
+
+static int
+scenario_speed_start_8bit(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	CHECK(gta4l_test.speed_hs_calls == 1);
+	CHECK(gta4l_test.speed_switch8_calls == 1);
+	CHECK(gta4l_test.speed_switch4_calls == 0);
+	CHECK(gta4l_test.speed_recover_calls == 0);
+	CHECK(gta4l_test.width_ext_csd_calls == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8);
+	CHECK(g_self->report.speed == 1);
+	CHECK(g_self->report.speed_hs == 1);
+	CHECK(g_self->report.speed_hsrb == 0);
+	CHECK(g_self->report.speed_hsa == 1);
+	CHECK(g_self->report.speed_rcg ==
+	    (GTA4L_EMMC_RCG_50M_CFG &
+	    (GTA4L_EMMC_RCG_SRC_SEL_MASK |
+	    GTA4L_EMMC_RCG_SRC_DIV_MASK |
+	    GTA4L_EMMC_RCG_MODE_MASK)));
+	CHECK(g_self->report.speed_hispd == 0);
+	CHECK(g_self->report.speed_wtry == 8);
+	CHECK(g_self->report.speed_wid == 8);
+	CHECK(g_self->report.speed_verified == 1);
+	CHECK(g_self->report.speed_hb == 0);
+	CHECK(g_self->report.speed_ha == GTA4L_EMMC_HOST_CONTROL_8BIT);
+	CHECK(g_self->report.speed_cmd6 == 1);
+	CHECK(g_self->report.speed_base == 1);
+	CHECK(g_self->report.speed_wfall == 0);
+	CHECK(g_self->report.speed_wroll == 0);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE);
+	CHECK(gta4l_test.deadline_arm_calls == 1);
+	CHECK(gta4l_test.deadline_last_budget_ms ==
+	    GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS);
+	CHECK(gta4l_test.deadline_clear_calls >= 1);
+	CHECK(!g_self->host.deadline_active);
+	return 0;
+}
+
+static void
+speed_hispd_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_hispd =
+	    GTA4L_EMMC_HOST_CONTROL_8BIT | 0x04;
+}
+
+static int
+scenario_speed_start_hispd_record(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_hispd_fixture) == 0);
+	CHECK(g_started);
+	CHECK(g_self->report.speed_hispd ==
+	    (uint32_t)(GTA4L_EMMC_HOST_CONTROL_8BIT | 0x04));
+	return 0;
+}
+
+static void
+speed_fallback_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_switch8_rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+	gta4l_test.speed_switch8_verified = 0;
+	gta4l_test.speed_switch8_host_bit = 0;
+}
+
+static int
+scenario_speed_start_fallback(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fallback_fixture) == 0);
+	CHECK(g_started);
+	CHECK(gta4l_test.speed_hs_calls == 1);
+	CHECK(gta4l_test.speed_switch8_calls == 1);
+	CHECK(gta4l_test.speed_switch4_calls == 1);
+	CHECK(gta4l_test.speed_recover_calls == 0);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4);
+	CHECK(g_self->report.speed_wtry == 8);
+	CHECK(g_self->report.speed_wid == 4);
+	CHECK(g_self->report.speed_verified == 1);
+	CHECK(g_self->report.speed_wfall == 1);
+	CHECK(g_self->report.speed_wroll == 1);
+	CHECK(g_self->report.speed_ha == GTA4L_EMMC_HOST_CONTROL_4BIT);
+	CHECK(g_self->report.speed_base == 1);
+	CHECK(!g_self->host.deadline_active);
+	return 0;
+}
+
+static void
+speed_restore_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_switch8_rc = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+	gta4l_test.speed_switch8_verified = 0;
+	gta4l_test.speed_switch8_rollback = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+	gta4l_test.speed_switch8_host_bit = 0;
+}
+
+static int
+scenario_speed_start_width_restore(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_restore_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.speed_switch8_calls == 1);
+	CHECK(gta4l_test.speed_switch4_calls == 0);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_WIDTH);
+	CHECK(g_self->report.speed_revert == 1);
+	CHECK(g_self->report.speed_rverified == 1);
+	CHECK(g_self->report.speed_hsrevert == 1);
+	CHECK(g_self->report.speed_rhs == 0);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(gta4l_test.deadline_last_budget_ms ==
+	    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS);
+	CHECK(!g_self->host.deadline_active);
+	return 0;
+}
+
+static void
+speed_fallback_fail_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_switch8_rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+	gta4l_test.speed_switch8_verified = 0;
+	gta4l_test.speed_switch8_host_bit = 0;
+	gta4l_test.speed_switch4_rc = GTA4L_EMMC_ERR_BUS_WIDTH;
+	gta4l_test.speed_switch4_verified = 0;
+	gta4l_test.speed_switch4_host_bit = 0;
+}
+
+static int
+scenario_speed_start_fallback_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fallback_fail_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.speed_switch8_calls == 1);
+	CHECK(gta4l_test.speed_switch4_calls == 1);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_FALLBACK);
+	CHECK(g_self->report.speed_wfall == 1);
+	CHECK(g_self->report.speed_wroll == 1);
+	CHECK(g_self->report.speed_wid == 4);
+	CHECK(g_self->report.speed_verified == 0);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	return 0;
+}
+
+static void
+speed_hs_fail_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_hs_rc = GTA4L_EMMC_ERR_TIMING;
+}
+
+static int
+scenario_speed_start_hs_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_hs_fail_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.speed_hs_calls == 1);
+	CHECK(gta4l_test.speed_switch8_calls == 0);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_HS);
+	CHECK(g_self->report.speed_fail_status == GTA4L_EMMC_ERR_TIMING);
+	CHECK(g_self->report.speed_revert == 1);
+	CHECK(g_self->report.speed_rverified == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	CHECK(gta4l_test.deadline_last_budget_ms ==
+	    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS);
+	CHECK(!g_self->host.deadline_active);
+	return 0;
+}
+
+static void
+speed_hs_readback_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_hs_after = 0;
+}
+
+static int
+scenario_speed_start_hs_readback(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_hs_readback_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_HS);
+	CHECK(g_self->report.speed_fail_status == GTA4L_EMMC_ERR_TIMING);
+	CHECK(g_self->report.speed_hsa == 0);
+	CHECK(g_self->report.speed_rverified == 1);
+	return 0;
+}
+
+static void
+speed_hs_clock_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_hs_clock_rc = GTA4L_EMMC_ERR_CLOCK;
+}
+
+static int
+scenario_speed_start_hs_clock(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_hs_clock_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_HS);
+	CHECK(g_self->report.speed_fail_status == GTA4L_EMMC_ERR_CLOCK);
+	CHECK(g_self->report.speed_rverified == 1);
+	return 0;
+}
+
+static void
+speed_baseline_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_ext_csd_fail = GTA4L_EMMC_ERR_DATA_CRC;
+}
+
+static int
+scenario_speed_start_baseline_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_baseline_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.speed_hs_calls == 0);
+	CHECK(gta4l_test.speed_recover_calls == 0);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_BASELINE);
+	CHECK(g_self->report.speed_fail_status == GTA4L_EMMC_ERR_DATA_CRC);
+	CHECK(g_self->report.speed_revert == 0);
+	CHECK(gta4l_test.deadline_arm_calls == 1);
+	CHECK(gta4l_test.deadline_clear_calls >= 1);
+	CHECK(!g_self->host.deadline_active);
+	return 0;
+}
+
+static void
+speed_base_fail_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.fail_read_at = 0;
+}
+
+static int
+scenario_speed_start_base_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_base_fail_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.speed_switch8_calls == 1);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_BASE);
+	CHECK(g_self->report.speed_base == 0);
+	CHECK(g_self->report.speed_revert == 1);
+	CHECK(g_self->report.speed_rverified == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	return 0;
+}
+
+static void
+speed_advert_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.property_fail_at = 0;
+}
+
+static int
+scenario_speed_start_advert(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_advert_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT);
+	CHECK(g_self->report.speed_revert == 1);
+	CHECK(g_self->report.speed_rverified == 1);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+	return 0;
+}
+
+static void
+speed_gate_hook(uint32_t phase)
+{
+	if (phase == GTA4L_TEST_SPEED_PHASE_START) {
+		g_self->gate->depth = 1;
+	}
+}
+
+static void
+speed_gate_fixture(void)
+{
+	gta4l_test.speed_active = 1;
+	gta4l_test.speed_hs_rc = GTA4L_EMMC_ERR_TIMING;
+	gta4l_test_speed_hook = speed_gate_hook;
+}
+
+static int
+scenario_speed_start_gate_timeout(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_gate_fixture) == 1);
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(gta4l_test.speed_recover_calls == 0);
+	/* The HS failure stays the first latched stage; the gate timeout is
+	 * visible only by the unlocked snapshot and the skipped revert. */
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_HS);
+	CHECK(g_self->report.speed_revert == 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SNAP: locked=0") != 0);
+	CHECK(gta4l_test.deadline_last_budget_ms ==
+	    GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS);
+	CHECK(!g_self->host.deadline_active);
+	g_self->gate->depth = 0;
+	return 0;
+}
+
+#define SPEED_FAILURE_COMMON(stage) \
+	do { \
+		CHECK(invoke_thread(1) == 1); \
+		CHECK(g_self->report.speed_fail_stage == (stage)); \
+		CHECK(gta4l_test.speed_recover_calls == 1); \
+		CHECK(gta4l_test.speed_recover_budget_ms == \
+		    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS); \
+		CHECK(g_self->host.bus_width == \
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1); \
+		CHECK(!g_self->host.deadline_active); \
+		CHECK(strstr(gta4l_test.panic, \
+		    "revert=1 rverified=1") != 0); \
+		CHECK(strstr(gta4l_test.panic, \
+		    "hsrevert=1 hsverified=1 rhsb=1 rhs=0 rclk=400000") != 0); \
+		CHECK(strstr(gta4l_test.panic, "rstatus=0") != 0); \
+		CHECK(gta4l_test.message_count == 1); \
+		CHECK(g_self->offlineNotified); \
+		CHECK(!g_self->online); \
+		CHECK(g_self->widthholdClient == 0); \
+		CHECK(g_self->widthholdBoot == 0); \
+		CHECK(g_self->widthholdWhole == 0); \
+	} while (0)
+
+static int
+scenario_speed_match_4bit(void)
+{
+	uint8_t digest[32];
+	char digestText[33];
+	char expected[512];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fallback_report_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	CHECK(invoke_thread(1) == 1);
+	speed_window_expected_digest(digest);
+	partread_digest_hex(digest, digestText);
+	CHECK(strstr(gta4l_test.panic,
+	    "wid=4 verified=1 hb=00 ha=02 cmd6=1 base=1 bytes1=4096") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "wfall=1 wroll=1") != 0);
+	snprintf(expected, sizeof(expected),
+	    " dig2=%s req=8 fails=0 cancel=0 budget=0 partial=0 pub=1 "
+	    "partdiag=0 revert=1 rverified=1 rhb=02 rha=00 rcmd6=2 "
+	    "rstatus=0 hsrevert=1 hsverified=1 rhsb=1 rhs=0 rclk=400000 "
+	    "limit=64 seg=1 cap=61071360", digestText);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(gta4l_test.speed_switch8_calls == 1);
+	CHECK(gta4l_test.speed_switch4_calls == 1);
+	CHECK(g_self->report.speed_wid == 4u);
+	CHECK(g_self->report.speed_wfall == 1u);
+	CHECK(g_self->report.speed_wroll == 1u);
+	CHECK(g_self->report.speed_req == 8u);
+	CHECK(gta4l_test.message_count == 0);
+	CHECK(gta4l_test.speed_recover_calls == 1);
+	CHECK(speed_counter_positive("ticks1="));
+	speed_print_line("SPEEDMATCH4");
+	return 0;
+}
+
+static int
+scenario_speed_read_crc(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test_multi_hook = speed_crc_hook;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_READ);
+	CHECK(g_self->report.speed_req == 4u);
+	CHECK(g_self->report.speed_fails == 1u);
+	CHECK(g_self->report.speed_bytes1 == 3072u);
+	CHECK(g_self->report.speed_dig1[0] == 0u);
+	CHECK(strstr(gta4l_test.panic,
+	    "dig1=00000000000000000000000000000000") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "dig2=00000000000000000000000000000000") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_read_timeout(void)
+{
+	uint8_t digest[32];
+	char digestText[33];
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test_multi_hook = speed_timeout_hook;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_READ);
+	CHECK(g_self->report.speed_req == 7u);
+	CHECK(g_self->report.speed_fails == 1u);
+	CHECK(g_self->report.speed_bytes1 == 4096u);
+	CHECK(g_self->report.speed_bytes2 == 2048u);
+	speed_window_expected_digest(digest);
+	partread_digest_hex(digest, digestText);
+	snprintf(expected, sizeof(expected), "dig1=%s", digestText);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "dig2=00000000000000000000000000000000") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_short(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test_media_read_hook = speed_short_read_hook;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_SHORT);
+	CHECK(g_self->report.speed_req == 1u);
+	CHECK(g_self->report.speed_fails == 1u);
+	CHECK(g_self->report.speed_partial == 1u);
+	CHECK(g_self->report.speed_bytes1 ==
+	    (GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES - 1u));
+	CHECK(strstr(gta4l_test.panic, "partial=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "bytes1=1023") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_budget(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	widthhold_hook_reset();
+	g_widthhold_advance_call = 0;
+	g_widthhold_advance_ms = GTA4L_EMMC_BLOCK_SPEED_READ_BUDGET_MS;
+	gta4l_test_multi_hook = widthhold_multi_hook;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_BUDGET);
+	CHECK(g_self->report.speed_budget == 1u);
+	CHECK(g_self->report.speed_req == 1u);
+	CHECK(gta4l_test.multi_calls == 1u);
+	CHECK(strstr(gta4l_test.panic, "budget=1") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_budget_boundary(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	widthhold_hook_reset();
+	g_widthhold_advance_call = 0;
+	g_widthhold_advance_ms =
+	    GTA4L_EMMC_BLOCK_SPEED_READ_BUDGET_MS - 1u;
+	gta4l_test_multi_hook = widthhold_multi_hook;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE);
+	CHECK(g_self->report.speed_budget == 0u);
+	CHECK(g_self->report.speed_req == 8u);
+	CHECK(gta4l_test.multi_calls == 8u);
+	CHECK(strstr(gta4l_test.panic, "budget=0") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_cancel_before(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	g_self->reportCancel = true;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_CANCEL);
+	CHECK(g_self->report.speed_cancel == 1u);
+	CHECK(g_self->report.speed_req == 0u);
+	CHECK(g_self->report.speed_pub == 0u);
+	CHECK(gta4l_test.multi_calls == 0u);
+	CHECK(strstr(gta4l_test.panic, "cancel=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "pub=0") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_cancel_during(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	widthhold_hook_reset();
+	g_widthhold_cancel_call = 1;
+	gta4l_test_multi_hook = widthhold_multi_hook;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_CANCEL);
+	CHECK(g_self->report.speed_cancel == 1u);
+	CHECK(g_self->report.speed_req == 2u);
+	CHECK(g_self->report.speed_bytes1 == 2048u);
+	CHECK(gta4l_test.multi_calls == 2u);
+	return 0;
+}
+
+static int
+scenario_speed_media_absent(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(false, false);
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_MEDIA);
+	CHECK(g_self->report.speed_pub == 0u);
+	CHECK(g_self->report.speed_partdiag == 0u);
+	CHECK(gta4l_test.multi_calls == 0u);
+	CHECK(gta4l_test.now_ms >=
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_MEDIA_WAIT_MS);
+	CHECK(strstr(gta4l_test.panic, "pub=0") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_part_absent(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_PART);
+	CHECK(g_self->report.speed_pub == 0u);
+	CHECK(g_self->report.speed_partdiag ==
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_NOTFOUND);
+	CHECK(gta4l_test.now_ms >=
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_DEADLINE_MS);
+	CHECK(gta4l_test.multi_calls == 0u);
+	return 0;
+}
+
+static int
+scenario_speed_part_duplicate(void)
+{
+	IOMedia *boot;
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	boot = add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_PART);
+	CHECK(g_self->report.speed_partdiag ==
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_DUPLICATE);
+	CHECK(g_widthhold_boot_media->open_calls == 0);
+	CHECK(boot->open_calls == 0);
+	CHECK(gta4l_test.multi_calls == 0u);
+	return 0;
+}
+
+static int
+scenario_speed_part_wrong_base(void)
+{
+	IOMedia *boot;
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	boot = add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    false, "Apple_Boot", true);
+	boot->property_faults = GTA4L_TEST_PROP_BASE_MISSING_LATE;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_PART);
+	CHECK(g_self->report.speed_partdiag ==
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_BASE);
+	CHECK(boot->open_calls == 0);
+	return 0;
+}
+
+static int
+scenario_speed_part_writable(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, false);
+	(void)add_media(false,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES,
+	    true, "Apple_Boot", true);
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_PART);
+	CHECK(g_self->report.speed_partdiag ==
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_WRITABLE);
+	CHECK(gta4l_test.multi_calls == 0u);
+	return 0;
+}
+
+static int
+scenario_speed_desc(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.descriptor_alloc_fail = 1;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_DESC);
+	CHECK(g_self->report.speed_req == 0u);
+	CHECK(g_self->report.speed_fails == 0u);
+	CHECK(g_self->report.speed_pub == 1u);
+	CHECK(gta4l_test.multi_calls == 0u);
+	return 0;
+}
+
+static int
+scenario_speed_open_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	g_widthhold_boot_media->open_refuse = true;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_OPEN);
+	CHECK(g_self->report.speed_req == 0u);
+	CHECK(g_self->report.speed_pub == 1u);
+	CHECK(g_widthhold_boot_media->open_calls == 1);
+	CHECK(g_widthhold_boot_media->close_calls == 0);
+	CHECK(g_self->widthholdClient == 0);
+	CHECK(gta4l_test.multi_calls == 0u);
+	return 0;
+}
+
+static int
+scenario_speed_foreign_tag(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.widthhold_media_tag_delta = 1;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_FOREIGN);
+	CHECK(g_self->report.speed_req == 1u);
+	CHECK(g_self->report.speed_fails == 1u);
+	CHECK(g_self->report.speed_pub == 1u);
+	return 0;
+}
+
+static int
+scenario_speed_order(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.widthhold_media_extra = 1;
+	SPEED_FAILURE_COMMON(GTA4L_EMMC_BLOCK_SPEED_STAGE_ORDER);
+	CHECK(g_self->report.speed_req == 1u);
+	CHECK(g_self->report.speed_fails == 1u);
+	return 0;
+}
+
+static int
+scenario_speed_digest_mismatch(void)
+{
+	uint8_t digest[32];
+	char digestText[33];
+	char expected[256];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.multi_corrupt_at = 4;
+	gta4l_test.multi_corrupt_count = 1;
+	gta4l_test.multi_corrupt_block =
+	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES /
+	    GTA4L_EMMC_BLOCK_BYTES;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE);
+	CHECK(g_self->report.speed_req == 8u);
+	CHECK(g_self->report.speed_fails == 0u);
+	speed_window_expected_digest(digest);
+	partread_digest_hex(digest, digestText);
+	snprintf(expected, sizeof(expected), "dig1=%s", digestText);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	snprintf(expected, sizeof(expected), "dig2=%s", digestText);
+	CHECK(strstr(gta4l_test.panic, expected) == 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "dig2=00000000000000000000000000000000") == 0);
+	CHECK(g_self->report.speed_dig1[0] != 0u);
+	CHECK(memcmp(g_self->report.speed_dig1,
+	    g_self->report.speed_dig2, 16u) != 0);
+	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=1") != 0);
+	CHECK(gta4l_test.message_count == 0);
+	speed_print_line("SPEEDMISMATCH");
+	return 0;
+}
+
+static int
+scenario_speed_gate_timeout(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	widthhold_hook_reset();
+	g_widthhold_gate_call = 0;
+	gta4l_test_multi_hook = widthhold_multi_hook;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_GATE);
+	CHECK(g_self->report.speed_revert == 0u);
+	CHECK(gta4l_test.speed_recover_calls == 0u);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8);
+	CHECK(strstr(gta4l_test.panic, "revert=0 rverified=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 SNAP: locked=0") != 0);
+	CHECK(gta4l_test.now_ms >= GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_MS);
+	CHECK(gta4l_test.message_count == 1);
+	g_self->gate->depth = 0;
+	return 0;
+}
+
+static int
+scenario_speed_revert_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.speed_recover_rc = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_REVERT);
+	CHECK(g_self->report.speed_revert == 1u);
+	CHECK(g_self->report.speed_rverified == 0u);
+	CHECK(g_self->report.speed_hsrevert == 0u);
+	CHECK(g_self->report.speed_hsverified == 0u);
+	CHECK(g_self->report.speed_rhs == 0u);
+	CHECK(g_self->report.speed_rclk == GTA4L_EMMC_BLOCK_CLOCK_HZ);
+	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "rstatus=-23") != 0);
+	CHECK(!g_self->online);
+	CHECK(gta4l_test.message_count == 1);
+	CHECK(gta4l_test.speed_recover_budget_ms ==
+	    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS);
+	return 0;
+}
+
+static int
+scenario_speed_revert_unverified(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.speed_recover_verified = 0;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_REVERT);
+	CHECK(g_self->report.speed_rverified == 0u);
+	CHECK(g_self->report.speed_hsrevert == 1u);
+	CHECK(g_self->report.speed_hsverified == 0u);
+	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "hsrevert=1 hsverified=0") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_revert_budget(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.speed_recover_advance_ms =
+	    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS;
+	gta4l_test.speed_recover_rc = GTA4L_EMMC_ERR_DEADLINE;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_REVERT);
+	CHECK(g_self->report.speed_rverified == 0u);
+	CHECK(g_self->report.speed_rstatus == GTA4L_EMMC_ERR_DEADLINE);
+	CHECK(strstr(gta4l_test.panic, "rstatus=-25") != 0);
+	CHECK(gta4l_test.speed_recover_budget_ms ==
+	    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS);
+	CHECK(!g_self->host.deadline_active);
+	return 0;
+}
+
+static int
+scenario_speed_revert_hs_stuck(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.speed_recover_hs_after = 1;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_REVERT);
+	CHECK(g_self->report.speed_rverified == 1u);
+	CHECK(g_self->report.speed_hsrevert == 0u);
+	CHECK(g_self->report.speed_rhs == 1u);
+	CHECK(strstr(gta4l_test.panic, "hsrevert=0 hsverified=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "rhs=1") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_revert_clock(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.speed_recover_clock_rc = GTA4L_EMMC_ERR_CLOCK;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_REVERT);
+	CHECK(g_self->report.speed_rclk == 0u);
+	CHECK(strstr(gta4l_test.panic, "rclk=0") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_revert_host_wide(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.speed_recover_host_clear = 0;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_REVERT);
+	CHECK(g_self->report.speed_rverified == 1u);
+	CHECK((g_self->report.speed_rha &
+	    (GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT)) != 0u);
+	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8);
+	CHECK(strstr(gta4l_test.panic, "rha=20") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_first_failure_latch(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.fail_multi_at = 0;
+	gta4l_test.speed_recover_rc = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_READ);
+	CHECK(g_self->report.speed_rverified == 0u);
+	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=0") != 0);
+	CHECK(!g_self->online);
+	CHECK(gta4l_test.message_count == 1);
+	return 0;
+}
+
+static int
+scenario_speed_watchdog(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-speed=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	widthhold_hook_reset();
+	g_widthhold_watchdog_call = 0;
+	gta4l_test_multi_hook = widthhold_multi_hook;
+	CHECK(invoke_thread(1) == 0);
+	CHECK(g_self->terminalClaimed);
+	CHECK(g_self->reportDone);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 REPORT: rc=16 stop=16") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 SPEED: ") != 0);
+	/* The watchdog snapshot is taken before the report thread's
+	 * revert, so the line documents the no-revert watchdog policy. */
+	CHECK(strstr(gta4l_test.panic, "revert=0 rverified=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "WIDTHHOLDREAD") == 0);
+	return 0;
+}
+
+static int
+scenario_speed_thread_start(void)
+{
+	static const int fail_at[] = { 0, 1 };
+	unsigned int index;
+
+	for (index = 0; index < sizeof(fail_at) / sizeof(fail_at[0]);
+	    index++) {
+		gta4l_test_reset();
+		gta4l_test.boot_args =
+		    "gta4l-emmc-block=3 gta4l-emmc-speed=1";
+		speed_fixture();
+		gta4l_test.thread_start_fail_at = fail_at[index];
+		gta4l_test.thread_start_fail_result = -1;
+		g_self = new Gta4lEmmcBlock();
+		g_started = false;
+		g_panicked = 0;
+		if (setjmp(gta4l_test.panic_jump) == 0) {
+			g_started = g_self->start(0);
+		} else {
+			g_panicked = 1;
+		}
+		CHECK(!g_started);
+		CHECK(g_panicked);
+		CHECK(g_self->report.speed_fail_stage ==
+		    GTA4L_EMMC_BLOCK_SPEED_STAGE_THREAD);
+		CHECK(gta4l_test.speed_recover_calls == 1);
+		CHECK(g_self->host.bus_width ==
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
+		CHECK(strstr(gta4l_test.panic, "revert=1 rverified=1") != 0);
+		CHECK(g_self->report.speed_fail_status == 16);
+	}
+	return 0;
+}
+
+static int
+scenario_speed_alloc(void)
+{
+	gta4l_test_reset();
+	gta4l_test.boot_args = "gta4l-emmc-block=3 gta4l-emmc-speed=1";
+	speed_fixture();
+	gta4l_test.consume_alloc_fail = 1;
+	g_self = new Gta4lEmmcBlock();
+	g_started = false;
+	g_panicked = 0;
+	if (setjmp(gta4l_test.panic_jump) == 0) {
+		g_started = g_self->start(0);
+	} else {
+		g_panicked = 1;
+	}
+	CHECK(!g_started);
+	CHECK(g_panicked);
+	CHECK(g_self->speedWindow == 0);
+	CHECK(g_self->report.speed_fail_stage ==
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_ALLOC);
+	CHECK(gta4l_test.speed_hs_calls == 0u);
+	CHECK(gta4l_test.speed_recover_calls == 0u);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SPEED: hs=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "revert=0") != 0);
+	return 0;
+}
+
+static int
+scenario_speed_format_max(void)
+{
+	struct gta4l_emmc_block_report report;
+	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	const char *line;
+	const char *end;
+	uint32_t length;
+
+	bzero(&report, sizeof(report));
+	report.speed = 1u;
+	report.speed_hs = 0xffffffffu;
+	report.speed_hsrb = 0xffffffffu;
+	report.speed_hsa = 0xffffffffu;
+	report.speed_rcg = 0xffffffffu;
+	report.speed_hispd = 0xffffffffu;
+	report.speed_wtry = 0xffffffffu;
+	report.speed_wfall = 0xffffffffu;
+	report.speed_wroll = 0xffffffffu;
+	report.speed_wid = 0xffffffffu;
+	report.speed_verified = 0xffffffffu;
+	report.speed_hb = 0xffffffffu;
+	report.speed_ha = 0xffffffffu;
+	report.speed_cmd6 = 0xffffffffu;
+	report.speed_base = 0xffffffffu;
+	report.speed_bytes1 = 0xffffffffu;
+	report.speed_ticks1 = UINT64_MAX;
+	report.speed_hz = 0xffffffffu;
+	memset(report.speed_dig1, 0xff, sizeof(report.speed_dig1));
+	report.speed_bytes2 = 0xffffffffu;
+	report.speed_ticks2 = UINT64_MAX;
+	memset(report.speed_dig2, 0xff, sizeof(report.speed_dig2));
+	report.speed_req = 0xffffffffu;
+	report.speed_fails = 0xffffffffu;
+	report.speed_cancel = 0xffffffffu;
+	report.speed_budget = 0xffffffffu;
+	report.speed_partial = 0xffffffffu;
+	report.speed_pub = 0xffffffffu;
+	report.speed_partdiag = 0xffffffffu;
+	report.speed_revert = 0xffffffffu;
+	report.speed_rverified = 0xffffffffu;
+	report.speed_rhb = 0xffffffffu;
+	report.speed_rha = 0xffffffffu;
+	report.speed_rcmd6 = 0xffffffffu;
+	report.speed_rstatus = INT32_MIN;
+	report.speed_hsrevert = 0xffffffffu;
+	report.speed_hsverified = 0xffffffffu;
+	report.speed_rhsb = 0xffffffffu;
+	report.speed_rhs = 0xffffffffu;
+	report.speed_rclk = 0xffffffffu;
+	report.speed_limit = 0xffffffffu;
+	report.speed_segments = 0xffffffffu;
+	report.speed_capacity = 0xffffffffu;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(length < sizeof(buffer));
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 SPEED: ") != 0);
+	line = strstr(buffer, "GTA4L-EMMC P5 SPEED: ");
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) ==
+	    GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES);
+	CHECK(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES ==
+	    (GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES + 838u + 2u));
 	return 0;
 }
 
@@ -11298,13 +12519,55 @@ static const struct scenario_entry scenarios[] = {
 	{ "widthpub-revert-failure", scenario_widthpub_revert_failure },
 	{ "widthpub-baseline-failure", scenario_widthpub_baseline_failure },
 	{ "widthpub-switch-failure", scenario_widthpub_switch_failure },
-	{ "speed-accepted", scenario_speed_accepted },
+	{ "speed-match-8bit", scenario_speed_match_8bit },
+	{ "speed-match-4bit", scenario_speed_match_4bit },
+	{ "speed-read-crc", scenario_speed_read_crc },
+	{ "speed-read-timeout", scenario_speed_read_timeout },
+	{ "speed-short", scenario_speed_short },
+	{ "speed-budget", scenario_speed_budget },
+	{ "speed-budget-boundary", scenario_speed_budget_boundary },
+	{ "speed-cancel-before", scenario_speed_cancel_before },
+	{ "speed-cancel-during", scenario_speed_cancel_during },
+	{ "speed-media-absent", scenario_speed_media_absent },
+	{ "speed-part-absent", scenario_speed_part_absent },
+	{ "speed-part-duplicate", scenario_speed_part_duplicate },
+	{ "speed-part-wrong-base", scenario_speed_part_wrong_base },
+	{ "speed-part-writable", scenario_speed_part_writable },
+	{ "speed-desc", scenario_speed_desc },
+	{ "speed-open-fail", scenario_speed_open_fail },
+	{ "speed-foreign-tag", scenario_speed_foreign_tag },
+	{ "speed-order", scenario_speed_order },
+	{ "speed-digest-mismatch", scenario_speed_digest_mismatch },
+	{ "speed-gate-timeout", scenario_speed_gate_timeout },
+	{ "speed-revert-fail", scenario_speed_revert_fail },
+	{ "speed-revert-unverified", scenario_speed_revert_unverified },
+	{ "speed-revert-budget", scenario_speed_revert_budget },
+	{ "speed-revert-hs-stuck", scenario_speed_revert_hs_stuck },
+	{ "speed-revert-clock", scenario_speed_revert_clock },
+	{ "speed-revert-host-wide", scenario_speed_revert_host_wide },
+	{ "speed-first-failure-latch", scenario_speed_first_failure_latch },
+	{ "speed-watchdog", scenario_speed_watchdog },
+	{ "speed-thread-start", scenario_speed_thread_start },
+	{ "speed-alloc", scenario_speed_alloc },
+	{ "speed-format-max", scenario_speed_format_max },
 	{ "speed-absent", scenario_speed_absent },
 	{ "speed-refused-orphan", scenario_speed_refused_orphan },
 	{ "speed-refused-block", scenario_speed_refused_block },
 	{ "speed-refused-value", scenario_speed_refused_value },
 	{ "speed-refused-duplicate", scenario_speed_refused_duplicate },
 	{ "speed-refused-conflicts", scenario_speed_refused_conflicts },
+	{ "speed-start-8bit", scenario_speed_start_8bit },
+	{ "speed-start-hispd-record", scenario_speed_start_hispd_record },
+	{ "speed-start-fallback", scenario_speed_start_fallback },
+	{ "speed-start-width-restore", scenario_speed_start_width_restore },
+	{ "speed-start-fallback-fail", scenario_speed_start_fallback_fail },
+	{ "speed-start-hs-fail", scenario_speed_start_hs_fail },
+	{ "speed-start-hs-readback", scenario_speed_start_hs_readback },
+	{ "speed-start-hs-clock", scenario_speed_start_hs_clock },
+	{ "speed-start-baseline-fail", scenario_speed_start_baseline_fail },
+	{ "speed-start-base-fail", scenario_speed_start_base_fail },
+	{ "speed-start-advert", scenario_speed_start_advert },
+	{ "speed-start-gate-timeout", scenario_speed_start_gate_timeout },
 	{ "policy", scenario_policy },
 };
 
