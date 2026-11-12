@@ -1,10 +1,11 @@
 # gta4l S1 speed design and record (2026-11-12)
 
-Status: design, host-only, **blocked on the combined revert helper**. No
-candidate has been built, flashed or booted, and no driver change exists.
-This document is the rung record for S1: the design sections below are
-corrected after the 2026-11-12 audit; the host, candidate, run and verdict
-sections are appended after the batch and the owner boot.
+Status: design plus host helper, host-only. The combined width/timing
+revert helper now exists and is host-tested; the S1 block-driver mode is not
+implemented. No candidate has been built, flashed or booted. This document
+is the rung record for S1: the design sections below are corrected after the
+2026-11-12 audit; the candidate, run and verdict sections are appended after
+the implementation batch and the owner boot.
 
 Risk class R1: a new combination of measured modes (HS timing plus a wider
 bus) with reference support and a verified pre-report revert. Standing owner
@@ -98,13 +99,17 @@ width with a data CRC or timeout. S1 never mixes both configurations.
 5. Acquire the gate within 2,000 ms.
 6. Revert with one **combined width and timing helper**, not two independent
    helpers. The helper must:
+   - clear a stuck data inhibit;
    - drop the clock to 400 kHz;
    - write CMD6 byte 185 = 0 and wait for TRAN;
    - write CMD6 BUS_WIDTH = 1 and wait for TRAN;
+   - clear the host width bits and verify the readback;
    - read EXT_CSD once and require byte 185 = 0 plus unchanged read-only
      properties;
    - record both CMD6 attempts and the final host control.
-   The combined helper is a prerequisite of this rung and is not implemented.
+   The combined helper is `gta4l_emmc_recover_width_and_timing()` in
+   `package/Gta4lEmmc.c`, implemented and host-tested in the 2026-11-12
+   helper batch.
 7. Emit the `SPEED:` line and the existing media fields, then take the
    intentional terminal report stop.
 
@@ -173,14 +178,18 @@ Pre-watchdog start path:
 | Step | Bound |
 | --- | ---: |
 | 1-bit EXT_CSD baseline | 2,000 ms |
-| HS entry (CMD6 + CMD13 + readback + clock) | 4,500 ms |
-| 8-bit verified switch | 6,010 ms |
+| HS entry (2 EXT_CSD reads + CMD6 + TRAN + clock) | 6,261 ms |
+| 8-bit verified switch (success path) | 6,010 ms |
+| 8-bit failure and verified rollback (replaces the switch row) | 16,030 ms |
 | 4-bit verified fallback (only after a verified 8-bit rollback) | 6,010 ms |
 | 4-bit LBA-1 baseline | 2,000 ms |
-| **Success path (8-bit)** | **14,510 ms** |
-| **Success path after verified 8-bit refusal (4-bit)** | **20,520 ms** |
+| **Success path (8-bit)** | **16,271 ms** |
+| **Success path after verified 8-bit refusal (4-bit)** | **26,291 ms** |
 
 The start path has no 1-bit reference read and no megabyte-scale transfer.
+The 4-bit fallback replaces the 6,010 ms 8-bit switch with the 16,030 ms
+failed-switch bound, so the worst start path is 26,291 ms. Both paths are
+pre-watchdog; N10.24 accepted 38,230 ms there.
 
 Report thread:
 
@@ -191,13 +200,14 @@ Report thread:
 | shared two-pass loop budget | 3,000 ms |
 | one in-flight two-block request | 4,500 ms |
 | gate acquisition | 2,000 ms |
-| combined width/timing revert | 6,150 ms |
-| **Total** | **25,650 ms** |
+| combined width/timing revert | 6,371 ms |
+| **Total** | **25,871 ms** |
 
-The combined revert bound is the sum of one 400 kHz clock switch (150 ms),
-two CMD6 writes (1,000 ms each), two TRAN waits (1,000 ms each) and one
-EXT_CSD read (CMD + data timeout = 2,000 ms): **6,150 ms**. Margin against
-the 30,000 ms watchdog is **4,350 ms**.
+The combined revert bound is the sum of one 400 kHz clock switch (RCG 100
++ stable 150 + settle 1 = 251 ms), one inhibit clear (100 ms), two CMD6
+writes (1,000 ms each), two TRAN waits (10 x (100 + 1) = 1,010 ms each) and
+one EXT_CSD read (CMD + data timeout = 2,000 ms): **6,371 ms**. Margin
+against the 30,000 ms watchdog is **4,129 ms**.
 
 The earlier 1 MiB / 27,220 ms draft is withdrawn. It assumed one in-flight
 bound for a 32 KiB request, but `GTA4L_EMMC_BLOCK_CHUNK_BLOCKS` is two, so
@@ -243,9 +253,9 @@ reads and two clock/CMD operations. Neither bound was supportable.
 
 ## 7. Open items
 
-- **Blocking:** the combined width/timing revert helper does not exist. S1
-  must not be implemented or flashed until it is written, host-tested and
-  its bound is checked against the source.
+- The combined width/timing revert helper exists and passes the core
+  scenarios. The S1 block-driver mode and adapter scenarios are the next
+  batch; do not flash until they pass.
 - `HISPD` remains unset in the primary image; S1b is the fallback.
 - The 8-bit / 50 MHz timing margin, pad state and DLL state are unmeasured
   until the boot.
@@ -253,7 +263,13 @@ reads and two clock/CMD operations. Neither bound was supportable.
 - Sustained throughput is S2 and needs a transport or deadline change; it
   is not part of S1.
 
-## 8. Host, candidate, run and verdict
+## 8. Host helper batch
 
-Blocked. Nothing to append until the combined revert helper exists and the
-S1 implementation batch runs.
+The 2026-11-12 helper batch adds
+`gta4l_emmc_recover_width_and_timing()` and nine core scenarios:
+`recover-both-clean`, `recover-both-8bit`, `recover-both-clock-busy`,
+`recover-both-hs-stuck`, `recover-both-cmd6-error`,
+`recover-both-width-error`, `recover-both-properties`,
+`recover-both-inhibit-stuck` and `recover-both-arg`. The core suite passes
+198 scenarios and 119 mutation controls. The S1 mode, adapter scenarios,
+candidate, run and verdict are still to come.

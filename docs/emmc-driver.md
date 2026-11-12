@@ -34,7 +34,7 @@ criterion and every failed or partial rung.
 | `package/Gta4lEmmcBlockCore.c/.h` | Portable read-only block request helper: validation, per-block loop, bounce copy, counters |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO through the platform object, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 189 scenarios and 117 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 198 scenarios and 119 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |

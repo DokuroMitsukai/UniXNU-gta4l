@@ -213,6 +213,15 @@ SCENARIOS = [
     'hs-timing-cmd6-error',
     'hs-timing-clock-busy',
     'hs-timing-arg',
+    'recover-both-clean',
+    'recover-both-8bit',
+    'recover-both-clock-busy',
+    'recover-both-hs-stuck',
+    'recover-both-cmd6-error',
+    'recover-both-width-error',
+    'recover-both-properties',
+    'recover-both-inhibit-stuck',
+    'recover-both-arg',
 ]
 
 # Boundary variants: the same production core compiled with a shortened CMD3
@@ -1394,6 +1403,18 @@ def main() -> int:
              '\t}\n'
              '\trc = gta4l_emmc_wait_tran(host);\n',
              'Gta4lEmmc.c', (), 'hs-timing-cmd6-error'),
+            ('recover-skip-host-clear',
+             '\tfinal_control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |\n'
+             '\t    GTA4L_EMMC_HOST_CONTROL_8BIT);\n',
+             '\t/* host width clear removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'recover-both-clean'),
+            ('recover-accept-hs-stuck',
+             '\tif ((ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] != 0u) ||\n'
+             '\t    (gta4l_emmc_ext_csd_properties_same(baseline, '
+             'ext_csd) == 0)) {\n',
+             '\tif (gta4l_emmc_ext_csd_properties_same(baseline, '
+             'ext_csd) == 0) {\n',
+             'Gta4lEmmc.c', (), 'recover-both-hs-stuck'),
             ('cmd3-retry-silent',
              '\t\t\thost->cmd3_retry_engaged = 1;\n',
              '\t\t\thost->cmd3_retry_engaged = 0;\n',
@@ -1615,6 +1636,10 @@ def main() -> int:
                 'HS enter failed',
             'hs-ignore-switch-error':
                 'CMD6 SWITCH_ERROR was not reported',
+            'recover-skip-host-clear':
+                'combined revert failed',
+            'recover-accept-hs-stuck':
+                'stuck HS revert was not reported',
             'cmd3-retry-silent':
                 'CMD3 retry engagement flag mismatch',
             'cmd3-retry-no-first-timeout':

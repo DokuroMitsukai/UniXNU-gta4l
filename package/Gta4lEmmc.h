@@ -903,6 +903,34 @@ struct gta4l_emmc_hs_result {
 int gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
     struct gta4l_emmc_hs_result *result);
 
+/* One-attempt combined revert from HS timing and a 4- or 8-bit bus back to
+ * legacy timing and 1-bit. It drops the clock to 400 kHz, clears a stuck
+ * data inhibit, writes CMD6 HS_TIMING=0 and BUS_WIDTH=1, clears the host
+ * width bits, then reads EXT_CSD once and requires byte 185 = 0 plus
+ * unchanged read-only properties. It does not retry: a failure is terminal
+ * and the caller must report it. The source-derived worst case is 6,371 ms
+ * (clock 251, inhibit 100, two CMD6 1,000 each, two TRAN waits 1,010 each,
+ * one EXT_CSD read 2,000). */
+struct gta4l_emmc_recover_result {
+	uint32_t hs_before;         /* byte 185 before the HS write */
+	uint32_t hs_after;          /* byte 185 after the final read */
+	uint32_t clock;             /* CLOCK_CONTROL after the 400 kHz switch */
+	uint32_t rcg_after;         /* GCC APPS CFG after the clock switch */
+	uint32_t hs_switch_status;  /* HS CMD6 R1 status */
+	uint32_t width_switch_status; /* BUS_WIDTH CMD6 R1 status */
+	uint8_t  host_before;       /* HOST_CONTROL before the width clear */
+	uint8_t  host_after;        /* HOST_CONTROL after the width clear */
+	uint32_t cmd6_attempts;     /* HS and BUS_WIDTH writes issued */
+	uint32_t verified;          /* byte 185 = 0 and properties match */
+	int      clock_result;      /* clock switch result */
+	int      hs_result;         /* HS CMD6/TRAN result */
+	int      width_result;      /* BUS_WIDTH CMD6/TRAN result */
+	int      result;            /* overall result */
+};
+
+int gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
+    const uint8_t *baseline, struct gta4l_emmc_recover_result *result);
+
 #ifdef __cplusplus
 }
 #endif

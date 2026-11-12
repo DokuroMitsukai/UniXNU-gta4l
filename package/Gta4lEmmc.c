@@ -1970,20 +1970,19 @@ gta4l_emmc_ext_csd_properties_same(const uint8_t *a, const uint8_t *b)
 	return 1;
 }
 
-/* One CMD6 BUS_WIDTH write and TRAN wait, without touching the host width.
- * The command/response path is independent of the DAT width, so this can
- * restore the card while the host still drives the attempted width. */
+/* One CMD6 EXT_CSD byte write and TRAN wait. The command/response path is
+ * independent of the DAT width, so this can change or restore a card byte
+ * while the host still drives any width. */
 static int
-gta4l_emmc_width_cmd6(struct gta4l_emmc_host *host, uint32_t code,
-    uint32_t *switch_status)
+gta4l_emmc_switch_byte(struct gta4l_emmc_host *host, uint32_t index,
+    uint32_t value, uint32_t *switch_status)
 {
 	uint32_t response[4];
 	uint32_t argument;
 	int rc;
 
 	argument = GTA4L_EMMC_SWITCH_ACCESS_WRITE |
-	    (GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF << 16) |
-	    (code << 8) | GTA4L_EMMC_SWITCH_CMD_SET_NORMAL;
+	    (index << 16) | (value << 8) | GTA4L_EMMC_SWITCH_CMD_SET_NORMAL;
 	rc = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD6, argument,
 	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
 	    GTA4L_EMMC_CMD_INDEX, GTA4L_EMMC_CMD_TIMEOUT_US, response);
@@ -1998,6 +1997,15 @@ gta4l_emmc_width_cmd6(struct gta4l_emmc_host *host, uint32_t code,
 		return GTA4L_EMMC_ERR_CARD_STATUS;
 	}
 	return gta4l_emmc_wait_tran(host);
+}
+
+/* One CMD6 BUS_WIDTH write and TRAN wait, without touching the host width. */
+static int
+gta4l_emmc_width_cmd6(struct gta4l_emmc_host *host, uint32_t code,
+    uint32_t *switch_status)
+{
+	return gta4l_emmc_switch_byte(host,
+	    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF, code, switch_status);
 }
 
 /* Restore the card and host after a failed width verification. The card may
@@ -3259,6 +3267,155 @@ gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
 	gta4l_emmc_log(host, GTA4L_EMMC_LOG_CLOCK, timing,
 	    gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_CLOCK_CONTROL));
+	return GTA4L_EMMC_OK;
+}
+
+int
+gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
+    const uint8_t *baseline, struct gta4l_emmc_recover_result *result)
+{
+	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
+	uint32_t clock = 0;
+	uint32_t status = 0;
+	uint32_t final_control;
+	uint32_t readback;
+	int rc;
+	const struct gta4l_emmc_recover_result zero = { 0 };
+
+	if ((host == 0) || (host->initialized == 0) || (baseline == 0)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if (result != 0) {
+		*result = zero;
+		result->host_before = (uint8_t)gta4l_emmc_read8(host,
+		    GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL);
+		result->result = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+	}
+
+	/* Legacy timing is not valid at the HS rate: drop the clock before
+	 * asking the card to leave HS. The clock switch is the same helper
+	 * used on entry; its failure leaves the card bytes and host width
+	 * untouched, though the RCG state may be partially updated. */
+	rc = gta4l_emmc_switch_clock(host, GTA4L_EMMC_RCG_400K_CFG,
+	    GTA4L_EMMC_RCG_400K_M, GTA4L_EMMC_RCG_400K_N,
+	    GTA4L_EMMC_RCG_400K_D, &clock);
+	if (result != 0) {
+		result->clock = clock;
+		result->clock_result = rc;
+		result->rcg_after = gta4l_emmc_read32(host,
+		    GTA4L_EMMC_SPACE_GCC,
+		    GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
+	}
+	if (rc != GTA4L_EMMC_OK) {
+		return rc;
+	}
+	host->last_step = GTA4L_EMMC_STEP_HS_CLOCK;
+
+	/* A failed transfer can leave DAT_INHIBIT latched. The bounded local
+	 * reset is the only way to regain command admission, so it runs
+	 * before the first CMD6; there is no retry after this point. */
+	rc = gta4l_emmc_clear_dat_inhibit(host);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->result = rc;
+		}
+		return rc;
+	}
+
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->hs_result = rc;
+		}
+		return rc;
+	}
+	if (result != 0) {
+		result->hs_before = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
+		result->cmd6_attempts++;
+	}
+	rc = gta4l_emmc_switch_byte(host, GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF,
+	    0u, &status);
+	if (result != 0) {
+		result->hs_switch_status = status;
+		result->hs_result = rc;
+	}
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->result = rc;
+		}
+		return rc;
+	}
+	host->last_step = GTA4L_EMMC_STEP_HS_TIMING;
+
+	if (result != 0) {
+		result->cmd6_attempts++;
+	}
+	status = 0;
+	rc = gta4l_emmc_switch_byte(host,
+	    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_OFF,
+	    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1, &status);
+	if (result != 0) {
+		result->width_switch_status = status;
+		result->width_result = rc;
+	}
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->result = rc;
+		}
+		return rc;
+	}
+
+	/* The card is at 1-bit. Clear the host width before the verification
+	 * read so the DAT path and the card agree. */
+	final_control = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	final_control &= ~(GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT);
+	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL, final_control);
+	gta4l_emmc_barrier(host);
+	readback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	if (result != 0) {
+		result->host_after = (uint8_t)readback;
+	}
+	if ((readback & (GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT)) != 0u) {
+		if (result != 0) {
+			result->result = GTA4L_EMMC_ERR_WIDTH_RESTORE;
+		}
+		return GTA4L_EMMC_ERR_WIDTH_RESTORE;
+	}
+	host->bus_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
+	host->last_step = GTA4L_EMMC_STEP_BUS_WIDTH;
+
+	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
+	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->hs_result = rc;
+		}
+		return rc;
+	}
+	if (result != 0) {
+		result->hs_after = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
+	}
+	if ((ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] != 0u) ||
+	    (gta4l_emmc_ext_csd_properties_same(baseline, ext_csd) == 0)) {
+		if (result != 0) {
+			result->verified = 0u;
+			result->result = (ext_csd[
+			    GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] != 0u) ?
+			    GTA4L_EMMC_ERR_TIMING :
+			    GTA4L_EMMC_ERR_WIDTH_RESTORE;
+		}
+		return (ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] != 0u) ?
+		    GTA4L_EMMC_ERR_TIMING : GTA4L_EMMC_ERR_WIDTH_RESTORE;
+	}
+	if (result != 0) {
+		result->verified = 1u;
+		result->result = GTA4L_EMMC_OK;
+	}
 	return GTA4L_EMMC_OK;
 }
 

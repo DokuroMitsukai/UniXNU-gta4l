@@ -335,6 +335,7 @@ struct sim {
 	int bus_test_active;
 	int bus_test_pattern_error;
 	int bus_width_switch_error;
+	int recover_width_switch_error;
 	int bus_width_stuck;
 	int bus_width_verify_mismatch;
 	int bus_width_rollback_fail;
@@ -1483,6 +1484,12 @@ sim_command(struct sim *sim, uint16_t command)
 		}
 		if (sim->bus_width_switch_error != 0) {
 			response |= 0x00000080u; /* SWITCH_ERROR */
+		} else if (sim->recover_width_switch_error != 0 &&
+		    ((argument >> 16) & 0xFFu) == SIM_BUS_WIDTH_OFF &&
+		    sim->ext_csd[SIM_HS_TIMING_OFF] == 0u) {
+			/* Fail only the width write of a combined revert,
+			 * after the HS write has already cleared byte 185. */
+			response |= 0x00000080u;
 		} else if (((argument >> 16) & 0xFFu) == SIM_HS_TIMING_OFF) {
 			if (sim->hs_timing_stuck == 0) {
 				sim->ext_csd[SIM_HS_TIMING_OFF] =
@@ -2160,8 +2167,7 @@ check(int condition, const char *message)
 static void
 check_block(const struct sim *sim, uint32_t lba, const uint8_t *buffer,
     const char *label)
-{
-	uint32_t index;
+{	uint32_t index;
 	int bad = 0;
 
 	(void)sim;
@@ -2320,6 +2326,23 @@ timeline_store_boundary(void)
 	    "a later scheduled store overwrote the terminal slot");
 }
 
+static void
+prepare_hs_width(struct sim *sim, struct gta4l_emmc_host *host, uint32_t bits,
+    uint8_t *baseline)
+{
+	struct gta4l_emmc_hs_result hs;
+	struct gta4l_emmc_bus_result bus;
+	int rc;
+
+	(void)sim;
+	rc = gta4l_emmc_read_ext_csd(host, baseline);
+	check(rc == GTA4L_EMMC_OK, "recover setup baseline read failed");
+	rc = gta4l_emmc_set_hs_timing(host, 1u, &hs);
+	check(rc == GTA4L_EMMC_OK, "recover setup HS entry failed");
+	rc = gta4l_emmc_set_bus_width_verified(host, bits, &bus);
+	check(rc == GTA4L_EMMC_OK, "recover setup width switch failed");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2335,6 +2358,7 @@ main(int argc, char **argv)
 	struct gta4l_emmc_bus_reset_result bus_reset;
 	struct gta4l_emmc_post_write_drain_result drain;
 	struct gta4l_emmc_hs_result hs;
+	struct gta4l_emmc_recover_result both;
 	static uint8_t mb_blocks[SIM_MB_TEST_BLOCKS * GTA4L_EMMC_BLOCK_BYTES];
 	int result;
 	int expected;
@@ -4738,6 +4762,161 @@ main(int argc, char **argv)
 			    "HS switch ran without init");
 			check(sim.cmd6_count == 0u,
 			    "uninitialized HS switch issued a CMD6");
+		}
+	} else if (scenario_is(scenario, "recover-both-clean")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_OK, "combined revert failed");
+		check(both.result == GTA4L_EMMC_OK && both.verified == 1u,
+		    "combined revert did not verify");
+		check(both.hs_before == 1u && both.hs_after == 0u,
+		    "combined revert byte-185 values mismatch");
+		check(both.clock_result == GTA4L_EMMC_OK &&
+		    both.hs_result == GTA4L_EMMC_OK &&
+		    both.width_result == GTA4L_EMMC_OK,
+		    "combined revert recorded a failure");
+		check(both.cmd6_attempts == 2u,
+		    "combined revert CMD6 count mismatch");
+		check((both.host_after &
+		    (GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT)) == 0u,
+		    "combined revert left a host width bit");
+		check(host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1,
+		    "combined revert card width field mismatch");
+		check(host.last_step == GTA4L_EMMC_STEP_BUS_WIDTH,
+		    "combined revert step mismatch");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 0u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 0u,
+		    "combined revert card bytes mismatch");
+		check(sim.gcc[SIM_GCC_APPS_CFG / 4u] ==
+		    GTA4L_EMMC_RCG_400K_CFG,
+		    "combined revert left the 50 MHz RCG");
+		check(sim.cmd6_count == 4u,
+		    "combined revert issue count mismatch");
+	} else if (scenario_is(scenario, "recover-both-8bit")) {
+		prepare_hs_width(&sim, &host, 8u, ext);
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_OK,
+		    "combined revert from 8-bit failed");
+		check(both.verified == 1u &&
+		    (both.host_before & GTA4L_EMMC_HOST_CONTROL_8BIT) != 0u &&
+		    (both.host_after &
+		    (GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT)) == 0u,
+		    "combined 8-bit host width fields mismatch");
+		check(sim.ext_csd[SIM_BUS_WIDTH_OFF] == 0u &&
+		    sim.ext_csd[SIM_HS_TIMING_OFF] == 0u,
+		    "combined 8-bit card bytes mismatch");
+	} else if (scenario_is(scenario, "recover-both-clock-busy")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.rcg_busy = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_ERR_CLOCK,
+		    "busy revert clock was not reported");
+		check(both.clock_result == GTA4L_EMMC_ERR_CLOCK &&
+		    both.cmd6_attempts == 0u,
+		    "busy revert issued a CMD6");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u,
+		    "busy revert changed a card byte");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "busy revert changed the host width");
+	} else if (scenario_is(scenario, "recover-both-hs-stuck")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.hs_timing_stuck = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_ERR_TIMING,
+		    "stuck HS revert was not reported");
+		check(both.hs_result == GTA4L_EMMC_OK &&
+		    both.width_result == GTA4L_EMMC_OK &&
+		    both.verified == 0u &&
+		    both.hs_after == 1u,
+		    "stuck HS revert fields mismatch");
+		check(sim.ext_csd[SIM_BUS_WIDTH_OFF] == 0u &&
+		    (sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "stuck HS revert did not clear the width");
+	} else if (scenario_is(scenario, "recover-both-cmd6-error")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.bus_width_switch_error = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "HS CMD6 error was not reported");
+		check(both.hs_result == GTA4L_EMMC_ERR_CARD_STATUS &&
+		    both.width_result == 0 &&
+		    both.cmd6_attempts == 1u,
+		    "HS CMD6 error fields mismatch");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
+		    (sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "HS CMD6 error changed the width state");
+	} else if (scenario_is(scenario, "recover-both-width-error")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.recover_width_switch_error = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
+		    "width CMD6 error was not reported");
+		check(both.hs_result == GTA4L_EMMC_OK &&
+		    both.width_result == GTA4L_EMMC_ERR_CARD_STATUS &&
+		    both.cmd6_attempts == 2u,
+		    "width CMD6 error fields mismatch");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 0u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u &&
+		    (sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "width CMD6 error changed the host width");
+	} else if (scenario_is(scenario, "recover-both-properties")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.bus_width_recover_mismatch = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+		    "properties mismatch was not reported");
+		check(both.hs_after == 0u && both.verified == 0u,
+		    "properties mismatch fields mismatch");
+		check(sim.ext_csd[SIM_BUS_WIDTH_OFF] == 0u &&
+		    (sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "properties mismatch did not reach 1-bit");
+	} else if (scenario_is(scenario, "recover-both-inhibit-stuck")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.bus_test_dat_inhibit = 1;
+		sim.bus_test_reset_no_inhibit_clear = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_ERR_INHIBIT,
+		    "surviving inhibit was not reported");
+		check(both.cmd6_attempts == 0u,
+		    "surviving inhibit issued a CMD6");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u,
+		    "surviving inhibit changed a card byte");
+	} else if (scenario_is(scenario, "recover-both-arg")) {
+		result = gta4l_emmc_recover_width_and_timing(&host, 0, &both);
+		check(result == GTA4L_EMMC_ERR_ARG,
+		    "null baseline was accepted");
+		{
+			struct gta4l_emmc_host fresh;
+
+			memset(&fresh, 0, sizeof(fresh));
+			fresh.ops = &sim_ops;
+			fresh.context = &sim;
+			result = gta4l_emmc_recover_width_and_timing(&fresh,
+			    ext, &both);
+			check(result == GTA4L_EMMC_ERR_ARG,
+			    "recover ran without init");
+			check(sim.cmd6_count == 0u,
+			    "recover without init issued a CMD6");
 		}
 	} else if (scenario_is(scenario, "multi-stop-tc-only") ||
 	    scenario_is(scenario, "multi-stop-late-cc") ||
