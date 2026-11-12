@@ -221,6 +221,8 @@ SCENARIOS = [
     'recover-both-width-error',
     'recover-both-properties',
     'recover-both-inhibit-stuck',
+    'recover-both-inhibit-clear',
+    'recover-both-final-read-timeout',
     'recover-both-arg',
 ]
 

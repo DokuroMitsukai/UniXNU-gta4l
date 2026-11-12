@@ -345,6 +345,7 @@ struct sim {
 	int bus_width_busy;
 	int bus_width_busy_polls;
 	int hs_timing_stuck;
+	int recover_final_read_timeout;
 	int bus_test_data_timeout;
 	int bus_test_read_timeout;
 	int bus_test_data_crc;
@@ -1653,7 +1654,11 @@ sim_command(struct sim *sim, uint16_t command)
 			sim->error_int |= GTA4L_EMMC_INT_ERR_DATA_CRC;
 			break;
 		}
-		if (sim->data_timeout == 0) {
+		if ((sim->data_timeout == 0) &&
+		    !((sim->recover_final_read_timeout != 0) &&
+		    (sim->ext_csd[SIM_HS_TIMING_OFF] == 0u) &&
+		    ((sim->sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u))) {
 			if (sim->no_brr == 0) {
 				sim_fill_words(sim, sim->ext_csd);
 				if ((sim->bus_width_verify_mismatch != 0) &&
@@ -4770,8 +4775,8 @@ main(int argc, char **argv)
 		check(result == GTA4L_EMMC_OK, "combined revert failed");
 		check(both.result == GTA4L_EMMC_OK && both.verified == 1u,
 		    "combined revert did not verify");
-		check(both.hs_before == 1u && both.hs_after == 0u,
-		    "combined revert byte-185 values mismatch");
+		check(both.hs_after == 0u,
+		    "combined revert byte-185 value mismatch");
 		check(both.clock_result == GTA4L_EMMC_OK &&
 		    both.hs_result == GTA4L_EMMC_OK &&
 		    both.width_result == GTA4L_EMMC_OK,
@@ -4817,6 +4822,7 @@ main(int argc, char **argv)
 		check(result == GTA4L_EMMC_ERR_CLOCK,
 		    "busy revert clock was not reported");
 		check(both.clock_result == GTA4L_EMMC_ERR_CLOCK &&
+		    both.result == GTA4L_EMMC_ERR_CLOCK &&
 		    both.cmd6_attempts == 0u,
 		    "busy revert issued a CMD6");
 		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
@@ -4835,6 +4841,7 @@ main(int argc, char **argv)
 		    "stuck HS revert was not reported");
 		check(both.hs_result == GTA4L_EMMC_OK &&
 		    both.width_result == GTA4L_EMMC_OK &&
+		    both.result == GTA4L_EMMC_ERR_TIMING &&
 		    both.verified == 0u &&
 		    both.hs_after == 1u,
 		    "stuck HS revert fields mismatch");
@@ -4850,6 +4857,7 @@ main(int argc, char **argv)
 		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
 		    "HS CMD6 error was not reported");
 		check(both.hs_result == GTA4L_EMMC_ERR_CARD_STATUS &&
+		    both.result == GTA4L_EMMC_ERR_CARD_STATUS &&
 		    both.width_result == 0 &&
 		    both.cmd6_attempts == 1u,
 		    "HS CMD6 error fields mismatch");
@@ -4867,6 +4875,7 @@ main(int argc, char **argv)
 		    "width CMD6 error was not reported");
 		check(both.hs_result == GTA4L_EMMC_OK &&
 		    both.width_result == GTA4L_EMMC_ERR_CARD_STATUS &&
+		    both.result == GTA4L_EMMC_ERR_CARD_STATUS &&
 		    both.cmd6_attempts == 2u,
 		    "width CMD6 error fields mismatch");
 		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 0u &&
@@ -4882,7 +4891,8 @@ main(int argc, char **argv)
 		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
 		check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
 		    "properties mismatch was not reported");
-		check(both.hs_after == 0u && both.verified == 0u,
+		check(both.hs_after == 0u && both.verified == 0u &&
+		    both.result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
 		    "properties mismatch fields mismatch");
 		check(sim.ext_csd[SIM_BUS_WIDTH_OFF] == 0u &&
 		    (sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
@@ -4896,11 +4906,37 @@ main(int argc, char **argv)
 		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
 		check(result == GTA4L_EMMC_ERR_INHIBIT,
 		    "surviving inhibit was not reported");
-		check(both.cmd6_attempts == 0u,
-		    "surviving inhibit issued a CMD6");
+		check(both.result == GTA4L_EMMC_ERR_INHIBIT &&
+		    both.cmd6_attempts == 0u,
+		    "surviving inhibit result fields mismatch");
 		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
 		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u,
 		    "surviving inhibit changed a card byte");
+	} else if (scenario_is(scenario, "recover-both-inhibit-clear")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.bus_test_dat_inhibit = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_OK,
+		    "recover after a data inhibit failed");
+		check(both.verified == 1u && sim.bus_test_dat_inhibit == 0,
+		    "recover did not clear the data inhibit");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 0u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 0u,
+		    "inhibit-clear recover card bytes mismatch");
+	} else if (scenario_is(scenario, "recover-both-final-read-timeout")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.recover_final_read_timeout = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+		    "final read timeout was not reported");
+		check(both.result == GTA4L_EMMC_ERR_DATA_TIMEOUT &&
+		    both.verified == 0u,
+		    "final read timeout result fields mismatch");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "final read timeout left a host width bit");
 	} else if (scenario_is(scenario, "recover-both-arg")) {
 		result = gta4l_emmc_recover_width_and_timing(&host, 0, &both);
 		check(result == GTA4L_EMMC_ERR_ARG,

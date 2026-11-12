@@ -3308,6 +3308,9 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 		    GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
 	}
 	if (rc != GTA4L_EMMC_OK) {
+		if (result != 0) {
+			result->result = rc;
+		}
 		return rc;
 	}
 	host->last_step = GTA4L_EMMC_STEP_HS_CLOCK;
@@ -3323,15 +3326,7 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 		return rc;
 	}
 
-	rc = gta4l_emmc_read_ext_csd(host, ext_csd);
-	if (rc != GTA4L_EMMC_OK) {
-		if (result != 0) {
-			result->hs_result = rc;
-		}
-		return rc;
-	}
 	if (result != 0) {
-		result->hs_before = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
 		result->cmd6_attempts++;
 	}
 	rc = gta4l_emmc_switch_byte(host, GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF,
@@ -3394,6 +3389,7 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 	if (rc != GTA4L_EMMC_OK) {
 		if (result != 0) {
 			result->hs_result = rc;
+			result->result = rc;
 		}
 		return rc;
 	}

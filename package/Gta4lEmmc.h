@@ -908,11 +908,11 @@ int gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
  * data inhibit, writes CMD6 HS_TIMING=0 and BUS_WIDTH=1, clears the host
  * width bits, then reads EXT_CSD once and requires byte 185 = 0 plus
  * unchanged read-only properties. It does not retry: a failure is terminal
- * and the caller must report it. The source-derived worst case is 6,371 ms
- * (clock 251, inhibit 100, two CMD6 1,000 each, two TRAN waits 1,010 each,
- * one EXT_CSD read 2,000). */
+ * and the caller must report it. The source-derived worst case is 9,371 ms
+ * (clock 251, inhibit clear 100, two CMD6 paths 3,010 each including their
+ * command-inhibit waits and TRAN polls, one EXT_CSD read 3,000 including its
+ * command-inhibit wait). */
 struct gta4l_emmc_recover_result {
-	uint32_t hs_before;         /* byte 185 before the HS write */
 	uint32_t hs_after;          /* byte 185 after the final read */
 	uint32_t clock;             /* CLOCK_CONTROL after the 400 kHz switch */
 	uint32_t rcg_after;         /* GCC APPS CFG after the clock switch */

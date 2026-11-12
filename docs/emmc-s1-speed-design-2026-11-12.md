@@ -177,18 +177,18 @@ Pre-watchdog start path:
 
 | Step | Bound |
 | --- | ---: |
-| 1-bit EXT_CSD baseline | 2,000 ms |
-| HS entry (2 EXT_CSD reads + CMD6 + TRAN + clock) | 6,261 ms |
+| 1-bit EXT_CSD baseline (inhibit + CMD + data) | 3,000 ms |
+| HS entry (2 EXT_CSD reads + CMD6 + TRAN + clock) | 9,261 ms |
 | 8-bit verified switch (success path) | 6,010 ms |
 | 8-bit failure and verified rollback (replaces the switch row) | 16,030 ms |
 | 4-bit verified fallback (only after a verified 8-bit rollback) | 6,010 ms |
-| 4-bit LBA-1 baseline | 2,000 ms |
-| **Success path (8-bit)** | **16,271 ms** |
-| **Success path after verified 8-bit refusal (4-bit)** | **26,291 ms** |
+| 4-bit LBA-1 baseline | 3,000 ms |
+| **Success path (8-bit)** | **21,271 ms** |
+| **Success path after verified 8-bit refusal (4-bit)** | **31,291 ms** |
 
 The start path has no 1-bit reference read and no megabyte-scale transfer.
 The 4-bit fallback replaces the 6,010 ms 8-bit switch with the 16,030 ms
-failed-switch bound, so the worst start path is 26,291 ms. Both paths are
+failed-switch bound, so the worst start path is 31,291 ms. Both paths are
 pre-watchdog; N10.24 accepted 38,230 ms there.
 
 Report thread:
@@ -197,17 +197,18 @@ Report thread:
 | --- | ---: |
 | whole-media wait | 8,000 ms |
 | BOOT discovery deadline | 2,000 ms |
-| shared two-pass loop budget | 3,000 ms |
+| shared two-pass loop budget | 2,000 ms |
 | one in-flight two-block request | 4,500 ms |
 | gate acquisition | 2,000 ms |
-| combined width/timing revert | 6,371 ms |
-| **Total** | **25,871 ms** |
+| combined width/timing revert | 9,371 ms |
+| **Total** | **27,871 ms** |
 
 The combined revert bound is the sum of one 400 kHz clock switch (RCG 100
 + stable 150 + settle 1 = 251 ms), one inhibit clear (100 ms), two CMD6
-writes (1,000 ms each), two TRAN waits (10 x (100 + 1) = 1,010 ms each) and
-one EXT_CSD read (CMD + data timeout = 2,000 ms): **6,371 ms**. Margin
-against the 30,000 ms watchdog is **4,129 ms**.
+paths at 3,010 ms each (command-inhibit wait 1,000 + CMD6 1,000 + TRAN
+10 x (100 + 1) = 1,010) and one EXT_CSD read at 3,000 ms (command-inhibit
+wait 1,000 + CMD 1,000 + data 1,000): **9,371 ms**. Margin against the
+30,000 ms watchdog is **2,129 ms**.
 
 The earlier 1 MiB / 27,220 ms draft is withdrawn. It assumed one in-flight
 bound for a 32 KiB request, but `GTA4L_EMMC_BLOCK_CHUNK_BLOCKS` is two, so
@@ -266,10 +267,10 @@ reads and two clock/CMD operations. Neither bound was supportable.
 ## 8. Host helper batch
 
 The 2026-11-12 helper batch adds
-`gta4l_emmc_recover_width_and_timing()` and nine core scenarios:
+`gta4l_emmc_recover_width_and_timing()` and eleven core scenarios:
 `recover-both-clean`, `recover-both-8bit`, `recover-both-clock-busy`,
 `recover-both-hs-stuck`, `recover-both-cmd6-error`,
 `recover-both-width-error`, `recover-both-properties`,
-`recover-both-inhibit-stuck` and `recover-both-arg`. The core suite passes
-198 scenarios and 119 mutation controls. The S1 mode, adapter scenarios,
+`recover-both-inhibit-stuck`, `recover-both-inhibit-clear`, `recover-both-final-read-timeout` and `recover-both-arg`. The core suite passes
+200 scenarios and 119 mutation controls. The S1 mode, adapter scenarios,
 candidate, run and verdict are still to come.
