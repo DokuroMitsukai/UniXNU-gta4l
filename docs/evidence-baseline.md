@@ -1467,7 +1467,7 @@ bytes of the previously booted image `[S]`.
 | Porting record | `porting.toml` | `31d3ae88b796d1e2411184b8838788b4287d1ca2d8c97b7371e05f19096556ab` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `d3876c23cb0a65c886bd9c2e673a81c4989d6b2093b0f198f663accf72f10c93` |
+| eMMC driver record | `docs/emmc-driver.md` | `a3a2b599a71a67298a1fe09a771015b7462b65dbc8340dfdcb930abf22abbe3d` |
 | eMMC core header | `package/Gta4lEmmc.h` | `a05a9a06ee4fa2ac5f60c6add22fc56cb90972ef6917010aa9c7fabdff3149eb` |
 | eMMC core source | `package/Gta4lEmmc.c` | `66fb20a2de47edffdfa517df5622284609d187b283847db287dcb88e3141bf18` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |

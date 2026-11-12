@@ -40,7 +40,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
 | `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls, with 285 adapter scenarios and 104 adapter/support plus 10 policy mutation controls against the host IOKit seam |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
-| `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`) and passes every argument through |
+| `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
 | `scripts/test-gta4l-board-userdata.py` | Compares `board.toml [userdata]` with the captured GPT and runs mutation controls |
 | `scripts/copy-gta4l-reference-sources.py` | Copies the pinned reference sources into gitignored `out/` with a SHA-256 manifest |
