@@ -67,8 +67,9 @@ def check_line(line):
 def detect_width(lines):
     counts = {}
     for line in lines:
-        length = len(line.rstrip('\n'))
-        if 40 <= length <= 200:
+        text = line.rstrip('\n')
+        length = len(text)
+        if report_start(text) and 40 <= length <= 200:
             counts[length] = counts.get(length, 0) + 1
     confident = [(length, count) for length, count in counts.items()
                  if count >= 2]
