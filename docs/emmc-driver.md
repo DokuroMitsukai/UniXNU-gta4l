@@ -6639,6 +6639,104 @@ initialization reliability, cold/warm correlation, arbitrary I/O, write,
 mount or publication-readiness claim is made. Findings:
 `docs/emmc-n10.24-widthhold-repeatability-observation-2026-11-12.md`.
 
+### 5.3.98 N10.24 widthpub host implementation (host-only, 2026-11-12)
+
+Follow-up to §5.3.96 and the owner-accepted corrected design. The host batch
+implements the opt-in bounded published-media read mode in
+`package/Gta4lEmmcBlock.h`/`.c`/`.cpp` without a candidate build,
+ABI/packaging gate, device access, flash, boot, mount or write.
+
+Selector and scope. `gta4l-emmc-widthpub=1` requires exactly one
+`gta4l-emmc-block=3` token and refuses an orphan or duplicate block token,
+block values other than 3, a malformed, duplicate or non-1 widthpub value,
+and every combination with `partobs`, `partcmp`, `partread`, `deblock`,
+`breakup`, `sweep`, `consume`, `width` or `widthhold`. An absent token and
+the legacy `gta4l-emmc-width=4`/`gta4l-emmc-widthhold=1` paths are unchanged.
+
+Sequence and read set. The mode reuses the widthhold start path: 1-bit
+EXT_CSD baseline, 8-block/4,096-byte 1-bit BOOT reference in four two-block
+chunks, the verified 4-bit switch (CMD6 `BUS_WIDTH`, CMD13 TRAN wait,
+`HOST_CONTROL` apply/readback, read-only EXT_CSD properties comparison; byte
+183 is never a switch condition and CMD19/CMD14 is excluded), the inherited
+LBA-1 baseline read, the production 64-block/32,768-byte/one-segment
+advertisement and `registerService()`. The report thread discovers exactly
+one whole media and one pinned BOOT partition with the structural Content
+check and first-failure `partdiag`, opens the partition as a read-only client
+once and runs two passes over the four two-block offsets 0, 1,024, 2,048 and
+3,072 bytes (LBAs 2,255,360/2,255,362/2,255,364/2,255,366), eight tagged
+cases total. Both passes share one 3,000 ms case-loop budget checked between
+cases; the second pass adds cases, not budget. Each case requires exact
+completed counts, a clean stop and a per-case digest equal to the reference
+slice; foreign traffic, missing/duplicate/out-of-order cases, short
+transfers, read failures, budget expiry and cancellation are strict
+failures. On every post-switch exit the thread acquires `gate` with the
+bounded timeout and attempts the verified 1-bit revert before the terminal
+report; there is no `held` state and no success path without a verified
+revert.
+
+Publication marker. The `pub` report field is set to 1 only inside
+`runWidthhold()` after `widthholdDiscoverMedia()` has proved exactly one whole
+media and one BOOT partition were published while the card and host were at
+4-bit. The source comment records that the marker records publication, not
+qualification success. A discovery failure leaves `pub=0`; success requires
+`pub=1` together with the existing `complete=1`, `partdiag=0`, `revert=1` and
+`rverified=1` guards.
+
+Decommission. The batch adds the owner-accepted report-thread offline
+notification delta. `notifyOfflineOnce()` latches the first failure under
+`reportLock` and sends
+`kIOMessageMediaStateHasChanged(kIOMediaStateOffline)` exactly once per
+terminal widthpub failure and never on the success path. The report thread
+calls it after it has released the controller gate and the media client and
+quiesced the in-flight request; a failing case completion also calls it, and
+in widthpub mode the async-read failure path routes through the same latch
+instead of messaging directly, so a failing case read does not notify clients
+twice. The helper is scoped to widthpub mode, so the absent-token 1-bit and
+widthhold paths keep their prior behavior; the model is the existing
+async-read notification at `package/Gta4lEmmcBlock.cpp:2313`–`:2316`.
+
+Report and bounds. The report family is one terminal `WIDTHPUB` summary plus
+one `WIDTHPUBREAD` last-case line on success, or one `WIDTHPUBFAIL` line on
+failure, reusing the widthhold field block and adding `pub=` after
+`complete=`; widthpub mode suppresses the legacy `READ`/`QUAL`/`QUAL3` and
+`PART` lines. Formatter-exact line bounds are 936 bytes for `WIDTHPUB` (the
+922-byte widthhold summary, a one-character-shorter prefix and the widest
+` pub=<u32>` field), 302 for `WIDTHPUBREAD` and 132 for `WIDTHPUBFAIL`; the
+worst report is 2,079 bytes inside the 2,560-byte buffer. The pre-watchdog
+start path keeps the N10.17 source-derived bounds: 28,010 ms success, 36,030
+ms on a failed switch and 38,230 ms on another post-switch failure. The
+report thread is 27,720 ms (8,000 media wait + 2,000 BOOT deadline + 3,000
+shared case budget + 4,500 in-flight two-block case + 2,000 revert gate +
+8,220 verified revert), leaving 2,280 ms under the 30,000 ms watchdog; the
+bounds are conditional and exclude scheduler stalls.
+
+Host results and checker. The block suite passes 48 core scenarios with 38
+mutation controls and 370 adapter scenarios (371 PASS lines) with the
+widthpub full-pass, publication, budget, read/short/match/foreign/cancel/
+gate/revert/baseline/switch failures, media-absent and selector-refusal
+cases, plus adapter/support controls for single-pass, window-collapse,
+pub-cleared, pub-before-discovery, offline-missing and offline-latch and
+policy controls for value-accepted, duplicate-accepted and
+widthhold-conflict-accepted; core 189/117, probe 196/100 and the documented
+evidence counts pass. The new host-only `scripts/check-gta4l-widthpub-evidence.py`
+recomputes the window and last-case slice prefixes from the final packaged
+BOOT image, requires the success shape, `pub=1`, `partdiag=0` and a verified
+revert, and rejects a digest mismatch, a one-byte-changed image, a
+missing/duplicate/extra field or line, a nonzero mismatch/foreign/cancel/
+budget, and a `WIDTHHOLD`-labelled summary; `--self-test` passes. The checker
+does not read a device, firmware or candidate kernel.
+
+Status. Host-only. No device access, flash, boot, mount, write or commit
+occurred. A host-only candidate was later produced from this batch
+(prelinked kernel `e65d0625…`, audit `out/gta4l/storage-abi-e65d06259ae4`,
+payload `c852dc80…`, BOOT image `72759594…`); the production record is
+`docs/emmc-n10.24-widthpub-design-2026-11-12.md` §8. N10.23 remains the only
+captured widthhold hardware PASS and N10.20 remains FAIL; general 4-bit
+publication, sustained or arbitrary I/O, repeatability and initialization
+reliability remain `[U]`. Candidate production and any hardware run are
+separately gated. Findings:
+`docs/emmc-n10.24-widthpub-design-2026-11-12.md`.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

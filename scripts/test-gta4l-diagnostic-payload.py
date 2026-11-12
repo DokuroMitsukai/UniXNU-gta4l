@@ -513,6 +513,11 @@ def test_emmc_block_3_widthhold(base):
                                   'widthhold')
 
 
+def test_emmc_block_3_widthpub(base):
+    check_observation_personality(base, 'emmc-block-3-widthpub', 3,
+                                  'widthpub')
+
+
 def test_partcmp_rejects_early_panic_fixture(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
@@ -734,6 +739,34 @@ def test_widthhold_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS widthhold rejects the early-panic fs-timer fixture')
+
+
+def test_widthpub_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-widthpub'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for widthpub')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS widthpub rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -1117,6 +1150,86 @@ def test_diagnostic_contract(_base):
         'gta4l-emmc-widthhold=1', 'emmc-block-3-width4')
     assert not width4_with_widthhold[
         'emmc-block-3-width4_diagnostic_selected']
+    good_widthpub = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthpub=1',
+        'emmc-block-3-widthpub')
+    assert all(good_widthpub.values()), good_widthpub
+    orphan_widthpub = checks(
+        'gta4l-emmc-probe=1 gta4l-emmc-widthpub=1')
+    assert not orphan_widthpub['no_widthpub_token_outside_block_mode']
+    duplicate_widthpub = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthpub=1 '
+        'gta4l-emmc-widthpub=1', 'emmc-block-3-widthpub')
+    assert not duplicate_widthpub['at_most_one_widthpub_token']
+    for value in ('0', '2', '-1', '', 'true'):
+        bad_widthpub_value = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-widthpub={value}',
+            'emmc-block-3-widthpub')
+        assert not bad_widthpub_value['widthpub_value_one'], \
+            bad_widthpub_value
+        assert not bad_widthpub_value[
+            'emmc-block-3-widthpub_diagnostic_selected'], \
+            bad_widthpub_value
+    widthpub_block_one = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-widthpub=1',
+        'emmc-block-3-widthpub')
+    assert not widthpub_block_one['widthpub_requires_block_three']
+    assert not widthpub_block_one[
+        'emmc-block-3-widthpub_diagnostic_selected']
+    widthpub_duplicate_block = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-block=3 '
+        'gta4l-emmc-widthpub=1', 'emmc-block-3-widthpub')
+    assert not widthpub_duplicate_block['exactly_one_block_mode_token']
+    widthpub_with_probe = checks(
+        'gta4l-emmc-probe=1 gta4l-emmc-block=3 gta4l-emmc-widthpub=1',
+        'emmc-block-3-widthpub')
+    assert not widthpub_with_probe['no_probe_token_in_block_mode']
+    assert not widthpub_with_probe[
+        'emmc-block-3-widthpub_diagnostic_selected']
+    missing_widthpub = checks(
+        'gta4l-emmc-block=3', 'emmc-block-3-widthpub')
+    assert not missing_widthpub[
+        'emmc-block-3-widthpub_diagnostic_selected']
+    plain_widthpub_expected = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthpub=1', 'emmc-block-3')
+    assert not plain_widthpub_expected['emmc-block-3_diagnostic_selected']
+    for modifier in ('partobs', 'partcmp', 'partread', 'deblock', 'breakup',
+                     'sweep', 'consume'):
+        key = f'widthpub_{modifier}_exclusive'
+        conflict = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-{modifier}=1 '
+            'gta4l-emmc-widthpub=1', 'emmc-block-3-widthpub')
+        assert not conflict[key], conflict
+        assert not conflict[
+            'emmc-block-3-widthpub_diagnostic_selected'], conflict
+        smuggled = checks(
+            f'gta4l-emmc-block=3 gta4l-emmc-{modifier}=1 '
+            'gta4l-emmc-widthpub=1', f'emmc-block-3-{modifier}')
+        assert not smuggled[
+            f'emmc-block-3-{modifier}_diagnostic_selected'], smuggled
+    widthpub_width_conflict = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-width=4 '
+        'gta4l-emmc-widthpub=1', 'emmc-block-3-widthpub')
+    assert not widthpub_width_conflict['widthpub_width_exclusive']
+    assert not widthpub_width_conflict[
+        'emmc-block-3-widthpub_diagnostic_selected']
+    width4_with_widthpub = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-width=4 '
+        'gta4l-emmc-widthpub=1', 'emmc-block-3-width4')
+    assert not width4_with_widthpub[
+        'emmc-block-3-width4_diagnostic_selected']
+    widthpub_widthhold_conflict = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthhold=1 '
+        'gta4l-emmc-widthpub=1', 'emmc-block-3-widthpub')
+    assert not widthpub_widthhold_conflict[
+        'widthpub_widthhold_exclusive']
+    assert not widthpub_widthhold_conflict[
+        'emmc-block-3-widthpub_diagnostic_selected']
+    widthhold_with_widthpub = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-widthhold=1 '
+        'gta4l-emmc-widthpub=1', 'emmc-block-3-widthhold')
+    assert not widthhold_with_widthpub[
+        'emmc-block-3-widthhold_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -1137,7 +1250,7 @@ def main():
              test_emmc_block_1_breakup, test_emmc_block_3_breakup,
              test_emmc_block_1_sweep, test_emmc_block_3_sweep,
              test_emmc_block_3_consume, test_emmc_block_3_width4,
-             test_emmc_block_3_widthhold,
+             test_emmc_block_3_widthhold, test_emmc_block_3_widthpub,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,
@@ -1147,6 +1260,7 @@ def main():
              test_consume_rejects_early_panic_fixture,
              test_width4_rejects_early_panic_fixture,
              test_widthhold_rejects_early_panic_fixture,
+             test_widthpub_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)

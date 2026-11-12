@@ -10,6 +10,16 @@ authorize implementation, candidate production, a device run, a commit or a
 push. Implementation, candidate production, hardware protocol and any boot
 are separately gated.
 
+**N10.24 implementation amendment (2026-11-12):** the owner accepted this
+corrected scope, including the two-pass read set under one shared 3,000 ms
+case-loop budget, the `gta4l-emmc-widthpub=1` token and report names, the
+`pub` publication marker and the report-thread offline-notification delta.
+The host implementation batch is recorded in `docs/emmc-driver.md` §5.3.98
+and adds `scripts/check-gta4l-widthpub-evidence.py`. No candidate build,
+ABI/packaging gate, device access, flash or boot is authorized by this
+amendment; candidate production and any hardware run remain separately
+gated.
+
 ## 1. Scope and question
 
 N10.23 already observed, on one bounded boot, the production driver publishing
@@ -437,4 +447,76 @@ Open items for the owner:
 - `package/Gta4lEmmc.c`, `package/Gta4lEmmcBlock.c`,
   `package/Gta4lEmmcBlock.cpp`, `package/Gta4lEmmcBlock.h`
 - `scripts/check-gta4l-widthhold-evidence.py`
+- `scripts/check-gta4l-widthpub-evidence.py`
 - `porting.toml`
+
+## 8. Host candidate production record (2026-11-12)
+
+This record covers the host-only candidate chain. It does not authorize or
+record a device run, flash, boot, mount or write, and no commit was made.
+
+Build chain. The device tree was the `b6dbe59` base with the uncommitted
+N10.24 implementation batch. The first kernel build stopped at the block
+archive step because it bootstrapped against a stale default storage-ABI
+audit (`storage-ABI audit candidate does not match ... kernel.macho`). The
+rebuilt kernel used the previous candidate-matched audit
+`out/gta4l/storage-abi-04ae57f6f565` as the bootstrap and produced prelinked
+candidate `e65d06259ae4f3846cab567356e6f50699acca73d4982b77c87982357c8c8b14`
+(51,527,680 bytes, slide `-0x1000000`; record
+`out/gta4l/ram-root-emmc-n10.24-widthpub-candidate-evidence/kernel-build-2.log`).
+The candidate carries the WIDTHPUB summary/read/fail format strings, the
+`gta4l-emmc-widthpub` boot argument and
+`_gta4l_emmc_block_widthpub_select`.
+
+Storage-ABI audit. `scripts/audit-gta4l-storage-interface.py` against the
+candidate passed and wrote `out/gta4l/storage-abi-e65d06259ae4/`, with the
+unchanged vtable/metaclass/service addresses `0xfffffff005cb44c0`,
+`0xfffffff006add1d0` and `0xfffffff007b2b5b8`, 190 ordinary storage slots and
+181 kernel bindings; `scripts/test-gta4l-storage-abi.py --artifacts` passes.
+
+Archive requalification. The tree requalification against the final audit
+produced `archive-requalified-tree-e65d.a`; its three members are
+byte-identical to the archive linked into the kernel
+(`archive-member-compare.txt`: `be2c76cd…` `Gta4lEmmcBlock.o`,
+`59acca9e…` `Gta4lEmmcBlockCpp.o`, `3e53b66d…` `original-bindings.o`). The
+container hashes differ (`0b8b99e0…` linked vs `9eff92b8…` requalified)
+only in `ar` member metadata (uid/gid and symbol-table form), the documented
+`ar` path dependence; the requalified report binds the current candidate and
+audit (`archive-requalified-tree-report-e65d.json`).
+
+Payload and BOOT. The `emmc-block-3-widthpub` payload
+(`gta4l-emmc-block=3 gta4l-emmc-widthpub=1`) built from the candidate and the
+fs-timer-hold raw ramdisk is
+`c852dc808020a8fabea06ffe12aad117d0ee20559dd08725e35d88e821e1d22a`
+(83,886,080 bytes); its contract passes 78/78, including the widthpub
+value-must-be-1, block-3 requirement and every widthpub/width/widthhold
+exclusivity check. The
+packaged BOOT image is
+`727595944324f5a439e4fe9ec1b3fddc2da979d731a4f9589d7d12013e78d922`
+(85,688,320 bytes); the component gate passes 18/18 with
+`only_ramdisk_differs=true`, and the explicit `check-gta4l-boot-image.py` run
+against the expected payload digest also passes.
+
+Digest binding and checker. The final BOOT window prefix (offset 0, 4,096
+bytes) is `2469ee44e806df84cd1464ddc959d3ea` and the last-case slice prefix
+(offset 3,072, 1,024 bytes) is `5f70bf18a086007016e948b04aed3b82`.
+`scripts/check-gta4l-widthpub-evidence.py --self-test` passes, and the
+checker accepts a clearly labelled synthetic success report generated from
+the final packaged image (`widthpub-synthetic-success-report.txt`) and rejects
+the checker's changed-image/malformed cases. That fixture is a host
+verification aid, not a device observation.
+
+Host suites. The diagnostic payload builder (48 PASS), packager (19 PASS),
+packaging, inventory, evidence-count and RAM-root recipe checks pass; the
+block suite passes 48 core scenarios with 38 mutation controls and 370
+adapter scenarios, and the storage-ABI test and the widthpub checker log
+into the same evidence directory, which also carries the refreshed
+`docs/evidence-baseline.md` row hashes for the changed inputs. Raw logs,
+manifests and the private raw evidence are in
+`out/gta4l/ram-root-emmc-n10.24-widthpub-candidate-evidence/`
+and `out/gta4l/storage-abi-e65d06259ae4/`.
+
+Status. Host-qualified candidate only. No widthpub hardware result exists;
+the bounded publication read, general 4-bit publication, repeatability and
+initialization reliability remain `[U]`. A device run needs a fresh explicit
+owner approval and a BOOT-only flash naming this image.

@@ -1226,10 +1226,9 @@ ADAPTER_MUTATIONS = [
      'widthhold-budget'),
     ('widthhold-case-skip',
      [('\t\t\t\t\tfor (index = 0;\n'
-       '\t\t\t\t\t    index < GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES;\n',
+       '\t\t\t\t\t    index < cases;\n',
        '\t\t\t\t\tfor (index = 0;\n'
-       '\t\t\t\t\t    index <\n'
-       '\t\t\t\t\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES - 1u);\n'),
+       '\t\t\t\t\t    index < (cases - 1u);\n'),
       ('\t    revertOk) ? 1u : 0u;\n'
        '\treport.widthhold_complete = complete;\n',
        '\t    revertOk) ? 1u : 0u;\n'
@@ -1320,6 +1319,49 @@ ADAPTER_MUTATIONS = [
        '\tif ((0) && ((writableProperty == nullptr) ||\n'
        '\t    writableProperty->getValue())) {\n')],
      'widthhold-part-writable'),
+    ('widthpub-single-pass',
+     [('\treturn widthpubMode ? GTA4L_EMMC_BLOCK_WIDTHPUB_CASES :\n'
+       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES;\n',
+       '\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES;\n')],
+     'widthpub-match'),
+    ('widthpub-window-collapse',
+     [('\t\t\t\t\t\twindowIndex = widthpubMode ?\n'
+       '\t\t\t\t\t\t    (index %\n'
+       '\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_WIDTHPUB_CASE_OFFSETS) :\n'
+       '\t\t\t\t\t\t    index;\n',
+       '\t\t\t\t\t\twindowIndex = widthpubMode ?\n'
+       '\t\t\t\t\t\t    (index %\n'
+       '\t\t\t\t\t\t    GTA4L_EMMC_BLOCK_WIDTHPUB_PASSES) :\n'
+       '\t\t\t\t\t\t    index;\n')],
+     'widthpub-match'),
+    ('widthpub-pub-cleared',
+     [('\t\t\t\treport.widthpub_pub = 1u;\n',
+       '\t\t\t\treport.widthpub_pub = 0u;\n')],
+     'widthpub-match'),
+    ('widthpub-pub-before-discovery',
+     [('\t\treason = widthholdDiscoverMedia();\n'
+       '\t\tif (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {\n',
+       '\t\treason = widthholdDiscoverMedia();\n'
+       '\t\treport.widthpub_pub = 1u;\n'
+       '\t\tif (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {\n')],
+     'widthpub-media-absent'),
+    ('widthpub-offline-missing',
+     [('\tif (complete == 0u) {\n'
+       '\t\tnotifyOfflineOnce();\n'
+       '\t}\n',
+       '\tif (complete == 0u) {\n'
+       '\t}\n')],
+     'widthpub-budget'),
+    ('widthpub-offline-latch',
+     [('\tif (!offlineNotified) {\n'
+       '\t\tofflineNotified = true;\n'
+       '\t\tsend = true;\n'
+       '\t}\n',
+       '\tif (1) {\n'
+       '\t\tofflineNotified = true;\n'
+       '\t\tsend = true;\n'
+       '\t}\n')],
+     'widthpub-read-error'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -1484,6 +1526,40 @@ POLICY_MUTATIONS = [
        '\t\tgta4l_emmc_block_put_char(&writer, \' \');\n',
        '')],
      'widthhold-part-absent'),
+    ('widthpub-value-accepted',
+     [('\tif (token_value != (int)GTA4L_EMMC_BLOCK_WIDTHPUB_ON) {\n',
+       '\tif ((token_value != (int)GTA4L_EMMC_BLOCK_WIDTHPUB_ON) &&\n'
+       '\t    0) {\n')],
+     'widthpub-refused-value'),
+    ('widthpub-duplicate-accepted',
+     [('\tif ((duplicate_tokens != 0) || (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;\n'
+       '\t}\n',
+       '\tif (((duplicate_tokens != 0) && 0) ||\n'
+       '\t    (block_selected == 0) ||\n'
+       '\t    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||\n'
+       '\t    (partobs_selected != 0) || (partcmp_selected != 0) ||\n'
+       '\t    (partread_selected != 0) || (deblock_selected != 0) ||\n'
+       '\t    (breakup_selected != 0) || (sweep_selected != 0) ||\n'
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;\n'
+       '\t}\n')],
+     'widthpub-refused-duplicate'),
+    ('widthpub-widthhold-conflict-accepted',
+     [('\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    (widthhold_selected != 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;\n',
+       '\t    (consume_selected != 0) || (width_selected != 0) ||\n'
+       '\t    ((widthhold_selected != 0) && 0)) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;\n')],
+     'widthpub-refused-conflicts'),
 ]
 
 
@@ -2054,8 +2130,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 352, f'expected 352 adapter PASS lines, got {passes}'
-        print('PASS adapter: 351 scenarios against the host IOKit seam')
+        assert passes == 371, f'expected 371 adapter PASS lines, got {passes}'
+        print('PASS adapter: 370 scenarios against the host IOKit seam')
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
             run, built = compile_adapter_mutation(

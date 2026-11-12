@@ -10,7 +10,9 @@ to --output or a manifest is written. The partobs, partcmp, partread, deblock,
 breakup, sweep, consume and width personalities additionally require
 --data-ramdisk-manifest naming the fs-timer-hold fixture, so the old
 early-success-panic RAM-root fixture cannot be repackaged for the observation.
-The widthhold personality maps to gta4l-emmc-block=3 gta4l-emmc-widthhold=1.
+The widthhold personality maps to gta4l-emmc-block=3 gta4l-emmc-widthhold=1
+and the widthpub personality maps to gta4l-emmc-block=3
+gta4l-emmc-widthpub=1.
 """
 import argparse
 import datetime
@@ -64,6 +66,7 @@ DIAGNOSTICS = {
     'emmc-block-3-consume': 'gta4l-emmc-block=3 gta4l-emmc-consume=1',
     'emmc-block-3-width4': 'gta4l-emmc-block=3 gta4l-emmc-width=4',
     'emmc-block-3-widthhold': 'gta4l-emmc-block=3 gta4l-emmc-widthhold=1',
+    'emmc-block-3-widthpub': 'gta4l-emmc-block=3 gta4l-emmc-widthpub=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
@@ -74,12 +77,13 @@ SWEEP_DIAGNOSTICS = ('emmc-block-1-sweep', 'emmc-block-3-sweep')
 CONSUME_DIAGNOSTICS = ('emmc-block-3-consume',)
 WIDTH_DIAGNOSTICS = ('emmc-block-3-width4',)
 WIDTHHOLD_DIAGNOSTICS = ('emmc-block-3-widthhold',)
+WIDTHPUB_DIAGNOSTICS = ('emmc-block-3-widthpub',)
 PARTITION_DIAGNOSTICS = (PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS +
                          PARTREAD_DIAGNOSTICS)
 OBSERVATION_DIAGNOSTICS = (PARTITION_DIAGNOSTICS + DEBLOCK_DIAGNOSTICS +
                            BREAKUP_DIAGNOSTICS + SWEEP_DIAGNOSTICS +
                            CONSUME_DIAGNOSTICS + WIDTH_DIAGNOSTICS +
-                           WIDTHHOLD_DIAGNOSTICS)
+                           WIDTHHOLD_DIAGNOSTICS + WIDTHPUB_DIAGNOSTICS)
 DATA_RAMDISK_DIAGNOSTICS = ('report', 'fs-timer', 'fs-timer-hold')
 
 

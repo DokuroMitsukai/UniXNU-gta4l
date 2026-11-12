@@ -343,6 +343,42 @@ extern "C" {
  * The summary bound uses the larger 922 line so it covers both shapes. */
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_REPORT_WORST_BYTES 2066u
 
+/* N10.24 bounded 4-bit published-media read qualification. This is the same
+ * pre-report-revert sequence as widthhold, but it serves two passes of the
+ * four two-block offsets under one shared 3,000 ms total case-loop budget and
+ * adds a `pub` marker that is 1 only after the media and BOOT partition were
+ * published at 4-bit. The token, report prefix and reason namespace are
+ * distinct so a widthpub report is never read as a widthhold report.
+ *
+ * Timing stays the widthhold bound because the second pass adds cases, not
+ * budget: 8,000 ms media wait + 2,000 ms BOOT deadline + 3,000 ms shared loop
+ * budget + one 4,500 ms in-flight case + 2,000 ms revert gate + 8,220 ms
+ * verified revert = 27,720 ms, leaving 2,280 ms under the 30,000 ms watchdog.
+ * The pre-watchdog start path is the widthhold sequence: 28,010 ms on
+ * success, 36,030 ms if the switch itself fails, and 38,230 ms after any
+ * other post-switch pre-report failure with the bounded recovery. */
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_ARG "gta4l-emmc-widthpub"
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_OFF 0
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_ON 1
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED (-1)
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_BITS_4 4u
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_PASSES 2u
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_CASE_OFFSETS 4u
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_CASES \
+	(GTA4L_EMMC_BLOCK_WIDTHPUB_PASSES * \
+	GTA4L_EMMC_BLOCK_WIDTHPUB_CASE_OFFSETS)
+/* Formatter-exact maxima: the shared widthhold summary is 922 bytes; the
+ * one-character-shorter WIDTHPUB prefix and the widest ` pub=<u32>` field
+ * add 14 bytes, giving 936. The read and failure detail prefixes are one
+ * character shorter than their widthhold counterparts: 302 and 132. The base
+ * bound is still 838, so the success worst case is
+ * 838 + 936 + 302 + two newlines + NUL = 2,079; the failure path totals
+ * 1,909 and is covered by the larger summary bound. */
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_LINE_BYTES 936u
+#define GTA4L_EMMC_BLOCK_WIDTHPUBREAD_LINE_BYTES 302u
+#define GTA4L_EMMC_BLOCK_WIDTHPUBFAIL_LINE_BYTES 132u
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REPORT_WORST_BYTES 2079u
+
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2560u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u
@@ -828,6 +864,11 @@ struct gta4l_emmc_block_report {
 	uint32_t widthhold_fail_blocks;
 	uint32_t widthhold_fail_max;
 	uint8_t widthhold_fail_digest[16];
+	/* N10.24 bounded published-media marker and mode. The widthpub report
+	 * reuses the widthhold field block; widthpub != 0 selects the
+	 * WIDTHPUB formatter prefix and widthpub_pub is the `pub` marker. */
+	uint32_t widthpub;
+	uint32_t widthpub_pub;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -964,6 +1005,16 @@ int gta4l_emmc_block_widthhold_select(int token_present, int token_value,
     int partobs_selected, int partcmp_selected, int partread_selected,
     int deblock_selected, int breakup_selected, int sweep_selected,
     int consume_selected, int width_selected);
+
+/* Select the opt-in bounded published-media read qualification. The token is
+ * accepted only when exactly one gta4l-emmc-block=3 token is selected, the
+ * value is exactly 1, the token is not duplicated and none of the other
+ * partition/read/consumer/width instruments is selected in the same boot. */
+int gta4l_emmc_block_widthpub_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int consume_selected, int width_selected, int widthhold_selected);
 
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
@@ -1180,6 +1231,55 @@ int gta4l_emmc_block_breakup_geometry(uint64_t start, uint32_t length,
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ADVERT 19u
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_THREAD 20u
 #define GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC 21u
+
+/* WIDTHPUB reuses the widthhold engine and therefore its numeric reason and
+ * stage space. The aliases keep widthpub code and tests explicit without
+ * creating a second, drifting table. A widthpub reason is only ever printed
+ * on a WIDTHPUB line. */
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_NONE \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_BASELINE \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BASELINE
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_PREREAD \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PREREAD
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_SWITCH \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_SWITCH
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_MEDIA \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MEDIA
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_PART \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_OPEN \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_OPEN
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_ARG \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ARG
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_DESC \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_DESC
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_READ \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_READ
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_SHORT \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_SHORT
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_MATCH \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_ORDER \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ORDER
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_FOREIGN \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_FOREIGN
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_BUDGET \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BUDGET
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_CANCEL \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_GATE \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_GATE
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_REVERT \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_REVERT
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_BASE4 \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BASE4
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_ADVERT \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ADVERT
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_THREAD \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_THREAD
+#define GTA4L_EMMC_BLOCK_WIDTHPUB_REASON_ALLOC \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC
 
 /* WIDTHHOLD BOOT-partition qualification diagnostics. The first failing
  * category is latched with reason PART and printed in the summary; zero

@@ -50,6 +50,33 @@ _Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
     widthhold_fail_actual) == 4u, "WIDTHHOLD fail_actual must stay u32");
 _Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
     widthhold_fail_start) == 4u, "WIDTHHOLD fail_start must stay u32");
+_Static_assert(GTA4L_EMMC_BLOCK_WIDTHPUB_CASES ==
+    (GTA4L_EMMC_BLOCK_WIDTHPUB_PASSES *
+    GTA4L_EMMC_BLOCK_WIDTHPUB_CASE_OFFSETS),
+    "WIDTHPUB case count must cover both passes");
+_Static_assert(GTA4L_EMMC_BLOCK_WIDTHPUB_CASE_OFFSETS ==
+    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASES,
+    "WIDTHPUB must repeat the widthhold case offsets");
+_Static_assert(GTA4L_EMMC_BLOCK_WIDTHPUB_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "WIDTHPUB line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_WIDTHPUBREAD_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "WIDTHPUBREAD line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_WIDTHPUBFAIL_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "WIDTHPUBFAIL line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_WIDTHPUB_REPORT_WORST_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "WIDTHPUB worst case must fit the report buffer");
+_Static_assert((GTA4L_EMMC_BLOCK_WIDTHPUB_LINE_BYTES +
+    GTA4L_EMMC_BLOCK_WIDTHPUBREAD_LINE_BYTES) <
+    GTA4L_EMMC_BLOCK_WIDTHPUB_REPORT_WORST_BYTES,
+    "WIDTHPUB worst case must cover both detail lines");
+_Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
+    widthpub) == 4u, "WIDTHPUB mode field must stay u32");
+_Static_assert(sizeof(((struct gta4l_emmc_block_report *)0)->
+    widthpub_pub) == 4u, "WIDTHPUB pub field must stay u32");
 
 static int
 gta4l_emmc_block_is_space(char value)
@@ -299,6 +326,31 @@ gta4l_emmc_block_widthhold_select(int token_present, int token_value,
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REFUSED;
 	}
 	return GTA4L_EMMC_BLOCK_WIDTHHOLD_ON;
+}
+
+int
+gta4l_emmc_block_widthpub_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int consume_selected, int width_selected, int widthhold_selected)
+{
+	if (token_present == 0) {
+		return GTA4L_EMMC_BLOCK_WIDTHPUB_OFF;
+	}
+	if ((duplicate_tokens != 0) || (block_selected == 0) ||
+	    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||
+	    (partobs_selected != 0) || (partcmp_selected != 0) ||
+	    (partread_selected != 0) || (deblock_selected != 0) ||
+	    (breakup_selected != 0) || (sweep_selected != 0) ||
+	    (consume_selected != 0) || (width_selected != 0) ||
+	    (widthhold_selected != 0)) {
+		return GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;
+	}
+	if (token_value != (int)GTA4L_EMMC_BLOCK_WIDTHPUB_ON) {
+		return GTA4L_EMMC_BLOCK_WIDTHPUB_REFUSED;
+	}
+	return GTA4L_EMMC_BLOCK_WIDTHPUB_ON;
 }
 
 static struct gta4l_emmc_block_deblock_case gta4l_emmc_block_deblock_cases[] = {
@@ -2795,6 +2847,8 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 
 	if (report->widthhold != 0) {
 		gta4l_emmc_block_put_string(&writer,
+		    (report->widthpub != 0) ?
+		    "GTA4L-EMMC P5 WIDTHPUB: " :
 		    "GTA4L-EMMC P5 WIDTHHOLD: ");
 		gta4l_emmc_block_put_key(&writer, "cases");
 		gta4l_emmc_block_put_u64(&writer, report->widthhold_cases);
@@ -2810,6 +2864,12 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "complete");
 		gta4l_emmc_block_put_u64(&writer, report->widthhold_complete);
+		if (report->widthpub != 0) {
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "pub");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->widthpub_pub);
+		}
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "switch");
 		gta4l_emmc_block_put_u64(&writer, report->widthhold_switch);
@@ -2952,6 +3012,8 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 
 		if (report->widthhold_failed != 0u) {
 			gta4l_emmc_block_put_string(&writer,
+			    (report->widthpub != 0) ?
+			    "GTA4L-EMMC P5 WIDTHPUBFAIL: " :
 			    "GTA4L-EMMC P5 WIDTHHOLDFAIL: ");
 			gta4l_emmc_block_put_key(&writer, "index");
 			gta4l_emmc_block_put_u64(&writer,
@@ -2992,6 +3054,8 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 			gta4l_emmc_block_put_char(&writer, '\n');
 		} else if (report->widthhold_reads != 0u) {
 			gta4l_emmc_block_put_string(&writer,
+			    (report->widthpub != 0) ?
+			    "GTA4L-EMMC P5 WIDTHPUBREAD: " :
 			    "GTA4L-EMMC P5 WIDTHHOLDREAD: ");
 			gta4l_emmc_block_put_key(&writer, "index");
 			gta4l_emmc_block_put_u64(&writer,
