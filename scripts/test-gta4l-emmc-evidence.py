@@ -9,6 +9,7 @@ wrapping the reports at 80 columns and joining them again, and then checks
 that a one-character digest mutation is rejected. Missing evidence is
 reported as SKIP; it is not an error.
 """
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -88,6 +89,44 @@ def cases():
         print(f'PASS: {mode} normalized report and mutation control')
 
 
+def speed_case():
+    """Exercise --mode speed through the dispatcher with a synthetic BOOT."""
+    window_bytes = 4096
+    lba = 2255360
+    with tempfile.TemporaryDirectory(prefix='gta4l-speed-') as tmp:
+        base = Path(tmp)
+        data = bytearray()
+        for block in range(lba, lba + window_bytes // 512):
+            data.extend(bytes((block + index) & 0xff
+                              for index in range(512)))
+        image = base / 'boot.img'
+        image.write_bytes(bytes(data))
+        digest = hashlib.sha256(bytes(data)).hexdigest()[:32]
+        line = (
+            f'GTA4L-EMMC P5 SPEED: hs=1 hsrb=0 hsa=1 rcg=0000020b '
+            f'hispd=00 wtry=8 wfall=0 wroll=0 wid=8 verified=1 hb=00 '
+            f'ha=20 cmd6=1 base=1 bytes1={window_bytes} ticks1=1000 '
+            f'hz=19200000 dig1={digest} bytes2={window_bytes} '
+            f'ticks2=1000 dig2={digest} req=8 fails=0 cancel=0 budget=0 '
+            f'partial=0 pub=1 partdiag=0 revert=1 rverified=1 rhb=20 '
+            f'rha=00 rcmd6=2 rstatus=0 hsrevert=1 hsverified=1 rhsb=1 '
+            f'rhs=0 rclk=400000 limit=64 seg=1 cap=61071360')
+        report = base / 'report.txt'
+        report.write_text('GTA4L-EMMC P5 MEDIA: whole=1\n' + line + '\n')
+        ok = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'speed',
+                 '--image', image, '--report', report)
+        if ok.returncode != 0:
+            raise AssertionError(
+                f'speed: valid report was rejected: {ok.stdout} {ok.stderr}')
+        report.write_text('GTA4L-EMMC P5 MEDIA: whole=1\n' +
+                          line.replace(digest, '0' * 32) + '\n')
+        bad = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'speed',
+                  '--image', image, '--report', report)
+        if bad.returncode == 0:
+            raise AssertionError('speed: a wrong digest was accepted')
+    print('PASS: speed dispatcher digest and field check')
+
+
 def main():
     for script, label in (
             ('normalize-gta4l-report.py', 'normalizer'),
@@ -98,6 +137,7 @@ def main():
                   f'{completed.stderr}')
             return 1
     cases()
+    speed_case()
     print('PASS: evidence normalizer and dispatcher host test')
     return 0
 

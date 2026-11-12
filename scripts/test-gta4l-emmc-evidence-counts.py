@@ -18,6 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CORE_TEST = ROOT / 'scripts/test-gta4l-emmc.py'
 PROBE_TEST = ROOT / 'scripts/test-gta4l-emmc-probe.py'
+BLOCK_TEST = ROOT / 'scripts/test-gta4l-emmc-block.py'
+ADAPTER_HARNESS = (ROOT / 'scripts' / 'sim-gta4l-emmc-block' /
+                   'adapter_harness.cpp')
 DRIVER_DOC = ROOT / 'docs/emmc-driver.md'
 CMD7_DOC = ROOT / 'docs/emmc-cmd7-timeout-finding.md'
 BASELINE_DOC = ROOT / 'docs/evidence-baseline.md'
@@ -44,9 +47,19 @@ def list_length(tree, name, module_level, source):
     return len(found[0].elts)
 
 
+def adapter_scenarios():
+    text = ADAPTER_HARNESS.read_text()
+    found = re.findall(r'^\t\{ "[^"]+",', text, re.M)
+    if not found:
+        raise AssertionError(
+            f'{ADAPTER_HARNESS.name}: no adapter scenario table entries')
+    return len(found)
+
+
 def source_counts():
     core_tree = ast.parse(CORE_TEST.read_text(), filename=str(CORE_TEST))
     probe_tree = ast.parse(PROBE_TEST.read_text(), filename=str(PROBE_TEST))
+    block_tree = ast.parse(BLOCK_TEST.read_text(), filename=str(BLOCK_TEST))
     core_scenarios = list_length(
         core_tree, 'SCENARIOS', True, CORE_TEST)
     core_scenarios += list_length(
@@ -57,7 +70,16 @@ def source_counts():
         probe_tree, 'SCENARIOS', True, PROBE_TEST)
     probe_mutations = list_length(
         probe_tree, 'MUTATIONS', True, PROBE_TEST)
-    return core_scenarios, core_mutations, probe_scenarios, probe_mutations
+    block_scenarios = adapter_scenarios()
+    adapter_mutations = list_length(
+        block_tree, 'ADAPTER_MUTATIONS', True, BLOCK_TEST)
+    support_mutations = list_length(
+        block_tree, 'SUPPORT_MUTATIONS', True, BLOCK_TEST)
+    policy_mutations = list_length(
+        block_tree, 'POLICY_MUTATIONS', True, BLOCK_TEST)
+    return (core_scenarios, core_mutations, probe_scenarios, probe_mutations,
+            block_scenarios, adapter_mutations, support_mutations,
+            policy_mutations)
 
 
 COUNT_PATTERNS = (
@@ -81,19 +103,25 @@ COUNT_PATTERNS = (
      r'Current\s+eMMC\s+probe\s+report\s+test\s*\|\s*PASS:\s*'
      r'(\d+)\s+scenarios\s+and\s+(\d+)\s+mutation\s+controls',
      'probe', 'current probe validation counts'),
+    (DRIVER_DOC,
+     r'block\s+adapter\s+test\s+runs\s+(\d+)\s+scenarios\s+with\s+'
+     r'(\d+)\s+adapter\s+mutations,\s+(\d+)\s+support\s+mutations\s+and\s+'
+     r'(\d+)\s+policy\s+mutations',
+     'block', 'current block validation counts'),
 )
 
 
-def expected_for(kind, core_scenarios, core_mutations, probe_scenarios,
-                 probe_mutations):
-    core = (str(core_scenarios), str(core_mutations))
-    probe = (str(probe_scenarios), str(probe_mutations))
+def expected_for(kind, *counts):
+    core = (str(counts[0]), str(counts[1]))
+    probe = (str(counts[2]), str(counts[3]))
     if kind == 'core':
         return core
     if kind == 'probe':
         return probe
     if kind == 'both':
         return core + probe
+    if kind == 'block':
+        return tuple(str(count) for count in counts[4:8])
     raise AssertionError(f'unknown count summary kind: {kind}')
 
 
@@ -109,13 +137,11 @@ def require_all(path, text, pattern, expected, label):
                 f'{expected!r}')
 
 
-def check_documents(documents, core_scenarios, core_mutations,
-                    probe_scenarios, probe_mutations):
+def check_documents(documents, *counts):
     for path, pattern, kind, label in COUNT_PATTERNS:
         require_all(
             path, documents[path], pattern,
-            expected_for(kind, core_scenarios, core_mutations,
-                         probe_scenarios, probe_mutations),
+            expected_for(kind, *counts),
             label)
 
 
@@ -134,9 +160,7 @@ def replace_group(document, pattern, group):
     return ''.join(pieces)
 
 
-def self_test(documents, core_scenarios, core_mutations,
-              probe_scenarios, probe_mutations):
-    counts = (core_scenarios, core_mutations, probe_scenarios, probe_mutations)
+def self_test(documents, *counts):
     for path, pattern, kind, label in COUNT_PATTERNS:
         expected = expected_for(kind, *counts)
         for group in range(1, len(expected) + 1):
@@ -187,9 +211,10 @@ def self_test(documents, core_scenarios, core_mutations,
 
 
 def main():
-    core_scenarios, core_mutations, probe_scenarios, probe_mutations = (
-        source_counts())
-    counts = (core_scenarios, core_mutations, probe_scenarios, probe_mutations)
+    counts = source_counts()
+    (core_scenarios, core_mutations, probe_scenarios, probe_mutations,
+     block_scenarios, adapter_mutations, support_mutations,
+     policy_mutations) = counts
     if any(count <= 0 for count in counts):
         raise AssertionError(f'implausible source counts: {counts}')
 
@@ -203,7 +228,9 @@ def main():
     print(f'PASS: documented counts match sources '
           f'(core {core_scenarios} scenarios, {core_mutations} mutation '
           f'controls; probe {probe_scenarios} scenarios, '
-          f'{probe_mutations} mutation controls)')
+          f'{probe_mutations} mutation controls; block {block_scenarios} '
+          f'scenarios, {adapter_mutations} adapter, {support_mutations} '
+          f'support and {policy_mutations} policy mutations)')
     return 0
 
 

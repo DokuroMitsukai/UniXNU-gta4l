@@ -173,6 +173,30 @@ def self_test():
         write_outputs(output, joins, warnings, base / 'out.txt', base / 'log')
         log = (base / 'log').read_text()
         assert 'summary joins=0 warnings=1' in log, log
+        prefix = 'GTA4L-EMMC P5 SPEED: '
+        tokens = []
+        size = len(prefix)
+        index = 0
+        while True:
+            token = f'f{index:02d}=' + '1' * 8
+            extra = len(token) + (1 if tokens else 0)
+            if size + extra > 746:
+                break
+            tokens.append(token)
+            size += extra
+            index += 1
+        assert tokens, 'speed line fixture has no fields'
+        tokens[-1] += '1' * (746 - size)
+        logical = prefix + ' '.join(tokens)
+        assert len(logical) == 746, len(logical)
+        for width in (80, 120):
+            physical = [logical[start:start + width]
+                        for start in range(0, len(logical), width)]
+            assert len(physical) > 1
+            output, joins, warnings = normalize(physical, width)
+            assert output == [logical], (width, len(output[0]))
+            assert len(joins) == 1, (width, joins)
+            assert warnings == [], (width, warnings)
     print('PASS: normalizer joins wrapped reports and refuses ambiguous cuts')
 
 

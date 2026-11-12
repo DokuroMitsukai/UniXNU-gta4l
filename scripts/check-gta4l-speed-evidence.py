@@ -41,6 +41,7 @@ UNSIGNED = (
     'hsrb', 'hsa', 'cmd6', 'ticks1', 'hz', 'ticks2', 'req', 'rcmd6',
     'rhsb', 'rhs', 'rclk', 'limit', 'seg', 'cap')
 WIDTH = {'8': 0x20, '4': 0x02}
+WIDTH_BITS = 0x22
 
 
 def window_prefix(image):
@@ -125,6 +126,8 @@ def check(line, expected_prefix):
         hispd = hb = ha = rhb = rha = 0
     if hispd & 0x04:
         errors.append('hispd is set; the primary S1 configuration keeps it clear')
+    if hispd & WIDTH_BITS:
+        errors.append('hispd carries a wide host width before the switch')
     if fields['wid'] in WIDTH:
         want = WIDTH[fields['wid']]
         if (hb & 0x22) != 0:
@@ -137,6 +140,8 @@ def check(line, expected_prefix):
             errors.append('rha still carries a wide host width')
     if fields['rcmd6'].isdigit() and int(fields['rcmd6']) < 2:
         errors.append('rcmd6 must record the HS and width CMD6 writes')
+    if fields['cmd6'].isdigit() and int(fields['cmd6']) < 1:
+        errors.append('cmd6 must record at least one width CMD6 write')
     for name in ('ticks1', 'ticks2'):
         if fields[name].isdigit() and int(fields[name]) == 0:
             errors.append(f'{name} is zero')
@@ -158,7 +163,7 @@ def self_test():
         image.write_bytes(bytes(range(256)) * (WINDOW_BYTES // 256))
         digest = window_prefix(image)
         line = (
-            f'{LABEL}hs=1 hsrb=0 hsa=1 rcg=0000020b hispd=02 wtry=8 '
+            f'{LABEL}hs=1 hsrb=0 hsa=1 rcg=0000020b hispd=00 wtry=8 '
             'wfall=0 wroll=0 wid=8 verified=1 hb=00 ha=20 cmd6=1 base=1 '
             f'bytes1={WINDOW_BYTES} ticks1=1000 hz=19200000 dig1={digest} '
             f'bytes2={WINDOW_BYTES} ticks2=1000 dig2={digest} '
@@ -189,7 +194,9 @@ def self_test():
             (line.replace('wfall=0', 'wfall=1'), 'false fallback'),
             (line.replace('wroll=0', 'wroll=1'), 'false rollback'),
             (line.replace('wtry=8', 'wtry=4'), 'wrong first width'),
-            (line.replace('hispd=02', 'hispd=06'), 'HISPD set'),
+            (line.replace('hispd=00', 'hispd=04'), 'HISPD set'),
+            (line.replace('hispd=00', 'hispd=02'), 'wide before switch'),
+            (line.replace('hispd=00', 'hispd=20'), '8-bit before switch'),
             (line.replace('rha=00', 'rha=20'), 'revert width remains'),
             (line.replace('hsrevert=1', 'hsrevert=0'), 'no HS revert'),
             (line.replace('partial=0', 'partial=1'), 'partial pass'),
@@ -203,6 +210,21 @@ def self_test():
             (line + ' extra=1', 'extra field'),
         )
         for text, label in mutations:
+            assert check_errors(text, digest), f'{label} was accepted'
+        for name in FIXED:
+            changed = re.sub(rf'(?<!\S){re.escape(name)}=\S+',
+                             f'{name}=999999999999', line, count=1)
+            assert changed != line, f'FIXED field {name} was not found'
+            assert check_errors(changed, digest), \
+                f'FIXED field {name} was accepted with a wrong value'
+        conditional = (
+            (line.replace('wid=8', 'wid=4'), 'wid=4 without fallback'),
+            (line.replace('cmd6=1', 'cmd6=0'), 'zero CMD6 count'),
+            (line.replace('rcmd6=2', 'rcmd6=0'), 'zero revert CMD6 count'),
+            (line.replace('ticks1=1000', 'ticks1=0'), 'zero ticks1'),
+            (line.replace('ticks2=1000', 'ticks2=0'), 'zero ticks2'),
+        )
+        for text, label in conditional:
             assert check_errors(text, digest), f'{label} was accepted'
         fallback = (line.replace('wfall=0', 'wfall=1')
                     .replace('wroll=0', 'wroll=1')
