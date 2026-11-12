@@ -6726,16 +6726,20 @@ missing/duplicate/extra field or line, a nonzero mismatch/foreign/cancel/
 budget, and a `WIDTHHOLD`-labelled summary; `--self-test` passes. The checker
 does not read a device, firmware or candidate kernel.
 
-Status. Host-only. No device access, flash, boot, mount, write or commit
-occurred. A host-only candidate was later produced from this batch
-(prelinked kernel `e65d0625…`, audit `out/gta4l/storage-abi-e65d06259ae4`,
-payload `c852dc80…`, BOOT image `72759594…`); the production record is
-`docs/emmc-n10.24-widthpub-design-2026-11-12.md` §8. N10.23 remains the only
-captured widthhold hardware PASS and N10.20 remains FAIL; general 4-bit
-publication, sustained or arbitrary I/O, repeatability and initialization
-reliability remain `[U]`. Candidate production and any hardware run are
-separately gated. Findings:
-`docs/emmc-n10.24-widthpub-design-2026-11-12.md`.
+Status. The host batch itself performed no device access, flash, boot, mount
+or write. A host-only candidate was later produced from this batch (prelinked
+kernel `e65d0625…`, audit `out/gta4l/storage-abi-e65d06259ae4`, payload
+`c852dc80…`, BOOT image `72759594…`); the production record is
+`docs/emmc-n10.24-widthpub-design-2026-11-12.md` §8. One owner-approved
+BOOT-only flash and one owner-triggered cold boot then returned the widthpub
+success shape with `pub=1`, eight passes, `partdiag=0`, a verified revert and
+the expected window digests; the run record is
+`docs/emmc-n10.24-widthpub-hardware-run-2026-11-12.md`, and the one-boot
+budget is consumed. N10.23 remains the only captured widthhold hardware PASS
+and N10.20 remains FAIL; general 4-bit publication, sustained or arbitrary
+I/O, repeatability and initialization reliability remain `[U]`. Findings:
+`docs/emmc-n10.24-widthpub-design-2026-11-12.md` and
+`docs/emmc-n10.24-widthpub-hardware-run-2026-11-12.md`.
 
 ## 6. Expected report
 

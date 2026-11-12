@@ -452,8 +452,9 @@ Open items for the owner:
 
 ## 8. Host candidate production record (2026-11-12)
 
-This record covers the host-only candidate chain. It does not authorize or
-record a device run, flash, boot, mount or write, and no commit was made.
+This record covers the host-only candidate chain. The one-boot device run is
+recorded separately in `docs/emmc-n10.24-widthpub-hardware-run-2026-11-12.md`.
+The production batch and this record were committed as `29a4fcd`.
 
 Build chain. The device tree was the `b6dbe59` base with the uncommitted
 N10.24 implementation batch. The first kernel build stopped at the block
@@ -516,7 +517,12 @@ manifests and the private raw evidence are in
 `out/gta4l/ram-root-emmc-n10.24-widthpub-candidate-evidence/`
 and `out/gta4l/storage-abi-e65d06259ae4/`.
 
-Status. Host-qualified candidate only. No widthpub hardware result exists;
-the bounded publication read, general 4-bit publication, repeatability and
-initialization reliability remain `[U]`. A device run needs a fresh explicit
-owner approval and a BOOT-only flash naming this image.
+Status. Host-qualified candidate with a bounded hardware PASS. The one
+owner-approved BOOT-only flash of image `72759594…` and the single
+owner-triggered cold boot returned the success shape: `cases=8 passed=8
+complete=1 pub=1`, matching window digests `2469ee44…`/`5f70bf18…`,
+`partdiag=0`, `revert=1`, `rverified=1` and no `WIDTHPUBFAIL`. The one-boot
+budget is consumed. The bounded publication read passed on this boot; general
+4-bit publication, sustained/arbitrary I/O, mount/write, repeatability and
+initialization reliability remain `[U]`. Any further boot requires a new
+explicit owner approval and a fresh finite budget.
