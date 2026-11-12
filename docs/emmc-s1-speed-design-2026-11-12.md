@@ -189,8 +189,13 @@ Pre-watchdog start path:
 | **Success path after verified 8-bit refusal (4-bit)** | **31,291 ms** |
 
 The pre-watchdog rows above still use the older per-TRAN estimate (one
-1,010 ms wait). B2 re-derives them against the enforced deadline before the
-start path is implemented; they gate nothing yet.
+1,010 ms wait). The 2026-11-12 owner decision exports
+`gta4l_emmc_deadline_arm/check/clear` so B2 can arm one start budget across
+these helpers; the combined revert re-arms under its own 9,500 ms budget, so
+the worst case is the start budget plus 9.5 s instead of the roughly 70 s
+unbounded 4-bit fallback path (measured 11,010 ms per TRAN wait and
+13,010 ms per CMD6 path). B2 re-derives these rows against the enforced
+deadline before the start path is implemented; they gate nothing yet.
 
 The start path has no 1-bit reference read and no megabyte-scale transfer.
 The 4-bit fallback replaces the 6,010 ms 8-bit switch with the 16,030 ms
@@ -268,7 +273,9 @@ reads and two clock/CMD operations. Neither bound was supportable.
   scenarios. Its S1 budget is now enforced by a shared deadline. The S1
   block-driver selector is implemented and host-tested; the start path,
   report thread, formatter and deep adapter scenarios are the next batch;
-  do not flash until they pass.
+  do not flash until they pass. The arm/check/clear deadline API is exported
+  for the start path, and the combined revert keeps its separate 9,500 ms
+  budget.
 - `HISPD` remains unset in the primary image; S1b is the fallback.
 - The 8-bit / 50 MHz timing margin, pad state and DLL state are unmeasured
   until the boot.
@@ -304,3 +311,13 @@ with 38 mutation controls and 377 adapter scenarios (378 PASS lines) with
 probe 196/100. The selector is inert until the start path consumes it: no
 HS entry, wider bus, `SPEED` report line, candidate, run or verdict exists
 yet.
+
+The deadline-export batch makes `gta4l_emmc_deadline_arm()`,
+`gta4l_emmc_deadline_check()` and `gta4l_emmc_deadline_clear()` public with
+the caller-owned contract: one shared absolute deadline, expiry at counter
+equality, no helper clears it and an arm replaces it. The simulator adds the
+`bus_width_restore_no_cc` fault, the `deadline-api-expiry`,
+`deadline-start-hs`, `deadline-start-width` and `deadline-start-rollback`
+scenarios, and strict-check plus active-flag mutation controls. The core
+suite passes 211 scenarios and 128 mutation controls; probe 196/100. B2 can
+now bound the whole start path with one budget; B2-a is resolved.

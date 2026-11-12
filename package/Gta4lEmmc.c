@@ -86,8 +86,11 @@ gta4l_emmc_counter(struct gta4l_emmc_host *host)
 
 /* Arm, check and clear the caller's optional wait deadline. One absolute
  * counter value is shared by every nested wait, so a TRAN poll's
- * command-inhibit wait cannot extend the bound the caller set. */
-static void
+ * command-inhibit wait cannot extend the bound the caller set. The block
+ * driver arms one start budget across several core helpers; a helper must
+ * not clear it, and a helper that needs its own budget (for example the
+ * combined revert) re-arms it. */
+void
 gta4l_emmc_deadline_arm(struct gta4l_emmc_host *host, uint32_t budget_ms)
 {
 	host->deadline_active = 0;
@@ -101,7 +104,7 @@ gta4l_emmc_deadline_arm(struct gta4l_emmc_host *host, uint32_t budget_ms)
 	host->deadline_active = 1;
 }
 
-static int
+int
 gta4l_emmc_deadline_check(struct gta4l_emmc_host *host)
 {
 	if (host->deadline_active == 0) {
@@ -113,7 +116,7 @@ gta4l_emmc_deadline_check(struct gta4l_emmc_host *host)
 	return GTA4L_EMMC_OK;
 }
 
-static void
+void
 gta4l_emmc_deadline_clear(struct gta4l_emmc_host *host)
 {
 	host->deadline_active = 0;

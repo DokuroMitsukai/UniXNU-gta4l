@@ -341,6 +341,7 @@ struct sim {
 	int bus_width_stuck;
 	int bus_width_verify_mismatch;
 	int bus_width_rollback_fail;
+	int bus_width_restore_no_cc;
 	int bus_width_readback_zero;
 	int bus_width_recover_mismatch;
 	int bus_width_recover_mismatch_once;
@@ -1490,6 +1491,14 @@ sim_command(struct sim *sim, uint16_t command)
 		sim->cmd6_argument = argument;
 		if (sim->cmd6_no_cc != 0) {
 			/* The command never completes and changes nothing. */
+			break;
+		}
+		if ((sim->bus_width_restore_no_cc != 0) &&
+		    (((argument >> 16) & 0xFFu) == SIM_BUS_WIDTH_OFF) &&
+		    (((argument >> 8) & 0x0Fu) == 0u)) {
+			/* The 1-bit restore CMD6 never completes, so a
+			 * rollback that needs it can only end at the caller's
+			 * deadline. */
 			break;
 		}
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
@@ -5122,6 +5131,102 @@ main(int argc, char **argv)
 		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
 		    SIM_HOST_CONTROL_4BIT,
 		    "CMD6 deadline changed the host width");
+	} else if (scenario_is(scenario, "deadline-api-expiry")) {
+		gta4l_emmc_deadline_arm(&host, 10u);
+		check(host.deadline_active == 1u,
+		    "exported deadline arm did not arm");
+		check(gta4l_emmc_deadline_check(&host) == GTA4L_EMMC_OK,
+		    "exported deadline check expired before the budget");
+		sim_delay_us(&sim, 10000u);
+		check(gta4l_emmc_deadline_check(&host) ==
+		    GTA4L_EMMC_ERR_DEADLINE,
+		    "exported deadline check did not expire at equality");
+		gta4l_emmc_deadline_clear(&host);
+		check(host.deadline_active == 0u,
+		    "exported deadline clear left the deadline armed");
+		check(gta4l_emmc_deadline_check(&host) == GTA4L_EMMC_OK,
+		    "exported deadline check failed after clear");
+	} else if (scenario_is(scenario, "deadline-start-hs")) {
+		uint64_t start;
+
+		sim.cmd13_never_ready = 1;
+		start = sim.time_us;
+		gta4l_emmc_deadline_arm(&host, 5u);
+		memset(&hs, 0, sizeof(hs));
+		result = gta4l_emmc_set_hs_timing(&host, 1u, &hs);
+		check(result == GTA4L_EMMC_ERR_DEADLINE,
+		    "HS-entry deadline expiry was not reported");
+		check(hs.switch_result == GTA4L_EMMC_ERR_DEADLINE,
+		    "HS-entry deadline fields mismatch");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u,
+		    "HS-entry deadline did not observe the card switch");
+		check(host.deadline_active == 1u,
+		    "HS-entry helper cleared the caller budget");
+		check(sim.time_us - start >= 5000u,
+		    "HS-entry deadline expired early");
+		gta4l_emmc_deadline_clear(&host);
+		check(host.deadline_active == 0u,
+		    "HS-entry deadline was not cleared");
+	} else if (scenario_is(scenario, "deadline-start-width")) {
+		uint64_t start;
+
+		sim.cmd13_never_ready = 1;
+		start = sim.time_us;
+		gta4l_emmc_deadline_arm(&host, 5u);
+		memset(&bus, 0, sizeof(bus));
+		result = gta4l_emmc_set_bus_width_verified(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+		    "switch deadline expiry was not terminal");
+		check(bus.switch_result == GTA4L_EMMC_ERR_DEADLINE,
+		    "switch deadline fields mismatch");
+		check(bus.rollback_result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+		    "switch deadline recorded a clean rollback");
+		check(bus.verified == 0u,
+		    "switch deadline recorded a verified width");
+		check(bus.cmd6_attempts == 3u,
+		    "switch deadline CMD6 count mismatch");
+		check(host.deadline_active == 1u,
+		    "switch helper cleared the caller budget");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "switch deadline left a host width bit");
+		check(sim.time_us - start >= 5000u,
+		    "switch deadline expired early");
+		gta4l_emmc_deadline_clear(&host);
+		check(host.deadline_active == 0u,
+		    "switch deadline was not cleared");
+	} else if (scenario_is(scenario, "deadline-start-rollback")) {
+		uint64_t start;
+
+		sim.bus_width_verify_mismatch = 1;
+		sim.bus_width_restore_no_cc = 1;
+		start = sim.time_us;
+		gta4l_emmc_deadline_arm(&host, 500u);
+		memset(&bus, 0, sizeof(bus));
+		result = gta4l_emmc_set_bus_width_verified(&host, 8u, &bus);
+		check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+		    "rollback deadline expiry was not terminal");
+		check(bus.switch_result == GTA4L_EMMC_ERR_BUS_WIDTH,
+		    "rollback deadline lost the switch failure");
+		check(bus.rollback_result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
+		    "rollback deadline recorded a clean rollback");
+		check(bus.verified == 0u,
+		    "rollback deadline recorded a verified width");
+		check(bus.cmd6_attempts == 3u,
+		    "rollback deadline CMD6 count mismatch");
+		check(host.deadline_active == 1u,
+		    "rollback helper cleared the caller budget");
+		check(sim.ext_csd[SIM_BUS_WIDTH_OFF] ==
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8,
+		    "rollback deadline changed the attempted card width");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "rollback deadline left a host width bit");
+		check(sim.time_us - start >= 500000u,
+		    "rollback deadline expired early");
+		gta4l_emmc_deadline_clear(&host);
+		check(host.deadline_active == 0u,
+		    "rollback deadline was not cleared");
 	} else if (scenario_is(scenario, "recover-both-arg")) {
 		result = gta4l_emmc_recover_width_and_timing(&host, 0, &both,
 		    9500u);

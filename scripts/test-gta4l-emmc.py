@@ -231,6 +231,10 @@ SCENARIOS = [
     'recover-deadline-reset',
     'recover-deadline-cmd6',
     'recover-both-arg',
+    'deadline-api-expiry',
+    'deadline-start-hs',
+    'deadline-start-width',
+    'deadline-start-rollback',
 ]
 
 # Boundary variants: the same production core compiled with a shortened CMD3
@@ -1651,6 +1655,20 @@ def main() -> int:
              '\titerations = gta4l_emmc_poll_iterations(timeout_us);\n',
              '\titerations = gta4l_emmc_poll_iterations(timeout_us) + 1u;\n',
              'Gta4lEmmc.c', (), 'cmd3-timeline-timeout'),
+            ('deadline-api-strict',
+             '\tif (gta4l_emmc_counter(host) >= host->deadline_ticks) {\n',
+             '\tif (gta4l_emmc_counter(host) > host->deadline_ticks) {\n',
+             'Gta4lEmmc.c', (), 'deadline-api-expiry'),
+            ('deadline-api-clear-active',
+             'void\n'
+             'gta4l_emmc_deadline_clear(struct gta4l_emmc_host *host)\n'
+             '{\n'
+             '\thost->deadline_active = 0;\n',
+             'void\n'
+             'gta4l_emmc_deadline_clear(struct gta4l_emmc_host *host)\n'
+             '{\n'
+             '\t/* active flag no longer cleared by mutation */\n',
+             'Gta4lEmmc.c', (), 'deadline-api-expiry'),
         ]
         mutation_reasons = {
             'cmd1-response-snapshot-missing':
@@ -1819,6 +1837,10 @@ def main() -> int:
                 'capture-disabled run recorded a pre-CMD3 response',
             'timeline-poll-extended':
                 'the terminal timeout has the wrong iteration',
+            'deadline-api-strict':
+                'exported deadline check did not expire at equality',
+            'deadline-api-clear-active':
+                'exported deadline clear left the deadline armed',
         }
         for name, old, new, filename, extra, scenario in mutations:
             core = mutate(directory, name, old, new, filename)

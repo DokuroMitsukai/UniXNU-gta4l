@@ -950,6 +950,19 @@ int gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
     const uint8_t *baseline, struct gta4l_emmc_recover_result *result,
     uint32_t budget_ms);
 
+/* Caller-owned wait budget shared by every nested wait in one operation.
+ * `arm` starts one absolute deadline (`budget_ms` after the current counter);
+ * a zero budget, zero `counter_hz` or an absent counter disables enforcement
+ * and leaves the historical iteration bounds in charge. `check` returns
+ * GTA4L_EMMC_ERR_DEADLINE once the counter reaches the deadline (equality
+ * expires). `clear` disarms it and must run on every exit so a stale budget
+ * cannot bound a later operation. An arm replaces an existing deadline, so a
+ * helper that needs its own budget (the combined revert does) re-arms it. */
+void gta4l_emmc_deadline_arm(struct gta4l_emmc_host *host,
+    uint32_t budget_ms);
+int gta4l_emmc_deadline_check(struct gta4l_emmc_host *host);
+void gta4l_emmc_deadline_clear(struct gta4l_emmc_host *host);
+
 #ifdef __cplusplus
 }
 #endif

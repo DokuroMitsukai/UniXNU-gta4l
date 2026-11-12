@@ -34,7 +34,7 @@ criterion and every failed or partial rung.
 | `package/Gta4lEmmcBlockCore.c/.h` | Portable read-only block request helper: validation, per-block loop, bounce copy, counters |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO through the platform object, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 207 scenarios and 126 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 211 scenarios and 128 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
@@ -6721,6 +6721,51 @@ not enter HS timing or a wider bus, and the report formatter emits no
 formatter (B4) and deep adapter/device gates (B5/B6) remain. S1 is not
 device-qualified, and the measured driver remains 1-bit/4-bit SDR at
 400 kHz.
+
+### 5.3.100 S1 start-budget deadline export (host-only, 2026-11-12)
+
+Follow-up to §5.3.99 and the S1 design §4/§7. This batch exports the shared
+wait deadline from `package/Gta4lEmmc.c` so the S1 block-driver start path
+can bound several core helpers with one budget. It adds no start path,
+report field, selector change, candidate, device access, flash or boot.
+
+API. `gta4l_emmc_deadline_arm()`, `gta4l_emmc_deadline_check()` and
+`gta4l_emmc_deadline_clear()` were `static`; this batch exports them and
+documents the contract in `Gta4lEmmc.h`. `arm` records one absolute counter
+value (`budget_ms` after the current counter). A zero budget, a zero
+`counter_hz` or an absent counter leaves enforcement off and keeps the
+historical iteration bounds. `check` returns `GTA4L_EMMC_ERR_DEADLINE` once
+the counter reaches the deadline, so equality expires. `clear` disarms the
+deadline and belongs on every exit. An `arm` replaces an existing deadline:
+the block driver arms one start budget across several core helpers, the
+helpers do not clear it, and a helper that needs its own budget (the
+combined `gta4l_emmc_recover_width_and_timing()` revert) re-arms it under
+its own 9,500 ms budget. The new worst case is the start budget plus 9.5 s
+instead of the roughly 70 s unbounded 4-bit fallback path; the estimate uses
+the measured 11,010 ms TRAN wait and 13,010 ms CMD6 path, so the pre-B0 §4
+rows remain estimates for B2 to re-derive. The B2-a blocker is resolved; no
+start path is implemented here.
+
+Host results. The simulator adds the `bus_width_restore_no_cc` fault (the
+1-bit restore CMD6 never completes) and four scenarios: `deadline-api-expiry`
+(arm/check/clear, expiry at equality and a check after clear),
+`deadline-start-hs` (a 5 ms caller budget ends
+`gta4l_emmc_set_hs_timing()` with `GTA4L_EMMC_ERR_DEADLINE` and stays armed
+for the caller), `deadline-start-width` (a 5 ms budget ends the verified
+8-bit switch in the terminal `GTA4L_EMMC_ERR_WIDTH_RESTORE` because the
+rollback reads cannot pass the exhausted deadline, with the host width bits
+cleared and the caller budget left armed) and `deadline-start-rollback` (a
+500 ms budget, a verified switch mismatch and a restore CMD6 that never
+completes, so the rollback can only end at the deadline and the attempted
+card byte stays 8). The two new mutation controls make `check` strict (`>`
+instead of `>=`) and leave `deadline_active` set in `clear`. The core suite
+passes 211 scenarios and 128 mutation controls; probe 196/100 and the
+documented evidence counts pass. Host-only; no device access, flash or boot.
+
+Status. The selector remains inert as in §5.3.99. B2 (start path with
+stand-ins) is next; it arms one budget before the 1-bit baseline and clears
+it on every exit, and the combined revert keeps its separate 9,500 ms
+budget. No candidate, run or verdict changes.
 
 ## 6. Expected report
 
