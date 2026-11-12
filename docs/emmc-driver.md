@@ -6767,6 +6767,54 @@ stand-ins) is next; it arms one budget before the 1-bit baseline and clears
 it on every exit, and the combined revert keeps its separate 9,500 ms
 budget. No candidate, run or verdict changes.
 
+### 5.3.101 S1 start-budget timing record (host-only, 2026-11-12)
+
+Follow-up to §5.3.100 and S1 design §4. This batch fixes the start-path
+budget and re-derives the pre-watchdog rows against the exported deadline.
+It changes one comment block in `package/Gta4lEmmc.h`, the S1 speed comment
+in `package/Gta4lEmmcBlock.h`, the design, this record and the
+porting/evidence rows. It adds no start path, code path, scenario,
+candidate, device access, flash or boot.
+
+Budget. The B2 start path arms **one 25,000 ms budget**
+(`gta4l_emmc_deadline_arm`) after `initializeHardware()` and before the
+1-bit EXT_CSD baseline, and clears it (`gta4l_emmc_deadline_clear`) on every
+exit before `registerService()`. The budget covers the 1-bit EXT_CSD
+baseline, HS entry, the 8-bit verified switch, a 4-bit fallback and the
+LBA-1 baseline; every nested wait checks it. A start-budget expiry is
+terminal and reported: HS entry returns `GTA4L_EMMC_ERR_DEADLINE`, while the
+switch or its rollback returns `GTA4L_EMMC_ERR_WIDTH_RESTORE` because the
+rollback cannot verify at an exhausted deadline, and that result forbids the
+4-bit fallback. The combined
+`gta4l_emmc_recover_width_and_timing()` then re-arms its own **9,500 ms**
+budget, clears it on every exit, and the failure is reported after the
+verified revert. The worst pre-watchdog path is therefore **34,500 ms**,
+inside the N10.24-accepted 38,230 ms envelope with 3,730 ms of margin.
+
+Re-derivation. The pre-B0 rows used one 1,010 ms TRAN wait. Against the
+enforced deadline, the per-step sums are only the no-deadline regression
+bounds: 1-bit EXT_CSD baseline 2,000 ms; HS entry 17,261 ms; 8-bit verified
+switch 17,010 ms; failed 8-bit switch plus one verified rollback 32,020 ms;
+a second restore attempt 47,030 ms; 4-bit fallback 17,010 ms; LBA-1 baseline
+2,000 ms. They use the measured 11,010 ms TRAN wait (10 x (1,000 ms inhibit
++ 100 ms CMD13 poll + 1 ms delay)) and the 13,010 ms CMD6 path (1,000 ms
+inhibit + 1,000 ms command poll + 11,010 ms TRAN). The earlier 21,271 ms and
+31,291 ms sums are withdrawn as path bounds. The enforced budget converts a
+pathological eventually-successful wait into a reported terminal failure
+instead of an unbounded `start()`; a healthy path is far below 25,000 ms.
+
+Host results. No scenario or code behaviour changed. The core suite still
+passes 211 scenarios and 128 mutation controls; the probe suite passes 196
+and 100; the block suite passes 48 core scenarios with 38 mutation controls
+and 377 adapter scenarios (378 PASS lines). Host-only; no S1 start path,
+candidate, device access, flash or boot.
+
+Status. The selector remains inert as in §5.3.99/§5.3.100. B2 (start path
+with host stand-ins for `gta4l_emmc_set_hs_timing()` and
+`gta4l_emmc_recover_width_and_timing()`) is next; it arms the recorded
+25,000 ms budget and clears it on every exit. No candidate, run or verdict
+changes.
+
 ## 6. Expected report
 
 On a full success the probe panics with a report containing:

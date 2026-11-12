@@ -4,7 +4,9 @@ Status: design plus host helper and selector, host-only. The combined
 width/timing revert helper and the S1 block-driver selector now exist and
 are host-tested; the S1 start path, report thread, formatter, deep adapter
 scenarios and diagnostic personality are not implemented. No candidate has
-been built, flashed or booted. This document is the rung record for S1: the
+been built, flashed or booted. The start-path budget is fixed at 25,000 ms
+and the combined revert budget at 9,500 ms (worst pre-watchdog path
+34,500 ms). This document is the rung record for S1: the
 design sections below are corrected after the 2026-11-12 audit; the
 candidate, run and verdict sections are appended after the implementation
 batch and the owner boot.
@@ -175,32 +177,56 @@ not accepted.
 
 ## 4. Timing
 
-Pre-watchdog start path:
+Pre-watchdog start path. The start path arms **one 25,000 ms budget**
+(`gta4l_emmc_deadline_arm`) after `initializeHardware()` and before the
+1-bit EXT_CSD baseline, and clears it (`gta4l_emmc_deadline_clear`) on every
+exit before `registerService()`. The budget covers the 1-bit EXT_CSD
+baseline, HS entry, the 8-bit verified switch, a 4-bit fallback and the
+LBA-1 baseline. Every nested wait checks it: command inhibit, command and
+data polls, TRAN, the RCG update and the clock-stable wait.
 
-| Step | Bound |
+| Case | Bound |
 | --- | ---: |
-| 1-bit EXT_CSD baseline (inhibit + CMD + data) | 3,000 ms |
-| HS entry (2 EXT_CSD reads + CMD6 + TRAN + clock) | 9,261 ms |
-| 8-bit verified switch (success path) | 6,010 ms |
-| 8-bit failure and verified rollback (replaces the switch row) | 16,030 ms |
-| 4-bit verified fallback (only after a verified 8-bit rollback) | 6,010 ms |
-| 4-bit LBA-1 baseline | 3,000 ms |
-| **Success path (8-bit)** | **21,271 ms** |
-| **Success path after verified 8-bit refusal (4-bit)** | **31,291 ms** |
+| Start budget (enforced) | 25,000 ms |
+| Combined width/timing revert after an expiry (enforced, separate) | 9,500 ms |
+| **Worst pre-watchdog path** | **34,500 ms** |
+| N10.24 accepted pre-watchdog envelope | 38,230 ms |
+| **Margin** | **3,730 ms** |
 
-The pre-watchdog rows above still use the older per-TRAN estimate (one
-1,010 ms wait). The 2026-11-12 owner decision exports
-`gta4l_emmc_deadline_arm/check/clear` so B2 can arm one start budget across
-these helpers; the combined revert re-arms under its own 9,500 ms budget, so
-the worst case is the start budget plus 9.5 s instead of the roughly 70 s
-unbounded 4-bit fallback path (measured 11,010 ms per TRAN wait and
-13,010 ms per CMD6 path). B2 re-derives these rows against the enforced
-deadline before the start path is implemented; they gate nothing yet.
+A start-budget expiry is terminal and reported; it is never retried and it
+never runs the revert under the expired budget. HS entry returns
+`GTA4L_EMMC_ERR_DEADLINE`; the switch or its rollback returns
+`GTA4L_EMMC_ERR_WIDTH_RESTORE` because the rollback cannot verify at an
+exhausted deadline, and that result forbids the 4-bit fallback. In both
+cases the combined `gta4l_emmc_recover_width_and_timing()` re-arms its own
+9,500 ms budget, clears it on every exit, and the failure is reported after
+the verified revert.
+
+The per-step rows below are historical iteration bounds for the no-deadline
+regression, not the enforced path bound:
+
+| Step (no deadline armed) | Iteration bound |
+| --- | ---: |
+| 1-bit EXT_CSD baseline (inhibit + data) | 2,000 ms |
+| HS entry (2 EXT_CSD reads + CMD6 + TRAN + clock) | 17,261 ms |
+| 8-bit verified switch (success path) | 17,010 ms |
+| 8-bit failure plus one verified rollback | 32,020 ms |
+| 8-bit failure plus a second restore attempt | 47,030 ms |
+| 4-bit verified fallback (after a verified rollback) | 17,010 ms |
+| LBA-1 baseline read | 2,000 ms |
+
+They use the measured 11,010 ms TRAN wait (10 x (1,000 ms inhibit +
+100 ms CMD13 poll + 1 ms delay)) and the 13,010 ms CMD6 path (1,000 ms
+inhibit + 1,000 ms command poll + 11,010 ms TRAN). The earlier 21,271 ms
+and 31,291 ms sums are withdrawn as path bounds: they assumed one 1,010 ms
+TRAN wait and did not allow the second rollback attempt. The enforced
+budget intentionally converts a pathological eventually-successful wait
+into a reported terminal failure instead of an unbounded `start()`. A
+healthy start path is far below 25,000 ms, and a path that consumes the
+budget is treated as a stall.
 
 The start path has no 1-bit reference read and no megabyte-scale transfer.
-The 4-bit fallback replaces the 6,010 ms 8-bit switch with the 16,030 ms
-failed-switch bound, so the worst start path is 31,291 ms. Both paths are
-pre-watchdog; N10.24 accepted 38,230 ms there.
+Both paths are pre-watchdog; N10.24 accepted 38,230 ms there.
 
 Report thread:
 
@@ -321,3 +347,10 @@ equality, no helper clears it and an arm replaces it. The simulator adds the
 scenarios, and strict-check plus active-flag mutation controls. The core
 suite passes 211 scenarios and 128 mutation controls; probe 196/100. B2 can
 now bound the whole start path with one budget; B2-a is resolved.
+
+The start-budget record batch fixes that budget at **25,000 ms** and the
+combined revert at **9,500 ms**, so the worst pre-watchdog path is
+**34,500 ms**, 3,730 ms inside the N10.24 38,230 ms envelope. Design §4 now
+carries the enforced figures and keeps the per-step iteration bounds only as
+the no-deadline regression reference. No code path consumes the budget yet;
+B2 arms it after `initializeHardware()` and clears it before publication.

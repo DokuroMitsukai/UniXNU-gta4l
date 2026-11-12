@@ -383,7 +383,9 @@ extern "C" {
  * verified 4-bit fallback. The token is accepted only with exactly one
  * gta4l-emmc-block=3 token, the value 1, no duplicate and none of the
  * partition, read, consumer or width instruments selected in the same
- * boot. B1 plumbs the selector; the S1 start path consumes it. */
+ * boot. B1 plumbs the selector; the S1 start path consumes it and arms a
+ * 25,000 ms start budget with a separate 9,500 ms combined revert behind
+ * it (worst pre-watchdog path 34,500 ms). */
 #define GTA4L_EMMC_BLOCK_SPEED_ARG "gta4l-emmc-speed"
 #define GTA4L_EMMC_BLOCK_SPEED_OFF 0
 #define GTA4L_EMMC_BLOCK_SPEED_ON 1

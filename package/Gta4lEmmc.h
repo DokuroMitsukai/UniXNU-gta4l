@@ -928,7 +928,9 @@ int gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
  * performs, including the command-inhibit wait inside each TRAN poll. A zero
  * budget, a zero host counter_hz, or an absent counter disables enforcement
  * and keeps the historical iteration bounds. `elapsed_ticks` is the counter
- * delta across the helper regardless of enforcement. */
+ * delta across the helper regardless of enforcement. The S1 report thread
+ * arms 9,500 ms for this revert; a start-path failure arms the same 9,500 ms
+ * after the start budget expired, so the two budgets never nest. */
 struct gta4l_emmc_recover_result {
 	uint32_t hs_after;          /* byte 185 after the final read */
 	uint32_t clock;             /* CLOCK_CONTROL after the 400 kHz switch */
@@ -957,7 +959,10 @@ int gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
  * GTA4L_EMMC_ERR_DEADLINE once the counter reaches the deadline (equality
  * expires). `clear` disarms it and must run on every exit so a stale budget
  * cannot bound a later operation. An arm replaces an existing deadline, so a
- * helper that needs its own budget (the combined revert does) re-arms it. */
+ * helper that needs its own budget (the combined revert does) re-arms it.
+ * The S1 start path arms 25,000 ms once before the 1-bit EXT_CSD baseline
+ * and clears it before publication; the combined revert then re-arms its own
+ * 9,500 ms, so the worst pre-watchdog path is 34,500 ms. */
 void gta4l_emmc_deadline_arm(struct gta4l_emmc_host *host,
     uint32_t budget_ms);
 int gta4l_emmc_deadline_check(struct gta4l_emmc_host *host);
