@@ -186,6 +186,10 @@ Pre-watchdog start path:
 | **Success path (8-bit)** | **21,271 ms** |
 | **Success path after verified 8-bit refusal (4-bit)** | **31,291 ms** |
 
+The pre-watchdog rows above still use the older per-TRAN estimate (one
+1,010 ms wait). B2 re-derives them against the enforced deadline before the
+start path is implemented; they gate nothing yet.
+
 The start path has no 1-bit reference read and no megabyte-scale transfer.
 The 4-bit fallback replaces the 6,010 ms 8-bit switch with the 16,030 ms
 failed-switch bound, so the worst start path is 31,291 ms. Both paths are
@@ -200,15 +204,16 @@ Report thread:
 | shared two-pass loop budget | 2,000 ms |
 | one in-flight two-block request | 4,500 ms |
 | gate acquisition | 2,000 ms |
-| combined width/timing revert | 9,371 ms |
-| **Total** | **27,871 ms** |
+| combined width/timing revert | 9,500 ms |
+| **Total** | **28,000 ms** |
 
-The combined revert bound is the sum of one 400 kHz clock switch (RCG 100
-+ stable 150 + settle 1 = 251 ms), one inhibit clear (100 ms), two CMD6
-paths at 3,010 ms each (command-inhibit wait 1,000 + CMD6 1,000 + TRAN
-10 x (100 + 1) = 1,010) and one EXT_CSD read at 3,000 ms (command-inhibit
-wait 1,000 + CMD 1,000 + data 1,000): **9,371 ms**. Margin against the
-30,000 ms watchdog is **2,129 ms**.
+The revert budget is **enforced**, not estimated: the helper arms one
+shared elapsed-time deadline before the clock switch and checks it in every
+wait, including the command-inhibit wait inside each TRAN poll. The S1
+budget is **9,500 ms**, so the report thread is at most **28,000 ms** and
+the margin against the 30,000 ms watchdog is **2,000 ms**. Expiry is a
+terminal revert failure (`hsrevert=0`, `rverified=0`), reported and not
+retried.
 
 The earlier 1 MiB / 27,220 ms draft is withdrawn. It assumed one in-flight
 bound for a 32 KiB request, but `GTA4L_EMMC_BLOCK_CHUNK_BLOCKS` is two, so
@@ -223,6 +228,9 @@ reads and two clock/CMD operations. Neither bound was supportable.
 - Combined revert helper: normal path, clock-switch failure, first CMD6
   failure, TRAN failure, second CMD6 failure, EXT_CSD read failure, byte-185
   mismatch, properties mismatch, and no fallback after `ERR_WIDTH_RESTORE`.
+- Deadline enforcement: arm/clear on every exit, a no-budget regression,
+  and expiry inside the clock wait, data reset, command-inhibit wait, TRAN
+  poll and final read. Mutation controls drop or misreport each check.
 - Simulator scenarios: 8-bit pass; verified 8-bit rollback then 4-bit pass;
   8-bit `ERR_WIDTH_RESTORE`; both widths fail; HS entry refused; CMD6
   readback mismatch; mid-read data CRC and timeout with the combined
@@ -255,8 +263,9 @@ reads and two clock/CMD operations. Neither bound was supportable.
 ## 7. Open items
 
 - The combined width/timing revert helper exists and passes the core
-  scenarios. The S1 block-driver mode and adapter scenarios are the next
-  batch; do not flash until they pass.
+  scenarios. Its S1 budget is now enforced by a shared deadline. The S1
+  block-driver mode and adapter scenarios are the next batch; do not flash
+  until they pass.
 - `HISPD` remains unset in the primary image; S1b is the fallback.
 - The 8-bit / 50 MHz timing margin, pad state and DLL state are unmeasured
   until the boot.
@@ -267,10 +276,14 @@ reads and two clock/CMD operations. Neither bound was supportable.
 ## 8. Host helper batch
 
 The 2026-11-12 helper batch adds
-`gta4l_emmc_recover_width_and_timing()` and eleven core scenarios:
+`gta4l_emmc_recover_width_and_timing()` and eighteen core scenarios:
 `recover-both-clean`, `recover-both-8bit`, `recover-both-clock-busy`,
 `recover-both-hs-stuck`, `recover-both-cmd6-error`,
 `recover-both-width-error`, `recover-both-properties`,
-`recover-both-inhibit-stuck`, `recover-both-inhibit-clear`, `recover-both-final-read-timeout` and `recover-both-arg`. The core suite passes
-200 scenarios and 119 mutation controls. The S1 mode, adapter scenarios,
-candidate, run and verdict are still to come.
+`recover-both-inhibit-stuck`, `recover-both-inhibit-clear`,
+`recover-both-final-read-timeout`, `recover-both-no-budget`,
+`recover-deadline-inhibit`, `recover-deadline-tran`,
+`recover-deadline-read`, `recover-deadline-clock`,
+`recover-deadline-reset`, `recover-deadline-cmd6` and `recover-both-arg`.
+The core suite passes 207 scenarios and 126 mutation controls. The S1 mode,
+adapter scenarios, candidate, run and verdict are still to come.

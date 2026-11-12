@@ -152,6 +152,8 @@ struct sim {
 	int power_off;
 	int rcg_busy;
 	int cmd_timeout;
+	int cmd6_no_cc;
+	int cmd_inhibit;
 	uint32_t cmd_crc_index;
 	int cmd_crc_with_cc;
 	int clear_response_on_w1c;
@@ -346,6 +348,8 @@ struct sim {
 	int bus_width_busy_polls;
 	int hs_timing_stuck;
 	int recover_final_read_timeout;
+	int recover_final_read_no_brr;
+	int cmd13_never_ready;
 	int bus_test_data_timeout;
 	int bus_test_read_timeout;
 	int bus_test_data_crc;
@@ -839,6 +843,9 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			    (sim->mb_dat_inhibit != 0) ||
 			    (sim->bus_test_dat_inhibit != 0)) {
 				value |= GTA4L_EMMC_PRESENT_DAT_INHIBIT;
+			}
+			if (sim->cmd_inhibit != 0) {
+				value |= GTA4L_EMMC_PRESENT_CMD_INHIBIT;
 			}
 			if (sim->buffer_ready != 0) {
 				value |=
@@ -1463,6 +1470,11 @@ sim_command(struct sim *sim, uint16_t command)
 		sim_set_response(sim, words, 4);
 		break;
 	case GTA4L_EMMC_CMD13:
+		if (sim->cmd13_never_ready != 0) {
+			/* The card reports TRAN but never READY_FOR_DATA,
+			 * so a TRAN poll can only end at its own bound. */
+			response = 0x00000800u;
+		}
 		if (sim->bus_width_busy_polls != 0) {
 			/* CMD6 completion leaves the card busy: TRAN but not
 			 * READY_FOR_DATA until the programmed poll budget is
@@ -1476,6 +1488,10 @@ sim_command(struct sim *sim, uint16_t command)
 	case SIM_CMD6:
 		sim->cmd6_count++;
 		sim->cmd6_argument = argument;
+		if (sim->cmd6_no_cc != 0) {
+			/* The command never completes and changes nothing. */
+			break;
+		}
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		if (sim->bus_width_busy != 0) {
 			/* The switch leaves the card busy; CMD13 reports TRAN
@@ -1659,7 +1675,12 @@ sim_command(struct sim *sim, uint16_t command)
 		    (sim->ext_csd[SIM_HS_TIMING_OFF] == 0u) &&
 		    ((sim->sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
 		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u))) {
-			if (sim->no_brr == 0) {
+			if ((sim->no_brr == 0) &&
+			    !((sim->recover_final_read_no_brr != 0) &&
+			    (sim->ext_csd[SIM_HS_TIMING_OFF] == 0u) &&
+			    ((sim->sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+			    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+			    0u))) {
 				sim_fill_words(sim, sim->ext_csd);
 				if ((sim->bus_width_verify_mismatch != 0) &&
 				    ((sim->sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
@@ -2372,6 +2393,7 @@ main(int argc, char **argv)
 	memset(&host, 0, sizeof(host));
 	host.ops = &sim_ops;
 	host.context = &sim;
+	host.counter_hz = 1000000u;
 	host.fixed_1v8 = 1;
 	host.pad_pwr_switch = 1;
 
@@ -4771,7 +4793,8 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario, "recover-both-clean")) {
 		prepare_hs_width(&sim, &host, 4u, ext);
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_OK, "combined revert failed");
 		check(both.result == GTA4L_EMMC_OK && both.verified == 1u,
 		    "combined revert did not verify");
@@ -4802,7 +4825,8 @@ main(int argc, char **argv)
 	} else if (scenario_is(scenario, "recover-both-8bit")) {
 		prepare_hs_width(&sim, &host, 8u, ext);
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_OK,
 		    "combined revert from 8-bit failed");
 		check(both.verified == 1u &&
@@ -4818,7 +4842,8 @@ main(int argc, char **argv)
 		prepare_hs_width(&sim, &host, 4u, ext);
 		sim.rcg_busy = 1;
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_ERR_CLOCK,
 		    "busy revert clock was not reported");
 		check(both.clock_result == GTA4L_EMMC_ERR_CLOCK &&
@@ -4836,7 +4861,8 @@ main(int argc, char **argv)
 		prepare_hs_width(&sim, &host, 4u, ext);
 		sim.hs_timing_stuck = 1;
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_ERR_TIMING,
 		    "stuck HS revert was not reported");
 		check(both.hs_result == GTA4L_EMMC_OK &&
@@ -4853,7 +4879,8 @@ main(int argc, char **argv)
 		prepare_hs_width(&sim, &host, 4u, ext);
 		sim.bus_width_switch_error = 1;
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
 		    "HS CMD6 error was not reported");
 		check(both.hs_result == GTA4L_EMMC_ERR_CARD_STATUS &&
@@ -4870,7 +4897,8 @@ main(int argc, char **argv)
 		prepare_hs_width(&sim, &host, 4u, ext);
 		sim.recover_width_switch_error = 1;
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_ERR_CARD_STATUS,
 		    "width CMD6 error was not reported");
 		check(both.hs_result == GTA4L_EMMC_OK &&
@@ -4888,7 +4916,8 @@ main(int argc, char **argv)
 		prepare_hs_width(&sim, &host, 4u, ext);
 		sim.bus_width_recover_mismatch = 1;
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_ERR_WIDTH_RESTORE,
 		    "properties mismatch was not reported");
 		check(both.hs_after == 0u && both.verified == 0u &&
@@ -4903,7 +4932,8 @@ main(int argc, char **argv)
 		sim.bus_test_dat_inhibit = 1;
 		sim.bus_test_reset_no_inhibit_clear = 1;
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_ERR_INHIBIT,
 		    "surviving inhibit was not reported");
 		check(both.result == GTA4L_EMMC_ERR_INHIBIT &&
@@ -4916,7 +4946,8 @@ main(int argc, char **argv)
 		prepare_hs_width(&sim, &host, 4u, ext);
 		sim.bus_test_dat_inhibit = 1;
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_OK,
 		    "recover after a data inhibit failed");
 		check(both.verified == 1u && sim.bus_test_dat_inhibit == 0,
@@ -4928,7 +4959,8 @@ main(int argc, char **argv)
 		prepare_hs_width(&sim, &host, 4u, ext);
 		sim.recover_final_read_timeout = 1;
 		memset(&both, 0, sizeof(both));
-		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
 		    "final read timeout was not reported");
 		check(both.result == GTA4L_EMMC_ERR_DATA_TIMEOUT &&
@@ -4937,8 +4969,162 @@ main(int argc, char **argv)
 		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
 		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u,
 		    "final read timeout left a host width bit");
+	} else if (scenario_is(scenario, "recover-both-no-budget")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    0u);
+		check(result == GTA4L_EMMC_OK,
+		    "budget-free revert failed");
+		check(both.verified == 1u && both.result == GTA4L_EMMC_OK,
+		    "budget-free revert did not verify");
+		check(both.elapsed_ticks > 0u,
+		    "budget-free revert recorded no elapsed ticks");
+		check(host.deadline_active == 0u,
+		    "budget-free revert left a deadline armed");
+		check((both.host_after &
+		    (GTA4L_EMMC_HOST_CONTROL_4BIT |
+		    GTA4L_EMMC_HOST_CONTROL_8BIT)) == 0u,
+		    "budget-free revert left a host width bit");
+	} else if (scenario_is(scenario, "recover-deadline-inhibit")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.cmd_inhibit = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    20u);
+		check(result == GTA4L_EMMC_ERR_DEADLINE,
+		    "deadline expiry was not reported at the command inhibit");
+		check(both.result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.hs_result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.cmd6_attempts == 1u,
+		    "command-inhibit deadline fields mismatch");
+		check(both.elapsed_ticks >= 20000u,
+		    "command-inhibit deadline expired early");
+		check(host.deadline_active == 0u,
+		    "command-inhibit deadline was not cleared");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u,
+		    "command-inhibit deadline changed a card byte");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "command-inhibit deadline changed the host width");
+	} else if (scenario_is(scenario, "recover-deadline-tran")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.cmd13_never_ready = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    3u);
+		check(result == GTA4L_EMMC_ERR_DEADLINE,
+		    "deadline expiry was not reported in the TRAN poll");
+		check(both.result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.hs_result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.cmd6_attempts == 1u,
+		    "TRAN deadline fields mismatch");
+		check(both.elapsed_ticks >= 3000u,
+		    "TRAN deadline expired early");
+		check(host.deadline_active == 0u,
+		    "TRAN deadline was not cleared");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 0u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u,
+		    "TRAN deadline card bytes mismatch");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "TRAN deadline changed the host width");
+	} else if (scenario_is(scenario, "recover-deadline-read")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.recover_final_read_no_brr = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    20u);
+		check(result == GTA4L_EMMC_ERR_DEADLINE,
+		    "deadline expiry was not reported in the final read");
+		check(both.result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.verified == 0u,
+		    "final-read deadline fields mismatch");
+		check(both.elapsed_ticks >= 20000u,
+		    "final-read deadline expired early");
+		check(host.deadline_active == 0u,
+		    "final-read deadline was not cleared");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 0u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 0u,
+		    "final-read deadline card bytes mismatch");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "final-read deadline left a host width bit");
+	} else if (scenario_is(scenario, "recover-deadline-clock")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.rcg_busy = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    20u);
+		check(result == GTA4L_EMMC_ERR_DEADLINE,
+		    "deadline expiry was not reported in the clock wait");
+		check(both.clock_result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.cmd6_attempts == 0u,
+		    "clock deadline fields mismatch");
+		check(both.elapsed_ticks >= 20000u,
+		    "clock deadline expired early");
+		check(host.deadline_active == 0u,
+		    "clock deadline was not cleared");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u,
+		    "clock deadline changed a card byte");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "clock deadline changed the host width");
+	} else if (scenario_is(scenario, "recover-deadline-reset")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.bus_test_dat_inhibit = 1;
+		sim.bus_test_reset_stuck = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    20u);
+		check(result == GTA4L_EMMC_ERR_DEADLINE,
+		    "deadline expiry was not reported in the data reset");
+		check(both.result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.cmd6_attempts == 0u,
+		    "data-reset deadline fields mismatch");
+		check(both.elapsed_ticks >= 20000u,
+		    "data-reset deadline expired early");
+		check(host.deadline_active == 0u,
+		    "data-reset deadline was not cleared");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u,
+		    "data-reset deadline changed a card byte");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "data-reset deadline changed the host width");
+	} else if (scenario_is(scenario, "recover-deadline-cmd6")) {
+		prepare_hs_width(&sim, &host, 4u, ext);
+		sim.cmd6_no_cc = 1;
+		memset(&both, 0, sizeof(both));
+		result = gta4l_emmc_recover_width_and_timing(&host, ext, &both,
+		    20u);
+		check(result == GTA4L_EMMC_ERR_DEADLINE,
+		    "deadline expiry was not reported in the CMD6 poll");
+		check(both.result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.hs_result == GTA4L_EMMC_ERR_DEADLINE &&
+		    both.cmd6_attempts == 1u,
+		    "CMD6 deadline fields mismatch");
+		check(both.elapsed_ticks >= 20000u,
+		    "CMD6 deadline expired early");
+		check(host.deadline_active == 0u,
+		    "CMD6 deadline was not cleared");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 1u &&
+		    sim.ext_csd[SIM_BUS_WIDTH_OFF] == 1u,
+		    "CMD6 deadline changed a card byte");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) ==
+		    SIM_HOST_CONTROL_4BIT,
+		    "CMD6 deadline changed the host width");
 	} else if (scenario_is(scenario, "recover-both-arg")) {
-		result = gta4l_emmc_recover_width_and_timing(&host, 0, &both);
+		result = gta4l_emmc_recover_width_and_timing(&host, 0, &both,
+		    9500u);
 		check(result == GTA4L_EMMC_ERR_ARG,
 		    "null baseline was accepted");
 		{
@@ -4948,7 +5134,7 @@ main(int argc, char **argv)
 			fresh.ops = &sim_ops;
 			fresh.context = &sim;
 			result = gta4l_emmc_recover_width_and_timing(&fresh,
-			    ext, &both);
+			    ext, &both, 9500u);
 			check(result == GTA4L_EMMC_ERR_ARG,
 			    "recover ran without init");
 			check(sim.cmd6_count == 0u,

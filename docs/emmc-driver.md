@@ -34,7 +34,7 @@ criterion and every failed or partial rung.
 | `package/Gta4lEmmcBlockCore.c/.h` | Portable read-only block request helper: validation, per-block loop, bounce copy, counters |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO through the platform object, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 200 scenarios and 119 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 207 scenarios and 126 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
@@ -1473,8 +1473,9 @@ byte is reverted to `hc=02`. A bus-test stop binds to `trc` and the
 `tw`/`te` pair; a content stop binds to `div`, the first differing LBA. The
 first failure stops the rung, so no assertion or content read runs on a
 width that failed. `rc=-19` is `GTA4L_EMMC_ERR_BUS_WIDTH`, `-20` is
-`GTA4L_EMMC_ERR_BUS_TEST`, and `-21` is the probe-only content-mismatch
-code. When the rung stops before a width's content pass, that width's
+`GTA4L_EMMC_ERR_BUS_TEST`, `-21` is the probe-only content-mismatch
+code, and `-25` is `GTA4L_EMMC_ERR_DEADLINE` from the shared wait
+deadline. When the rung stops before a width's content pass, that width's
 `b0`/`b1`/`same`/`div` fields are zero-initialized; `same=0` with `div=0` is
 not a content-disagreement result. A zero `FAIL` record means no terminal
 command/data failure was recorded; the stop reason is the `rc`/`swrc`/`trc`

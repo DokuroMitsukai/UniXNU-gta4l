@@ -1033,6 +1033,7 @@ Gta4lEmmcBlock::initializeHardware(void)
 	bzero(&host, sizeof(host));
 	host.ops = &gta4l_emmc_block_platform_ops;
 	host.context = &platform;
+	host.counter_hz = gta4l_emmc_platform_counter_hz();
 	host.fixed_1v8 = 1;
 	host.pad_pwr_switch = 1;
 	if (gta4l_emmc_platform_map(&platform) != 0) {

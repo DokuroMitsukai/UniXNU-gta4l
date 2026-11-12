@@ -223,6 +223,13 @@ SCENARIOS = [
     'recover-both-inhibit-stuck',
     'recover-both-inhibit-clear',
     'recover-both-final-read-timeout',
+    'recover-both-no-budget',
+    'recover-deadline-inhibit',
+    'recover-deadline-tran',
+    'recover-deadline-read',
+    'recover-deadline-clock',
+    'recover-deadline-reset',
+    'recover-deadline-cmd6',
     'recover-both-arg',
 ]
 
@@ -1417,6 +1424,130 @@ def main() -> int:
              '\tif (gta4l_emmc_ext_csd_properties_same(baseline, '
              'ext_csd) == 0) {\n',
              'Gta4lEmmc.c', (), 'recover-both-hs-stuck'),
+            ('deadline-no-arm',
+             '\tstart = gta4l_emmc_counter(host);\n'
+             '\tgta4l_emmc_deadline_arm(host, budget_ms);\n',
+             '\tstart = gta4l_emmc_counter(host);\n'
+             '\tgta4l_emmc_deadline_arm(host, budget_ms);\n'
+             '\tgta4l_emmc_deadline_clear(host);\n',
+             'Gta4lEmmc.c', (), 'recover-deadline-inhibit'),
+            ('deadline-command-poll',
+             '\t\tif (gta4l_emmc_deadline_check(host) != '
+             'GTA4L_EMMC_OK) {\n'
+             '\t\t\terror = gta4l_emmc_read16(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
+             '\t\t\tnormal = gta4l_emmc_read16(host,\n'
+             '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_NORMAL_INT_STATUS);\n'
+             '\t\t\tpresent = gta4l_emmc_read32(host,\n'
+             '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
+             '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t}\n'
+             '\t\tnormal = gta4l_emmc_read16(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_NORMAL_INT_STATUS);\n',
+             '\t\tnormal = gta4l_emmc_read16(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_NORMAL_INT_STATUS);\n',
+             'Gta4lEmmc.c', (), 'recover-deadline-cmd6'),
+            ('deadline-skip-inhibit',
+             '\tfor (index = 0; index < iterations; index++) {\n'
+             '\t\tif (gta4l_emmc_deadline_check(host) != '
+             'GTA4L_EMMC_OK) {\n'
+             '\t\t\treturn GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t}\n'
+             '\t\tstate = gta4l_emmc_read32(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n',
+             '\tfor (index = 0; index < iterations; index++) {\n'
+             '\t\tstate = gta4l_emmc_read32(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n',
+             'Gta4lEmmc.c', (), 'recover-deadline-inhibit'),
+            ('deadline-tran-wrong-code',
+             '\tfor (index = 0; index < iterations; index++) {\n'
+             '\t\tif (gta4l_emmc_deadline_check(host) != '
+             'GTA4L_EMMC_OK) {\n'
+             '\t\t\treturn GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t}\n'
+             '\t\tresult = gta4l_emmc_send_command(host, '
+             'GTA4L_EMMC_CMD13,\n',
+             '\tfor (index = 0; index < iterations; index++) {\n'
+             '\t\tif (gta4l_emmc_deadline_check(host) != '
+             'GTA4L_EMMC_OK) {\n'
+             '\t\t\treturn GTA4L_EMMC_ERR_CARD_NOT_READY;\n'
+             '\t\t}\n'
+             '\t\tresult = gta4l_emmc_send_command(host, '
+             'GTA4L_EMMC_CMD13,\n',
+             'Gta4lEmmc.c', (), 'recover-deadline-tran'),
+            ('deadline-skip-read',
+             '\tfor (step = 0; step < iterations; step++) {\n'
+             '\t\tif (gta4l_emmc_deadline_check(host) != '
+             'GTA4L_EMMC_OK) {\n'
+             '\t\t\terror = gta4l_emmc_read16(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
+             '\t\t\tpresent = gta4l_emmc_read32(host,\n'
+             '\t\t\t    GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_PRESENT_STATE);\n'
+             '\t\t\tgta4l_emmc_record_failure(host, index, argument,\n'
+             '\t\t\t    command, error, normal, present);\n'
+             '\t\t\tgta4l_emmc_clear_interrupts(host);\n'
+             '\t\t\treturn GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t}\n'
+             '\t\terror = gta4l_emmc_read16(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
+             '\n'
+             '\t\tif ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {\n',
+             '\tfor (step = 0; step < iterations; step++) {\n'
+             '\t\terror = gta4l_emmc_read16(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n'
+             '\n'
+             '\t\tif ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {\n',
+             'Gta4lEmmc.c', (), 'recover-deadline-read'),
+            ('deadline-skip-clock-wait',
+             '\tfor (index = 0; index < iterations; index++) {\n'
+             '\t\tif (gta4l_emmc_deadline_check(host) != '
+             'GTA4L_EMMC_OK) {\n'
+             '\t\t\treturn GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t}\n'
+             '\t\tif ((gta4l_emmc_read32(host, space, offset) & mask) '
+             '== value) {\n',
+             '\tfor (index = 0; index < iterations; index++) {\n'
+             '\t\tif ((gta4l_emmc_read32(host, space, offset) & mask) '
+             '== value) {\n',
+             'Gta4lEmmc.c', (), 'recover-deadline-clock'),
+            ('deadline-skip-reset',
+             '\tfor (index = 1; (readback != 0u) && (index < '
+             'iterations); index++) {\n'
+             '\t\tif (gta4l_emmc_deadline_check(host) != '
+             'GTA4L_EMMC_OK) {\n'
+             '\t\t\treturn GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t}\n'
+             '\t\tgta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);\n'
+             '\t\treadback = gta4l_emmc_read8(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_SOFTWARE_RESET);\n'
+             '\t}\n'
+             '\tif (readback != 0u) {\n'
+             '\t\treturn GTA4L_EMMC_ERR_RESET;\n'
+             '\t}\n',
+             '\tfor (index = 1; (readback != 0u) && (index < '
+             'iterations); index++) {\n'
+             '\t\tgta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);\n'
+             '\t\treadback = gta4l_emmc_read8(host, '
+             'GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_SOFTWARE_RESET);\n'
+             '\t}\n'
+             '\tif (readback != 0u) {\n'
+             '\t\treturn GTA4L_EMMC_ERR_RESET;\n'
+             '\t}\n',
+             'Gta4lEmmc.c', (), 'recover-deadline-reset'),
             ('cmd3-retry-silent',
              '\t\t\thost->cmd3_retry_engaged = 1;\n',
              '\t\t\thost->cmd3_retry_engaged = 0;\n',
@@ -1642,6 +1773,20 @@ def main() -> int:
                 'combined revert failed',
             'recover-accept-hs-stuck':
                 'stuck HS revert was not reported',
+            'deadline-no-arm':
+                'deadline expiry was not reported at the command inhibit',
+            'deadline-command-poll':
+                'deadline expiry was not reported in the CMD6 poll',
+            'deadline-skip-inhibit':
+                'deadline expiry was not reported at the command inhibit',
+            'deadline-tran-wrong-code':
+                'deadline expiry was not reported in the TRAN poll',
+            'deadline-skip-read':
+                'deadline expiry was not reported in the final read',
+            'deadline-skip-clock-wait':
+                'deadline expiry was not reported in the clock wait',
+            'deadline-skip-reset':
+                'deadline expiry was not reported in the data reset',
             'cmd3-retry-silent':
                 'CMD3 retry engagement flag mismatch',
             'cmd3-retry-no-first-timeout':

@@ -366,6 +366,11 @@ extern "C" {
  * at the previous width. The caller must stop: the active bus width is
  * unknown. */
 #define GTA4L_EMMC_ERR_WIDTH_RESTORE     -23
+/* A caller-armed wait deadline expired before the operation completed. Every
+ * later stage is abandoned; the caller must treat the state as terminal and
+ * report this code. (-24 is the probe-only length verdict, so the next
+ * controller code is -25.) */
+#define GTA4L_EMMC_ERR_DEADLINE          -25
 
 /* Diagnostic event codes passed to the log callback. */
 #define GTA4L_EMMC_LOG_RESET              1u
@@ -496,6 +501,14 @@ struct gta4l_emmc_cmd3_timeline_entry {
 struct gta4l_emmc_host {
 	const struct gta4l_emmc_ops *ops;
 	void *context;
+	/* Optional frequency of ops->counter. Zero disables enforceable
+	 * deadlines. When a caller arms one, every wait loop checks the
+	 * absolute deadline and returns GTA4L_EMMC_ERR_DEADLINE on expiry.
+	 * A zero budget leaves the historical iteration bounds in charge and
+	 * behaviour unchanged. */
+	uint64_t counter_hz;
+	uint64_t deadline_ticks;
+	uint8_t  deadline_active;
 	uint32_t rca;
 	uint32_t ocr;
 	uint32_t cid[4];
@@ -908,10 +921,14 @@ int gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
  * data inhibit, writes CMD6 HS_TIMING=0 and BUS_WIDTH=1, clears the host
  * width bits, then reads EXT_CSD once and requires byte 185 = 0 plus
  * unchanged read-only properties. It does not retry: a failure is terminal
- * and the caller must report it. The source-derived worst case is 9,371 ms
- * (clock 251, inhibit clear 100, two CMD6 paths 3,010 each including their
- * command-inhibit waits and TRAN polls, one EXT_CSD read 3,000 including its
- * command-inhibit wait). */
+ * and the caller must report it.
+ *
+ * `budget_ms` arms one shared elapsed-time deadline before the clock switch
+ * and clears it on every exit. The deadline covers every wait the helper
+ * performs, including the command-inhibit wait inside each TRAN poll. A zero
+ * budget, a zero host counter_hz, or an absent counter disables enforcement
+ * and keeps the historical iteration bounds. `elapsed_ticks` is the counter
+ * delta across the helper regardless of enforcement. */
 struct gta4l_emmc_recover_result {
 	uint32_t hs_after;          /* byte 185 after the final read */
 	uint32_t clock;             /* CLOCK_CONTROL after the 400 kHz switch */
@@ -922,6 +939,7 @@ struct gta4l_emmc_recover_result {
 	uint8_t  host_after;        /* HOST_CONTROL after the width clear */
 	uint32_t cmd6_attempts;     /* HS and BUS_WIDTH writes issued */
 	uint32_t verified;          /* byte 185 = 0 and properties match */
+	uint64_t elapsed_ticks;     /* counter delta across the helper */
 	int      clock_result;      /* clock switch result */
 	int      hs_result;         /* HS CMD6/TRAN result */
 	int      width_result;      /* BUS_WIDTH CMD6/TRAN result */
@@ -929,7 +947,8 @@ struct gta4l_emmc_recover_result {
 };
 
 int gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
-    const uint8_t *baseline, struct gta4l_emmc_recover_result *result);
+    const uint8_t *baseline, struct gta4l_emmc_recover_result *result,
+    uint32_t budget_ms);
 
 #ifdef __cplusplus
 }

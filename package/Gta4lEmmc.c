@@ -84,6 +84,42 @@ gta4l_emmc_counter(struct gta4l_emmc_host *host)
 	return 0;
 }
 
+/* Arm, check and clear the caller's optional wait deadline. One absolute
+ * counter value is shared by every nested wait, so a TRAN poll's
+ * command-inhibit wait cannot extend the bound the caller set. */
+static void
+gta4l_emmc_deadline_arm(struct gta4l_emmc_host *host, uint32_t budget_ms)
+{
+	host->deadline_active = 0;
+	host->deadline_ticks = 0;
+	if ((budget_ms == 0u) || (host->counter_hz == 0u) ||
+	    (host->ops->counter == 0)) {
+		return;
+	}
+	host->deadline_ticks = gta4l_emmc_counter(host) +
+	    ((uint64_t)budget_ms * host->counter_hz) / 1000u;
+	host->deadline_active = 1;
+}
+
+static int
+gta4l_emmc_deadline_check(struct gta4l_emmc_host *host)
+{
+	if (host->deadline_active == 0) {
+		return GTA4L_EMMC_OK;
+	}
+	if (gta4l_emmc_counter(host) >= host->deadline_ticks) {
+		return GTA4L_EMMC_ERR_DEADLINE;
+	}
+	return GTA4L_EMMC_OK;
+}
+
+static void
+gta4l_emmc_deadline_clear(struct gta4l_emmc_host *host)
+{
+	host->deadline_active = 0;
+	host->deadline_ticks = 0;
+}
+
 /* Keep the terminal command failure intact before the status latches are
  * cleared. The probe reports these fields, so a hardware panic identifies the
  * command instead of only the final reset log. Recovered CMD1 busy timeouts are
@@ -501,6 +537,9 @@ gta4l_emmc_wait8(struct gta4l_emmc_host *host, uint32_t space,
 	uint32_t index;
 
 	for (index = 0; index < iterations; index++) {
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			return GTA4L_EMMC_ERR_DEADLINE;
+		}
 		if ((gta4l_emmc_read8(host, space, offset) & mask) == value) {
 			return GTA4L_EMMC_OK;
 		}
@@ -517,6 +556,9 @@ gta4l_emmc_wait16(struct gta4l_emmc_host *host, uint32_t space,
 	uint32_t index;
 
 	for (index = 0; index < iterations; index++) {
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			return GTA4L_EMMC_ERR_DEADLINE;
+		}
 		if ((gta4l_emmc_read16(host, space, offset) & mask) == value) {
 			return GTA4L_EMMC_OK;
 		}
@@ -533,6 +575,9 @@ gta4l_emmc_wait32(struct gta4l_emmc_host *host, uint32_t space,
 	uint32_t index;
 
 	for (index = 0; index < iterations; index++) {
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			return GTA4L_EMMC_ERR_DEADLINE;
+		}
 		if ((gta4l_emmc_read32(host, space, offset) & mask) == value) {
 			return GTA4L_EMMC_OK;
 		}
@@ -604,6 +649,9 @@ gta4l_emmc_wait_inhibit(struct gta4l_emmc_host *host)
 	uint32_t index;
 
 	for (index = 0; index < iterations; index++) {
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			return GTA4L_EMMC_ERR_DEADLINE;
+		}
 		state = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_PRESENT_STATE);
 		if ((state & (GTA4L_EMMC_PRESENT_CMD_INHIBIT |
@@ -824,6 +872,20 @@ gta4l_emmc_send_command(struct gta4l_emmc_host *host, uint32_t index,
 			}
 			gta4l_emmc_clear_interrupts(host);
 			return gta4l_emmc_map_error(error, 0);
+		}
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+			normal = gta4l_emmc_read16(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			gta4l_emmc_record_failure(host, index, argument,
+			    command, error, normal, present);
+			gta4l_emmc_clear_interrupts(host);
+			return GTA4L_EMMC_ERR_DEADLINE;
 		}
 		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
@@ -1066,18 +1128,20 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
 	uint8_t *bytes = (uint8_t *)buffer;
 	int command_done = 0;
 	int data_done = 0;
+	int result;
 
 	if ((buffer == 0) || ((length % 4) != 0) ||
 	    (length == 0) || (length > 0xFFFFu)) {
 		return GTA4L_EMMC_ERR_ARG;
 	}
 	command = (uint16_t)((index << 8) | flags | GTA4L_EMMC_CMD_DATA);
-	if (gta4l_emmc_wait_inhibit(host) != GTA4L_EMMC_OK) {
+	result = gta4l_emmc_wait_inhibit(host);
+	if (result != GTA4L_EMMC_OK) {
 		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_PRESENT_STATE);
 		gta4l_emmc_record_failure(host, index, argument, command, 0, 0,
 		    present);
-		return GTA4L_EMMC_ERR_INHIBIT;
+		return result;
 	}
 	gta4l_emmc_clear_interrupts(host);
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
@@ -1096,6 +1160,17 @@ gta4l_emmc_read_data(struct gta4l_emmc_host *host, uint32_t index,
 
 	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
 	for (step = 0; step < iterations; step++) {
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+			present = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE);
+			gta4l_emmc_record_failure(host, index, argument,
+			    command, error, normal, present);
+			gta4l_emmc_clear_interrupts(host);
+			return GTA4L_EMMC_ERR_DEADLINE;
+		}
 		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
 
@@ -1410,6 +1485,9 @@ gta4l_emmc_switch_clock(struct gta4l_emmc_host *host, uint32_t config_bits,
 	int result;
 
 	result = gta4l_emmc_program_rcg(host, config_bits, m, n, d, 0);
+	if (result == GTA4L_EMMC_ERR_DEADLINE) {
+		return result;
+	}
 	if (result != GTA4L_EMMC_OK) {
 		return GTA4L_EMMC_ERR_CLOCK;
 	}
@@ -1421,6 +1499,9 @@ gta4l_emmc_switch_clock(struct gta4l_emmc_host *host, uint32_t config_bits,
 	    GTA4L_EMMC_CLOCK_INT_EN | GTA4L_EMMC_CLOCK_INT_STABLE,
 	    GTA4L_EMMC_CLOCK_INT_EN | GTA4L_EMMC_CLOCK_INT_STABLE,
 	    GTA4L_EMMC_CLOCK_TIMEOUT_US);
+	if (result == GTA4L_EMMC_ERR_DEADLINE) {
+		return result;
+	}
 	if (result != GTA4L_EMMC_OK) {
 		return GTA4L_EMMC_ERR_CLOCK;
 	}
@@ -1882,6 +1963,9 @@ gta4l_emmc_wait_tran(struct gta4l_emmc_host *host)
 	int result;
 
 	for (index = 0; index < iterations; index++) {
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			return GTA4L_EMMC_ERR_DEADLINE;
+		}
 		result = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD13,
 		    host->rca << 16, GTA4L_EMMC_CMD_RESP_SHORT |
 		    GTA4L_EMMC_CMD_CRC | GTA4L_EMMC_CMD_INDEX,
@@ -2125,6 +2209,9 @@ gta4l_emmc_clear_dat_inhibit(struct gta4l_emmc_host *host)
 	readback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_SOFTWARE_RESET);
 	for (index = 1; (readback != 0u) && (index < iterations); index++) {
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			return GTA4L_EMMC_ERR_DEADLINE;
+		}
 		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 		readback = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_SOFTWARE_RESET);
@@ -3270,21 +3357,42 @@ gta4l_emmc_set_hs_timing(struct gta4l_emmc_host *host, uint32_t timing,
 	return GTA4L_EMMC_OK;
 }
 
+/* Record the counter delta, disarm the shared deadline and return the staged
+ * result. Every exit after arming goes through here so an error cannot leave
+ * a later operation bounded by a stale deadline. */
+static int
+gta4l_emmc_recover_finish(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_recover_result *result, int rc, uint64_t start)
+{
+	if (result != 0) {
+		result->elapsed_ticks = gta4l_emmc_counter(host) - start;
+	}
+	gta4l_emmc_deadline_clear(host);
+	return rc;
+}
+
 int
 gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
-    const uint8_t *baseline, struct gta4l_emmc_recover_result *result)
+    const uint8_t *baseline, struct gta4l_emmc_recover_result *result,
+    uint32_t budget_ms)
 {
 	uint8_t ext_csd[GTA4L_EMMC_EXT_CSD_BYTES];
 	uint32_t clock = 0;
 	uint32_t status = 0;
 	uint32_t final_control;
 	uint32_t readback;
+	uint64_t start;
 	int rc;
 	const struct gta4l_emmc_recover_result zero = { 0 };
 
 	if ((host == 0) || (host->initialized == 0) || (baseline == 0)) {
+		if (host != 0) {
+			gta4l_emmc_deadline_clear(host);
+		}
 		return GTA4L_EMMC_ERR_ARG;
 	}
+	start = gta4l_emmc_counter(host);
+	gta4l_emmc_deadline_arm(host, budget_ms);
 	if (result != 0) {
 		*result = zero;
 		result->host_before = (uint8_t)gta4l_emmc_read8(host,
@@ -3311,7 +3419,7 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 		if (result != 0) {
 			result->result = rc;
 		}
-		return rc;
+		return gta4l_emmc_recover_finish(host, result, rc, start);
 	}
 	host->last_step = GTA4L_EMMC_STEP_HS_CLOCK;
 
@@ -3323,7 +3431,7 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 		if (result != 0) {
 			result->result = rc;
 		}
-		return rc;
+		return gta4l_emmc_recover_finish(host, result, rc, start);
 	}
 
 	if (result != 0) {
@@ -3339,7 +3447,7 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 		if (result != 0) {
 			result->result = rc;
 		}
-		return rc;
+		return gta4l_emmc_recover_finish(host, result, rc, start);
 	}
 	host->last_step = GTA4L_EMMC_STEP_HS_TIMING;
 
@@ -3358,7 +3466,7 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 		if (result != 0) {
 			result->result = rc;
 		}
-		return rc;
+		return gta4l_emmc_recover_finish(host, result, rc, start);
 	}
 
 	/* The card is at 1-bit. Clear the host width before the verification
@@ -3380,7 +3488,8 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 		if (result != 0) {
 			result->result = GTA4L_EMMC_ERR_WIDTH_RESTORE;
 		}
-		return GTA4L_EMMC_ERR_WIDTH_RESTORE;
+		return gta4l_emmc_recover_finish(host, result,
+		    GTA4L_EMMC_ERR_WIDTH_RESTORE, start);
 	}
 	host->bus_width = GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1;
 	host->last_step = GTA4L_EMMC_STEP_BUS_WIDTH;
@@ -3391,28 +3500,26 @@ gta4l_emmc_recover_width_and_timing(struct gta4l_emmc_host *host,
 			result->hs_result = rc;
 			result->result = rc;
 		}
-		return rc;
+		return gta4l_emmc_recover_finish(host, result, rc, start);
 	}
 	if (result != 0) {
 		result->hs_after = ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF];
 	}
 	if ((ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] != 0u) ||
 	    (gta4l_emmc_ext_csd_properties_same(baseline, ext_csd) == 0)) {
+		rc = (ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] != 0u) ?
+		    GTA4L_EMMC_ERR_TIMING : GTA4L_EMMC_ERR_WIDTH_RESTORE;
 		if (result != 0) {
 			result->verified = 0u;
-			result->result = (ext_csd[
-			    GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] != 0u) ?
-			    GTA4L_EMMC_ERR_TIMING :
-			    GTA4L_EMMC_ERR_WIDTH_RESTORE;
+			result->result = rc;
 		}
-		return (ext_csd[GTA4L_EMMC_EXT_CSD_HS_TIMING_OFF] != 0u) ?
-		    GTA4L_EMMC_ERR_TIMING : GTA4L_EMMC_ERR_WIDTH_RESTORE;
+		return gta4l_emmc_recover_finish(host, result, rc, start);
 	}
 	if (result != 0) {
 		result->verified = 1u;
 		result->result = GTA4L_EMMC_OK;
 	}
-	return GTA4L_EMMC_OK;
+	return gta4l_emmc_recover_finish(host, result, GTA4L_EMMC_OK, start);
 }
 
 static void
