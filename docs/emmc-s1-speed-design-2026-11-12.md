@@ -71,9 +71,10 @@ throughput moves to S2, which needs a transport or deadline change.
      (`rollback_result == GTA4L_EMMC_OK`) and the read-only EXT_CSD
      properties still match the baseline. An `ERR_WIDTH_RESTORE` result is
      terminal and forbids any fallback.
-   - Record the winning width, `wfall`, the switch result, the host control
-     before and after, the read-only EXT_CSD verification result and the
-     CMD6 attempt count.
+   - Record the winning width, `wfall`, `wroll`, the switch result, the
+     host control before and after, the read-only EXT_CSD verification
+     result and the CMD6 attempt count. `wroll=1` is set only after the
+     failed 8-bit attempt reports a verified rollback.
 6. Read the inherited LBA-1 baseline through the block core at the final
    mode. A failure is `BASE`; the start path then performs the combined
    synchronous revert and reports.
@@ -118,7 +119,7 @@ Success line, one logical line:
 
 ```
 GTA4L-EMMC P5 SPEED: hs=1 hsrb=0 hsa=1 rcg=0000020b hispd=<2hex>
-wtry=8 wfall=0 wid=<8|4> verified=1 hb=<2hex> ha=<2hex> cmd6=<u32> base=1
+wtry=8 wfall=0 wroll=0 wid=<8|4> verified=1 hb=<2hex> ha=<2hex> cmd6=<u32> base=1
 bytes1=4096 ticks1=<u64> hz=<u32> dig1=<32hex> bytes2=4096 ticks2=<u64>
 dig2=<32hex> req=8 fails=0 cancel=0 budget=0 partial=0 pub=1 partdiag=0
 revert=1 rverified=1 rhb=<2hex> rha=<2hex> rcmd6=<u32> rstatus=0
@@ -135,6 +136,8 @@ recorded in the code.
 - `hs=1`, `hsrb=0`, `hsa=1`, `rcg=0000020b`, `hispd` bit 2 clear,
   `wtry=8`, `wid` is 8 or 4, `verified=1`.
 - `wfall=0` with `wid=8`, or `wfall=1` with `wid=4`.
+- `wroll=0` with `wid=8`, or `wroll=1` with `wid=4`; `wroll=1` is accepted
+  only because the failed 8-bit attempt reported a verified rollback.
 - `hb` has no wide width bit; `ha` and `rhb` carry exactly the reported
   width; `rha` has neither bit.
 - `cmd6>=1`, `rcmd6>=2`.
@@ -216,8 +219,8 @@ reads and two clock/CMD operations. Neither bound was supportable.
   before and during a request; media discovery and partition deadline
   expiry.
 - Mutation controls: every predicate term, the digest comparison, the
-  winning width, `wfall`, `hispd`, both revert flags, `pub`, `partdiag`,
-  `req`, `bytes`, `partial`, `rcmd6`, and selector conflicts.
+  winning width, `wfall`, `wroll`, `hispd`, both revert flags, `pub`,
+  `partdiag`, `req`, `bytes`, `partial`, `rcmd6`, and selector conflicts.
 - Evidence checker: `--mode speed` recomputes the first 4 KiB digest,
   requires the exact line shape, rejects well-formed wrong values (clock,
   RCG, CMD6 counts, width bits, HS states) and rejects a one-character

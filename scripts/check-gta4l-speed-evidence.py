@@ -21,9 +21,9 @@ HEX8 = re.compile(r'^[0-9a-f]{8}$')
 HEX2 = re.compile(r'^[0-9a-f]{2}$')
 LABEL = 'GTA4L-EMMC P5 SPEED: '
 FIELDS = (
-    'hs', 'hsrb', 'hsa', 'rcg', 'hispd', 'wtry', 'wfall', 'wid',
-    'verified', 'hb', 'ha', 'cmd6', 'base', 'bytes1', 'ticks1', 'hz',
-    'dig1', 'bytes2', 'ticks2', 'dig2', 'req', 'fails', 'cancel',
+    'hs', 'hsrb', 'hsa', 'rcg', 'hispd', 'wtry', 'wfall', 'wroll',
+    'wid', 'verified', 'hb', 'ha', 'cmd6', 'base', 'bytes1', 'ticks1',
+    'hz', 'dig1', 'bytes2', 'ticks2', 'dig2', 'req', 'fails', 'cancel',
     'budget', 'partial', 'pub', 'partdiag', 'revert', 'rverified',
     'rhb', 'rha', 'rcmd6', 'rstatus', 'hsrevert', 'hsverified',
     'rhsb', 'rhs', 'rclk', 'limit', 'seg', 'cap')
@@ -92,12 +92,18 @@ def check(line, expected_prefix):
         errors.append('wtry must be 8; S1 always tries 8-bit first')
     if fields['wfall'] not in ('0', '1'):
         errors.append('wfall is not 0 or 1')
+    if fields['wroll'] not in ('0', '1'):
+        errors.append('wroll is not 0 or 1')
     if fields['wid'] not in WIDTH:
         errors.append(f'wid={fields["wid"]} is not 8 or 4')
     elif fields['wid'] == '8' and fields['wfall'] != '0':
         errors.append('wid=8 requires wfall=0')
+    elif fields['wid'] == '8' and fields['wroll'] != '0':
+        errors.append('wid=8 requires wroll=0')
     elif fields['wid'] == '4' and fields['wfall'] != '1':
         errors.append('wid=4 requires wfall=1')
+    elif fields['wid'] == '4' and fields['wroll'] != '1':
+        errors.append('wid=4 requires a verified 8-bit rollback (wroll=1)')
     if not HEX32.match(fields['dig1']) or not HEX32.match(fields['dig2']):
         errors.append('digest is not 32 lowercase hex characters')
     if fields['dig1'] != fields['dig2']:
@@ -153,7 +159,7 @@ def self_test():
         digest = window_prefix(image)
         line = (
             f'{LABEL}hs=1 hsrb=0 hsa=1 rcg=0000020b hispd=02 wtry=8 '
-            'wfall=0 wid=8 verified=1 hb=00 ha=20 cmd6=1 base=1 '
+            'wfall=0 wroll=0 wid=8 verified=1 hb=00 ha=20 cmd6=1 base=1 '
             f'bytes1={WINDOW_BYTES} ticks1=1000 hz=19200000 dig1={digest} '
             f'bytes2={WINDOW_BYTES} ticks2=1000 dig2={digest} '
             f'req={REQUESTS} fails=0 cancel=0 budget=0 partial=0 pub=1 '
@@ -181,6 +187,7 @@ def self_test():
             (line.replace('rhs=0', 'rhs=1'), 'HS not left'),
             (line.replace('rhsb=1', 'rhsb=0'), 'HS not set before leave'),
             (line.replace('wfall=0', 'wfall=1'), 'false fallback'),
+            (line.replace('wroll=0', 'wroll=1'), 'false rollback'),
             (line.replace('wtry=8', 'wtry=4'), 'wrong first width'),
             (line.replace('hispd=02', 'hispd=06'), 'HISPD set'),
             (line.replace('rha=00', 'rha=20'), 'revert width remains'),
@@ -198,6 +205,7 @@ def self_test():
         for text, label in mutations:
             assert check_errors(text, digest), f'{label} was accepted'
         fallback = (line.replace('wfall=0', 'wfall=1')
+                    .replace('wroll=0', 'wroll=1')
                     .replace('wid=8', 'wid=4').replace('ha=20', 'ha=02')
                     .replace('rhb=20', 'rhb=02'))
         assert not check_errors(fallback, digest), check_errors(fallback, digest)
