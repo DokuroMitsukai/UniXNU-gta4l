@@ -52,6 +52,33 @@ extern "C" kern_return_t thread_terminate(thread_t);
 #define GTA4L_EMMC_BLOCK_CLOCK_HZ 400000u
 #define GTA4L_EMMC_BLOCK_WATCHDOG_MS 30000u
 
+static_assert(GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS +
+    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS <= 38230u,
+    "S1 worst pre-watchdog path must stay inside the N10.24 envelope");
+static_assert(GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES == 4096u,
+    "S1 speed window must be the 4 KiB pass");
+static_assert(GTA4L_EMMC_BLOCK_SPEED_CASE_BLOCKS ==
+    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS,
+    "S1 case blocks must match the shared two-block case");
+static_assert(GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES ==
+    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES,
+    "S1 case bytes must match the shared two-block case");
+static_assert(GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES ==
+    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES,
+    "S1 window must cover the shared eight-block reference");
+static_assert(GTA4L_EMMC_BLOCK_SPEED_CASE_WORST_MS ==
+    (GTA4L_EMMC_CMD_TIMEOUT_US + GTA4L_EMMC_DATA_TIMEOUT_US +
+    GTA4L_EMMC_DATA_DRAIN_US + GTA4L_EMMC_CMD_TIMEOUT_US +
+    GTA4L_EMMC_CMD_TIMEOUT_US) / 1000u,
+    "S1 in-flight case bound must match the transport timeouts");
+static_assert(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_MS +
+    GTA4L_EMMC_BLOCK_SPEED_REPORT_MARGIN_MS <=
+    GTA4L_EMMC_BLOCK_WATCHDOG_MS,
+    "S1 report thread must finish inside the watchdog with its margin");
+static_assert(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "S1 report worst case must fit the report buffer");
+
 static_assert(GTA4L_EMMC_BLOCK_WIDTHHOLD_WORST_MS <
     GTA4L_EMMC_BLOCK_WATCHDOG_MS,
     "WIDTHHOLD/WIDTHPUB report worst case must stay below the watchdog");
@@ -558,6 +585,14 @@ private:
 	void widthholdReportCancel(void);
 	bool widthholdAttemptRevert(void);
 	bool widthholdSynchronousRecover(void);
+	void speedRecordHs(const struct gta4l_emmc_hs_result *hs);
+	void speedRecordSwitch(const struct gta4l_emmc_bus_result *bus,
+	    uint32_t bits, bool fallback);
+	void speedRecordRevert(void);
+	void speedLatchFailure(uint32_t stage, int32_t status);
+	bool speedRecover(void);
+	void speedFatal(uint32_t stage, int32_t status);
+	void runSpeed(void);
 	bool widthholdObserve(IOMemoryDescriptor *buffer, UInt64 block,
 	    UInt64 nblks);
 	void releaseWidthholdMedia(void);
@@ -692,6 +727,20 @@ private:
 	bool widthpubMode = false;
 	bool speedMode = false;
 	bool offlineNotified = false;
+	uint8_t *speedWindow = nullptr;
+	uint8_t speedBaseline[GTA4L_EMMC_EXT_CSD_BYTES];
+	struct gta4l_emmc_hs_result speedHs;
+	struct gta4l_emmc_bus_result speedSwitch;
+	struct gta4l_emmc_bus_result speedFallback;
+	struct gta4l_emmc_recover_result speedRevert;
+	int32_t speedRecoverStatus = 0;
+	uint32_t speedControl = 0;
+	bool speedBaseValid = false;
+	uint32_t speedFailStage =
+	    GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE;
+	int32_t speedFailStatus = 0;
+	bool speedGateTimedOut = false;
+	uint32_t speedClockHz = GTA4L_EMMC_BLOCK_CLOCK_HZ;
 	uint8_t *widthholdReference = nullptr;
 	uint8_t *widthholdObserved = nullptr;
 	uint8_t widthholdReferenceDigest[32];
@@ -1926,6 +1975,171 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 
+	if (speedMode) {
+		int speedRc;
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+		if (gta4l_test_speed_hook != nullptr) {
+			gta4l_test_speed_hook(GTA4L_TEST_SPEED_PHASE_START);
+		}
+#endif
+
+		/* S1 B2 start path: one 4 KiB window allocation, the 1-bit
+		 * EXT_CSD baseline, HS entry at 50 MHz, the verified 8-bit
+		 * switch with a 4-bit fallback only after a verified
+		 * rollback, then the inherited LBA-1 baseline at the final
+		 * mode. The one start budget is armed after hardware init
+		 * and cleared on every exit before publication. */
+		IOLockLock(reportLock);
+		report.speed = 1u;
+		report.speed_hs = 0u;
+		report.speed_wtry = GTA4L_EMMC_BLOCK_SPEED_BITS_8;
+		report.speed_wid = 1u;
+		report.speed_wfall = 0u;
+		report.speed_wroll = 0u;
+		report.speed_base = 0u;
+		report.speed_fail_stage =
+		    GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE;
+		report.speed_fail_status = 0;
+		IOLockUnlock(reportLock);
+
+		speedWindow = (uint8_t *)IOMallocContiguous(
+		    GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES, PAGE_SIZE,
+		    nullptr);
+		if (speedWindow == nullptr) {
+			IOLog("GTA4L-EMMC P5 FAILED: speed window "
+			    "allocation\n");
+			speedLatchFailure(
+			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ALLOC, 0);
+			panicWithReport();
+			return false;
+		}
+		bzero(speedWindow, GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES);
+
+		gta4l_emmc_deadline_arm(&host,
+		    GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS);
+
+		IOLockLock(gate);
+		speedRc = gta4l_emmc_read_ext_csd(&host, speedBaseline);
+		IOLockUnlock(gate);
+		if (speedRc != GTA4L_EMMC_OK) {
+			gta4l_emmc_deadline_clear(&host);
+			speedLatchFailure(
+			    GTA4L_EMMC_BLOCK_SPEED_STAGE_BASELINE,
+			    speedRc);
+			panicWithReport();
+			return false;
+		}
+
+		bzero(&speedHs, sizeof(speedHs));
+		IOLockLock(gate);
+		speedRc = gta4l_emmc_set_hs_timing(&host, 1u,
+		    &speedHs);
+		IOLockUnlock(gate);
+		speedRecordHs(&speedHs);
+		if ((speedRc != GTA4L_EMMC_OK) ||
+		    (speedHs.hs_before != 0u) ||
+		    (speedHs.hs_after != 1u) ||
+		    (speedHs.switch_result != GTA4L_EMMC_OK) ||
+		    (speedHs.clock_result != GTA4L_EMMC_OK) ||
+		    ((speedHs.rcg_after &
+		    (GTA4L_EMMC_RCG_SRC_SEL_MASK |
+		    GTA4L_EMMC_RCG_SRC_DIV_MASK |
+		    GTA4L_EMMC_RCG_MODE_MASK)) !=
+		    (GTA4L_EMMC_RCG_50M_CFG &
+		    (GTA4L_EMMC_RCG_SRC_SEL_MASK |
+		    GTA4L_EMMC_RCG_SRC_DIV_MASK |
+		    GTA4L_EMMC_RCG_MODE_MASK)))) {
+			gta4l_emmc_deadline_clear(&host);
+			speedLatchFailure(
+			    GTA4L_EMMC_BLOCK_SPEED_STAGE_HS,
+			    (speedRc != GTA4L_EMMC_OK) ? speedRc :
+			    (speedHs.switch_result != GTA4L_EMMC_OK) ?
+			    speedHs.switch_result :
+			    (speedHs.clock_result != GTA4L_EMMC_OK) ?
+			    speedHs.clock_result : GTA4L_EMMC_ERR_TIMING);
+			(void)speedRecover();
+			if (speedGateTimedOut) {
+				panicWithReportNoGate();
+			} else {
+				panicWithReport();
+			}
+			return false;
+		}
+		IOLockLock(reportLock);
+		speedClockHz = GTA4L_EMMC_BLOCK_SPEED_CLOCK_HZ;
+		report.speed_hs = 1u;
+		IOLockUnlock(reportLock);
+
+		bzero(&speedSwitch, sizeof(speedSwitch));
+		bzero(&speedFallback, sizeof(speedFallback));
+		IOLockLock(gate);
+		speedRc = gta4l_emmc_set_bus_width_verified(&host,
+		    GTA4L_EMMC_BLOCK_SPEED_BITS_8, &speedSwitch);
+		IOLockUnlock(gate);
+		speedRecordSwitch(&speedSwitch,
+		    GTA4L_EMMC_BLOCK_SPEED_BITS_8, false);
+		if ((speedRc != GTA4L_EMMC_OK) ||
+		    (speedSwitch.verified != 1u) ||
+		    ((speedSwitch.host_after &
+		    GTA4L_EMMC_HOST_CONTROL_8BIT) !=
+		    GTA4L_EMMC_HOST_CONTROL_8BIT) ||
+		    (host.bus_width !=
+		    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_8)) {
+			if ((speedSwitch.cmd6_attempts < 1u) ||
+			    (speedSwitch.rollback_result !=
+			    GTA4L_EMMC_OK)) {
+				/* No switch was issued, or the rollback
+				 * itself could not be verified. Both are
+				 * terminal: no 4-bit fallback after
+				 * ERR_WIDTH_RESTORE or unknown framing. */
+				gta4l_emmc_deadline_clear(&host);
+				speedLatchFailure(
+				    GTA4L_EMMC_BLOCK_SPEED_STAGE_WIDTH,
+				    (speedRc != GTA4L_EMMC_OK) ? speedRc :
+				    speedSwitch.switch_result);
+				(void)speedRecover();
+				if (speedGateTimedOut) {
+					panicWithReportNoGate();
+				} else {
+					panicWithReport();
+				}
+				return false;
+			}
+			IOLockLock(reportLock);
+			report.speed_wfall = 1u;
+			report.speed_wroll = 1u;
+			IOLockUnlock(reportLock);
+			IOLockLock(gate);
+			speedRc = gta4l_emmc_set_bus_width_verified(
+			    &host, GTA4L_EMMC_BLOCK_SPEED_BITS_4,
+			    &speedFallback);
+			IOLockUnlock(gate);
+			speedRecordSwitch(&speedFallback,
+			    GTA4L_EMMC_BLOCK_SPEED_BITS_4, true);
+			if ((speedRc != GTA4L_EMMC_OK) ||
+			    (speedFallback.verified != 1u) ||
+			    ((speedFallback.host_after &
+			    GTA4L_EMMC_HOST_CONTROL_4BIT) !=
+			    GTA4L_EMMC_HOST_CONTROL_4BIT) ||
+			    (host.bus_width !=
+			    GTA4L_EMMC_EXT_CSD_BUS_WIDTH_4)) {
+				gta4l_emmc_deadline_clear(&host);
+				speedLatchFailure(
+				    GTA4L_EMMC_BLOCK_SPEED_STAGE_FALLBACK,
+				    (speedRc != GTA4L_EMMC_OK) ?
+				    speedRc :
+				    speedFallback.switch_result);
+				(void)speedRecover();
+				if (speedGateTimedOut) {
+					panicWithReportNoGate();
+				} else {
+					panicWithReport();
+				}
+				return false;
+			}
+		}
+	}
+
 	if (widthholdMode || widthpubMode) {
 		/* The 1-bit reference and the 4-bit observed window never
 		 * alias. Both are page-aligned and contiguous so the media
@@ -2119,6 +2333,22 @@ Gta4lEmmcBlock::start(IOService *provider)
 	}
 	IOLockUnlock(gate);
 	if (baselineResult != 0) {
+		if (speedMode) {
+			/* The inherited LBA-1 baseline runs at the final
+			 * S1 mode. A failure is BASE: fail closed after the
+			 * combined revert under its own budget. */
+			gta4l_emmc_deadline_clear(&host);
+			speedLatchFailure(
+			    GTA4L_EMMC_BLOCK_SPEED_STAGE_BASE,
+			    baselineResult);
+			(void)speedRecover();
+			if (speedGateTimedOut) {
+				panicWithReportNoGate();
+			} else {
+				panicWithReport();
+			}
+			return false;
+		}
 		if (widthMode) {
 			/* The existing baseline read runs at the new width. A
 			 * failure here is a 4-bit read failure: fail closed
@@ -2151,12 +2381,33 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 
+	if (speedMode) {
+		/* The LBA-1 baseline is the last operation under the start
+		 * budget. Clear it before any publication work. */
+		gta4l_emmc_deadline_clear(&host);
+		IOLockLock(reportLock);
+		report.speed_base = 1u;
+		speedBaseValid = true;
+		IOLockUnlock(reportLock);
+	}
+
 	if (!setProperty(kIOMaximumBlockCountReadKey,
 	    (unsigned long long)(sweepMode ?
 	    GTA4L_EMMC_BLOCK_SWEEP_READ_BLOCKS : breakupMode ?
 	    GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS :
 	    GTA4L_EMMC_BLOCK_MAX_BLOCKS), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: block limit property\n");
+		if (speedMode) {
+			speedLatchFailure(
+			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
+			(void)speedRecover();
+			if (speedGateTimedOut) {
+				panicWithReportNoGate();
+			} else {
+				panicWithReport();
+			}
+			return false;
+		}
 		if (widthholdMode || widthpubMode) {
 			widthholdFatal(
 			    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ADVERT,
@@ -2170,6 +2421,17 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_BREAKUP_READ_MAX_BYTES :
 	    GTA4L_EMMC_BLOCK_MAX_BYTES), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: byte limit property\n");
+		if (speedMode) {
+			speedLatchFailure(
+			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
+			(void)speedRecover();
+			if (speedGateTimedOut) {
+				panicWithReportNoGate();
+			} else {
+				panicWithReport();
+			}
+			return false;
+		}
 		if (widthholdMode || widthpubMode) {
 			widthholdFatal(
 			    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ADVERT,
@@ -2183,6 +2445,17 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?
 	    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : 1u), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: segment limit property\n");
+		if (speedMode) {
+			speedLatchFailure(
+			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
+			(void)speedRecover();
+			if (speedGateTimedOut) {
+				panicWithReportNoGate();
+			} else {
+				panicWithReport();
+			}
+			return false;
+		}
 		if (widthholdMode || widthpubMode) {
 			widthholdFatal(
 			    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ADVERT,
@@ -2197,6 +2470,31 @@ Gta4lEmmcBlock::start(IOService *provider)
 
 	retain();
 	reportCancel = false;
+	if (speedMode) {
+		/* Same ordering as widthhold: the watchdog starts before the
+		 * reporter so a thread-start failure still leaves the
+		 * terminal report path able to take the combined revert. */
+		if (kernel_thread_start(&Gta4lEmmcBlock::watchdogEntry, this,
+		    &watchdogThread) != KERN_SUCCESS) {
+			release();
+			watchdogThread = nullptr;
+			IOLog("GTA4L-EMMC P5 WATCHDOG: thread start failed\n");
+			speedFatal(GTA4L_EMMC_BLOCK_SPEED_STAGE_THREAD, 16);
+			return false;
+		}
+		thread_deallocate(watchdogThread);
+		watchdogThread = nullptr;
+		if (kernel_thread_start(&Gta4lEmmcBlock::reportEntry, this,
+		    &reportThread) != KERN_SUCCESS) {
+			release();
+			speedFatal(GTA4L_EMMC_BLOCK_SPEED_STAGE_THREAD, 16);
+			return false;
+		}
+		thread_deallocate(reportThread);
+		reportThread = nullptr;
+		reportStarted = true;
+		return true;
+	}
 	if (widthholdMode || widthpubMode) {
 		/* The watchdog starts before the reporter so a watchdog
 		 * thread-start failure is still a pre-read widthhold exit
@@ -2314,6 +2612,11 @@ Gta4lEmmcBlock::free()
 		IOFreeContiguous(widthholdObserved,
 		    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES);
 		widthholdObserved = nullptr;
+	}
+	if (speedWindow != nullptr) {
+		IOFreeContiguous(speedWindow,
+		    GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES);
+		speedWindow = nullptr;
 	}
 	if (widthholdReference != nullptr) {
 		IOFreeContiguous(widthholdReference,
@@ -2535,7 +2838,7 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	completion->action(completion->target, completion->parameter, status,
 	    completed);
 	if (wentOffline) {
-		if (widthpubMode) {
+		if (widthpubMode || speedMode) {
 			/* The report thread owns the terminal decommission.
 			 * Share its one-shot latch so a failed case read does
 			 * not notify clients twice. */
@@ -3150,6 +3453,58 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		memcpy(target->width_fail_digest,
 		    report.width_fail_digest,
 		    sizeof(target->width_fail_digest));
+		target->speed = report.speed;
+		target->speed_hs = report.speed_hs;
+		target->speed_hsrb = report.speed_hsrb;
+		target->speed_hsa = report.speed_hsa;
+		target->speed_rcg = report.speed_rcg;
+		target->speed_hispd = report.speed_hispd;
+		target->speed_wtry = report.speed_wtry;
+		target->speed_wfall = report.speed_wfall;
+		target->speed_wroll = report.speed_wroll;
+		target->speed_wid = report.speed_wid;
+		target->speed_verified = report.speed_verified;
+		target->speed_hb = report.speed_hb;
+		target->speed_ha = report.speed_ha;
+		target->speed_cmd6 = report.speed_cmd6;
+		target->speed_base = report.speed_base;
+		target->speed_revert = report.speed_revert;
+		target->speed_rverified = report.speed_rverified;
+		target->speed_rhb = report.speed_rhb;
+		target->speed_rha = report.speed_rha;
+		target->speed_rcmd6 = report.speed_rcmd6;
+		target->speed_rstatus = report.speed_rstatus;
+		target->speed_hsrevert = report.speed_hsrevert;
+		target->speed_hsverified = report.speed_hsverified;
+		target->speed_rhsb = report.speed_rhsb;
+		target->speed_rhs = report.speed_rhs;
+		target->speed_rclk = report.speed_rclk;
+		target->speed_fail_stage = report.speed_fail_stage;
+		target->speed_fail_status = report.speed_fail_status;
+		target->speed_bytes1 = report.speed_bytes1;
+		target->speed_ticks1 = report.speed_ticks1;
+		target->speed_hz = report.speed_hz;
+		memcpy(target->speed_dig1, report.speed_dig1,
+		    sizeof(target->speed_dig1));
+		target->speed_bytes2 = report.speed_bytes2;
+		target->speed_ticks2 = report.speed_ticks2;
+		memcpy(target->speed_dig2, report.speed_dig2,
+		    sizeof(target->speed_dig2));
+		target->speed_req = report.speed_req;
+		target->speed_fails = report.speed_fails;
+		target->speed_cancel = report.speed_cancel;
+		target->speed_budget = report.speed_budget;
+		target->speed_partial = report.speed_partial;
+		target->speed_pub = report.speed_pub;
+		target->speed_partdiag = report.speed_partdiag;
+		target->speed_limit = report.speed_limit;
+		target->speed_segments = report.speed_segments;
+		target->speed_capacity = report.speed_capacity;
+		if (speedMode) {
+			target->clock_hz = speedClockHz;
+			target->timing = (speedClockHz ==
+			    GTA4L_EMMC_BLOCK_SPEED_CLOCK_HZ) ? 1u : 0u;
+		}
 		target->widthhold = report.widthhold;
 		target->widthpub = report.widthpub;
 		target->widthpub_pub = report.widthpub_pub;
@@ -6905,7 +7260,8 @@ Gta4lEmmcBlock::widthholdObserve(IOMemoryDescriptor *buffer, UInt64 block,
 	uint32_t tag;
 	uint64_t end;
 
-	if ((!widthholdMode && !widthpubMode) || (buffer == nullptr)) {
+	if ((!widthholdMode && !widthpubMode && !speedMode) ||
+	    (buffer == nullptr)) {
 		return false;
 	}
 	tag = (uint32_t)buffer->getTag();
@@ -7226,13 +7582,16 @@ Gta4lEmmcBlock::widthholdReadCase(IOMedia *boot, uint32_t index,
 	*max = 0;
 	*shapeOk = false;
 	windowIndex = widthpubMode ?
-	    (index % GTA4L_EMMC_BLOCK_WIDTHPUB_CASE_OFFSETS) : index;
+	    (index % GTA4L_EMMC_BLOCK_WIDTHPUB_CASE_OFFSETS) :
+	    (speedMode ?
+	    (index % GTA4L_EMMC_BLOCK_SPEED_CASE_OFFSETS) : index);
 	start = (uint64_t)windowIndex *
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES;
 	firstBlock = GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
 	    ((uint64_t)windowIndex *
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS);
-	tag = GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_TAG + index;
+	tag = (speedMode ? GTA4L_EMMC_BLOCK_SPEED_TAG :
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_TAG) + index;
 	bzero(slice, GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES);
 	bzero(&result, sizeof(result));
 	IOLockLock(reportLock);
@@ -7285,8 +7644,9 @@ Gta4lEmmcBlock::widthholdReadCase(IOMedia *boot, uint32_t index,
 	if (!*shapeOk) {
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ORDER;
 	}
-	if (memcmp(slice, widthholdReference + start,
-	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0) {
+	if (!speedMode &&
+	    (memcmp(slice, widthholdReference + start,
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0)) {
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH;
 	}
 	return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE;
@@ -7457,6 +7817,137 @@ Gta4lEmmcBlock::widthholdSynchronousRecover()
 		    widthholdRevertStatus, 0, nullptr);
 	}
 	return revertOk;
+}
+
+void
+Gta4lEmmcBlock::speedRecordHs(const struct gta4l_emmc_hs_result *hs)
+{
+	uint32_t control;
+
+	if (hs == nullptr) {
+		return;
+	}
+	control = (uint32_t)host.ops->read8(host.context,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
+	IOLockLock(reportLock);
+	speedControl = control & 0xffu;
+	report.speed = 1u;
+	report.speed_hsrb = hs->hs_before;
+	report.speed_hsa = hs->hs_after;
+	report.speed_rcg = hs->rcg_after &
+	    (GTA4L_EMMC_RCG_SRC_SEL_MASK |
+	    GTA4L_EMMC_RCG_SRC_DIV_MASK |
+	    GTA4L_EMMC_RCG_MODE_MASK);
+	report.speed_hispd = speedControl;
+	IOLockUnlock(reportLock);
+}
+
+void
+Gta4lEmmcBlock::speedRecordSwitch(const struct gta4l_emmc_bus_result *bus,
+    uint32_t bits, bool fallback)
+{
+	if (bus == nullptr) {
+		return;
+	}
+	IOLockLock(reportLock);
+	report.speed = 1u;
+	report.speed_wid = bits;
+	report.speed_verified = bus->verified;
+	report.speed_hb = bus->host_before;
+	report.speed_ha = bus->host_after;
+	report.speed_cmd6 = bus->cmd6_attempts;
+	if (fallback) {
+		report.speed_wfall = 1u;
+	}
+	IOLockUnlock(reportLock);
+}
+
+void
+Gta4lEmmcBlock::speedRecordRevert()
+{
+	uint32_t mask = GTA4L_EMMC_RCG_SRC_SEL_MASK |
+	    GTA4L_EMMC_RCG_SRC_DIV_MASK |
+	    GTA4L_EMMC_RCG_MODE_MASK;
+
+	IOLockLock(reportLock);
+	report.speed = 1u;
+	report.speed_revert = 1u;
+	report.speed_rverified = speedRevert.verified;
+	report.speed_rhb = speedRevert.host_before;
+	report.speed_rha = speedRevert.host_after;
+	report.speed_rcmd6 = speedRevert.cmd6_attempts;
+	report.speed_rstatus = speedRecoverStatus;
+	report.speed_hsrevert = ((speedRecoverStatus == GTA4L_EMMC_OK) &&
+	    (speedRevert.hs_after == 0u)) ? 1u : 0u;
+	report.speed_hsverified = speedRevert.verified;
+	report.speed_rhsb = (speedHs.hs_after == 1u) ? 1u : 0u;
+	report.speed_rhs = speedRevert.hs_after;
+	report.speed_rclk = ((speedRevert.clock_result == GTA4L_EMMC_OK) &&
+	    ((speedRevert.rcg_after & mask) ==
+	    (GTA4L_EMMC_RCG_400K_CFG & mask))) ?
+	    GTA4L_EMMC_BLOCK_CLOCK_HZ : 0u;
+	if (speedRevert.verified == 1u) {
+		speedClockHz = GTA4L_EMMC_BLOCK_CLOCK_HZ;
+	}
+	IOLockUnlock(reportLock);
+}
+
+void
+Gta4lEmmcBlock::speedLatchFailure(uint32_t stage, int32_t status)
+{
+	IOLockLock(reportLock);
+	if (speedFailStage == GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE) {
+		speedFailStage = stage;
+		speedFailStatus = status;
+	}
+	report.speed = 1u;
+	report.speed_fail_stage = speedFailStage;
+	report.speed_fail_status = speedFailStatus;
+	IOLockUnlock(reportLock);
+}
+
+bool
+Gta4lEmmcBlock::speedRecover()
+{
+	bool revertOk;
+
+	speedGateTimedOut = false;
+	if (!acquireWidthGate(GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_MS)) {
+		speedGateTimedOut = true;
+		speedLatchFailure(GTA4L_EMMC_BLOCK_SPEED_STAGE_GATE, 0);
+		return false;
+	}
+	bzero(&speedRevert, sizeof(speedRevert));
+	speedRecoverStatus = gta4l_emmc_recover_width_and_timing(&host,
+	    speedBaseline, &speedRevert,
+	    GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS);
+	IOLockUnlock(gate);
+	speedRecordRevert();
+	revertOk = (speedRecoverStatus == GTA4L_EMMC_OK) &&
+	    (speedRevert.verified == 1u) &&
+	    (speedRevert.hs_after == 0u) &&
+	    (host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1) &&
+	    ((speedRevert.host_after &
+	    (GTA4L_EMMC_HOST_CONTROL_4BIT |
+	    GTA4L_EMMC_HOST_CONTROL_8BIT)) == 0u);
+	if (!revertOk) {
+		speedLatchFailure(GTA4L_EMMC_BLOCK_SPEED_STAGE_REVERT,
+		    speedRecoverStatus);
+	}
+	return revertOk;
+}
+
+void
+Gta4lEmmcBlock::speedFatal(uint32_t stage, int32_t status)
+{
+	speedLatchFailure(stage, status);
+	online = false;
+	(void)speedRecover();
+	if (speedGateTimedOut) {
+		panicWithReportNoGate();
+	} else {
+		panicWithReport();
+	}
 }
 
 void
@@ -7965,6 +8456,285 @@ Gta4lEmmcBlock::runWidthhold()
 	}
 }
 
+static uint32_t
+speedStageForWidthholdReason(uint32_t reason)
+{
+	switch (reason) {
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MEDIA:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_MEDIA;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_PART;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_ALLOCBUF;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_DESC:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_DESC;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_OPEN:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_OPEN;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_READ:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_READ;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_SHORT:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_SHORT;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_MATCH;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ORDER:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_ORDER;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_FOREIGN:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_FOREIGN;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BUDGET:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_BUDGET;
+	case GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_CANCEL;
+	default:
+		return GTA4L_EMMC_BLOCK_SPEED_STAGE_UNKNOWN;
+	}
+}
+
+void
+Gta4lEmmcBlock::runSpeed()
+{
+	uint32_t reason;
+	uint32_t status = 0;
+	uint64_t actual = 0;
+	uint32_t subrequests = 0;
+	uint32_t blocks = 0;
+	uint32_t max = 0;
+	bool shapeOk = false;
+	bool revertOk;
+	uint32_t index;
+	uint32_t passIndex;
+	uint32_t windowIndex;
+	uint32_t passBytes;
+	uint32_t requests = 0;
+	uint32_t fails = 0;
+	uint32_t cancel = 0;
+	uint32_t budget = 0;
+	uint32_t partial = 0;
+	uint32_t published = 0;
+	uint64_t passStart;
+	uint64_t passTicks;
+	uint8_t digest[32];
+	uint8_t *slice;
+
+	widthholdWhole = nullptr;
+	widthholdBoot = nullptr;
+	widthholdClient = nullptr;
+	widthholdBootOpen = false;
+	IOLockLock(reportLock);
+	widthholdActive = false;
+	widthholdInFlight = false;
+	widthholdObservedSubrequests = 0;
+	widthholdObservedBlocks = 0;
+	widthholdObservedMax = 0;
+	widthholdObservedOrder = 0;
+	widthholdObservedForeign = 0;
+	widthholdReadStart = 0;
+	speedGateTimedOut = false;
+	report.speed_req = 0;
+	report.speed_fails = 0;
+	report.speed_cancel = 0;
+	report.speed_budget = 0;
+	report.speed_partial = 0;
+	report.speed_pub = 0;
+	report.speed_partdiag = 0;
+	report.speed_bytes1 = 0;
+	report.speed_ticks1 = 0;
+	report.speed_bytes2 = 0;
+	report.speed_ticks2 = 0;
+	report.speed_hz = (uint32_t)gta4l_emmc_platform_counter_hz();
+	bzero(report.speed_dig1, sizeof(report.speed_dig1));
+	bzero(report.speed_dig2, sizeof(report.speed_dig2));
+	IOLockUnlock(reportLock);
+
+	if (reportCancel) {
+		reason = GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL;
+		cancel = 1;
+	} else {
+		reason = widthholdDiscoverMedia();
+		if (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {
+			published = 1;
+			widthholdClient = new Gta4lEmmcWidthholdClient();
+			if ((widthholdClient == nullptr) ||
+			    !widthholdClient->init()) {
+				if (widthholdClient != nullptr) {
+					widthholdClient->release();
+					widthholdClient = nullptr;
+				}
+				reason =
+				    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_DESC;
+			} else if (!widthholdBoot->open(widthholdClient, 0,
+			    kIOStorageAccessReader)) {
+				reason =
+				    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_OPEN;
+			} else {
+				widthholdBootOpen = true;
+				widthholdReadStart =
+				    gta4l_emmc_platform_counter();
+				for (passIndex = 0;
+				    passIndex < GTA4L_EMMC_BLOCK_SPEED_PASSES;
+				    passIndex++) {
+					passBytes = 0;
+					passStart =
+					    gta4l_emmc_platform_counter();
+					for (windowIndex = 0;
+					    windowIndex <
+					    GTA4L_EMMC_BLOCK_SPEED_CASE_OFFSETS;
+					    windowIndex++) {
+						if (reportCancel) {
+							cancel = 1;
+							reason =
+							    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL;
+							break;
+						}
+						if (widthholdElapsedMs() >=
+						    GTA4L_EMMC_BLOCK_SPEED_READ_BUDGET_MS) {
+							budget = 1;
+							reason =
+							    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_BUDGET;
+							break;
+						}
+						index = (passIndex *
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_OFFSETS) +
+						    windowIndex;
+						slice = speedWindow +
+						    ((uint64_t)windowIndex *
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES);
+						widthholdCaseIndex = index;
+						widthholdCaseStart =
+						    windowIndex *
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES;
+						widthholdCaseLength =
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES;
+						widthholdCaseSpan =
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES;
+						widthholdCaseBlocks =
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_BLOCKS;
+						widthholdCaseMax =
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_BLOCKS;
+						reason = widthholdReadCase(
+						    widthholdBoot, index,
+						    slice, &status, &actual,
+						    &subrequests, &blocks,
+						    &max, &shapeOk);
+						if ((reason !=
+						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC) &&
+						    (reason !=
+						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_DESC)) {
+							requests++;
+						}
+						if ((reason !=
+						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) &&
+						    (reason !=
+						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ALLOC) &&
+						    (reason !=
+						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_DESC)) {
+							fails++;
+						}
+						if (actual >
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES) {
+							actual =
+							    GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES;
+						}
+						passBytes += (uint32_t)actual;
+						if ((actual !=
+						    GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES) ||
+						    (reason ==
+						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_SHORT)) {
+							partial = 1;
+						}
+						if (reason !=
+						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {
+							break;
+						}
+					}
+					passTicks =
+					    gta4l_emmc_platform_counter() -
+					    passStart;
+					IOLockLock(reportLock);
+					if (passIndex == 0u) {
+						report.speed_bytes1 =
+						    passBytes;
+						report.speed_ticks1 =
+						    passTicks;
+					} else {
+						report.speed_bytes2 =
+						    passBytes;
+						report.speed_ticks2 =
+						    passTicks;
+					}
+					IOLockUnlock(reportLock);
+					if (reason !=
+					    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {
+						break;
+					}
+					if ((windowIndex ==
+					    GTA4L_EMMC_BLOCK_SPEED_CASE_OFFSETS) &&
+					    (passBytes ==
+					    GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES)) {
+						gta4l_emmc_block_sha256(
+						    speedWindow,
+						    GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES,
+						    digest);
+						IOLockLock(reportLock);
+						if (passIndex == 0u) {
+							memcpy(
+							    report.speed_dig1,
+							    digest,
+							    16u);
+						} else {
+							memcpy(
+							    report.speed_dig2,
+							    digest,
+							    16u);
+						}
+						IOLockUnlock(reportLock);
+					}
+				}
+			}
+		}
+	}
+
+	if (reportCancel) {
+		cancel = 1;
+		if (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {
+			reason = GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL;
+		}
+	}
+	if (reason != GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {
+		speedLatchFailure(
+		    speedStageForWidthholdReason(reason),
+		    (int32_t)status);
+		online = false;
+	}
+
+	revertOk = speedRecover();
+	if (!revertOk) {
+		online = false;
+	}
+	releaseWidthholdMedia();
+
+	IOLockLock(reportLock);
+	report.speed_req = requests;
+	report.speed_fails = fails;
+	report.speed_cancel = cancel;
+	report.speed_budget = budget;
+	report.speed_partial = partial;
+	report.speed_pub = published;
+	report.speed_partdiag = report.widthhold_partdiag;
+	report.speed_fail_stage = speedFailStage;
+	report.speed_fail_status = speedFailStatus;
+	IOLockUnlock(reportLock);
+
+	if ((reason != GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) ||
+	    !revertOk) {
+		notifyOfflineOnce();
+	}
+	if (speedGateTimedOut) {
+		panicWithReportNoGate();
+	} else {
+		panicWithReport();
+	}
+}
+
 void
 Gta4lEmmcBlock::runPartitionComparison()
 {
@@ -8326,7 +9096,7 @@ Gta4lEmmcBlock::notifyOfflineOnce()
 	 * `reportLock` only. The absent-token 1-bit path and the widthhold
 	 * path keep their prior behavior, and the shared latch suppresses a
 	 * duplicate notification when both callers race. */
-	if (!widthpubMode) {
+	if (!widthpubMode && !speedMode) {
 		return;
 	}
 	IOLockLock(reportLock);
@@ -8686,6 +9456,43 @@ Gta4lEmmcBlock::runReport()
 	report.widthhold_fail_max = widthholdFailMax;
 	memcpy(report.widthhold_fail_digest, widthholdFailDigest,
 	    sizeof(report.widthhold_fail_digest));
+	report.speed = speedMode ? 1u : 0u;
+	if (speedMode) {
+		const struct gta4l_emmc_bus_result *winning =
+		    (speedFallback.requested != 0u) ? &speedFallback :
+		    &speedSwitch;
+		uint32_t rcgMask = GTA4L_EMMC_RCG_SRC_SEL_MASK |
+		    GTA4L_EMMC_RCG_SRC_DIV_MASK |
+		    GTA4L_EMMC_RCG_MODE_MASK;
+
+		report.speed_hs = (speedHs.hs_after == 1u) ? 1u : 0u;
+		report.speed_hsrb = speedHs.hs_before;
+		report.speed_hsa = speedHs.hs_after;
+		report.speed_rcg = speedHs.rcg_after & rcgMask;
+		report.speed_hispd = speedControl;
+		report.speed_wtry = GTA4L_EMMC_BLOCK_SPEED_BITS_8;
+		report.speed_wfall =
+		    (speedFallback.requested != 0u) ? 1u : 0u;
+		/* The start path only attempts the 4-bit fallback after the
+		 * 8-bit failure reported a verified rollback, so the two
+		 * fallback facts are equivalent by construction. */
+		report.speed_wroll = report.speed_wfall;
+		report.speed_wid = winning->requested;
+		report.speed_verified = winning->verified;
+		report.speed_hb = winning->host_before;
+		report.speed_ha = winning->host_after;
+		report.speed_cmd6 = winning->cmd6_attempts;
+		report.speed_base = speedBaseValid ? 1u : 0u;
+		report.speed_fail_stage = speedFailStage;
+		report.speed_fail_status = speedFailStatus;
+		report.speed_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
+		report.speed_segments = 1u;
+		report.speed_capacity = capacityBlocks;
+	}
+	if (speedMode) {
+		runSpeed();
+		return;
+	}
 	if (widthholdMode || widthpubMode) {
 		runWidthhold();
 		return;

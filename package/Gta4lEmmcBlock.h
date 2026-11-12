@@ -391,6 +391,89 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SPEED_ON 1
 #define GTA4L_EMMC_BLOCK_SPEED_REFUSED (-1)
 
+/* B2 start-path budgets and geometry. The start budget is armed once after
+ * initializeHardware() and cleared on every exit before registerService();
+ * the combined width/timing revert after a failure arms its own separate
+ * budget. The worst pre-watchdog path is 34,500 ms. */
+#define GTA4L_EMMC_BLOCK_SPEED_BUDGET_MS 25000u
+#define GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS 9500u
+#define GTA4L_EMMC_BLOCK_SPEED_BITS_8 8u
+#define GTA4L_EMMC_BLOCK_SPEED_BITS_4 4u
+#define GTA4L_EMMC_BLOCK_SPEED_WINDOW_BLOCKS 8u
+#define GTA4L_EMMC_BLOCK_SPEED_WINDOW_BYTES \
+	(GTA4L_EMMC_BLOCK_SPEED_WINDOW_BLOCKS * GTA4L_EMMC_BLOCK_BYTES)
+#define GTA4L_EMMC_BLOCK_SPEED_CLOCK_HZ 50000000u
+
+/* B3 report-path geometry. Two passes over the four fixed two-block offsets
+ * reuse the window allocated by the start path. The report thread has its
+ * own 2,000 ms shared loop budget so the 9,500 ms combined revert still
+ * keeps the worst report path at 28,000 ms. */
+#define GTA4L_EMMC_BLOCK_SPEED_PASSES 2u
+#define GTA4L_EMMC_BLOCK_SPEED_CASE_OFFSETS 4u
+#define GTA4L_EMMC_BLOCK_SPEED_CASE_BLOCKS 2u
+#define GTA4L_EMMC_BLOCK_SPEED_CASE_BYTES \
+	(GTA4L_EMMC_BLOCK_SPEED_CASE_BLOCKS * GTA4L_EMMC_BLOCK_BYTES)
+#define GTA4L_EMMC_BLOCK_SPEED_CASES \
+	(GTA4L_EMMC_BLOCK_SPEED_PASSES * \
+	GTA4L_EMMC_BLOCK_SPEED_CASE_OFFSETS)
+#define GTA4L_EMMC_BLOCK_SPEED_READ_BUDGET_MS 2000u
+#define GTA4L_EMMC_BLOCK_SPEED_TAG 0x53504545u
+
+/* One in-flight two-block case: command inhibit 1,000 ms + CMD18 data poll
+ * 1,000 ms + secondary drain 500 ms + CMD12 entry 1,000 ms + CMD12
+ * completion 1,000 ms. The block adapter's source static_assert ties this
+ * value back to the four transport constants. */
+#define GTA4L_EMMC_BLOCK_SPEED_CASE_WORST_MS 4500u
+/* Report-thread worst case: 8,000 media + 2,000 BOOT + 2,000 shared loop +
+ * 4,500 in-flight case + 2,000 gate + 9,500 combined revert = 28,000 ms,
+ * leaving 2,000 ms under the 30,000 ms watchdog. */
+#define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_MS \
+	(GTA4L_EMMC_BLOCK_WIDTHHOLD_MEDIA_WAIT_MS + \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_DEADLINE_MS + \
+	GTA4L_EMMC_BLOCK_SPEED_READ_BUDGET_MS + \
+	GTA4L_EMMC_BLOCK_SPEED_CASE_WORST_MS + \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_MS + \
+	GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS)
+#define GTA4L_EMMC_BLOCK_SPEED_REPORT_MARGIN_MS 2000u
+
+/* Formatter-exact bound: the SPEED line is 746 bytes with every numeric
+ * field at its widest (31 u32 fields, two u64 ticks, one i32 status, six
+ * two/four-byte hex fields at fixed width and two 32-hex digests). The
+ * established base REPORT/DRV/XFER/MEDIA/SNAP/FAIL block is 838, so the
+ * worst case is 838 + 746 + newline + NUL = 1,586. */
+#define GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES 746u
+#define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u
+
+/* Start-path failure stages, in execution order. A failure latch keeps the
+ * first stage so a later cleanup failure cannot mask it. */
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE 0u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_ALLOC 1u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_BASELINE 2u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_HS 3u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_WIDTH 4u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_FALLBACK 5u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_BASE 6u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT 7u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_GATE 8u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_REVERT 9u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_THREAD 10u
+/* Report-path stages continue the same first-failure latch. */
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_MEDIA 11u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_PART 12u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_DESC 13u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_OPEN 14u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_READ 15u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_SHORT 16u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_FOREIGN 17u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_ORDER 18u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_CANCEL 19u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_BUDGET 20u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_MATCH 21u
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_ALLOCBUF 22u
+/* An unexpected widthhold reason must stay visible instead of being
+ * reported as a data read failure. */
+#define GTA4L_EMMC_BLOCK_SPEED_STAGE_UNKNOWN 23u
+
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 2560u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u
@@ -881,6 +964,61 @@ struct gta4l_emmc_block_report {
 	 * WIDTHPUB formatter prefix and widthpub_pub is the `pub` marker. */
 	uint32_t widthpub;
 	uint32_t widthpub_pub;
+	/* S1 staged HS timing with the widest verified bus (B2 start path).
+	 * The marker is set before the first start-path operation. wtry is
+	 * always 8; wfall records that the 8-bit attempt failed and 4-bit
+	 * won; wroll is set only after that failure reported a verified
+	 * rollback. The read fields are added by the B3 report thread. */
+	uint32_t speed;
+	uint32_t speed_hs;
+	uint32_t speed_hsrb;
+	uint32_t speed_hsa;
+	uint32_t speed_rcg;
+	uint32_t speed_hispd;
+	uint32_t speed_wtry;
+	uint32_t speed_wfall;
+	uint32_t speed_wroll;
+	uint32_t speed_wid;
+	uint32_t speed_verified;
+	uint32_t speed_hb;
+	uint32_t speed_ha;
+	uint32_t speed_cmd6;
+	uint32_t speed_base;
+	uint32_t speed_revert;
+	uint32_t speed_rverified;
+	uint32_t speed_rhb;
+	uint32_t speed_rha;
+	uint32_t speed_rcmd6;
+	int32_t speed_rstatus;
+	uint32_t speed_hsrevert;
+	uint32_t speed_hsverified;
+	uint32_t speed_rhsb;
+	uint32_t speed_rhs;
+	uint32_t speed_rclk;
+	uint32_t speed_fail_stage;
+	int32_t speed_fail_status;
+	/* B3 report-thread fields. Each pass hashes the whole 4 KiB window;
+	 * ticks are platform-counter deltas and hz is the same counter's
+	 * frequency. req counts the eight two-block requests; partial marks
+	 * a short transfer, budget the shared loop expiry, pub the media and
+	 * BOOT publication, and partdiag the discovery diagnostic. */
+	uint32_t speed_bytes1;
+	uint64_t speed_ticks1;
+	uint32_t speed_hz;
+	uint8_t speed_dig1[16];
+	uint32_t speed_bytes2;
+	uint64_t speed_ticks2;
+	uint8_t speed_dig2[16];
+	uint32_t speed_req;
+	uint32_t speed_fails;
+	uint32_t speed_cancel;
+	uint32_t speed_budget;
+	uint32_t speed_partial;
+	uint32_t speed_pub;
+	uint32_t speed_partdiag;
+	uint32_t speed_limit;
+	uint32_t speed_segments;
+	uint32_t speed_capacity;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
