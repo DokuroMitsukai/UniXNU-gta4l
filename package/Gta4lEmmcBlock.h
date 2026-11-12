@@ -379,10 +379,11 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_WIDTHPUBFAIL_LINE_BYTES 132u
 #define GTA4L_EMMC_BLOCK_WIDTHPUB_REPORT_WORST_BYTES 2079u
 
-/* S1 staged 4-bit/50 MHz speed qualification. The token is accepted only
- * with exactly one gta4l-emmc-block=3 token, the value 1, no duplicate and
- * none of the partition, read, consumer or width instruments selected in
- * the same boot. B1 plumbs the selector; the S1 start path consumes it. */
+/* S1 staged high-speed qualification: 50 MHz timing at 8-bit with a
+ * verified 4-bit fallback. The token is accepted only with exactly one
+ * gta4l-emmc-block=3 token, the value 1, no duplicate and none of the
+ * partition, read, consumer or width instruments selected in the same
+ * boot. B1 plumbs the selector; the S1 start path consumes it. */
 #define GTA4L_EMMC_BLOCK_SPEED_ARG "gta4l-emmc-speed"
 #define GTA4L_EMMC_BLOCK_SPEED_OFF 0
 #define GTA4L_EMMC_BLOCK_SPEED_ON 1

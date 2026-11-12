@@ -6652,13 +6652,13 @@ shared case budget + 4,500 in-flight two-block case + 2,000 revert gate +
 bounds are conditional and exclude scheduler stalls.
 
 Host results and checker. The block suite passes 48 core scenarios with 38
-mutation controls and 377 adapter scenarios (378 PASS lines) with the
+mutation controls and 370 adapter scenarios (371 PASS lines) with the
 widthpub full-pass, publication, budget, read/short/match/foreign/cancel/
 gate/revert/baseline/switch failures, media-absent and selector-refusal
 cases, plus adapter/support controls for single-pass, window-collapse,
 pub-cleared, pub-before-discovery, offline-missing and offline-latch and
 policy controls for value-accepted, duplicate-accepted and
-widthhold-conflict-accepted; core 207/126, probe 196/100 and the documented
+widthhold-conflict-accepted; core 189/117, probe 196/100 and the documented
 evidence counts pass. The new host-only `scripts/check-gta4l-widthpub-evidence.py`
 recomputes the window and last-case slice prefixes from the final packaged
 BOOT image, requires the success shape, `pub=1`, `partdiag=0` and a verified

@@ -1784,7 +1784,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 		} else {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-speed value must be 1; "
-			    "1-bit is the absence of the token\n");
+			    "absence selects the normal 400 kHz path\n");
 		}
 		return false;
 	}
