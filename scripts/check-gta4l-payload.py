@@ -112,6 +112,7 @@ SPEED_DIAGNOSTICS = {
 }
 BULK_DIAGNOSTICS = {
     'emmc-block-3-bulk': 'emmc-block-3',
+    'emmc-block-3-bulk-dma': 'emmc-block-3',
 }
 
 

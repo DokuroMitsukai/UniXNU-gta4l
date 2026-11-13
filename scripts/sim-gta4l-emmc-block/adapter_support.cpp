@@ -36,6 +36,8 @@ gta4l_test_reset(void)
 	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(0) / 4u] =
 	    GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS <<
 	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT;
+	gta4l_test.adma_fail_at = -1;
+	gta4l_test.adma_corrupt_at = -1;
 	gta4l_test.reporter_start_result = 0;
 	gta4l_test.watchdog_start_result = 0;
 	gta4l_test.thread_start_fail_at = -1;
@@ -753,6 +755,75 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 }
 
 int
+gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
+    uint32_t count, void *buffer)
+{
+	struct gta4l_emmc_multi_result result;
+
+	return gta4l_emmc_read_multi_result(host, start_lba, count, buffer,
+	    &result);
+}
+
+extern "C" void
+gta4l_test_adma_set_buffer(void *buffer, uint32_t bytes)
+{
+	gta4l_test.adma_buffer = static_cast<uint8_t *>(buffer);
+	gta4l_test.adma_buffer_bytes = bytes;
+}
+
+int
+gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
+    uint32_t count, uint32_t desc_address, uint32_t desc_bytes,
+    struct gta4l_emmc_adma_result *result)
+{
+	uint32_t index;
+	uint32_t completed;
+	uint8_t *buffer = gta4l_test.adma_buffer;
+	uint32_t bytes = count * GTA4L_EMMC_BLOCK_BYTES;
+
+	(void)desc_address;
+	(void)desc_bytes;
+	if ((host == 0) || (result == 0) || (buffer == 0) ||
+	    (gta4l_test.adma_buffer_bytes < bytes)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	memset(result, 0, sizeof(*result));
+	result->transport_result = GTA4L_EMMC_OK;
+	result->fail_desc = 0xffffffffu;
+	result->reset_data_result = GTA4L_EMMC_OK;
+	result->reset_cmd_result = GTA4L_EMMC_OK;
+	if ((gta4l_test.adma_fail_at >= 0) &&
+	    ((uint32_t)gta4l_test.adma_fail_at ==
+	    gta4l_test.adma_calls)) {
+		result->transport_result = GTA4L_EMMC_ERR_ADMA;
+		result->adma_error = 3u;
+		result->adma_address = desc_address + 8u;
+		result->fail_desc = 1u;
+		result->stop_attempted = 1;
+		gta4l_test.adma_calls++;
+		return result->transport_result;
+	}
+	for (index = 0; index < count; index++) {
+		gta4l_test_fill_sector(start_lba + index,
+		    buffer + (index * GTA4L_EMMC_BLOCK_BYTES));
+		if ((gta4l_test.adma_corrupt_at >= 0) &&
+		    ((uint32_t)gta4l_test.adma_corrupt_at == index)) {
+			buffer[index * GTA4L_EMMC_BLOCK_BYTES] ^= 0x5Au;
+		}
+	}
+	completed = count;
+	if ((gta4l_test.adma_short_blocks > 0) &&
+	    ((uint32_t)gta4l_test.adma_short_blocks < count)) {
+		completed = count - (uint32_t)gta4l_test.adma_short_blocks;
+	}
+	result->completed_blocks = completed;
+	result->stop_attempted = 1;
+	result->stop_result = GTA4L_EMMC_OK;
+	gta4l_test.adma_calls++;
+	return result->transport_result;
+}
+
+int
 gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer)
 {
 	if ((host == 0) || (buffer == 0) || (host->initialized == 0)) {
@@ -1144,6 +1215,20 @@ IOMemoryDescriptor::getPhysicalSegment(IOByteCount offset, IOByteCount *length,
 	}
 	return (IOPhysicalAddress)(uintptr_t)
 	    (static_cast<uint8_t *>(address_) + offset);
+}
+
+IOReturn
+IOMemoryDescriptor::prepare(int direction)
+{
+	(void)direction;
+	return kIOReturnSuccess;
+}
+
+IOReturn
+IOMemoryDescriptor::complete(int direction)
+{
+	(void)direction;
+	return kIOReturnSuccess;
 }
 
 void *

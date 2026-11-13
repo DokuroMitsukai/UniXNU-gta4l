@@ -210,6 +210,8 @@ public:
 	virtual void release() override;
 	virtual IOPhysicalAddress getPhysicalSegment(IOByteCount offset,
 	    IOByteCount *length, IOOptionBits options);
+	virtual IOReturn prepare(int direction);
+	virtual IOReturn complete(int direction);
 protected:
 	void *address_ = nullptr;
 	UInt64 length_ = 0;
@@ -463,6 +465,12 @@ struct gta4l_test_state {
 	uint32_t smmu_reads;
 	int smmu_map_result;
 	uint32_t smmu_regs[1024];
+	uint32_t adma_calls;
+	int adma_fail_at;
+	int adma_corrupt_at;
+	int adma_short_blocks;
+	uint8_t *adma_buffer;
+	uint32_t adma_buffer_bytes;
 	uint32_t init_calls;
 	uint32_t read_calls;
 	int fail_read_at;

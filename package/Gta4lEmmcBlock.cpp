@@ -779,6 +779,10 @@ private:
 	void runSpeed(void);
 	bool runBulk(void);
 	bool runSmmuGate(void);
+	bool dmaAllocate(void);
+	void dmaRelease(void);
+	bool dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes);
+	bool dmaCompare(void);
 	void releaseBulkMedia(void);
 	bool bulkRead(IOMedia *boot, uint64_t firstBlock,
 	    uint64_t byteOffset, uint32_t length, uint32_t blocks,
@@ -920,6 +924,7 @@ private:
 	bool widthpubMode = false;
 	bool speedMode = false;
 	bool bulkMode = false;
+	bool dmaMode = false;
 	bool offlineNotified = false;
 	uint8_t *speedWindow = nullptr;
 	uint8_t speedBaseline[GTA4L_EMMC_EXT_CSD_BYTES];
@@ -1007,6 +1012,21 @@ private:
 	uint32_t bulkObservedMax = 0;
 	uint32_t bulkObservedOrder = 0;
 	uint32_t bulkObservedForeign = 0;
+	uint8_t *dmaTable = nullptr;
+	uint8_t *dmaBuffer = nullptr;
+	uint8_t *dmaPio = nullptr;
+	IOMemoryDescriptor *dmaTableDescriptor = nullptr;
+	IOMemoryDescriptor *dmaBufferDescriptor = nullptr;
+	uint32_t dmaTablePhysical = 0;
+	uint32_t dmaBufferPhysical = 0;
+	uint32_t dmaCmpPass = 0;
+	uint32_t dmaCmpTotal = 0;
+	uint32_t dmaChunks = 0;
+	uint32_t dmaBytes = 0;
+	uint32_t dmaFails = 0;
+	uint32_t dmaBudget = 0;
+	uint64_t dmaTicks = 0;
+	uint64_t dmaDat = 0;
 	uint32_t widthCaptureLimit =
 	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES;
 	bool registered = false;
@@ -1357,6 +1377,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t widthpubTokens;
 	uint32_t speedTokens;
 	uint32_t bulkTokens;
+	uint32_t dmaTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
@@ -1370,6 +1391,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int widthpubValue = 0;
 	int speedValue = 0;
 	int bulkValue = 0;
+	int dmaValue = 0;
 	int parsed;
 	int partobsParsed;
 	int partcmpParsed;
@@ -1383,6 +1405,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int widthpubParsed;
 	int speedParsed;
 	int bulkParsed;
+	int dmaParsed;
 	int mode;
 	int partobs;
 	int partcmp;
@@ -1396,6 +1419,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int widthpub;
 	int speed;
 	int bulk;
+	int dma;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -1427,6 +1451,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_SPEED_ARG);
 	bulkTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_BULK_ARG);
+	dmaTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_DMA_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -1496,6 +1522,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    &bulkValue, sizeof(bulkValue));
 	if ((bulkParsed == 0) && (bulkTokens != 0)) {
 		bulkValue = -1;
+	}
+	dmaParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_DMA_ARG,
+	    &dmaValue, sizeof(dmaValue));
+	if ((dmaParsed == 0) && (dmaTokens != 0)) {
+		dmaValue = -1;
 	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
@@ -2151,6 +2182,41 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	bulkMode = (bulk == GTA4L_EMMC_BLOCK_BULK_ON);
+	dma = gta4l_emmc_block_dma_select(
+	    dmaTokens != 0, dmaValue, dmaTokens > 1u,
+	    1, value,
+	    bulk == GTA4L_EMMC_BLOCK_BULK_ON,
+	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
+	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
+	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
+	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON,
+	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON,
+	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON,
+	    consume == GTA4L_EMMC_BLOCK_CONSUME_ON,
+	    width == GTA4L_EMMC_BLOCK_WIDTH_ON,
+	    widthhold == GTA4L_EMMC_BLOCK_WIDTHHOLD_ON,
+	    widthpub == GTA4L_EMMC_BLOCK_WIDTHPUB_ON,
+	    speed == GTA4L_EMMC_BLOCK_SPEED_ON);
+	if (dma == GTA4L_EMMC_BLOCK_DMA_REFUSED) {
+		if (dmaTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-dma token\n");
+		} else if (value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-dma "
+			    "requires gta4l-emmc-block=3\n");
+		} else if (bulk != GTA4L_EMMC_BLOCK_BULK_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-dma "
+			    "requires gta4l-emmc-bulk=1\n");
+		} else if (dmaValue != (int)GTA4L_EMMC_BLOCK_DMA_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-dma "
+			    "value must be 1\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-dma "
+			    "conflicts with another diagnostic selector\n");
+		}
+		return false;
+	}
+	dmaMode = (dma == GTA4L_EMMC_BLOCK_DMA_ON);
 	if (widthMode) {
 		/* The reference and observed copies never alias: the reference
 		 * is filled only by the pre-switch 1-bit read, the observed
@@ -9342,6 +9408,199 @@ Gta4lEmmcBlock::bulkRead(IOMedia *boot, uint64_t firstBlock,
 	return true;
 }
 
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+extern "C" void gta4l_test_adma_set_buffer(void *buffer, uint32_t bytes);
+#endif
+
+bool
+Gta4lEmmcBlock::dmaAllocate()
+{
+	IOPhysicalAddress physical;
+	IOByteCount segment = 0;
+
+	dmaRelease();
+	dmaTable = (uint8_t *)IOMallocAligned(PAGE_SIZE, PAGE_SIZE);
+	dmaBuffer = (uint8_t *)IOMallocContiguous(
+	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES + PAGE_SIZE, PAGE_SIZE,
+	    nullptr);
+	dmaPio = (uint8_t *)IOMallocContiguous(
+	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES, PAGE_SIZE, nullptr);
+	if ((dmaTable == nullptr) || (dmaBuffer == nullptr) ||
+	    (dmaPio == nullptr)) {
+		dmaRelease();
+		return false;
+	}
+	dmaTableDescriptor = IOMemoryDescriptor::withAddress(dmaTable,
+	    PAGE_SIZE, kIODirectionOut);
+	dmaBufferDescriptor = IOMemoryDescriptor::withAddress(dmaBuffer,
+	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES, kIODirectionIn);
+	if ((dmaTableDescriptor == nullptr) ||
+	    (dmaBufferDescriptor == nullptr)) {
+		dmaRelease();
+		return false;
+	}
+	physical = dmaTableDescriptor->getPhysicalSegment(0, &segment,
+	    kIOMemoryMapperNone);
+	if ((physical == 0) || (segment < PAGE_SIZE) ||
+	    ((uint64_t)physical + PAGE_SIZE > 0x100000000ULL)) {
+		dmaRelease();
+		return false;
+	}
+	dmaTablePhysical = (uint32_t)physical;
+	physical = dmaBufferDescriptor->getPhysicalSegment(0, &segment,
+	    kIOMemoryMapperNone);
+	if ((physical == 0) ||
+	    (segment < GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES) ||
+	    ((uint64_t)physical + GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES +
+	    PAGE_SIZE > 0x100000000ULL)) {
+		dmaRelease();
+		return false;
+	}
+	dmaBufferPhysical = (uint32_t)physical;
+	return true;
+}
+
+void
+Gta4lEmmcBlock::dmaRelease()
+{
+	if (dmaTableDescriptor != nullptr) {
+		dmaTableDescriptor->release();
+		dmaTableDescriptor = nullptr;
+	}
+	if (dmaBufferDescriptor != nullptr) {
+		dmaBufferDescriptor->release();
+		dmaBufferDescriptor = nullptr;
+	}
+	if (dmaTable != nullptr) {
+		IOFreeAligned(dmaTable, PAGE_SIZE);
+		dmaTable = nullptr;
+	}
+	if (dmaBuffer != nullptr) {
+		IOFreeContiguous(dmaBuffer,
+		    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES + PAGE_SIZE);
+		dmaBuffer = nullptr;
+	}
+	if (dmaPio != nullptr) {
+		IOFreeContiguous(dmaPio,
+		    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES);
+		dmaPio = nullptr;
+	}
+}
+
+bool
+Gta4lEmmcBlock::dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes)
+{
+	struct gta4l_emmc_adma_result result;
+	uint64_t start;
+	uint64_t elapsed;
+	uint32_t entries;
+	int rc;
+
+	if ((dmaTable == nullptr) || (dmaBuffer == nullptr) ||
+	    (dmaBufferDescriptor == nullptr) ||
+	    (dmaTableDescriptor == nullptr) ||
+	    (bytes == 0u) || (bytes > GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
+		return false;
+	}
+	entries = gta4l_emmc_block_adma_build(dmaTable,
+	    GTA4L_EMMC_BLOCK_DMA_TABLE_BYTES, dmaBufferPhysical, bytes,
+	    GTA4L_EMMC_BLOCK_DMA_MAX_ENTRY_BYTES);
+	if (entries == 0u) {
+		report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_TABLE;
+		return false;
+	}
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+	gta4l_test_adma_set_buffer(dmaBuffer, bytes);
+#endif
+	if ((dmaTableDescriptor->prepare(kIODirectionOut) !=
+	    kIOReturnSuccess) ||
+	    (dmaBufferDescriptor->prepare(kIODirectionIn) !=
+	    kIOReturnSuccess)) {
+		(void)dmaTableDescriptor->complete(kIODirectionOut);
+		(void)dmaBufferDescriptor->complete(kIODirectionIn);
+		report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_TABLE;
+		return false;
+	}
+	start = gta4l_emmc_platform_counter();
+	rc = gta4l_emmc_read_multi_adma(&host, lba, blocks,
+	    dmaTablePhysical, entries * 8u, &result);
+	elapsed = gta4l_emmc_platform_counter() - start;
+	(void)dmaTableDescriptor->complete(kIODirectionOut);
+	(void)dmaBufferDescriptor->complete(kIODirectionIn);
+	dmaDat += elapsed;
+	if ((rc != GTA4L_EMMC_OK) ||
+	    (result.completed_blocks != blocks)) {
+		dmaFails++;
+		report.dma_stage = (rc == GTA4L_EMMC_OK) ?
+		    GTA4L_EMMC_BLOCK_DMA_STAGE_SHORT :
+		    GTA4L_EMMC_BLOCK_DMA_STAGE_READ;
+		report.dma_ast = result.adma_error;
+		report.dma_aaddr = result.adma_address;
+		report.dma_desc = result.fail_desc;
+		return false;
+	}
+	return true;
+}
+
+bool
+Gta4lEmmcBlock::dmaCompare()
+{
+	uint64_t windowBlock = 0;
+	uint32_t chunk;
+	uint32_t index;
+	uint32_t lba;
+	uint32_t blocks;
+	uint32_t bytes;
+	uint32_t canary;
+	uint32_t cases[GTA4L_EMMC_BLOCK_DMA_COMPARE_CASES][2];
+
+	cases[0][0] = GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA;
+	cases[0][1] = GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS;
+	chunk = GTA4L_EMMC_BLOCK_BULK_CHUNKS / 2u;
+	cases[1][0] = GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+	    chunk * GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS;
+	cases[1][1] = GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS;
+	cases[2][0] = GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+	    (GTA4L_EMMC_BLOCK_BULK_CHUNKS - 1u) *
+	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS;
+	cases[2][1] = GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS;
+	if (gta4l_emmc_block_bulk_window(
+	    GTA4L_EMMC_BLOCK_BULK_ALIGNED_WINDOWS, &windowBlock) != 0) {
+		return false;
+	}
+	cases[3][0] = GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+	    (uint32_t)windowBlock;
+	cases[3][1] = GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS;
+	dmaCmpTotal = GTA4L_EMMC_BLOCK_DMA_COMPARE_CASES;
+	dmaCmpPass = 0;
+	for (index = 0; index < GTA4L_EMMC_BLOCK_DMA_COMPARE_CASES; index++) {
+		lba = cases[index][0];
+		blocks = cases[index][1];
+		bytes = blocks * GTA4L_EMMC_BLOCK_BYTES;
+		if (gta4l_emmc_read_multi(&host, lba, blocks, dmaPio) !=
+		    GTA4L_EMMC_OK) {
+			return false;
+		}
+		memset(dmaBuffer, 0xA5, bytes);
+		memset(dmaBuffer + bytes, 0, PAGE_SIZE);
+		if (!dmaRead(lba, blocks, bytes)) {
+			return false;
+		}
+		if (memcmp(dmaPio, dmaBuffer, bytes) != 0) {
+			dmaFails++;
+			return false;
+		}
+		for (canary = 0; canary < PAGE_SIZE; canary++) {
+			if (dmaBuffer[bytes + canary] != 0u) {
+				dmaFails++;
+				return false;
+			}
+		}
+		dmaCmpPass++;
+	}
+	return true;
+}
+
 bool
 Gta4lEmmcBlock::runSmmuGate()
 {
@@ -9455,6 +9714,11 @@ Gta4lEmmcBlock::runBulk()
 	bool readOk;
 	bool revertOk;
 	bool streamHashed = false;
+	bool useDma = false;
+	uint32_t dmaStage = GTA4L_EMMC_BLOCK_DMA_STAGE_NONE;
+	uint32_t dmaSkip = 0;
+	uint64_t dmaStart = 0;
+	const uint8_t *source = nullptr;
 	uint8_t digest[32];
 
 	bzero(digest, sizeof(digest));
@@ -9543,11 +9807,42 @@ Gta4lEmmcBlock::runBulk()
 	report.smmu_s2cr = 0u;
 	report.smmu_cb = 0u;
 	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
+	report.dma = 0u;
+	report.dma_mode = 0u;
+	report.dma_smmu = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
+	report.dma_cmp_pass = 0u;
+	report.dma_cmp_total = 0u;
+	report.dma_canary = 0u;
+	report.dma_poison = 0u;
+	report.dma_chunks = 0u;
+	report.dma_bytes = 0u;
+	report.dma_ticks = 0u;
+	report.dma_dat = 0u;
+	report.dma_fails = 0u;
+	report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_NONE;
+	report.dma_ast = 0u;
+	report.dma_aaddr = 0u;
+	report.dma_desc = 0xffffffffu;
+	report.dma_budget = 0u;
+	report.dma_skip = 0u;
+	dmaCmpPass = 0;
+	dmaCmpTotal = 0;
+	dmaChunks = 0;
+	dmaBytes = 0;
+	dmaFails = 0;
+	dmaBudget = 0;
+	dmaTicks = 0;
+	dmaDat = 0;
 	IOLockUnlock(reportLock);
 	/* B10.2: the read-only SMMU state gate runs before any DMA or card
 	 * stream work. B10.2 only reports the verdict; B10.3 consumes the
 	 * return value to skip DMA on fault/translate/map-fail. */
 	(void)runSmmuGate();
+	if (dmaMode &&
+	    (report.smmu_decision !=
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS)) {
+		dmaSkip = 1;
+	}
 	speedTimingActive = false;
 	speedCoreTicks = 0;
 	speedBusTicks = 0;
@@ -9613,6 +9908,22 @@ Gta4lEmmcBlock::runBulk()
 		}
 	}
 
+	if ((stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) && dmaMode &&
+	    (dmaSkip == 0u)) {
+		dmaStart = gta4l_emmc_platform_counter();
+		if (!dmaAllocate()) {
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_DMA;
+			dmaStage = GTA4L_EMMC_BLOCK_DMA_STAGE_ALLOC;
+		} else if (!dmaCompare()) {
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_DMA;
+			dmaStage = (report.dma_stage !=
+			    GTA4L_EMMC_BLOCK_DMA_STAGE_NONE) ?
+			    report.dma_stage :
+			    GTA4L_EMMC_BLOCK_DMA_STAGE_COMPARE;
+		} else {
+			useDma = true;
+		}
+	}
 	if (stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) {
 		speedTimingActive = true;
 		host.timing_capture = 1;
@@ -9641,23 +9952,40 @@ Gta4lEmmcBlock::runBulk()
 			byteOffset = (uint64_t)chunk *
 			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES;
 			caseStart = gta4l_emmc_platform_counter();
-			readOk = bulkRead(widthholdBoot,
-			    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
-			    ((uint64_t)chunk *
-			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS),
-			    byteOffset,
-			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES,
-			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS,
-			    GTA4L_EMMC_BLOCK_BULK_TAG, &result);
+			if (useDma) {
+				readOk = dmaRead(
+				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+				    ((uint64_t)chunk *
+				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS),
+				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS,
+				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES);
+				source = dmaBuffer;
+				hashed = GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES;
+			} else {
+				readOk = bulkRead(widthholdBoot,
+				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+				    ((uint64_t)chunk *
+				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS),
+				    byteOffset,
+				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES,
+				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS,
+				    GTA4L_EMMC_BLOCK_BULK_TAG, &result);
+				source = bulkClient->data();
+				hashed = (result.actual >
+				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES) ?
+				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES :
+				    (uint32_t)result.actual;
+			}
 			speedIoTicks +=
 			    gta4l_emmc_platform_counter() - caseStart;
-			hashed = (result.actual >
-			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES) ?
-			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES :
-			    (uint32_t)result.actual;
+			if (!readOk && useDma) {
+				dmaStage = report.dma_stage;
+				stage = GTA4L_EMMC_BLOCK_BULK_STAGE_DMA;
+				failStatus = 0;
+				break;
+			}
 			shaStart = gta4l_emmc_platform_counter();
-			gta4l_emmc_block_sha256_update(&sha,
-			    bulkClient->data(), hashed);
+			gta4l_emmc_block_sha256_update(&sha, source, hashed);
 			shaTicks += gta4l_emmc_platform_counter() - shaStart;
 			bytes += hashed;
 			if (readOk) {
@@ -9767,32 +10095,47 @@ Gta4lEmmcBlock::runBulk()
 			byteOffset = windowBlock *
 			    GTA4L_EMMC_BLOCK_BYTES;
 			caseStart = gta4l_emmc_platform_counter();
-			readOk = bulkRead(widthholdBoot,
-			    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
-			    windowBlock, byteOffset,
-			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES,
-			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS,
-			    GTA4L_EMMC_BLOCK_BULK_TAG + 1u, &result);
+			if (useDma) {
+				readOk = dmaRead(
+				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+				    windowBlock,
+				    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS,
+				    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES);
+			} else {
+				readOk = bulkRead(widthholdBoot,
+				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+				    windowBlock, byteOffset,
+				    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES,
+				    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS,
+				    GTA4L_EMMC_BLOCK_BULK_TAG + 1u, &result);
+			}
 			speedIoTicks +=
 			    gta4l_emmc_platform_counter() - caseStart;
 			if (!readOk) {
-				if ((result.status ==
+				if (useDma) {
+					dmaStage = report.dma_stage;
+					stage =
+					    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA;
+					failStatus = 0;
+				} else if ((result.status ==
 				    GTA4L_EMMC_ERR_DEADLINE) ||
 				    (bulkElapsedMs() >=
 				    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS)) {
 					budget = 1;
 					stage =
 					    GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET;
+					failStatus = result.status;
 				} else {
 					stage =
 					    GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW;
+					failStatus = result.status;
 				}
-				failStatus = result.status;
 				failWindow = window + 1u;
 				failOffset = (uint32_t)windowBlock;
 				break;
 			}
-			if (memcmp(bulkClient->data(), bulkReference,
+			if (memcmp(useDma ? dmaBuffer :
+			    bulkClient->data(), bulkReference,
 			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0) {
 				stage =
 				    GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW;
@@ -9807,6 +10150,9 @@ Gta4lEmmcBlock::runBulk()
 	}
 	speedTimingActive = false;
 	host.timing_capture = 0;
+	if (dmaMode) {
+		dmaRelease();
+	}
 
 	if (stage != GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) {
 		online = false;
@@ -9859,6 +10205,25 @@ Gta4lEmmcBlock::runBulk()
 	report.bulkio_rcg_m = host.diag_rcg_m;
 	report.bulkio_rcg_n = host.diag_rcg_n;
 	report.bulkio_rcg_d = host.diag_rcg_d;
+	report.dma = dmaMode ? 1u : 0u;
+	report.dma_mode = dmaMode ?
+	    GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32 : 0u;
+	report.dma_smmu = report.smmu_decision;
+	report.dma_cmp_pass = dmaCmpPass;
+	report.dma_cmp_total = dmaCmpTotal;
+	report.dma_canary = (dmaCmpTotal != 0u) ? 1u : 0u;
+	report.dma_poison = (dmaCmpTotal != 0u) ? 1u : 0u;
+	report.dma_chunks = useDma ? chunks : 0u;
+	report.dma_bytes = useDma ? bytes : 0u;
+	report.dma_ticks = (dmaStart != 0u) ?
+	    gta4l_emmc_platform_counter() - dmaStart : 0u;
+	report.dma_dat = dmaDat;
+	report.dma_fails = dmaFails;
+	if (dmaStage != GTA4L_EMMC_BLOCK_DMA_STAGE_NONE) {
+		report.dma_stage = dmaStage;
+	}
+	report.dma_budget = (dmaMode && (budget != 0u)) ? 1u : 0u;
+	report.dma_skip = dmaSkip;
 	report.speed_pub = published;
 	report.speed_partdiag = report.widthhold_partdiag;
 	if (streamHashed) {
@@ -10612,6 +10977,24 @@ Gta4lEmmcBlock::runReport()
 	report.smmu_s2cr = 0u;
 	report.smmu_cb = 0u;
 	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
+	report.dma = 0u;
+	report.dma_mode = 0u;
+	report.dma_smmu = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
+	report.dma_cmp_pass = 0u;
+	report.dma_cmp_total = 0u;
+	report.dma_canary = 0u;
+	report.dma_poison = 0u;
+	report.dma_chunks = 0u;
+	report.dma_bytes = 0u;
+	report.dma_ticks = 0u;
+	report.dma_dat = 0u;
+	report.dma_fails = 0u;
+	report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_NONE;
+	report.dma_ast = 0u;
+	report.dma_aaddr = 0u;
+	report.dma_desc = 0xffffffffu;
+	report.dma_budget = 0u;
+	report.dma_skip = 0u;
 	report.bulk_region = GTA4L_EMMC_BLOCK_BULK_REGION_BYTES;
 	report.bulk_chunks = 0u;
 	report.bulk_bytes = 0u;

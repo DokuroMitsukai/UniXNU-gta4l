@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 448 scenarios with 172 adapter mutations, 3 support mutations and 42 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 456 scenarios with 174 adapter mutations, 3 support mutations and 42 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7412,6 +7412,41 @@ case is 2,663 bytes and still fits the 4,096-byte panic buffer. The host
 suite adds five gate scenarios (fault, translate, no-match/USFCFG,
 CLIENTPD, map-fail) and six mutations (match, decision, USFCFG, CLIENTPD,
 map failure ignored, line dropped). Core passes 214/132, probe 196/100,
-and the block suite 448 scenarios with 172 adapter, 3 support and 42
+and the block suite 456 scenarios with 174 adapter, 3 support and 42
 policy mutations. Host-only: no candidate, device access, flash or boot;
 the first hardware exercise is the B10.5 DMA image.
+
+### 5.3.113 B10.3 polled ADMA2 adapter path (2026-11-14)
+
+The `gta4l-emmc-dma=1` sub-mode is accepted only with
+`gta4l-emmc-block=3 gta4l-emmc-bulk=1`; orphan, non-1, duplicate and
+conflicting tokens are refused before start. The path allocates a
+page-aligned 4 KiB descriptor table, a 32 KiB bounce buffer followed by a
+4 KiB canary page, and a 32 KiB PIO reference buffer. Every table,
+bounce and descriptor physical range is validated below 4 GiB and each
+transfer prepares/completes the table and bounce descriptors.
+
+After the B10.2 SMMU gate, four fixed cases (first, middle and last full
+64-block chunk, plus the first unaligned two-block window) are read by PIO
+and by ADMA2 into a poisoned bounce with a zeroed canary page. Exact
+bytes and an intact canary are required before the stream; the stream and
+the 80 windows then use ADMA2, with the windows compared against their
+PIO references. A gate skip keeps the PIO bulk path and reports
+`skip=1`. The first DMA failure latches `BULKFAIL stage=12`, records the
+ADMA error/address and descriptor index, sends the explicit stop, reverts
+and reports without retry or silent PIO fallback.
+
+The `DMA:` line reports mode, SMMU decision, comparison counts,
+canary/poison, chunks/bytes, ticks/dat, fails, stage, ADMA status/address,
+descriptor index, budget and skip; its exact bound is 308 bytes and the
+bulk worst case is 2,972 bytes inside the 3,072-byte buffer. The
+12,000/14,000 ms proposal was not used: with the existing worst-case
+media, BOOT, stop, gate and revert terms it would exceed the 30,000 ms
+watchdog. This rung keeps the proven 4,000/4,500 ms bulk budget; DMA+SHA
+is expected to hit the controlled budget exit until corecrypto SHA-256 is
+imported.
+
+Host suite: 456 scenarios with 174 adapter, 3 support and 42 policy
+mutations, including eight DMA scenarios and two DMA mutations. Host-only:
+no candidate, device access, flash or boot; the first DMA boot still
+needs the B10.5 hash-specific go.

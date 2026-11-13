@@ -524,6 +524,35 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SMMU_STREAM_ID 0x00c0u
 #define GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS 256u
 
+/* B10.3 polled 32-bit ADMA2 sub-mode of bulk. The token is valid only with
+ * gta4l-emmc-block=3 gta4l-emmc-bulk=1 and no other selector. The fixed
+ * comparison window covers the first, middle and last full 64-block chunk
+ * plus the first unaligned two-block window; only after all four match does
+ * the stream run by DMA. */
+#define GTA4L_EMMC_BLOCK_DMA_ARG "gta4l-emmc-dma"
+#define GTA4L_EMMC_BLOCK_DMA_OFF 0
+#define GTA4L_EMMC_BLOCK_DMA_ON 1
+#define GTA4L_EMMC_BLOCK_DMA_REFUSED (-1)
+#define GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32 1u
+#define GTA4L_EMMC_BLOCK_DMA_COMPARE_CASES 4u
+#define GTA4L_EMMC_BLOCK_DMA_STREAM_BUDGET_MS 12000u
+#define GTA4L_EMMC_BLOCK_DMA_TOTAL_BUDGET_MS 14000u
+#define GTA4L_EMMC_BLOCK_DMA_TABLE_BYTES 4096u
+#define GTA4L_EMMC_BLOCK_DMA_MAX_ENTRY_BYTES 32768u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_NONE 0u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_ALLOC 1u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_TABLE 2u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_COMPARE 3u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_READ 4u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_SHORT 5u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_BUDGET 6u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_CANARY 7u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_WINDOW 8u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_SHAPE 9u
+#define GTA4L_EMMC_BLOCK_ADMA_DESC_VALID 0x0001u
+#define GTA4L_EMMC_BLOCK_ADMA_DESC_END 0x0002u
+#define GTA4L_EMMC_BLOCK_ADMA_DESC_ACT_TRAN 0x0020u
+
 #define GTA4L_EMMC_BLOCK_SMMU_STAGE_NONE 0u
 #define GTA4L_EMMC_BLOCK_SMMU_STAGE_PRE 1u
 #define GTA4L_EMMC_BLOCK_SMMU_STAGE_READ 2u
@@ -556,6 +585,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_BULK_STAGE_PART 9u
 #define GTA4L_EMMC_BLOCK_BULK_STAGE_OPEN 10u
 #define GTA4L_EMMC_BLOCK_BULK_STAGE_SHAPE 11u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_DMA 12u
 
 /* Formatter-exact bounds: the BULK line is 249 bytes with its eleven
  * fields at their widest (seven u32 at ten digits, two u64 at twenty, one
@@ -565,13 +595,14 @@ extern "C" {
  * six u32 counters at ten digits, the 8-bit Host Control and 16-bit Clock
  * Control at two and four hex digits, Present State at eight, five packed
  * sixteen-digit register pairs and thirteen separators. The S1 worst case
- * is 1,586 bytes; adding the SPEEDIO, BULK, BULKIO, SMMU and optional
- * BULKFAIL lines keeps the combined report at 2,663 bytes inside the
- * 3,072-byte buffer. The extra space leaves room for the B10.3 DMA line. */
+ * is 1,586 bytes; adding the SPEEDIO, BULK, BULKIO, SMMU, DMA and optional
+ * BULKFAIL lines keeps the combined report at 2,972 bytes inside the
+ * 3,072-byte buffer. */
 #define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
 #define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
 #define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 250u
-#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2663u
+#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2972u
 
 /* Start-path failure stages, in execution order. A failure latch keeps the
  * first stage so a later cleanup failure cannot mask it. */
@@ -1229,6 +1260,29 @@ struct gta4l_emmc_block_report {
 	uint32_t smmu_s2cr;
 	uint32_t smmu_cb;
 	uint32_t smmu_decision;
+	/* B10.3 ADMA2 sub-mode. `dma` selects the DMA line; mode is 1 for
+	 * 32-bit ADMA2, smmu mirrors the gate decision, cmp_pass/total the
+	 * fixed comparison window, canary/poison its integrity checks, and
+	 * the stream fields mirror BULK. ast/aaddr/desc identify the first
+	 * ADMA fault, stage the first failure and budget the stream exit. */
+	uint32_t dma;
+	uint32_t dma_mode;
+	uint32_t dma_smmu;
+	uint32_t dma_cmp_pass;
+	uint32_t dma_cmp_total;
+	uint32_t dma_canary;
+	uint32_t dma_poison;
+	uint32_t dma_chunks;
+	uint32_t dma_bytes;
+	uint64_t dma_ticks;
+	uint64_t dma_dat;
+	uint32_t dma_fails;
+	uint32_t dma_stage;
+	uint32_t dma_ast;
+	uint32_t dma_aaddr;
+	uint32_t dma_desc;
+	uint32_t dma_budget;
+	uint32_t dma_skip;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -1401,6 +1455,21 @@ int gta4l_emmc_block_bulk_select(int token_present, int token_value,
     int deblock_selected, int breakup_selected, int sweep_selected,
     int consume_selected, int width_selected, int widthhold_selected,
     int widthpub_selected, int speed_selected);
+
+/* Select the ADMA2 sub-mode. Valid only with exactly one block=3 token, the
+ * bulk token selected and no other diagnostic selector. */
+int gta4l_emmc_block_dma_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int bulk_selected, int partobs_selected, int partcmp_selected,
+    int partread_selected, int deblock_selected, int breakup_selected,
+    int sweep_selected, int consume_selected, int width_selected,
+    int widthhold_selected, int widthpub_selected, int speed_selected);
+
+/* Build a 32-bit ADMA2 descriptor table from one contiguous buffer and
+ * return the entry count, or 0 on a bad range/table. The caller owns the
+ * page-aligned table and has already validated the 32-bit physical range. */
+uint32_t gta4l_emmc_block_adma_build(uint8_t *table, uint32_t table_bytes,
+    uint32_t address, uint32_t length, uint32_t max_entry_bytes);
 
 /* Derive the region-relative start block of one S2 bulk window. Windows
  * 0..63 are chunk-aligned and spread evenly over the region; windows 64..79

@@ -1566,10 +1566,10 @@ ADAPTER_MUTATIONS = [
        '\t\t\t    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {\n')],
      'bulk-cancel-during'),
     ('bulk-window-compare-skip',
-     [('\t\t\tif (memcmp(bulkClient->data(), bulkReference,\n'
+     [('\t\t\tif (memcmp(useDma ? dmaBuffer :\n'
+       '\t\t\t    bulkClient->data(), bulkReference,\n'
        '\t\t\t    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0) {\n',
-       '\t\t\tif ((0) && memcmp(bulkClient->data(), bulkReference,\n'
-       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0) {\n')],
+       '\t\t\tif (0) {\n')],
      'bulk-window-mismatch'),
     ('bulk-digest-report-omit',
      [('\tif (streamHashed) {\n'
@@ -1642,6 +1642,20 @@ ADAPTER_MUTATIONS = [
        '\t\tgoto done;\n'
        '\t}\n')],
      'bulk-smmu-map-fail'),
+    ('dma-compare-skipped',
+     [('\t\t} else if (!dmaCompare()) {\n',
+       '\t\t} else if (0) {\n')],
+     'dma-compare-mismatch'),
+    ('dma-smmu-skip-ignored',
+     [('\tif (dmaMode &&\n'
+       '\t    (report.smmu_decision !=\n'
+       '\t    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS)) {\n'
+       '\t\tdmaSkip = 1;\n'
+       '\t}\n',
+       '\tif (0) {\n'
+       '\t\tdmaSkip = 1;\n'
+       '\t}\n')],
+     'dma-smmu-skip'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2218,8 +2232,16 @@ def check_adapter_source():
         'consumer must validate the one-segment descriptor'
     assert 'descriptor->setTag(tag)' in adapter, \
         'consumer must tag the single case descriptor'
-    assert '->prepare(' not in adapter and '->complete(' not in adapter, \
-        'consumer must not manually prepare or complete the descriptor'
+    assert 'streamDescriptor->prepare' not in adapter and \
+        'streamDescriptor->complete' not in adapter and \
+        'windowDescriptor->prepare' not in adapter and \
+        'windowDescriptor->complete' not in adapter, \
+        'consumer must not manually prepare or complete the media descriptor'
+    assert 'dmaTableDescriptor->prepare(kIODirectionOut)' in adapter and \
+        'dmaBufferDescriptor->prepare(kIODirectionIn)' in adapter and \
+        'dmaTableDescriptor->complete(kIODirectionOut)' in adapter and \
+        'dmaBufferDescriptor->complete(kIODirectionIn)' in adapter, \
+        'DMA bounce descriptors must be prepared and completed'
     assert 'kIOStorageAccessReaderWriter' not in adapter, \
         'report media must never request writer access'
     assert '->write(' not in adapter and 'IOStorage::write' not in adapter, \
@@ -2421,8 +2443,10 @@ def check_adapter_source():
         policy_header, 'the BULKFAIL formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 250u' in \
         policy_header, 'the BULKIO formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2663u' in \
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2972u' in \
         policy_header, 'the BULK report bound must match the base block'
+    assert '#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u' in \
+        policy_header, 'the DMA formatter bound must stay exact'
     assert 'GTA4L-EMMC P5 BULKIO: ' in policy, \
         'bulk mode must emit the S2.1 data-phase and register line'
     assert '#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 139u' in \
@@ -2473,7 +2497,8 @@ def check_adapter_source():
         'bulk mode must reject foreign and overlapping requests'
     assert 'bulkObserve(buffer, blockNumber, nblks)' in adapter, \
         'adapter must observe the actual bulk subrequest decomposition'
-    assert 'memcmp(bulkClient->data(), bulkReference' in adapter, \
+    assert 'memcmp(useDma ? dmaBuffer :' in adapter and \
+        'bulkClient->data(), bulkReference' in adapter, \
         'bulk windows must compare the whole observed window'
     assert 'gta4l_emmc_deadline_arm(&host,\n' \
         '\t\t    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS)' in adapter, \
@@ -2867,8 +2892,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 449, f'expected 449 adapter PASS lines, got {passes}'
-        print('PASS adapter: 449 scenarios against the host IOKit seam')
+        assert passes == 457, f'expected 457 adapter PASS lines, got {passes}'
+        print('PASS adapter: 457 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
