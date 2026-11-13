@@ -138,6 +138,12 @@ SCENARIOS = [
     'multi-args',
     'multi-without-init',
     'multi-last-block',
+    'adma-success',
+    'adma-error',
+    'adma-no-tc',
+    'adma-length',
+    'adma-crc',
+    'adma-arg',
     'multi-success',
     'multi-repeat',
     'multi-timing-s21',
@@ -1078,19 +1084,41 @@ def main() -> int:
              'Gta4lEmmc.c', (), 'cmd9-late-error'),
             ('mb-block-count-off-by-one',
              '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
-             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n',
+             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n'
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
              '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
-             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)(count - 1u));\n',
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)(count - 1u));\n'
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
              'Gta4lEmmc.c', (), 'multi-success'),
             ('mb-lba-off-by-one',
              '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
-             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n',
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
              '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
-             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba + 1u);\n',
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba + 1u);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
              'Gta4lEmmc.c', (), 'multi-success'),
             ('mb-stop-suppressed',
-             '\tstop_result = gta4l_emmc_send_stop(host);\n',
-             '\tstop_result = GTA4L_EMMC_OK;\n',
+             '\tstop_result = gta4l_emmc_send_stop(host);\n'
+             '\tif (host->timing_capture != 0) {\n',
+             '\tstop_result = GTA4L_EMMC_OK;\n'
+             '\tif (host->timing_capture != 0) {\n',
              'Gta4lEmmc.c', ('-Wno-unused-function',), 'multi-success'),
             ('mb-auto-cmd12',
              '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
@@ -1127,15 +1155,52 @@ def main() -> int:
              '\t\t\thost->multi_completed = done;\n'
              '\t\t\tgta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,\n',
              'Gta4lEmmc.c', (), 'multi-late-error'),
+            ('adma-dma-enable-dropped',
+             '\t    GTA4L_EMMC_TM_MULTI | GTA4L_EMMC_TM_DMA_EN);\n',
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
+             'Gta4lEmmc.c', (), 'adma-success'),
+            ('adma-descriptor-address-dropped',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ADMA_SYS_ADDR, desc_address);\n',
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ADMA_SYS_ADDR, 0u);\n',
+             'Gta4lEmmc.c', (), 'adma-success'),
+            ('adma-select-not-cleared',
+             '\tgta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_HOST_CONTROL,\n'
+             '\t    (uint8_t)(host_control & '
+             '~GTA4L_EMMC_HOST_CONTROL_DMA_MASK));\n',
+             '\t/* DMA select restore removed by mutation */\n',
+             'Gta4lEmmc.c', (), 'adma-success'),
+            ('adma-stop-suppressed',
+             '\tstop_result = gta4l_emmc_send_stop(host);\n'
+             '\tresult->stop_attempted = '
+             '(host->multi_stop_valid != 0) ? 1u : 0u;\n',
+             '\tstop_result = GTA4L_EMMC_OK;\n'
+             '\tresult->stop_attempted = '
+             '(host->multi_stop_valid != 0) ? 1u : 0u;\n',
+             'Gta4lEmmc.c', ('-Wno-unused-function',), 'adma-success'),
             ('mb-block-size',
              '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
              '\t    GTA4L_EMMC_REG_BLOCK_SIZE, GTA4L_EMMC_BLOCK_BYTES);\n'
              '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
-             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n',
+             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n'
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
              '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
              '\t    GTA4L_EMMC_REG_BLOCK_SIZE, (uint16_t)count);\n'
              '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
-             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n',
+             '\t    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);\n'
+             '\tgta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);\n'
+             '\tgta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t    GTA4L_EMMC_REG_TRANSFER_MODE,\n'
+             '\t    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |\n'
+             '\t    GTA4L_EMMC_TM_MULTI);\n',
              'Gta4lEmmc.c', (), 'multi-success'),
             ('mb-drain-window-suppressed',
              '\tif ((completed == 0) && (result == GTA4L_EMMC_OK)) {\n'
@@ -1694,9 +1759,17 @@ def main() -> int:
              '\t\t\t\t\thost->timing_brr_wait_ticks += 0u;\n',
              'Gta4lEmmc.c', (), 'multi-timing-s21'),
             ('timing-polls-zero',
+             '\tresult = GTA4L_EMMC_OK;\n'
+             '\titerations = '
+             'gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);\n'
+             '\tfor (step = 0; step < iterations; step++) {\n'
              '\t\tif (host->timing_capture != 0) {\n'
              '\t\t\thost->timing_polls++;\n'
              '\t\t}\n',
+             '\tresult = GTA4L_EMMC_OK;\n'
+             '\titerations = '
+             'gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);\n'
+             '\tfor (step = 0; step < iterations; step++) {\n'
              '\t\tif (host->timing_capture != 0) {\n'
              '\t\t\thost->timing_polls += 0u;\n'
              '\t\t}\n',

@@ -763,6 +763,9 @@ gta4l_emmc_map_error(uint16_t error, int data)
 	if ((error & GTA4L_EMMC_INT_ERR_CMD_INDEX) != 0) {
 		return GTA4L_EMMC_ERR_CMD_INDEX;
 	}
+	if ((error & GTA4L_EMMC_INT_ERR_ADMA) != 0) {
+		return GTA4L_EMMC_ERR_ADMA;
+	}
 	if ((error & GTA4L_EMMC_INT_ERR_DATA_TIMEOUT) != 0) {
 		return GTA4L_EMMC_ERR_DATA_TIMEOUT;
 	}
@@ -4447,4 +4450,243 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 	result->transport_result = (result->stop_attempted != 0) ?
 	    host->multi_data_result : rc;
 	return rc;
+}
+
+/* Capture the first DMA failure before the stop/reset changes the state. */
+static void
+gta4l_emmc_capture_adma_failure(struct gta4l_emmc_host *host,
+    struct gta4l_emmc_adma_result *result, uint32_t desc_address,
+    uint32_t desc_bytes)
+{
+	uint32_t address;
+	uint32_t offset;
+
+	result->error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+	result->normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+	result->present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_PRESENT_STATE);
+	result->adma_error = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ADMA_ERROR_STATUS);
+	address = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ADMA_SYS_ADDR);
+	result->adma_address = address;
+	result->fail_desc = 0xffffffffu;
+	if ((address >= desc_address) && (desc_bytes != 0u)) {
+		offset = address - desc_address;
+		if (((offset & 7u) == 0u) && (offset < desc_bytes)) {
+			result->fail_desc = offset / 8u;
+		}
+	}
+}
+
+int
+gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
+    uint32_t count, uint32_t desc_address, uint32_t desc_bytes,
+    struct gta4l_emmc_adma_result *result)
+{
+	uint16_t command;
+	uint16_t normal = 0;
+	uint16_t error = 0;
+	uint32_t present = 0;
+	uint32_t response = 0;
+	uint32_t host_control;
+	uint32_t iterations;
+	uint32_t step;
+	uint32_t readback;
+	int command_done = 0;
+	int completed = 0;
+	int fault = 0;
+	int result_code;
+	int stop_result;
+
+	if ((host == 0) || (result == 0) || (host->initialized == 0) ||
+	    (desc_address == 0u) || (desc_bytes == 0u) ||
+	    ((desc_address & 7u) != 0u) || ((desc_bytes & 7u) != 0u) ||
+	    (desc_bytes > 4096u)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if ((count == 0u) || (count > 0xFFFFu)) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	if ((host->capacity_blocks == 0u) ||
+	    (start_lba >= (uint64_t)host->capacity_blocks) ||
+	    (start_lba > 0xFFFFFFFFu) ||
+	    ((uint64_t)count >
+	    ((uint64_t)host->capacity_blocks - start_lba))) {
+		return GTA4L_EMMC_ERR_ARG;
+	}
+	result->transport_result = GTA4L_EMMC_OK;
+	result->completed_blocks = 0;
+	result->stop_attempted = 0;
+	result->stop_result = 0;
+	result->adma_error = 0;
+	result->adma_address = 0;
+	result->fail_desc = 0xffffffffu;
+	result->reset_data_result = GTA4L_EMMC_OK;
+	result->reset_cmd_result = GTA4L_EMMC_OK;
+	result->error = 0;
+	result->normal = 0;
+	result->present = 0;
+	host->multi_block = 0;
+	host->multi_completed = 0;
+	host->multi_data_result = 0;
+	host->multi_stop_result = 0;
+	host->multi_stop_valid = 0;
+
+	command = (uint16_t)((GTA4L_EMMC_CMD18 << 8) |
+	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
+	    GTA4L_EMMC_CMD_INDEX | GTA4L_EMMC_CMD_DATA);
+	if (gta4l_emmc_wait_inhibit(host) != GTA4L_EMMC_OK) {
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,
+		    (uint32_t)start_lba, command, 0, 0, present);
+		result->transport_result = GTA4L_EMMC_ERR_INHIBIT;
+		result->present = present;
+		return result->transport_result;
+	}
+	gta4l_emmc_clear_interrupts(host);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_BLOCK_SIZE, GTA4L_EMMC_BLOCK_BYTES);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_BLOCK_COUNT, (uint16_t)count);
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ARGUMENT, (uint32_t)start_lba);
+	host_control = gta4l_emmc_read8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL);
+	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL,
+	    (uint8_t)((host_control & ~GTA4L_EMMC_HOST_CONTROL_DMA_MASK) |
+	    GTA4L_EMMC_HOST_CONTROL_DMA_ADMA2));
+	gta4l_emmc_write32(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_ADMA_SYS_ADDR, desc_address);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_TRANSFER_MODE,
+	    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |
+	    GTA4L_EMMC_TM_MULTI | GTA4L_EMMC_TM_DMA_EN);
+	gta4l_emmc_barrier(host);
+	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_COMMAND, command);
+	gta4l_emmc_barrier(host);
+
+	result_code = GTA4L_EMMC_OK;
+	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
+	for (step = 0; step < iterations; step++) {
+		if (host->timing_capture != 0) {
+			host->timing_polls++;
+		}
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			result_code = GTA4L_EMMC_ERR_DEADLINE;
+			fault = 1;
+			break;
+		}
+		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+			gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,
+			    (uint32_t)start_lba, command, error,
+			    gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_NORMAL_INT_STATUS),
+			    gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_PRESENT_STATE));
+			result_code = gta4l_emmc_map_error(error, 1);
+			fault = 1;
+			break;
+		}
+		normal = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_NORMAL_INT_STATUS);
+		if ((command_done == 0) &&
+		    ((normal & GTA4L_EMMC_INT_CC) != 0)) {
+			response = gta4l_emmc_read32(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_RESPONSE);
+			command_done = 1;
+		}
+		if ((command_done != 0) &&
+		    ((normal & GTA4L_EMMC_INT_TC) != 0)) {
+			error = gta4l_emmc_read16(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+			if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+				gta4l_emmc_record_failure(host,
+				    GTA4L_EMMC_CMD18, (uint32_t)start_lba,
+				    command, error,
+				    normal,
+				    gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_PRESENT_STATE));
+				result_code = gta4l_emmc_map_error(error, 1);
+				fault = 1;
+				break;
+			}
+			completed = 1;
+			break;
+		}
+		if (host->timing_capture != 0) {
+			host->timing_delays++;
+		}
+		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
+	}
+	if ((completed == 0) && (fault == 0)) {
+		result_code = GTA4L_EMMC_ERR_DATA_TIMEOUT;
+		fault = 1;
+	}
+	if (fault != 0) {
+		gta4l_emmc_capture_adma_failure(host, result, desc_address,
+		    desc_bytes);
+		host->multi_block = (completed != 0) ? (count - 1u) : 0u;
+		host->multi_completed = completed ? count : 0u;
+		gta4l_emmc_record_failure(host, GTA4L_EMMC_CMD18,
+		    (uint32_t)start_lba, command, result->error,
+		    result->normal, result->present);
+	}
+	if ((result_code == GTA4L_EMMC_OK) &&
+	    ((response & GTA4L_EMMC_R1_ERROR_MASK) != 0)) {
+		gta4l_emmc_log(host, GTA4L_EMMC_LOG_ERROR, 3, response);
+		result_code = GTA4L_EMMC_ERR_CARD_STATUS;
+	}
+	result->transport_result = result_code;
+	host->multi_data_result = result_code;
+	result->completed_blocks = completed ? count : 0u;
+	stop_result = gta4l_emmc_send_stop(host);
+	result->stop_attempted = (host->multi_stop_valid != 0) ? 1u : 0u;
+	result->stop_result = (int32_t)stop_result;
+	if ((result_code == GTA4L_EMMC_OK) && (stop_result != GTA4L_EMMC_OK)) {
+		result->transport_result = stop_result;
+	}
+	if (fault != 0) {
+		result->reset_data_result =
+		    (int32_t)gta4l_emmc_clear_dat_inhibit(host);
+		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_PRESENT_STATE);
+		result->present = present;
+		if ((present & GTA4L_EMMC_PRESENT_CMD_INHIBIT) != 0u) {
+			gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_SOFTWARE_RESET,
+			    GTA4L_EMMC_RESET_CMD);
+			gta4l_emmc_barrier(host);
+			iterations = gta4l_emmc_poll_iterations(
+			    GTA4L_EMMC_RESET_TIMEOUT_US);
+			readback = gta4l_emmc_read8(host,
+			    GTA4L_EMMC_SPACE_SDHCI,
+			    GTA4L_EMMC_REG_SOFTWARE_RESET);
+			for (step = 1; (readback != 0u) &&
+			    (step < iterations); step++) {
+				gta4l_emmc_delay(host,
+				    GTA4L_EMMC_POLL_STEP_US);
+				readback = gta4l_emmc_read8(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_SOFTWARE_RESET);
+			}
+			result->reset_cmd_result = (readback == 0u) ?
+			    GTA4L_EMMC_OK : GTA4L_EMMC_ERR_RESET;
+		}
+	}
+	gta4l_emmc_write8(host, GTA4L_EMMC_SPACE_SDHCI,
+	    GTA4L_EMMC_REG_HOST_CONTROL,
+	    (uint8_t)(host_control & ~GTA4L_EMMC_HOST_CONTROL_DMA_MASK));
+	gta4l_emmc_barrier(host);
+	return result->transport_result;
 }

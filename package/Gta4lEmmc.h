@@ -46,6 +46,8 @@ extern "C" {
 #define GTA4L_EMMC_REG_NORMAL_INT_SIGNAL   0x38u
 #define GTA4L_EMMC_REG_ERROR_INT_SIGNAL    0x3Au
 #define GTA4L_EMMC_REG_HOST_CONTROL2       0x3Eu
+#define GTA4L_EMMC_REG_ADMA_ERROR_STATUS   0x54u
+#define GTA4L_EMMC_REG_ADMA_SYS_ADDR       0x58u
 #define GTA4L_EMMC_REG_CAPABILITIES        0x40u
 #define GTA4L_EMMC_REG_HOST_VERSION        0xFEu
 
@@ -84,6 +86,7 @@ extern "C" {
 #define GTA4L_EMMC_CLOCK_INT_STABLE        0x0002u
 #define GTA4L_EMMC_CLOCK_CARD_EN           0x0004u
 #define GTA4L_EMMC_RESET_ALL               0x01u
+#define GTA4L_EMMC_RESET_CMD               0x02u
 #define GTA4L_EMMC_RESET_DATA              0x04u
 #define GTA4L_EMMC_TIMEOUT_MAX             0x0Eu
 #define GTA4L_EMMC_PRESENT_CMD_INHIBIT     0x00000001u
@@ -179,9 +182,26 @@ extern "C" {
 #define GTA4L_EMMC_CMD_INDEX               0x0010u
 
 /* Transfer-mode fields. */
+#define GTA4L_EMMC_TM_DMA_EN               0x0001u
 #define GTA4L_EMMC_TM_BLOCK_COUNT_EN       0x0002u
 #define GTA4L_EMMC_TM_READ                 0x0010u
 #define GTA4L_EMMC_TM_MULTI                0x0020u
+
+/* Host Control 1 DMA-select field (bits 4:3). 10b is 32-bit ADMA2. */
+#define GTA4L_EMMC_HOST_CONTROL_DMA_MASK   0x0018u
+#define GTA4L_EMMC_HOST_CONTROL_DMA_ADMA2  0x0010u
+
+/* ADMA2 32-bit descriptor: 16-bit attribute, 16-bit length, 32-bit address.
+ * Act=10b is a normal data transfer; length 0 would mean 65,536 bytes and is
+ * never emitted (the builder caps entries at 32 KiB). */
+#define GTA4L_EMMC_ADMA_DESC_VALID         0x0001u
+#define GTA4L_EMMC_ADMA_DESC_END           0x0002u
+#define GTA4L_EMMC_ADMA_DESC_ACT_TRAN      0x0020u
+#define GTA4L_EMMC_ADMA_DESC_MAX_BYTES     32768u
+
+/* ADMA Error Status (0x54) fields used only for the diagnostic report. */
+#define GTA4L_EMMC_ADMA_ERR_STATE_MASK     0x03u
+#define GTA4L_EMMC_ADMA_ERR_LENGTH_MISMATCH 0x04u
 
 /* Qualcomm power-control bits. */
 #define GTA4L_EMMC_PWRCTL_BUS_OFF          0x01u
@@ -371,6 +391,7 @@ extern "C" {
  * report this code. (-24 is the probe-only length verdict, so the next
  * controller code is -25.) */
 #define GTA4L_EMMC_ERR_DEADLINE          -25
+#define GTA4L_EMMC_ERR_ADMA               -26
 
 /* Diagnostic event codes passed to the log callback. */
 #define GTA4L_EMMC_LOG_RESET              1u
@@ -761,6 +782,31 @@ struct gta4l_emmc_multi_result {
 int gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host,
     uint64_t start_lba, uint32_t count, void *buffer,
     struct gta4l_emmc_multi_result *result);
+
+/* Polled 32-bit ADMA2 read of `count` blocks. The descriptor table is a
+ * page-aligned physical buffer supplied by the caller; the caller validates
+ * every descriptor address/length and the 32-bit physical range. The core
+ * only issues the transfer, waits for TC, stops the card and clears the DMA
+ * select. Every terminal field is captured before the reset so the report
+ * names the first failure. */
+struct gta4l_emmc_adma_result {
+	int32_t transport_result;
+	uint32_t completed_blocks;
+	uint8_t stop_attempted;
+	int32_t stop_result;
+	uint32_t adma_error;      /* ADMA Error Status (0x54) */
+	uint32_t adma_address;    /* ADMA System Address (0x58) */
+	uint32_t fail_desc;       /* descriptor index, 0xffffffff if outside */
+	int32_t reset_data_result;
+	int32_t reset_cmd_result;
+	uint32_t error;
+	uint32_t normal;
+	uint32_t present;
+};
+
+int gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host,
+    uint64_t start_lba, uint32_t count, uint32_t desc_address,
+    uint32_t desc_bytes, struct gta4l_emmc_adma_result *result);
 
 /* Read the 512-byte EXT_CSD into `buffer`. */
 int gta4l_emmc_read_ext_csd(struct gta4l_emmc_host *host, void *buffer);

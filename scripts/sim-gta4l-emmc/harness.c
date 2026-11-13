@@ -61,7 +61,16 @@
 #define SIM_HOST_CONTROL_8BIT   0x20u
 #define SIM_BUS_TEST_4_BYTES    4u
 #define SIM_BUS_TEST_8_BYTES    8u
+#define SIM_TM_DMA_EN           0x0001u
 #define SIM_TM_BLOCK_COUNT_EN   0x0002u
+#define SIM_HOST_DMA_MASK       0x0018u
+#define SIM_HOST_DMA_ADMA2      0x0010u
+#define SIM_ADMA_DESC_VALID     0x0001u
+#define SIM_ADMA_DESC_END       0x0002u
+#define SIM_ADMA_DESC_ACT_TRAN  0x0020u
+#define SIM_ADMA_ERR_TDAT       0x0003u
+#define SIM_ADMA_ERR_LENGTH     0x0004u
+#define SIM_DMA_REGIONS         4u
 #define SIM_INT_BWR             0x0010u
 #define SIM_TM_READ             0x0010u
 #define SIM_TM_MULTI            0x0020u
@@ -221,6 +230,17 @@ struct sim {
 	uint64_t mb_tc_due_us;
 	uint64_t mb_last_brr_due_us;
 	uint64_t mb_error_due_us;
+	/* Polled 32-bit ADMA2 model. The table and destination are registered
+	 * physical regions; the transfer copies sector data into the
+	 * descriptor addresses and sets TC (unless withheld or failed). */
+	int adma_dma_enabled;
+	int adma_no_tc;
+	int adma_error_at;
+	int adma_length_mismatch;
+	int adma_corrupt_at;
+	uint32_t adma_sys_addr;
+	uint32_t adma_error_status;
+	uint32_t adma_blocks_copied;
 	uint32_t cmd_late_error_index;
 	int cmd_late_error_emitted;
 	int power_written;
@@ -381,6 +401,48 @@ struct sim {
 	int buffer_read_cost_us;
 };
 
+/* Host-test physical-memory registry for the ADMA2 model. The production
+ * core sees only 32-bit physical addresses; scenarios register the table and
+ * destination buffers before issuing the transfer. */
+struct sim_dma_region {
+	uint32_t physical;
+	uint32_t length;
+	uint8_t *memory;
+};
+
+static struct sim_dma_region sim_dma_regions[SIM_DMA_REGIONS];
+static uint32_t sim_dma_region_count;
+
+static void
+sim_dma_register(uint32_t physical, void *memory, uint32_t length)
+{
+	if (sim_dma_region_count >= SIM_DMA_REGIONS) {
+		return;
+	}
+	sim_dma_regions[sim_dma_region_count].physical = physical;
+	sim_dma_regions[sim_dma_region_count].length = length;
+	sim_dma_regions[sim_dma_region_count].memory = (uint8_t *)memory;
+	sim_dma_region_count++;
+}
+
+static uint8_t *
+sim_dma_lookup(uint32_t address, uint32_t length)
+{
+	uint32_t index;
+
+	for (index = 0; index < sim_dma_region_count; index++) {
+		uint32_t base = sim_dma_regions[index].physical;
+
+		if ((address >= base) &&
+		    ((uint64_t)address + length <=
+		    (uint64_t)base + sim_dma_regions[index].length)) {
+			return sim_dma_regions[index].memory +
+			    (address - base);
+		}
+	}
+	return 0;
+}
+
 static int
 sim_sdhci_width_ok(uint32_t offset, uint32_t width)
 {
@@ -389,6 +451,7 @@ sim_sdhci_width_ok(uint32_t offset, uint32_t width)
 	case 0x29u: /* POWER_CONTROL */
 	case 0x2Eu: /* TIMEOUT_CONTROL */
 	case 0x2Fu: /* SOFTWARE_RESET */
+	case 0x54u: /* ADMA_ERROR_STATUS */
 		return width == 1u;
 	case 0x04u: /* BLOCK_SIZE */
 	case 0x06u: /* BLOCK_COUNT */
@@ -411,6 +474,7 @@ sim_sdhci_width_ok(uint32_t offset, uint32_t width)
 	case 0x1Cu:
 	case 0x20u: /* BUFFER_DATA_PORT */
 	case 0x24u: /* PRESENT_STATE */
+	case 0x58u: /* ADMA_SYS_ADDR */
 	case 0x40u: /* CAPABILITIES */
 	case 0x44u: /* CAPABILITIES_1 */
 	case 0x200u: /* CORE_DLL_CONFIG */
@@ -1256,6 +1320,122 @@ sim_command_ok(struct sim *sim, uint32_t index, uint32_t argument,
 	}
 }
 
+#define SIM_INT_ERR_ADMA 0x0200u
+
+static void
+sim_adma_fail(struct sim *sim, uint32_t status, uint32_t address)
+{
+	sim->error_int |= SIM_INT_ERR_ADMA;
+	sim->adma_error_status = status;
+	sim->adma_sys_addr = address;
+	sim->sdhci[GTA4L_EMMC_REG_ADMA_ERROR_STATUS] = (uint8_t)status;
+	sim->sdhci[GTA4L_EMMC_REG_ADMA_SYS_ADDR] =
+	    (uint8_t)(address & 0xFFu);
+	sim->sdhci[GTA4L_EMMC_REG_ADMA_SYS_ADDR + 1u] =
+	    (uint8_t)((address >> 8) & 0xFFu);
+	sim->sdhci[GTA4L_EMMC_REG_ADMA_SYS_ADDR + 2u] =
+	    (uint8_t)((address >> 16) & 0xFFu);
+	sim->sdhci[GTA4L_EMMC_REG_ADMA_SYS_ADDR + 3u] =
+	    (uint8_t)((address >> 24) & 0xFFu);
+	sim->mb_active = 0;
+}
+
+/* Copy the modeled card data into the descriptor destinations. The scenario
+ * registers the table and destination as physical regions; an unmapped
+ * address, a bad length or an injected descriptor fault sets the ADMA error
+ * bit and leaves TC clear, exactly as the core expects. */
+static void
+sim_adma_transfer(struct sim *sim, uint32_t argument)
+{
+	uint8_t *table;
+	uint8_t *destination;
+	uint32_t index = 0;
+	uint32_t total = 0;
+	uint32_t entry_address;
+	uint32_t offset;
+	uint32_t length;
+	uint32_t attribute;
+	uint32_t byte;
+	uint32_t expected = sim->block_count * GTA4L_EMMC_BLOCK_BYTES;
+
+	table = sim_dma_lookup(sim->adma_sys_addr, 8u);
+	if (table == 0) {
+		sim_adma_fail(sim, SIM_ADMA_ERR_TDAT | SIM_ADMA_ERR_LENGTH,
+		    sim->adma_sys_addr);
+		return;
+	}
+	while (index < 512u) {
+		attribute = (uint32_t)table[index * 8u] |
+		    ((uint32_t)table[index * 8u + 1u] << 8);
+		length = (uint32_t)table[index * 8u + 2u] |
+		    ((uint32_t)table[index * 8u + 3u] << 8);
+		entry_address = (uint32_t)table[index * 8u + 4u] |
+		    ((uint32_t)table[index * 8u + 5u] << 8) |
+		    ((uint32_t)table[index * 8u + 6u] << 16) |
+		    ((uint32_t)table[index * 8u + 7u] << 24);
+		if ((attribute & SIM_ADMA_DESC_VALID) == 0u) {
+			sim_adma_fail(sim, SIM_ADMA_ERR_TDAT |
+			    SIM_ADMA_ERR_LENGTH, sim->adma_sys_addr);
+			return;
+		}
+		if ((sim->adma_error_at >= 0) &&
+		    ((uint32_t)sim->adma_error_at == index)) {
+			sim_adma_fail(sim, SIM_ADMA_ERR_TDAT,
+			    sim->adma_sys_addr + index * 8u);
+			return;
+		}
+		if ((attribute & SIM_ADMA_DESC_ACT_TRAN) == 0u) {
+			sim_adma_fail(sim, SIM_ADMA_ERR_TDAT,
+			    sim->adma_sys_addr + index * 8u);
+			return;
+		}
+		if (length == 0u) {
+			length = 65536u;
+		}
+		if ((length % GTA4L_EMMC_BLOCK_BYTES) != 0u ||
+		    (total + length > expected)) {
+			sim_adma_fail(sim, SIM_ADMA_ERR_LENGTH,
+			    sim->adma_sys_addr + index * 8u);
+			return;
+		}
+		for (offset = 0; offset < length;
+		    offset += GTA4L_EMMC_BLOCK_BYTES) {
+			destination = sim_dma_lookup(entry_address + offset,
+			    GTA4L_EMMC_BLOCK_BYTES);
+			if (destination == 0) {
+				sim_adma_fail(sim, SIM_ADMA_ERR_TDAT,
+				    sim->adma_sys_addr + index * 8u);
+				return;
+			}
+			for (byte = 0; byte < GTA4L_EMMC_BLOCK_BYTES;
+			    byte++) {
+				destination[byte] = sim_block_byte(
+				    argument + (total /
+				    GTA4L_EMMC_BLOCK_BYTES), byte);
+			}
+			if ((sim->adma_corrupt_at >= 0) &&
+			    ((uint32_t)sim->adma_corrupt_at ==
+			    (total / GTA4L_EMMC_BLOCK_BYTES))) {
+				destination[0] ^= 0x5Au;
+			}
+			total += GTA4L_EMMC_BLOCK_BYTES;
+		}
+		index++;
+		if ((attribute & SIM_ADMA_DESC_END) != 0u) {
+			break;
+		}
+	}
+	if (total != expected) {
+		sim_adma_fail(sim, SIM_ADMA_ERR_LENGTH,
+		    sim->adma_sys_addr + index * 8u);
+		return;
+	}
+	sim->adma_blocks_copied = total / GTA4L_EMMC_BLOCK_BYTES;
+	if (sim->adma_no_tc == 0) {
+		sim->normal_int |= GTA4L_EMMC_INT_TC;
+	}
+}
+
 static void
 sim_command(struct sim *sim, uint16_t command)
 {
@@ -1662,6 +1842,14 @@ sim_command(struct sim *sim, uint16_t command)
 			sim->error_int |= GTA4L_EMMC_INT_ERR_DATA_CRC;
 			break;
 		}
+		if (sim->adma_dma_enabled != 0) {
+			sim->mb_dat_inhibit = 1;
+			sim->mb_active = 0;
+			if (sim->data_timeout == 0) {
+				sim_adma_transfer(sim, argument);
+			}
+			break;
+		}
 		if (sim->data_timeout == 0) {
 			sim->mb_active = 1;
 			if (sim->no_brr == 0) {
@@ -1774,6 +1962,7 @@ sim_write16(void *context, uint32_t space, uint32_t offset, uint16_t value)
 	}
 	if (offset == GTA4L_EMMC_REG_TRANSFER_MODE) {
 		sim->transfer_mode = value;
+		sim->adma_dma_enabled = ((value & SIM_TM_DMA_EN) != 0) ? 1 : 0;
 		if ((value & SIM_TM_AUTO_CMD12) != 0) {
 			sim->auto_cmd12_seen = 1;
 		}
@@ -1927,6 +2116,9 @@ sim_write32(void *context, uint32_t space, uint32_t offset, uint32_t value)
 		if (!sim_sdhci_width_ok(offset, 4u)) {
 			sim->access_violation = 1;
 			return;
+		}
+		if (offset == GTA4L_EMMC_REG_ADMA_SYS_ADDR) {
+			sim->adma_sys_addr = value;
 		}
 		if (offset == GTA4L_EMMC_REG_CORE_DLL_CONFIG) {
 			uint32_t previous = (uint32_t)sim->sdhci[offset] |
@@ -2171,6 +2363,8 @@ sim_init(struct sim *sim)
 	sim->mb_tc_delay_us = -1;
 	sim->mb_last_brr_delay_us = -1;
 	sim->mb_error_delay_us = -1;
+	sim->adma_error_at = -1;
+	sim->adma_corrupt_at = -1;
 	sim->bus_test_corrupt_word = -1;
 	sim_write32(sim, GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_MCI_VERSION,
 	    0x10000072u);
@@ -2385,6 +2579,52 @@ prepare_hs_width(struct sim *sim, struct gta4l_emmc_host *host, uint32_t bits,
 	check(rc == GTA4L_EMMC_OK, "recover setup width switch failed");
 }
 
+static void
+sim_adma_build(uint8_t *table, uint32_t destination, uint32_t blocks,
+    uint32_t entry_bytes, uint32_t entries)
+{
+	uint32_t index;
+	uint32_t remaining = blocks * GTA4L_EMMC_BLOCK_BYTES;
+	uint32_t length;
+
+	memset(table, 0, 4096);
+	for (index = 0; index < entries; index++) {
+		length = (remaining > entry_bytes) ? entry_bytes : remaining;
+		table[index * 8u + 0u] = (uint8_t)(SIM_ADMA_DESC_VALID |
+		    SIM_ADMA_DESC_ACT_TRAN |
+		    ((index + 1u == entries) ? SIM_ADMA_DESC_END : 0u));
+		table[index * 8u + 1u] = 0u;
+		table[index * 8u + 2u] = (uint8_t)(length & 0xFFu);
+		table[index * 8u + 3u] = (uint8_t)(length >> 8);
+		table[index * 8u + 4u] = (uint8_t)(destination & 0xFFu);
+		table[index * 8u + 5u] = (uint8_t)((destination >> 8) & 0xFFu);
+		table[index * 8u + 6u] = (uint8_t)((destination >> 16) & 0xFFu);
+		table[index * 8u + 7u] = (uint8_t)((destination >> 24) & 0xFFu);
+		destination += length;
+		remaining -= length;
+	}
+}
+
+static void
+check_adma_blocks(const uint8_t *buffer, uint32_t start, uint32_t count,
+    const char *label)
+{
+	uint32_t block;
+	uint32_t index;
+
+	for (block = 0; block < count; block++) {
+		for (index = 0; index < GTA4L_EMMC_BLOCK_BYTES; index++) {
+			if (buffer[block * GTA4L_EMMC_BLOCK_BYTES + index] !=
+			    sim_block_byte(start + block, index)) {
+				printf("FAIL %s block %u byte %u\n", label,
+				    block, index);
+				failures++;
+				return;
+			}
+		}
+	}
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2401,7 +2641,10 @@ main(int argc, char **argv)
 	struct gta4l_emmc_post_write_drain_result drain;
 	struct gta4l_emmc_hs_result hs;
 	struct gta4l_emmc_recover_result both;
+	struct gta4l_emmc_adma_result adma;
 	static uint8_t mb_blocks[SIM_MB_TEST_BLOCKS * GTA4L_EMMC_BLOCK_BYTES];
+	static uint8_t adma_table[4096];
+	static uint8_t adma_dest[64u * 1024u];
 	int result;
 	int expected;
 
@@ -3690,6 +3933,93 @@ main(int argc, char **argv)
 			    "tail multi-block ordinal mismatch");
 			check(sim.mb_issued_block_count == 3u,
 			    "tail block count register mismatch");
+		}
+	} else if (scenario_is(scenario, "adma-success") ||
+	    scenario_is(scenario, "adma-error") ||
+	    scenario_is(scenario, "adma-no-tc") ||
+	    scenario_is(scenario, "adma-length") ||
+	    scenario_is(scenario, "adma-crc") ||
+	    scenario_is(scenario, "adma-arg")) {
+		uint32_t adma_blocks = 64u;
+		uint32_t adma_entries = 2u;
+		uint32_t adma_entry_bytes = 16384u;
+
+		sim_dma_region_count = 0;
+		memset(adma_table, 0, sizeof(adma_table));
+		memset(adma_dest, 0xA5, sizeof(adma_dest));
+		sim_adma_build(adma_table, 0x00200000u, adma_blocks,
+		    adma_entry_bytes, adma_entries);
+		if (scenario_is(scenario, "adma-length")) {
+			adma_table[2] = 0xFFu;
+			adma_table[3] = 0x01u;
+		}
+		if (scenario_is(scenario, "adma-error")) {
+			sim.adma_error_at = 1;
+		}
+		if (scenario_is(scenario, "adma-no-tc")) {
+			sim.adma_no_tc = 1;
+		}
+		if (scenario_is(scenario, "adma-crc")) {
+			sim.data_crc = 1;
+		}
+		sim_dma_register(0x00100000u, adma_table,
+		    sizeof(adma_table));
+		sim_dma_register(0x00200000u, adma_dest,
+		    sizeof(adma_dest));
+		result = gta4l_emmc_read_multi_adma(&host, 2u, adma_blocks,
+		    scenario_is(scenario, "adma-arg") ? 0u : 0x00100000u,
+		    64u, &adma);
+		check((sim_read8(&sim, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_HOST_CONTROL) &
+		    SIM_HOST_DMA_MASK) == 0u,
+		    "ADMA select was not cleared on exit");
+		if (scenario_is(scenario, "adma-arg")) {
+			check(result == GTA4L_EMMC_ERR_ARG,
+			    "ADMA zero table was accepted");
+		} else if (scenario_is(scenario, "adma-success")) {
+			check(result == GTA4L_EMMC_OK,
+			    "ADMA success read failed");
+			check_adma_blocks(adma_dest, 2u, adma_blocks,
+			    "ADMA success");
+			check(adma.completed_blocks == adma_blocks,
+			    "ADMA completed block count mismatch");
+			check(adma.stop_attempted == 1u,
+			    "ADMA success did not stop the card");
+			check(sim.mb_stop_count == 1,
+			    "ADMA success did not issue one CMD12");
+			check(adma.adma_error == 0u,
+			    "ADMA success reported an error status");
+		} else if (scenario_is(scenario, "adma-error")) {
+			check(result == GTA4L_EMMC_ERR_ADMA,
+			    "descriptor fault did not map to ERR_ADMA");
+			check(adma.fail_desc == 1u,
+			    "ADMA failing descriptor index mismatch");
+			check(adma.adma_error == SIM_ADMA_ERR_TDAT,
+			    "ADMA error status mismatch");
+			check(adma.stop_attempted == 1u,
+			    "ADMA fault did not attempt CMD12");
+			check(adma.reset_data_result == GTA4L_EMMC_OK,
+			    "ADMA fault did not reset the data circuit");
+		} else if (scenario_is(scenario, "adma-no-tc")) {
+			check(result == GTA4L_EMMC_ERR_DATA_TIMEOUT,
+			    "missing ADMA TC did not time out");
+			check(adma.stop_attempted == 1u,
+			    "ADMA timeout did not attempt CMD12");
+			check(adma.reset_data_result == GTA4L_EMMC_OK,
+			    "ADMA timeout did not reset the data circuit");
+		} else if (scenario_is(scenario, "adma-length")) {
+			check(result == GTA4L_EMMC_ERR_ADMA,
+			    "ADMA length mismatch was accepted");
+			check((adma.adma_error &
+			    SIM_ADMA_ERR_LENGTH) != 0u,
+			    "ADMA length error bit is missing");
+			check(adma.fail_desc == 0u,
+			    "ADMA length failure descriptor mismatch");
+		} else if (scenario_is(scenario, "adma-crc")) {
+			check(result == GTA4L_EMMC_ERR_DATA_CRC,
+			    "ADMA data CRC was not reported");
+			check(adma.adma_error == 0u,
+			    "ADMA data CRC reported a descriptor error");
 		}
 	} else if (scenario_is(scenario, "multi-success") ||
 	    scenario_is(scenario, "multi-repeat") ||
