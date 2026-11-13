@@ -259,11 +259,20 @@ def check_archive_imports(undefined):
         _, _, symbols = load_object(item['object'])
         for name, value, kind in symbols:
             if kind != 1:
-                archive_defined.add(name)
+                archive_defined.add(name.lstrip('_'))
+    # The portable core and probe archives are linked into the kernel; a new
+    # core symbol is not in the previous candidate kernel until this build's
+    # core archive is linked. Treat the sibling archives as providers so the
+    # first pass that adds a core primitive does not look like a missing
+    # kernel export.
+    for other in (CORE_ARCHIVE, PROBE_ARCHIVE):
+        if other.is_file():
+            archive_defined |= {
+                name.lstrip('_') for name in archive_symbols(other)}
     kernel_exports = defined_symbols(KERNEL)
     checked = set()
     for name in undefined:
-        if name in archive_defined:
+        if name.lstrip('_') in archive_defined:
             continue
         if 'IOBlockStorageDevice' in name:
             continue

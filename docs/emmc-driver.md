@@ -7450,3 +7450,28 @@ Host suite: 460 scenarios with 175 adapter, 3 support and 46 policy
 mutations, including twelve DMA scenarios and seven DMA mutations. Host-only:
 no candidate, device access, flash or boot; the first DMA boot still
 needs the B10.5 hash-specific go.
+
+### 5.3.114 B10.5 DMA candidate (2026-11-14)
+
+Host-only candidate, not flashed. Native kernel
+`bff4bad8a2f4c1bbd4b445f1daba34ad88672e9c088886c8cd4770110e1a2b97`;
+storage-ABI audit `out/gta4l/storage-abi-bff4bad8a2f4` PASS (190 slots, 181
+bindings, native 4K); requalified archive
+`1841bf2bb75da0478eb685df351f38a8076d862ba34376346d2c5dd87ee64bd3`; payload
+`d55a7bf5918973d9534bbc7a9947e548045064ef8ea64fc3d6d66cc6fd8aa196`
+(83,886,080 bytes) with `gta4l-emmc-block=3 gta4l-emmc-bulk=1
+gta4l-emmc-dma=1 rd=md0`; BOOT image
+`a1e26c3415ee9778d796cc70623919b156392b22fa65e8c672219f01835e51c6`
+(85,688,320 bytes) packaged against the v5 baseline
+`ce4d76e8024a220890e7f32e2992a7beb094087910b070fc615c6fe1ee86dcde`.
+Payload contract and boot-image gate pass; only the ramdisk differs from the
+v5 baseline.
+
+Evidence:
+`out/gta4l/ram-root-emmc-b10.3-dma-candidate-evidence/` (kernel, audit
+log, archive, build report, payload, image, gate JSON). The first DMA flash
+is **not authorized** yet: it needs an owner "go" naming the image SHA-256
+above. Risk: the controller becomes a bus master for the first time, the
+SMMU gate is read-only, card writes stay disabled, one owner boot; worst
+case is a panic or hang with eMMC contents unaffected. BOOT-only write,
+protected partitions and the full p69 backup rule still apply.
