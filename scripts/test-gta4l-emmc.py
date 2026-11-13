@@ -140,6 +140,7 @@ SCENARIOS = [
     'multi-last-block',
     'multi-success',
     'multi-repeat',
+    'multi-timing-s21',
     'multi-data-timeout',
     'multi-data-crc',
     'multi-late-error',
@@ -147,6 +148,8 @@ SCENARIOS = [
     'multi-drain-brr',
     'multi-drain-error',
     'multi-drain-stall',
+    'multi-deadline-data',
+    'multi-deadline-drain',
     'multi-stop-tc-only',
     'multi-stop-late-cc',
     'multi-stop-busy-timeout',
@@ -1142,6 +1145,36 @@ def main() -> int:
              '\t\t/* The primary bound expired without an error or TC. '
              'Attempt 2\n',
              'Gta4lEmmc.c', (), 'multi-drain-tc'),
+            ('mb-deadline-data-skip',
+             '\t\tif (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {\n'
+             '\t\t\tresult = GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t\tbreak;\n'
+             '\t\t}\n'
+             '\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n',
+             '\t\tif ((0) && (gta4l_emmc_deadline_check(host) !=\n'
+             '\t\t    GTA4L_EMMC_OK)) {\n'
+             '\t\t\tresult = GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t\tbreak;\n'
+             '\t\t}\n'
+             '\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n',
+             'Gta4lEmmc.c', (), 'multi-deadline-data'),
+            ('mb-deadline-drain-skip',
+             '\t\t\tif (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {\n'
+             '\t\t\t\tresult = GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n'
+             '\t\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n',
+             '\t\t\tif ((0) && (gta4l_emmc_deadline_check(host) !=\n'
+             '\t\t\t    GTA4L_EMMC_OK)) {\n'
+             '\t\t\t\tresult = GTA4L_EMMC_ERR_DEADLINE;\n'
+             '\t\t\t\tbreak;\n'
+             '\t\t\t}\n'
+             '\t\t\terror = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,\n'
+             '\t\t\t    GTA4L_EMMC_REG_ERROR_INT_STATUS);\n',
+             'Gta4lEmmc.c', (), 'multi-deadline-drain'),
             ('mb-drain-tc-recheck-removed',
              '\t\t\tif ((command_done != 0) && (done == count) &&\n'
              '\t\t\t    ((normal & GTA4L_EMMC_INT_TC) != 0)) {\n',
@@ -1655,6 +1688,19 @@ def main() -> int:
              '\titerations = gta4l_emmc_poll_iterations(timeout_us);\n',
              '\titerations = gta4l_emmc_poll_iterations(timeout_us) + 1u;\n',
              'Gta4lEmmc.c', (), 'cmd3-timeline-timeout'),
+            ('timing-brr-zero',
+             '\t\t\t\t\thost->timing_brr_wait_ticks +=\n'
+             '\t\t\t\t\t    drain_stamp - block_stamp;\n',
+             '\t\t\t\t\thost->timing_brr_wait_ticks += 0u;\n',
+             'Gta4lEmmc.c', (), 'multi-timing-s21'),
+            ('timing-polls-zero',
+             '\t\tif (host->timing_capture != 0) {\n'
+             '\t\t\thost->timing_polls++;\n'
+             '\t\t}\n',
+             '\t\tif (host->timing_capture != 0) {\n'
+             '\t\t\thost->timing_polls += 0u;\n'
+             '\t\t}\n',
+             'Gta4lEmmc.c', (), 'multi-timing-s21'),
             ('deadline-api-strict',
              '\tif (gta4l_emmc_counter(host) >= host->deadline_ticks) {\n',
              '\tif (gta4l_emmc_counter(host) > host->deadline_ticks) {\n',
@@ -1837,6 +1883,10 @@ def main() -> int:
                 'capture-disabled run recorded a pre-CMD3 response',
             'timeline-poll-extended':
                 'the terminal timeout has the wrong iteration',
+            'timing-brr-zero':
+                'S2.1 did not accumulate the BRR wait',
+            'timing-polls-zero':
+                'S2.1 did not count poll iterations',
             'deadline-api-strict':
                 'exported deadline check did not expire at equality',
             'deadline-api-clear-active':

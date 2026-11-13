@@ -64,9 +64,10 @@ WIDTH_PREFIX = 'gta4l-emmc-width='
 WIDTHHOLD_PREFIX = 'gta4l-emmc-widthhold='
 WIDTHPUB_PREFIX = 'gta4l-emmc-widthpub='
 SPEED_PREFIX = 'gta4l-emmc-speed='
+BULK_PREFIX = 'gta4l-emmc-bulk='
 BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
 # The partobs, partcmp, partread, deblock, breakup, sweep, consume, width,
-# widthhold, widthpub and speed tokens are modifiers, not independent
+# widthhold, widthpub, speed and bulk tokens are modifiers, not independent
 # diagnostics:
 # each is only valid with exactly one block token. Each personality names the
 # block personality it extends.
@@ -108,6 +109,9 @@ WIDTHPUB_DIAGNOSTICS = {
 }
 SPEED_DIAGNOSTICS = {
     'emmc-block-3-speed': 'emmc-block-3',
+}
+BULK_DIAGNOSTICS = {
+    'emmc-block-3-bulk': 'emmc-block-3',
 }
 
 
@@ -241,6 +245,8 @@ def diagnostic_contract(args, expected='any'):
                        if item.startswith(WIDTHPUB_PREFIX)]
     speed_tokens = [item for item in tokens
                     if item.startswith(SPEED_PREFIX)]
+    bulk_tokens = [item for item in tokens
+                   if item.startswith(BULK_PREFIX)]
     checks = {'exactly_one_diagnostic_argument': len(found) == 1}
     block_selected = [DIAGNOSTIC_NAMES[name] for name in BLOCK_DIAGNOSTICS
                       if DIAGNOSTIC_NAMES[name] in found]
@@ -401,6 +407,33 @@ def diagnostic_contract(args, expected='any'):
             speed_tokens and widthhold_tokens)
         checks['speed_widthpub_exclusive'] = not (
             speed_tokens and widthpub_tokens)
+        checks['at_most_one_bulk_token'] = len(bulk_tokens) <= 1
+        checks['bulk_value_one'] = all(
+            item == BULK_PREFIX + '1' for item in bulk_tokens)
+        checks['bulk_requires_block_three'] = (
+            not bulk_tokens or block_tokens == [BLOCK_PREFIX + '3'])
+        checks['bulk_partobs_exclusive'] = not (
+            bulk_tokens and partobs_tokens)
+        checks['bulk_partcmp_exclusive'] = not (
+            bulk_tokens and partcmp_tokens)
+        checks['bulk_partread_exclusive'] = not (
+            bulk_tokens and partread_tokens)
+        checks['bulk_deblock_exclusive'] = not (
+            bulk_tokens and deblock_tokens)
+        checks['bulk_breakup_exclusive'] = not (
+            bulk_tokens and breakup_tokens)
+        checks['bulk_sweep_exclusive'] = not (
+            bulk_tokens and sweep_tokens)
+        checks['bulk_consume_exclusive'] = not (
+            bulk_tokens and consume_tokens)
+        checks['bulk_width_exclusive'] = not (
+            bulk_tokens and width_tokens)
+        checks['bulk_widthhold_exclusive'] = not (
+            bulk_tokens and widthhold_tokens)
+        checks['bulk_widthpub_exclusive'] = not (
+            bulk_tokens and widthpub_tokens)
+        checks['bulk_speed_exclusive'] = not (
+            bulk_tokens and speed_tokens)
     else:
         checks['no_block_token_outside_block_mode'] = not block_tokens
         checks['no_partobs_token_outside_block_mode'] = not partobs_tokens
@@ -416,6 +449,7 @@ def diagnostic_contract(args, expected='any'):
         checks['no_widthpub_token_outside_block_mode'] = (
             not widthpub_tokens)
         checks['no_speed_token_outside_block_mode'] = not speed_tokens
+        checks['no_bulk_token_outside_block_mode'] = not bulk_tokens
     if expected != 'any':
         if expected in PARTOBS_DIAGNOSTICS:
             base = PARTOBS_DIAGNOSTICS[expected]
@@ -536,6 +570,17 @@ def diagnostic_contract(args, expected='any'):
                 not breakup_tokens and not sweep_tokens and
                 not consume_tokens and not width_tokens and
                 not widthhold_tokens and not widthpub_tokens)
+        elif expected in BULK_DIAGNOSTICS:
+            base = BULK_DIAGNOSTICS[expected]
+            checks[f'{expected}_diagnostic_selected'] = (
+                found == [DIAGNOSTIC_NAMES[base]] and
+                bulk_tokens == [BULK_PREFIX + '1'] and
+                not partobs_tokens and not partcmp_tokens and
+                not partread_tokens and not deblock_tokens and
+                not breakup_tokens and not sweep_tokens and
+                not consume_tokens and not width_tokens and
+                not widthhold_tokens and not widthpub_tokens and
+                not speed_tokens)
         else:
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[expected]] and
@@ -545,6 +590,8 @@ def diagnostic_contract(args, expected='any'):
                 not consume_tokens and not width_tokens and
                 not widthhold_tokens and not widthpub_tokens and
                 not speed_tokens)
+        if bulk_tokens and expected not in BULK_DIAGNOSTICS:
+            checks[f'{expected}_diagnostic_selected'] = False
     checks['unixnu_toml_has_xnu_args'] = bool(args)
     return checks
 
@@ -615,7 +662,8 @@ def main():
                                  *WIDTH_DIAGNOSTICS,
                                  *WIDTHHOLD_DIAGNOSTICS,
                                  *WIDTHPUB_DIAGNOSTICS,
-                                 *SPEED_DIAGNOSTICS),
+                                 *SPEED_DIAGNOSTICS,
+                                 *BULK_DIAGNOSTICS),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

@@ -127,6 +127,48 @@ def speed_case():
     print('PASS: speed dispatcher digest and field check')
 
 
+def bulk_case():
+    """Exercise --mode bulk through the dispatcher with a synthetic BOOT."""
+    region_bytes = 85688320
+    with tempfile.TemporaryDirectory(prefix='gta4l-bulk-') as tmp:
+        base = Path(tmp)
+        image = base / 'boot.img'
+        pattern = bytes((index * 7 + 3) & 0xff for index in range(4096))
+        with image.open('wb') as handle:
+            remaining = region_bytes
+            while remaining:
+                take = min(remaining, len(pattern))
+                handle.write(pattern[:take])
+                remaining -= take
+        digest = hashlib.sha256(image.read_bytes()).hexdigest()[:32]
+        speed = ('GTA4L-EMMC P5 SPEED: hs=1 hsrb=0 hsa=1 rcg=0000020b '
+                 'hispd=00 wtry=8 wfall=0 wroll=0 wid=8 verified=1 hb=00 '
+                 'ha=20 cmd6=1 base=1 bytes1=0 ticks1=0 hz=1000000 '
+                 'dig1=' + '0' * 32 + ' bytes2=0 ticks2=0 dig2=' +
+                 '0' * 32 + ' req=0 fails=0 cancel=0 budget=0 partial=0 '
+                 'pub=1 partdiag=0 revert=1 rverified=1 rhb=20 rha=00 '
+                 'rcmd6=2 rstatus=0 hsrevert=1 hsverified=1 rhsb=1 rhs=0 '
+                 'rclk=400000 limit=64 seg=1 cap=61071360')
+        bulk = (f'GTA4L-EMMC P5 BULK: region={region_bytes} chunks=2615 '
+                f'bytes={region_bytes} ticks=2500000 hz=1000000 '
+                f'seed=47544134 windows=80 wpass=80 wfail=0 woffset=0 '
+                f'digest={digest}')
+        report = base / 'report.txt'
+        report.write_text(speed + '\n' + bulk + '\n')
+        ok = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
+                 '--image', image, '--report', report)
+        if ok.returncode != 0:
+            raise AssertionError(
+                f'bulk: valid report was rejected: {ok.stdout} {ok.stderr}')
+        report.write_text(speed + '\n' +
+                          bulk.replace(digest, '0' * 32) + '\n')
+        bad = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
+                  '--image', image, '--report', report)
+        if bad.returncode == 0:
+            raise AssertionError('bulk: a wrong digest was accepted')
+    print('PASS: bulk dispatcher digest and window check')
+
+
 def main():
     for script, label in (
             ('normalize-gta4l-report.py', 'normalizer'),
@@ -138,6 +180,7 @@ def main():
             return 1
     cases()
     speed_case()
+    bulk_case()
     print('PASS: evidence normalizer and dispatcher host test')
     return 0
 

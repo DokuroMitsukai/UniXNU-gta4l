@@ -1067,21 +1067,21 @@ ADAPTER_MUTATIONS = [
        '\treport.widthhold_complete = complete;\n')],
      'widthhold-short'),
     ('widthhold-bytes-skip',
-     [('\tif (!speedMode &&\n'
+     [('\tif (!speedMode && !bulkMode &&\n'
        '\t    (memcmp(slice, widthholdReference + start,\n'
        '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH;\n'
        '\t}\n',
-       '\tif ((0) && !speedMode &&\n'
+       '\tif ((0) && !speedMode && !bulkMode &&\n'
        '\t    (memcmp(slice, widthholdReference + start,\n'
        '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0)) {\n'
        '\t\treturn GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH;\n'
        '\t}\n')],
      'widthhold-match-mismatch'),
     ('widthhold-prefix-compare',
-     [('\tif (!speedMode &&\n'
+     [('\tif (!speedMode && !bulkMode &&\n'
        '\t    (memcmp(slice, widthholdReference + start,\n',
-       '\tif (!speedMode &&\n'
+       '\tif (!speedMode && !bulkMode &&\n'
        '\t    (memcmp(slice, widthholdReference,\n')],
      'widthhold-match'),
     ('widthhold-rb-proof',
@@ -1398,7 +1398,9 @@ ADAPTER_MUTATIONS = [
        '\t\t\t\t\t\t\t;\n')],
      'speed-match-8bit'),
     ('speed-report-io-dropped',
-     [('\treport.speedio_req = (uint32_t)host.timing_requests;\n',
+     [('\treport.speed_fail_status = speedFailStatus;\n'
+       '\treport.speedio_req = (uint32_t)host.timing_requests;\n',
+       '\treport.speed_fail_status = speedFailStatus;\n'
        '\treport.speedio_req = 0u;\n')],
      'speed-match-8bit'),
     ('speed-report-fails-dropped',
@@ -1410,15 +1412,25 @@ ADAPTER_MUTATIONS = [
        '\t\t\t\t\t\t\tpartial = 0;\n')],
      'speed-short'),
     ('speed-report-pub-early',
-     [('\tuint32_t published = 0;\n',
+     [('\tuint32_t partial = 0;\n'
+       '\tuint32_t published = 0;\n',
+       '\tuint32_t partial = 0;\n'
        '\tuint32_t published = 1;\n')],
      'speed-media-absent'),
     ('speed-report-partdiag-dropped',
-     [('\treport.speed_partdiag = report.widthhold_partdiag;\n',
+     [('\treport.speed_partial = partial;\n'
+       '\treport.speed_pub = published;\n'
+       '\treport.speed_partdiag = report.widthhold_partdiag;\n',
+       '\treport.speed_partial = partial;\n'
+       '\treport.speed_pub = published;\n'
        '\treport.speed_partdiag = 0u;\n')],
      'speed-part-writable'),
     ('speed-report-success-no-revert',
-     [('\trevertOk = speedRecover();\n',
+     [('\tspeedTimingActive = false;\n'
+       '\thost.timing_capture = 0;\n'
+       '\trevertOk = speedRecover();\n',
+       '\tspeedTimingActive = false;\n'
+       '\thost.timing_capture = 0;\n'
        '\trevertOk = true;\n')],
      'speed-match-8bit'),
     ('speed-report-revert-ignored',
@@ -1494,9 +1506,132 @@ ADAPTER_MUTATIONS = [
        '\t\t    &speedSwitch;\n')],
      'speed-match-4bit'),
     ('speed-report-hz-zero',
-     [('\treport.speed_hz = (uint32_t)gta4l_emmc_platform_counter_hz();\n',
+     [('\tspeedGateTimedOut = false;\n'
+       '\treport.speed_req = 0;\n'
+       '\treport.speed_fails = 0;\n'
+       '\treport.speed_cancel = 0;\n'
+       '\treport.speed_budget = 0;\n'
+       '\treport.speed_partial = 0;\n'
+       '\treport.speed_pub = 0;\n'
+       '\treport.speed_partdiag = 0;\n'
+       '\treport.speed_bytes1 = 0;\n'
+       '\treport.speed_ticks1 = 0;\n'
+       '\treport.speed_bytes2 = 0;\n'
+       '\treport.speed_ticks2 = 0;\n'
+       '\treport.speed_hz = (uint32_t)gta4l_emmc_platform_counter_hz();\n',
+       '\tspeedGateTimedOut = false;\n'
+       '\treport.speed_req = 0;\n'
+       '\treport.speed_fails = 0;\n'
+       '\treport.speed_cancel = 0;\n'
+       '\treport.speed_budget = 0;\n'
+       '\treport.speed_partial = 0;\n'
+       '\treport.speed_pub = 0;\n'
+       '\treport.speed_partdiag = 0;\n'
+       '\treport.speed_bytes1 = 0;\n'
+       '\treport.speed_ticks1 = 0;\n'
+       '\treport.speed_bytes2 = 0;\n'
+       '\treport.speed_ticks2 = 0;\n'
        '\treport.speed_hz = 0u;\n')],
      'speed-match-8bit'),
+    ('bulk-budget-skip',
+     [('\t\t\tif (bulkElapsedMs() >=\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {\n',
+       '\t\t\tif ((0) && bulkElapsedMs() >=\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {\n')],
+     'bulk-budget'),
+    ('bulk-budget-flag-dropped',
+     [('\t\t\tif (bulkElapsedMs() >=\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {\n'
+       '\t\t\t\tbudget = 1;\n',
+       '\t\t\tif (bulkElapsedMs() >=\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {\n'
+       '\t\t\t\tbudget = 0;\n')],
+     'bulk-budget'),
+    ('bulk-cancel-stream-skip',
+     [('\t\t\tif (reportCancel) {\n'
+       '\t\t\t\tcancel = 1;\n'
+       '\t\t\t\tstage =\n'
+       '\t\t\t\t    GTA4L_EMMC_BLOCK_BULK_STAGE_CANCEL;\n'
+       '\t\t\t\tbreak;\n'
+       '\t\t\t}\n'
+       '\t\t\tif (bulkElapsedMs() >=\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {\n',
+       '\t\t\tif (0) {\n'
+       '\t\t\t\tcancel = 1;\n'
+       '\t\t\t\tstage =\n'
+       '\t\t\t\t    GTA4L_EMMC_BLOCK_BULK_STAGE_CANCEL;\n'
+       '\t\t\t\tbreak;\n'
+       '\t\t\t}\n'
+       '\t\t\tif (bulkElapsedMs() >=\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {\n')],
+     'bulk-cancel-during'),
+    ('bulk-window-compare-skip',
+     [('\t\t\tif (memcmp(bulkClient->data(), bulkReference,\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0) {\n',
+       '\t\t\tif ((0) && memcmp(bulkClient->data(), bulkReference,\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0) {\n')],
+     'bulk-window-mismatch'),
+    ('bulk-digest-report-omit',
+     [('\tif (streamHashed) {\n'
+       '\t\tmemcpy(report.bulk_digest, digest,\n'
+       '\t\t    sizeof(report.bulk_digest));\n'
+       '\t}\n',
+       '\tif (streamHashed) {\n'
+       '\t\tbzero(report.bulk_digest, sizeof(report.bulk_digest));\n'
+       '\t}\n')],
+     'bulk-success'),
+    ('bulk-chunks-overclaim',
+     [('\t\t\tif (readOk) {\n'
+       '\t\t\t\tchunks++;\n'
+       '\t\t\t}\n',
+       '\t\t\tif (readOk) {\n'
+       '\t\t\t\tchunks += 2u;\n'
+       '\t\t\t}\n')],
+     'bulk-success'),
+    ('bulkio-brr-dropped',
+     [('\treport.bulkio_brr = (uint32_t)host.timing_brr_wait_ticks;\n',
+       '\treport.bulkio_brr = 0u;\n')],
+     'bulk-success'),
+    ('bulkio-clock-dropped',
+     [('\treport.bulkio_clock_control = host.diag_clock_control;\n',
+       '\treport.bulkio_clock_control = 0u;\n')],
+     'bulk-success'),
+    ('bulkio-cal-dropped',
+     [('\treport.bulkio_cal = (uint32_t)host.drain_cal_ticks;\n',
+       '\treport.bulkio_cal = 0u;\n')],
+     'bulk-success'),
+    ('bulk-short-stage-swapped',
+     [('\t\t\t\t\tstage =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_BULK_STAGE_SHORT;\n',
+       '\t\t\t\t\tstage =\n'
+       '\t\t\t\t\t    GTA4L_EMMC_BLOCK_BULK_STAGE_READ;\n')],
+     'bulk-short'),
+    ('bulk-read-failure-skip',
+     [('\t\t\tif (!readOk) {\n'
+       '\t\t\t\tfailStatus = result.status;\n',
+       '\t\t\tif (0) {\n'
+       '\t\t\t\tfailStatus = result.status;\n')],
+     'bulk-read-crc'),
+    ('bulk-foreign-accept',
+     [('\tif ((tag == 0u) || (tag != bulkActiveTag) ||\n'
+       '\t    (block != bulkActiveFirst) ||\n'
+       '\t    (nblks != bulkActiveBlocks)) {\n',
+       '\tif ((tag == 0u) && (tag != bulkActiveTag) &&\n'
+       '\t    (block != bulkActiveFirst) &&\n'
+       '\t    (nblks != bulkActiveBlocks)) {\n')],
+     'bulk-shape'),
+    ('bulk-revert-ignore',
+     [('\trevertOk = speedRecover();\n'
+       '\tif (!revertOk) {\n'
+       '\t\tonline = false;\n'
+       '\t}\n'
+       '\treleaseBulkMedia();\n',
+       '\trevertOk = speedRecover();\n'
+       '\tif (0) {\n'
+       '\t\tonline = false;\n'
+       '\t}\n'
+       '\treleaseBulkMedia();\n')],
+     'bulk-revert-fail'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2150,7 +2285,8 @@ def check_adapter_source():
     assert speed_baseline_at < speed_hs_at < speed_w8_at, \
         'speed sequence must baseline, enter HS and switch width in order'
     speed_start_at = adapter.index(
-        'if (speedMode) {', adapter.index('Gta4lEmmcBlock::start('))
+        'if (speedMode || bulkMode) {',
+        adapter.index('Gta4lEmmcBlock::start('))
     speed_start = adapter[speed_start_at:adapter.index(
         '\n\tif (widthholdMode || widthpubMode) {', speed_start_at)]
     speed_arm_at = speed_start.index('gta4l_emmc_deadline_arm')
@@ -2188,7 +2324,8 @@ def check_adapter_source():
         'bzero(&speedFallback, sizeof(speedFallback));') < \
         adapter.index('GTA4L_EMMC_BLOCK_SPEED_BITS_8, &speedSwitch)'), \
         'speedFallback must be cleared before the first width attempt'
-    assert 'tag = (speedMode ? GTA4L_EMMC_BLOCK_SPEED_TAG :' in adapter \
+    assert 'tag = ((speedMode || bulkMode) ?\n' \
+        '\t    GTA4L_EMMC_BLOCK_SPEED_TAG :' in adapter \
         and 'tag != widthholdActiveTag' in adapter, \
         'speed tags must be exact and foreign tags rejected'
     assert 'speedSwitch.rollback_result' in adapter and \
@@ -2204,6 +2341,84 @@ def check_adapter_source():
     assert 'report.speed_wfall = 1u;' in adapter and \
         'report.speed_wroll = 1u;' in adapter, \
         'speed report must record the fallback and its verified rollback'
+    assert 'GTA4L_EMMC_BLOCK_BULK_ARG' in adapter, \
+        'adapter must parse the opt-in bulk token'
+    assert 'gta4l_emmc_block_bulk_select' in adapter and \
+        'gta4l_emmc_block_bulk_select' in policy, \
+        'bulk selector must live in the shared policy'
+    assert 'runBulk' in adapter, \
+        'adapter must implement the sustained bulk qualification'
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REGION_BYTES 85688320u' in \
+        policy_header, 'bulk region must stay at the BOOT image size'
+    assert '#define GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS 4000u' in \
+        policy_header, 'bulk stream budget must stay at 4,000 ms'
+    assert '#define GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS 4500u' in \
+        policy_header, 'bulk inclusive transport budget must stay at 4,500 ms'
+    assert '#define GTA4L_EMMC_BLOCK_BULK_CMD12_TAIL_MS' in policy_header \
+        and 'GTA4L_EMMC_BLOCK_BULK_CMD12_TAIL_MS ==' in adapter, \
+        'bulk stop tail must be modeled and pinned to the CMD12 bounds'
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_MS' in policy_header \
+        and 'GTA4L_EMMC_BLOCK_BULK_REPORT_MARGIN_MS <=' in adapter, \
+        'bulk report worst case must be checked against the watchdog'
+    assert 'host.timing_capture = 1;' in adapter and \
+        'report.speedio_dat = host.timing_data_ticks;' in adapter and \
+        'report.speedio_io = speedIoTicks;' in adapter, \
+        'bulk mode must capture and report the phase split'
+    assert '#define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u' in policy_header, \
+        'the BULK formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u' in \
+        policy_header, 'the BULKFAIL formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 250u' in \
+        policy_header, 'the BULKIO formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2523u' in \
+        policy_header, 'the BULK report bound must match the base block'
+    assert 'GTA4L-EMMC P5 BULKIO: ' in policy, \
+        'bulk mode must emit the S2.1 data-phase and register line'
+    assert 'gta4l_emmc_capture_diag_regs(&host);' in adapter, \
+        'bulk mode must snapshot the link registers before the stream'
+    assert 'report.bulkio_brr = (uint32_t)host.timing_brr_wait_ticks;' in \
+        adapter, 'bulk mode must report the BRR wait'
+    assert 'report.bulkio_drain = (uint32_t)host.timing_drain_ticks;' in \
+        adapter, 'bulk mode must report the FIFO drain time'
+    assert 'report.bulkio_cal = (uint32_t)host.drain_cal_ticks;' in \
+        adapter, 'bulk mode must report the direct drain calibration'
+    assert 'gta4l_emmc_calibrate_drain(&host,' in adapter, \
+        'bulk mode must calibrate the data-port read cost'
+    assert 'shaTicks += gta4l_emmc_platform_counter() - shaStart;' in \
+        adapter, 'bulk mode must time the SHA-256 update separately'
+    assert 'class Gta4lEmmcBulkClient : public IOService' in adapter, \
+        'bulk reads must use a distinct IOService client'
+    assert 'GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES' in adapter and \
+        'IOFreeContiguous(buffer' in adapter, \
+        'bulk stream must own and free one contiguous chunk'
+    assert 'GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES' in adapter and \
+        'IOFreeContiguous(bulkReference' in adapter, \
+        'bulk window reference must be allocated and freed'
+    assert 'gta4l_emmc_block_sha256_init(&sha)' in adapter and \
+        'gta4l_emmc_block_sha256_update(&sha,' in adapter and \
+        'gta4l_emmc_block_sha256_final(&sha, digest)' in adapter, \
+        'bulk stream must hash exactly the bytes read'
+    assert 'gta4l_emmc_block_bulk_window(window' in adapter, \
+        'bulk windows must use the shared window derivation'
+    assert 'bulkObservedOrder' in adapter and \
+        'bulkObservedForeign' in adapter, \
+        'bulk mode must reject foreign and overlapping requests'
+    assert 'bulkObserve(buffer, blockNumber, nblks)' in adapter, \
+        'adapter must observe the actual bulk subrequest decomposition'
+    assert 'memcmp(bulkClient->data(), bulkReference' in adapter, \
+        'bulk windows must compare the whole observed window'
+    assert 'gta4l_emmc_deadline_arm(&host,\n' \
+        '\t\t    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS)' in adapter, \
+        'bulk stream must arm the inclusive transport budget once'
+    assert 'GTA4L-EMMC P5 BULK: ' in policy, \
+        'bulk success must emit the summary line'
+    assert 'GTA4L-EMMC P5 BULKFAIL: ' in policy, \
+        'bulk failure must emit the first-failure detail line'
+    assert 'report->bulk != 0' in policy and \
+        'report->bulk_fail_stage != 0u' in policy, \
+        'bulk failure line must be conditional on a latched stage'
+    assert '(report->widthhold == 0) && (report->speed == 0)' in policy, \
+        'bulk must suppress the legacy READ/QUAL lines through speed mode'
     probe = CONSUMER_PROBE.read_text()
     assert 'IOMallocContiguous(' in probe and \
         'IOFreeContiguous(' in probe, \
@@ -2555,7 +2770,7 @@ def main():
             'baseline scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block core' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 47, f'expected 47 PASS lines, got {passes}'
+        assert passes == 48, f'expected 48 PASS lines, got {passes}'
         for name, old, new, scenario in MUTATIONS:
             text = CORE.read_text()
             assert text.count(old) == 1, \
@@ -2584,8 +2799,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 419, f'expected 419 adapter PASS lines, got {passes}'
-        print('PASS adapter: 419 scenarios against the host IOKit seam')
+        assert passes == 444, f'expected 444 adapter PASS lines, got {passes}'
+        print('PASS adapter: 444 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:
@@ -2625,7 +2840,7 @@ def main():
                 f'policy mutation {name} did not fail {scenario}:\n' + \
                 (run.stdout + run.stderr)
             print(f'PASS policy mutation {name} rejected ({scenario})')
-    print(f'PASS gta4l eMMC block core: 46 scenarios, '
+    print(f'PASS gta4l eMMC block core: 47 scenarios, '
           f'{len(MUTATIONS)} mutation controls')
     return 0
 

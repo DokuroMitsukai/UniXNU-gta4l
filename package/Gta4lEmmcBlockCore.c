@@ -377,38 +377,96 @@ gta4l_emmc_block_sha256_transform(uint32_t state[8],
 	state[7] += h;
 }
 
-void
-gta4l_emmc_block_sha256(const uint8_t *data, uint32_t length,
-    uint8_t digest[32])
+static void
+gta4l_emmc_block_sha256_copy(uint8_t *target, const uint8_t *source,
+    uint32_t length)
 {
-	uint32_t state[8] = {
+	uint32_t index;
+
+	for (index = 0; index < length; index++) {
+		target[index] = source[index];
+	}
+}
+
+void
+gta4l_emmc_block_sha256_init(struct gta4l_emmc_block_sha256_ctx *ctx)
+{
+	static const uint32_t initial[8] = {
 		0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
 		0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u,
 	};
+	uint32_t index;
+
+	if (ctx == 0) {
+		return;
+	}
+	for (index = 0; index < 8u; index++) {
+		ctx->state[index] = initial[index];
+	}
+	ctx->total = 0;
+	ctx->used = 0;
+}
+
+void
+gta4l_emmc_block_sha256_update(struct gta4l_emmc_block_sha256_ctx *ctx,
+    const uint8_t *data, uint32_t length)
+{
+	uint32_t need;
+
+	if (ctx == 0) {
+		return;
+	}
+	if ((data == 0) && (length != 0)) {
+		return;
+	}
+	ctx->total += length;
+	if (ctx->used != 0) {
+		need = 64u - ctx->used;
+		if (length < need) {
+			gta4l_emmc_block_sha256_copy(ctx->buffer + ctx->used,
+			    data, length);
+			ctx->used += length;
+			return;
+		}
+		gta4l_emmc_block_sha256_copy(ctx->buffer + ctx->used, data,
+		    need);
+		gta4l_emmc_block_sha256_transform(ctx->state, ctx->buffer);
+		data += need;
+		length -= need;
+		ctx->used = 0;
+	}
+	while (length >= 64u) {
+		gta4l_emmc_block_sha256_transform(ctx->state, data);
+		data += 64u;
+		length -= 64u;
+	}
+	if (length != 0) {
+		gta4l_emmc_block_sha256_copy(ctx->buffer, data, length);
+		ctx->used = length;
+	}
+}
+
+void
+gta4l_emmc_block_sha256_final(struct gta4l_emmc_block_sha256_ctx *ctx,
+    uint8_t digest[32])
+{
 	uint8_t tail[128];
-	uint32_t offset = 0;
-	uint32_t remaining;
 	uint32_t padded;
 	uint32_t index;
 	uint64_t bits;
 
-	if ((data == 0) && (length != 0)) {
+	if ((ctx == 0) || (digest == 0)) {
 		return;
 	}
-	while ((length - offset) >= 64u) {
-		gta4l_emmc_block_sha256_transform(state, data + offset);
-		offset += 64u;
-	}
-	remaining = length - offset;
-	padded = (remaining < 56u) ? 64u : 128u;
+	padded = (ctx->used < 56u) ? 64u : 128u;
 	for (index = 0; index < padded; index++) {
 		tail[index] = 0;
 	}
-	for (index = 0; index < remaining; index++) {
-		tail[index] = data[offset + index];
+	for (index = 0; index < ctx->used; index++) {
+		tail[index] = ctx->buffer[index];
 	}
-	tail[remaining] = 0x80u;
-	bits = (uint64_t)length * 8u;
+	tail[ctx->used] = 0x80u;
+	bits = ctx->total * 8u;
 	tail[padded - 8u] = (uint8_t)(bits >> 56);
 	tail[padded - 7u] = (uint8_t)(bits >> 48);
 	tail[padded - 6u] = (uint8_t)(bits >> 40);
@@ -417,14 +475,28 @@ gta4l_emmc_block_sha256(const uint8_t *data, uint32_t length,
 	tail[padded - 3u] = (uint8_t)(bits >> 16);
 	tail[padded - 2u] = (uint8_t)(bits >> 8);
 	tail[padded - 1u] = (uint8_t)bits;
-	gta4l_emmc_block_sha256_transform(state, tail);
+	gta4l_emmc_block_sha256_transform(ctx->state, tail);
 	if (padded == 128u) {
-		gta4l_emmc_block_sha256_transform(state, tail + 64u);
+		gta4l_emmc_block_sha256_transform(ctx->state, tail + 64u);
 	}
 	for (index = 0; index < 8u; index++) {
-		digest[index * 4u] = (uint8_t)(state[index] >> 24);
-		digest[index * 4u + 1u] = (uint8_t)(state[index] >> 16);
-		digest[index * 4u + 2u] = (uint8_t)(state[index] >> 8);
-		digest[index * 4u + 3u] = (uint8_t)state[index];
+		digest[index * 4u] = (uint8_t)(ctx->state[index] >> 24);
+		digest[index * 4u + 1u] = (uint8_t)(ctx->state[index] >> 16);
+		digest[index * 4u + 2u] = (uint8_t)(ctx->state[index] >> 8);
+		digest[index * 4u + 3u] = (uint8_t)ctx->state[index];
 	}
+}
+
+void
+gta4l_emmc_block_sha256(const uint8_t *data, uint32_t length,
+    uint8_t digest[32])
+{
+	struct gta4l_emmc_block_sha256_ctx ctx;
+
+	if ((data == 0) && (length != 0)) {
+		return;
+	}
+	gta4l_emmc_block_sha256_init(&ctx);
+	gta4l_emmc_block_sha256_update(&ctx, data, length);
+	gta4l_emmc_block_sha256_final(&ctx, digest);
 }

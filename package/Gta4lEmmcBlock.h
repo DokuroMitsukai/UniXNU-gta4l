@@ -451,6 +451,83 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES 267u
 #define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u
 
+/* S2 sustained large-read qualification. The mode reuses the S1 start
+ * path and the verified combined revert, then streams the 85,688,320-byte
+ * BOOT image region through the partition IOMedia in 64-block (32 KiB)
+ * requests, hashes exactly the bytes read and reads 64 aligned plus 16
+ * unaligned random windows. The stream loop gets 4,000 ms and the whole
+ * read phase an inclusive 4,500 ms transport deadline, checked inside the
+ * CMD18 data and drain polls. The stop transmission is still issued after
+ * an expiry and keeps its own 2,000 ms command bound; with the 8,000 ms
+ * media wait, 2,000 ms BOOT deadline, 2,000 ms stop tail, 2,000 ms revert
+ * gate and 9,500 ms combined revert the report thread stays at 28,000 ms,
+ * leaving the fixed 2,000 ms under the 30,000 ms watchdog. */
+#define GTA4L_EMMC_BLOCK_BULK_ARG "gta4l-emmc-bulk"
+#define GTA4L_EMMC_BLOCK_BULK_OFF 0
+#define GTA4L_EMMC_BLOCK_BULK_ON 1
+#define GTA4L_EMMC_BLOCK_BULK_REFUSED (-1)
+#define GTA4L_EMMC_BLOCK_BULK_REGION_BYTES 85688320u
+#define GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS GTA4L_EMMC_BLOCK_MAX_BLOCKS
+#define GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES \
+	(GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS * GTA4L_EMMC_BLOCK_BYTES)
+#define GTA4L_EMMC_BLOCK_BULK_CHUNKS \
+	(GTA4L_EMMC_BLOCK_BULK_REGION_BYTES / \
+	GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)
+#define GTA4L_EMMC_BLOCK_BULK_ALIGNED_WINDOWS 64u
+#define GTA4L_EMMC_BLOCK_BULK_UNALIGNED_WINDOWS 16u
+#define GTA4L_EMMC_BLOCK_BULK_WINDOWS \
+	(GTA4L_EMMC_BLOCK_BULK_ALIGNED_WINDOWS + \
+	GTA4L_EMMC_BLOCK_BULK_UNALIGNED_WINDOWS)
+#define GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS 2u
+#define GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES \
+	(GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS * GTA4L_EMMC_BLOCK_BYTES)
+#define GTA4L_EMMC_BLOCK_BULK_SEED 0x47544134u
+#define GTA4L_EMMC_BLOCK_BULK_TAG 0x42554c4bu
+#define GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS 4000u
+#define GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS 4500u
+#define GTA4L_EMMC_BLOCK_BULK_CMD12_TAIL_MS \
+	((GTA4L_EMMC_CMD_TIMEOUT_US + GTA4L_EMMC_CMD_TIMEOUT_US) / 1000u)
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_MS \
+	(GTA4L_EMMC_BLOCK_WIDTHHOLD_MEDIA_WAIT_MS + \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_DEADLINE_MS + \
+	GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS + \
+	GTA4L_EMMC_BLOCK_BULK_CMD12_TAIL_MS + \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_MS + \
+	GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS)
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_MARGIN_MS 2000u
+
+/* Bulk-only failure stages. The stream and window reads share the S1
+ * transport; the stage names the first bulk failure, not the S1 start
+ * path. */
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_NONE 0u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_ALLOC 1u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_DESC 2u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_READ 3u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_SHORT 4u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW 5u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET 6u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_CANCEL 7u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_MEDIA 8u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_PART 9u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_OPEN 10u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_SHAPE 11u
+
+/* Formatter-exact bounds: the BULK line is 249 bytes with its eleven
+ * fields at their widest (seven u32 at ten digits, two u64 at twenty, one
+ * u32 hex at eight, one 32-hex digest and ten separator spaces); the
+ * failure-only BULKFAIL line is 167 bytes with seven u32 at ten digits,
+ * one i32 at eleven and seven separators. The BULKIO line is 250 bytes:
+ * six u32 counters at ten digits, the 8-bit Host Control and 16-bit Clock
+ * Control at two and four hex digits, Present State at eight, five packed
+ * sixteen-digit register pairs and thirteen separators. The S1 worst case
+ * is 1,586 bytes; adding the SPEEDIO, BULK, BULKIO and optional BULKFAIL
+ * lines keeps the combined report at 2,523 bytes inside the 2,560-byte
+ * buffer. */
+#define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
+#define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
+#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 250u
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2523u
+
 /* Start-path failure stages, in execution order. A failure latch keeps the
  * first stage so a later cleanup failure cannot mask it. */
 #define GTA4L_EMMC_BLOCK_SPEED_STAGE_NONE 0u
@@ -1041,6 +1118,56 @@ struct gta4l_emmc_block_report {
 	uint64_t speedio_bus;
 	uint64_t speedio_io;
 	uint64_t speedio_win;
+	/* S2 sustained bulk read. bulk != 0 selects the BULK/BULKFAIL lines.
+	 * region/chunks/bytes describe the stream (bytes is the verified
+	 * prefix, chunks the completed 64-block requests), ticks the stream
+	 * wall time at hz, digest the SHA-256 prefix of exactly those bytes.
+	 * windows is the fixed 80-window set; wpass the matching count and
+	 * wfail/woffset the first failing window (1-based) and its block
+	 * offset. seed lets the host recompute the offsets. */
+	uint32_t bulk;
+	uint32_t bulk_region;
+	uint32_t bulk_chunks;
+	uint32_t bulk_bytes;
+	uint32_t bulk_windows;
+	uint32_t bulk_wpass;
+	uint32_t bulk_wfail;
+	uint32_t bulk_woffset;
+	uint32_t bulk_seed;
+	uint32_t bulk_fail_stage;
+	int32_t bulk_fail_status;
+	uint32_t bulk_cancel;
+	uint32_t bulk_budget;
+	uint64_t bulk_ticks;
+	uint64_t bulk_hz;
+	uint8_t bulk_digest[16];
+	/* S2.1 bulk data-phase split and one-shot register snapshot. All
+	 * values are u32 so the BULKIO bound is at most ten decimal digits
+	 * per counter or eight hex digits per register. brr/drain/polls/
+	 * delays are the CMD18 loop accounting; sha is the incremental
+	 * SHA-256 update time; the register fields are raw reads taken in
+	 * HS/8-bit immediately before the stream. caps0/caps1 are SDHCI
+	 * 0x40/0x44, dll is 0x200/0x208, vendor is 0x20C/0x250, and rcg is
+	 * GCC SDCC1 APPS CFG/M/N/D. */
+	uint32_t bulkio_brr;
+	uint32_t bulkio_drain;
+	uint32_t bulkio_cal;
+	uint32_t bulkio_polls;
+	uint32_t bulkio_delays;
+	uint32_t bulkio_sha;
+	uint32_t bulkio_host_control;
+	uint32_t bulkio_clock_control;
+	uint32_t bulkio_present;
+	uint32_t bulkio_caps0;
+	uint32_t bulkio_caps1;
+	uint32_t bulkio_dll_config;
+	uint32_t bulkio_dll_status;
+	uint32_t bulkio_vendor_spec;
+	uint32_t bulkio_vendor_spec3;
+	uint32_t bulkio_rcg_cfg;
+	uint32_t bulkio_rcg_m;
+	uint32_t bulkio_rcg_n;
+	uint32_t bulkio_rcg_d;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -1202,6 +1329,24 @@ int gta4l_emmc_block_speed_select(int token_present, int token_value,
     int deblock_selected, int breakup_selected, int sweep_selected,
     int consume_selected, int width_selected, int widthhold_selected,
     int widthpub_selected);
+
+/* Select the opt-in S2 sustained bulk qualification. The token is accepted
+ * only when exactly one gta4l-emmc-block=3 token is selected, the value is
+ * exactly 1, the token is not duplicated and none of the partition, read,
+ * consumer, width or S1 speed instruments is selected in the same boot. */
+int gta4l_emmc_block_bulk_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int partobs_selected, int partcmp_selected, int partread_selected,
+    int deblock_selected, int breakup_selected, int sweep_selected,
+    int consume_selected, int width_selected, int widthhold_selected,
+    int widthpub_selected, int speed_selected);
+
+/* Derive the region-relative start block of one S2 bulk window. Windows
+ * 0..63 are chunk-aligned and spread evenly over the region; windows 64..79
+ * come from a xorshift32 sequence seeded with GTA4L_EMMC_BLOCK_BULK_SEED and
+ * are forced off a chunk boundary. The mapping is pure so the host can
+ * recompute every offset from the seed printed in the report. */
+int gta4l_emmc_block_bulk_window(uint32_t index, uint64_t *start_block);
 
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u

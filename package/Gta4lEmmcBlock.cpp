@@ -82,6 +82,26 @@ static_assert(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES +
     GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "S1 report with SPEEDIO must fit the report buffer");
+static_assert(GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS <
+    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS,
+    "S2 bulk stream loop must fit the inclusive transport budget");
+static_assert(GTA4L_EMMC_BLOCK_BULK_CMD12_TAIL_MS ==
+    (GTA4L_EMMC_CMD_TIMEOUT_US + GTA4L_EMMC_CMD_TIMEOUT_US) / 1000u,
+    "S2 stop tail must match the two CMD12 command bounds");
+static_assert(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_MS +
+    GTA4L_EMMC_BLOCK_BULK_REPORT_MARGIN_MS <=
+    GTA4L_EMMC_BLOCK_WATCHDOG_MS,
+    "S2 bulk report thread must finish inside the watchdog with its margin");
+static_assert(GTA4L_EMMC_BLOCK_BULK_REGION_BYTES ==
+    GTA4L_EMMC_BLOCK_BULK_CHUNKS * GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES,
+    "S2 bulk chunks must cover the whole BOOT region");
+static_assert(GTA4L_EMMC_BLOCK_BULK_WINDOWS ==
+    GTA4L_EMMC_BLOCK_BULK_ALIGNED_WINDOWS +
+    GTA4L_EMMC_BLOCK_BULK_UNALIGNED_WINDOWS,
+    "S2 bulk windows must cover the aligned and unaligned sets");
+static_assert(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "S2 bulk report worst case must fit the report buffer");
 
 static_assert(GTA4L_EMMC_BLOCK_WIDTHHOLD_WORST_MS <
     GTA4L_EMMC_BLOCK_WATCHDOG_MS,
@@ -421,6 +441,157 @@ Gta4lEmmcWidthholdClient::run(IOMedia *boot, uint64_t start,
 	return true;
 }
 
+struct gta4l_emmc_bulk_result {
+	uint32_t reason;
+	uint32_t attempted;
+	int32_t status;
+	uint64_t actual;
+};
+
+/* The S2 bulk client owns one persistent contiguous stream buffer and the
+ * two fixed-shape descriptors so the sustained loop pays neither an
+ * allocation nor a descriptor build per 32 KiB request. It is a distinct
+ * IOService identity for the tagged IOMedia::read() calls; the adapter
+ * owns the media reference and the report. */
+class Gta4lEmmcBulkClient : public IOService {
+	OSDeclareDefaultStructors(Gta4lEmmcBulkClient)
+
+public:
+	bool allocate(uint32_t length);
+	void dispose(void);
+	void free() override;
+	bool run(IOMedia *boot, uint64_t start, uint32_t length,
+	    uint32_t tag, struct gta4l_emmc_bulk_result *result);
+	const uint8_t *data() const
+	{
+		return buffer;
+	}
+private:
+	IOMemoryDescriptor *streamDescriptor = nullptr;
+	IOMemoryDescriptor *windowDescriptor = nullptr;
+	uint8_t *buffer = nullptr;
+	uint32_t bufferLength = 0;
+};
+
+OSDefineMetaClassAndStructors(Gta4lEmmcBulkClient, IOService)
+
+bool
+Gta4lEmmcBulkClient::allocate(uint32_t length)
+{
+	IOPhysicalAddress address;
+	IOByteCount segmentLength = 0;
+
+	if (buffer != nullptr) {
+		return bufferLength >= length;
+	}
+	if (length == 0u) {
+		return false;
+	}
+	buffer = (uint8_t *)IOMallocContiguous(length, PAGE_SIZE, nullptr);
+	if (buffer == nullptr) {
+		return false;
+	}
+	bufferLength = length;
+	bzero(buffer, length);
+	streamDescriptor = IOMemoryDescriptor::withAddress(buffer,
+	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES, kIODirectionIn);
+	if (streamDescriptor == nullptr) {
+		dispose();
+		return false;
+	}
+	address = streamDescriptor->getPhysicalSegment(0, &segmentLength,
+	    kIOMemoryMapperNone);
+	if ((address == 0) ||
+	    (segmentLength < GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
+		dispose();
+		return false;
+	}
+	windowDescriptor = IOMemoryDescriptor::withAddress(buffer,
+	    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES, kIODirectionIn);
+	if (windowDescriptor == nullptr) {
+		dispose();
+		return false;
+	}
+	address = windowDescriptor->getPhysicalSegment(0, &segmentLength,
+	    kIOMemoryMapperNone);
+	if ((address == 0) ||
+	    (segmentLength < GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES)) {
+		dispose();
+		return false;
+	}
+	return true;
+}
+
+void
+Gta4lEmmcBulkClient::dispose()
+{
+	if (streamDescriptor != nullptr) {
+		streamDescriptor->release();
+		streamDescriptor = nullptr;
+	}
+	if (windowDescriptor != nullptr) {
+		windowDescriptor->release();
+		windowDescriptor = nullptr;
+	}
+	if (buffer != nullptr) {
+		IOFreeContiguous(buffer, bufferLength);
+		buffer = nullptr;
+	}
+	bufferLength = 0;
+}
+
+void
+Gta4lEmmcBulkClient::free()
+{
+	dispose();
+	IOService::free();
+}
+
+bool
+Gta4lEmmcBulkClient::run(IOMedia *boot, uint64_t start,
+    uint32_t length, uint32_t tag,
+    struct gta4l_emmc_bulk_result *result)
+{
+	IOMemoryDescriptor *descriptor;
+	UInt64 actual = 0;
+	IOReturn status;
+
+	if ((boot == nullptr) || (result == nullptr)) {
+		return false;
+	}
+	result->reason = GTA4L_EMMC_BLOCK_BULK_STAGE_NONE;
+	result->attempted = 0;
+	result->status = 0;
+	result->actual = 0;
+	if (buffer == nullptr) {
+		result->reason = GTA4L_EMMC_BLOCK_BULK_STAGE_ALLOC;
+		return false;
+	}
+	if (length == GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES) {
+		descriptor = streamDescriptor;
+	} else if (length == GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) {
+		descriptor = windowDescriptor;
+	} else {
+		result->reason = GTA4L_EMMC_BLOCK_BULK_STAGE_DESC;
+		return false;
+	}
+	if (descriptor == nullptr) {
+		result->reason = GTA4L_EMMC_BLOCK_BULK_STAGE_DESC;
+		return false;
+	}
+	descriptor->setTag(tag);
+	result->attempted = 1;
+	status = boot->read(this, start, descriptor, nullptr, &actual);
+	result->status = (int32_t)status;
+	result->actual = actual;
+	if (status != kIOReturnSuccess) {
+		result->reason = GTA4L_EMMC_BLOCK_BULK_STAGE_READ;
+	} else if (actual != (UInt64)length) {
+		result->reason = GTA4L_EMMC_BLOCK_BULK_STAGE_SHORT;
+	}
+	return true;
+}
+
 class Gta4lEmmcBlock : public IOBlockStorageDevice {
 	OSDeclareDefaultStructors(Gta4lEmmcBlock)
 
@@ -606,6 +777,14 @@ private:
 	bool speedRecover(void);
 	void speedFatal(uint32_t stage, int32_t status);
 	void runSpeed(void);
+	bool runBulk(void);
+	void releaseBulkMedia(void);
+	bool bulkRead(IOMedia *boot, uint64_t firstBlock,
+	    uint64_t byteOffset, uint32_t length, uint32_t blocks,
+	    uint32_t tag, struct gta4l_emmc_bulk_result *result);
+	uint64_t bulkElapsedMs(void);
+	bool bulkObserve(IOMemoryDescriptor *buffer, UInt64 block,
+	    UInt64 nblks);
 	bool widthholdObserve(IOMemoryDescriptor *buffer, UInt64 block,
 	    UInt64 nblks);
 	void releaseWidthholdMedia(void);
@@ -739,6 +918,7 @@ private:
 	bool widthholdMode = false;
 	bool widthpubMode = false;
 	bool speedMode = false;
+	bool bulkMode = false;
 	bool offlineNotified = false;
 	uint8_t *speedWindow = nullptr;
 	uint8_t speedBaseline[GTA4L_EMMC_EXT_CSD_BYTES];
@@ -812,6 +992,20 @@ private:
 	uint32_t widthholdCreditedStops = 0;
 	uint32_t widthholdStopFailures = 0;
 	uint64_t widthholdReadStart = 0;
+	Gta4lEmmcBulkClient *bulkClient = nullptr;
+	uint8_t *bulkReference = nullptr;
+	uint64_t bulkReadStart = 0;
+	bool bulkActive = false;
+	bool bulkInFlight = false;
+	uint32_t bulkActiveTag = 0;
+	uint64_t bulkActiveFirst = 0;
+	uint64_t bulkActiveEnd = 0;
+	uint32_t bulkActiveBlocks = 0;
+	uint32_t bulkObservedSubrequests = 0;
+	uint32_t bulkObservedBlocks = 0;
+	uint32_t bulkObservedMax = 0;
+	uint32_t bulkObservedOrder = 0;
+	uint32_t bulkObservedForeign = 0;
 	uint32_t widthCaptureLimit =
 	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES;
 	bool registered = false;
@@ -1161,6 +1355,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t widthholdTokens;
 	uint32_t widthpubTokens;
 	uint32_t speedTokens;
+	uint32_t bulkTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
@@ -1173,6 +1368,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int widthholdValue = 0;
 	int widthpubValue = 0;
 	int speedValue = 0;
+	int bulkValue = 0;
 	int parsed;
 	int partobsParsed;
 	int partcmpParsed;
@@ -1185,6 +1381,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int widthholdParsed;
 	int widthpubParsed;
 	int speedParsed;
+	int bulkParsed;
 	int mode;
 	int partobs;
 	int partcmp;
@@ -1197,6 +1394,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int widthhold;
 	int widthpub;
 	int speed;
+	int bulk;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -1226,6 +1424,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_WIDTHPUB_ARG);
 	speedTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_SPEED_ARG);
+	bulkTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_BULK_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -1291,6 +1491,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	if ((speedParsed == 0) && (speedTokens != 0)) {
 		speedValue = -1;
 	}
+	bulkParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_BULK_ARG,
+	    &bulkValue, sizeof(bulkValue));
+	if ((bulkParsed == 0) && (bulkTokens != 0)) {
+		bulkValue = -1;
+	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
 	if (mode == GTA4L_EMMC_BLOCK_SELECT_INERT) {
@@ -1347,6 +1552,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 		if (speedTokens != 0) {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-speed requires "
+			    "gta4l-emmc-block=3\n");
+		}
+		if (bulkTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-bulk requires "
 			    "gta4l-emmc-block=3\n");
 		}
 		return false;
@@ -1863,6 +2073,83 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	speedMode = (speed == GTA4L_EMMC_BLOCK_SPEED_ON);
+	bulk = gta4l_emmc_block_bulk_select(
+	    bulkTokens != 0, bulkValue, bulkTokens > 1u,
+	    1, value,
+	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
+	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
+	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
+	    deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON,
+	    breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON,
+	    sweep == GTA4L_EMMC_BLOCK_SWEEP_ON,
+	    consume == GTA4L_EMMC_BLOCK_CONSUME_ON,
+	    width == GTA4L_EMMC_BLOCK_WIDTH_ON,
+	    widthhold == GTA4L_EMMC_BLOCK_WIDTHHOLD_ON,
+	    widthpub == GTA4L_EMMC_BLOCK_WIDTHPUB_ON,
+	    speed == GTA4L_EMMC_BLOCK_SPEED_ON);
+	if (bulk == GTA4L_EMMC_BLOCK_BULK_REFUSED) {
+		if (bulkTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-bulk token\n");
+		} else if (value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-bulk requires "
+			    "gta4l-emmc-block=3\n");
+		} else if (partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partobs "
+			    "and gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partcmp "
+			    "and gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (partread == GTA4L_EMMC_BLOCK_PARTREAD_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-partread "
+			    "and gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (deblock == GTA4L_EMMC_BLOCK_DEBLOCK_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-deblock "
+			    "and gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (breakup == GTA4L_EMMC_BLOCK_BREAKUP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-breakup "
+			    "and gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (sweep == GTA4L_EMMC_BLOCK_SWEEP_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-sweep "
+			    "and gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (consume == GTA4L_EMMC_BLOCK_CONSUME_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-consume "
+			    "and gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (width == GTA4L_EMMC_BLOCK_WIDTH_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-width "
+			    "and gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (widthhold == GTA4L_EMMC_BLOCK_WIDTHHOLD_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-widthhold and "
+			    "gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (widthpub == GTA4L_EMMC_BLOCK_WIDTHPUB_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-widthpub and "
+			    "gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else if (speed == GTA4L_EMMC_BLOCK_SPEED_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-speed and "
+			    "gta4l-emmc-bulk are mutually "
+			    "exclusive\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-bulk value must be 1; "
+			    "absence selects the normal 400 kHz path\n");
+		}
+		return false;
+	}
+	bulkMode = (bulk == GTA4L_EMMC_BLOCK_BULK_ON);
 	if (widthMode) {
 		/* The reference and observed copies never alias: the reference
 		 * is filled only by the pre-switch 1-bit read, the observed
@@ -2026,7 +2313,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 
-	if (speedMode) {
+	if (speedMode || bulkMode) {
 		int speedRc;
 #ifdef GTA4L_EMMC_BLOCK_HOST_TEST
 		if (gta4l_test_speed_hook != nullptr) {
@@ -2039,9 +2326,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 		 * switch with a 4-bit fallback only after a verified
 		 * rollback, then the inherited LBA-1 baseline at the final
 		 * mode. The one start budget is armed after hardware init
-		 * and cleared on every exit before publication. */
+		 * and cleared on every exit before publication. S2 bulk
+		 * reuses the same start path. */
 		IOLockLock(reportLock);
 		report.speed = 1u;
+		report.bulk = bulkMode ? 1u : 0u;
 		report.speed_hs = 0u;
 		report.speed_wtry = GTA4L_EMMC_BLOCK_SPEED_BITS_8;
 		report.speed_wid = 1u;
@@ -2384,7 +2673,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	}
 	IOLockUnlock(gate);
 	if (baselineResult != 0) {
-		if (speedMode) {
+		if (speedMode || bulkMode) {
 			/* The inherited LBA-1 baseline runs at the final
 			 * S1 mode. A failure is BASE: fail closed after the
 			 * combined revert under its own budget. */
@@ -2432,7 +2721,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 
-	if (speedMode) {
+	if (speedMode || bulkMode) {
 		/* The LBA-1 baseline is the last operation under the start
 		 * budget. Clear it before any publication work. */
 		gta4l_emmc_deadline_clear(&host);
@@ -2448,7 +2737,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_BREAKUP_READ_BLOCKS :
 	    GTA4L_EMMC_BLOCK_MAX_BLOCKS), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: block limit property\n");
-		if (speedMode) {
+		if (speedMode || bulkMode) {
 			speedLatchFailure(
 			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
 			(void)speedRecover();
@@ -2472,7 +2761,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_BREAKUP_READ_MAX_BYTES :
 	    GTA4L_EMMC_BLOCK_MAX_BYTES), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: byte limit property\n");
-		if (speedMode) {
+		if (speedMode || bulkMode) {
 			speedLatchFailure(
 			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
 			(void)speedRecover();
@@ -2496,7 +2785,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?
 	    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : 1u), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: segment limit property\n");
-		if (speedMode) {
+		if (speedMode || bulkMode) {
 			speedLatchFailure(
 			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
 			(void)speedRecover();
@@ -2521,7 +2810,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 
 	retain();
 	reportCancel = false;
-	if (speedMode) {
+	if (speedMode || bulkMode) {
 		/* Same ordering as widthhold: the watchdog starts before the
 		 * reporter so a thread-start failure still leaves the
 		 * terminal report path able to take the combined revert. */
@@ -2674,6 +2963,15 @@ Gta4lEmmcBlock::free()
 		    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES);
 		widthholdReference = nullptr;
 	}
+	if (bulkReference != nullptr) {
+		IOFreeContiguous(bulkReference,
+		    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES);
+		bulkReference = nullptr;
+	}
+	if (bulkClient != nullptr) {
+		bulkClient->release();
+		bulkClient = nullptr;
+	}
 	if (partmapDma != nullptr) {
 		IOFreeAligned(partmapDma,
 		    GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES);
@@ -2723,6 +3021,7 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	bool wentOffline = false;
 	bool consumeAttributed = false;
 	bool widthholdAttributed = false;
+	bool bulkAttributed = false;
 
 	(void)attributes;
 	if ((buffer == nullptr) || (completion == nullptr) ||
@@ -2736,6 +3035,7 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	sweepObserve(buffer, blockNumber, nblks);
 	consumeAttributed = consumeObserve(buffer, blockNumber, nblks);
 	widthholdAttributed = widthholdObserve(buffer, blockNumber, nblks);
+	bulkAttributed = bulkObserve(buffer, blockNumber, nblks);
 	if (blockNumber >= (UInt64)capacityBlocks) {
 		return kIOReturnBadArgument;
 	}
@@ -2805,12 +3105,12 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	}
 	direction = GTA4L_EMMC_BLOCK_READ;
 	countersBefore = block.counters;
-	if (widthholdAttributed && speedTimingActive) {
+	if ((widthholdAttributed || bulkAttributed) && speedTimingActive) {
 		busStartTicks = gta4l_emmc_platform_counter();
 	}
 	result = gta4l_emmc_block_read(&block, blockNumber, (uint32_t)nblks,
 	    (uint64_t)buffer->getLength(), direction, &completed);
-	if (widthholdAttributed && speedTimingActive) {
+	if ((widthholdAttributed || bulkAttributed) && speedTimingActive) {
 		speedBusTicks += gta4l_emmc_platform_counter() - busStartTicks;
 	}
 	countersAfter = block.counters;
@@ -2904,7 +3204,7 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	completion->action(completion->target, completion->parameter, status,
 	    completed);
 	if (wentOffline) {
-		if (widthpubMode || speedMode) {
+		if (widthpubMode || speedMode || bulkMode) {
 			/* The report thread owns the terminal decommission.
 			 * Share its one-shot latch so a failed case read does
 			 * not notify clients twice. */
@@ -3576,7 +3876,43 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		target->speedio_bus = report.speedio_bus;
 		target->speedio_io = report.speedio_io;
 		target->speedio_win = report.speedio_win;
-		if (speedMode) {
+		target->bulk = report.bulk;
+		target->bulk_region = report.bulk_region;
+		target->bulk_chunks = report.bulk_chunks;
+		target->bulk_bytes = report.bulk_bytes;
+		target->bulk_windows = report.bulk_windows;
+		target->bulk_wpass = report.bulk_wpass;
+		target->bulk_wfail = report.bulk_wfail;
+		target->bulk_woffset = report.bulk_woffset;
+		target->bulk_seed = report.bulk_seed;
+		target->bulk_fail_stage = report.bulk_fail_stage;
+		target->bulk_fail_status = report.bulk_fail_status;
+		target->bulk_cancel = report.bulk_cancel;
+		target->bulk_budget = report.bulk_budget;
+		target->bulk_ticks = report.bulk_ticks;
+		target->bulk_hz = report.bulk_hz;
+		memcpy(target->bulk_digest, report.bulk_digest,
+		    sizeof(target->bulk_digest));
+		target->bulkio_brr = report.bulkio_brr;
+		target->bulkio_drain = report.bulkio_drain;
+		target->bulkio_cal = report.bulkio_cal;
+		target->bulkio_polls = report.bulkio_polls;
+		target->bulkio_delays = report.bulkio_delays;
+		target->bulkio_sha = report.bulkio_sha;
+		target->bulkio_host_control = report.bulkio_host_control;
+		target->bulkio_clock_control = report.bulkio_clock_control;
+		target->bulkio_present = report.bulkio_present;
+		target->bulkio_caps0 = report.bulkio_caps0;
+		target->bulkio_caps1 = report.bulkio_caps1;
+		target->bulkio_dll_config = report.bulkio_dll_config;
+		target->bulkio_dll_status = report.bulkio_dll_status;
+		target->bulkio_vendor_spec = report.bulkio_vendor_spec;
+		target->bulkio_vendor_spec3 = report.bulkio_vendor_spec3;
+		target->bulkio_rcg_cfg = report.bulkio_rcg_cfg;
+		target->bulkio_rcg_m = report.bulkio_rcg_m;
+		target->bulkio_rcg_n = report.bulkio_rcg_n;
+		target->bulkio_rcg_d = report.bulkio_rcg_d;
+		if (speedMode || bulkMode) {
 			target->clock_hz = speedClockHz;
 			target->timing = (speedClockHz ==
 			    GTA4L_EMMC_BLOCK_SPEED_CLOCK_HZ) ? 1u : 0u;
@@ -7336,7 +7672,8 @@ Gta4lEmmcBlock::widthholdObserve(IOMemoryDescriptor *buffer, UInt64 block,
 	uint32_t tag;
 	uint64_t end;
 
-	if ((!widthholdMode && !widthpubMode && !speedMode) ||
+	if ((!widthholdMode && !widthpubMode && !speedMode &&
+	    !bulkMode) ||
 	    (buffer == nullptr)) {
 		return false;
 	}
@@ -7651,14 +7988,15 @@ Gta4lEmmcBlock::widthholdReadCase(IOMedia *boot, uint32_t index,
 	*shapeOk = false;
 	windowIndex = widthpubMode ?
 	    (index % GTA4L_EMMC_BLOCK_WIDTHPUB_CASE_OFFSETS) :
-	    (speedMode ?
+	    ((speedMode || bulkMode) ?
 	    (index % GTA4L_EMMC_BLOCK_SPEED_CASE_OFFSETS) : index);
 	start = (uint64_t)windowIndex *
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES;
 	firstBlock = GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
 	    ((uint64_t)windowIndex *
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS);
-	tag = (speedMode ? GTA4L_EMMC_BLOCK_SPEED_TAG :
+	tag = ((speedMode || bulkMode) ?
+	    GTA4L_EMMC_BLOCK_SPEED_TAG :
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_TAG) + index;
 	bzero(slice, GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES);
 	bzero(&result, sizeof(result));
@@ -7712,7 +8050,7 @@ Gta4lEmmcBlock::widthholdReadCase(IOMedia *boot, uint32_t index,
 	if (!*shapeOk) {
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_ORDER;
 	}
-	if (!speedMode &&
+	if (!speedMode && !bulkMode &&
 	    (memcmp(slice, widthholdReference + start,
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BYTES) != 0)) {
 		return GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MATCH;
@@ -8847,6 +9185,606 @@ Gta4lEmmcBlock::runSpeed()
 }
 
 void
+Gta4lEmmcBlock::releaseBulkMedia()
+{
+	if (widthholdBootOpen && (widthholdBoot != nullptr)) {
+		widthholdBoot->close(bulkClient, 0);
+		widthholdBootOpen = false;
+	}
+	if (bulkClient != nullptr) {
+		bulkClient->release();
+		bulkClient = nullptr;
+	}
+	if (widthholdBoot != nullptr) {
+		widthholdBoot->release();
+		widthholdBoot = nullptr;
+	}
+	if (widthholdWhole != nullptr) {
+		widthholdWhole->release();
+		widthholdWhole = nullptr;
+	}
+	if (bulkReference != nullptr) {
+		IOFreeContiguous(bulkReference,
+		    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES);
+		bulkReference = nullptr;
+	}
+}
+
+uint64_t
+Gta4lEmmcBlock::bulkElapsedMs()
+{
+	uint64_t now = gta4l_emmc_platform_counter();
+	uint64_t hz = gta4l_emmc_platform_counter_hz();
+	uint64_t ticks_per_ms;
+
+	if (hz == 0) {
+		return 0;
+	}
+	ticks_per_ms = hz / 1000u;
+	if (ticks_per_ms == 0) {
+		ticks_per_ms = 1;
+	}
+	return (now - bulkReadStart) / ticks_per_ms;
+}
+
+bool
+Gta4lEmmcBlock::bulkObserve(IOMemoryDescriptor *buffer, UInt64 block,
+    UInt64 nblks)
+{
+	uint32_t tag;
+	uint64_t end;
+
+	if (!bulkMode || (buffer == nullptr)) {
+		return false;
+	}
+	tag = (uint32_t)buffer->getTag();
+	IOLockLock(reportLock);
+	if (!bulkActive) {
+		IOLockUnlock(reportLock);
+		return false;
+	}
+	if ((tag == 0u) || (tag != bulkActiveTag) ||
+	    (block != bulkActiveFirst) ||
+	    (nblks != bulkActiveBlocks)) {
+		if (bulkObservedForeign != 0xffffffffu) {
+			bulkObservedForeign++;
+		}
+		IOLockUnlock(reportLock);
+		return false;
+	}
+	end = (nblks > (~0ull - block)) ? ~0ull : (block + nblks);
+	if (end > bulkActiveEnd) {
+		if (bulkObservedForeign != 0xffffffffu) {
+			bulkObservedForeign++;
+		}
+		IOLockUnlock(reportLock);
+		return false;
+	}
+	if (bulkInFlight) {
+		bulkObservedOrder = 1;
+		IOLockUnlock(reportLock);
+		return false;
+	}
+	bulkInFlight = true;
+	if (bulkObservedSubrequests != 0xffffffffu) {
+		bulkObservedSubrequests++;
+	}
+	if (nblks > 0xffffffffull) {
+		bulkObservedBlocks = 0xffffffffu;
+	} else if (bulkObservedBlocks <=
+	    (0xffffffffu - (uint32_t)nblks)) {
+		bulkObservedBlocks += (uint32_t)nblks;
+	} else {
+		bulkObservedBlocks = 0xffffffffu;
+	}
+	if (nblks > 0xffffffffull) {
+		bulkObservedMax = 0xffffffffu;
+	} else if ((uint32_t)nblks > bulkObservedMax) {
+		bulkObservedMax = (uint32_t)nblks;
+	}
+	IOLockUnlock(reportLock);
+	return true;
+}
+
+bool
+Gta4lEmmcBlock::bulkRead(IOMedia *boot, uint64_t firstBlock,
+    uint64_t byteOffset, uint32_t length, uint32_t blocks,
+    uint32_t tag, struct gta4l_emmc_bulk_result *result)
+{
+	uint32_t observedSubrequests;
+	uint32_t observedBlocks;
+	uint32_t observedMax;
+	uint32_t observedOrder;
+	uint32_t observedForeign;
+	bool ran;
+
+	if ((boot == nullptr) || (bulkClient == nullptr) ||
+	    (result == nullptr)) {
+		return false;
+	}
+	IOLockLock(reportLock);
+	bulkActive = true;
+	bulkInFlight = false;
+	bulkActiveTag = tag;
+	bulkActiveFirst = firstBlock;
+	bulkActiveEnd = firstBlock + blocks;
+	bulkActiveBlocks = blocks;
+	bulkObservedSubrequests = 0;
+	bulkObservedBlocks = 0;
+	bulkObservedMax = 0;
+	bulkObservedOrder = 0;
+	bulkObservedForeign = 0;
+	IOLockUnlock(reportLock);
+	ran = bulkClient->run(boot, byteOffset, length, tag, result);
+	IOLockLock(reportLock);
+	bulkActive = false;
+	bulkInFlight = false;
+	observedSubrequests = bulkObservedSubrequests;
+	observedBlocks = bulkObservedBlocks;
+	observedMax = bulkObservedMax;
+	observedOrder = bulkObservedOrder;
+	observedForeign = bulkObservedForeign;
+	IOLockUnlock(reportLock);
+	if (!ran || (result->reason !=
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) ||
+	    (result->status != kIOReturnSuccess) ||
+	    (result->actual != (UInt64)length)) {
+		return false;
+	}
+	if ((observedSubrequests != 1u) ||
+	    (observedBlocks != blocks) ||
+	    (observedMax != blocks) || (observedOrder != 0u) ||
+	    (observedForeign != 0u)) {
+		result->reason = GTA4L_EMMC_BLOCK_BULK_STAGE_SHAPE;
+		return false;
+	}
+	return true;
+}
+
+bool
+Gta4lEmmcBlock::runBulk()
+{
+	struct gta4l_emmc_bulk_result result;
+	struct gta4l_emmc_block_sha256_ctx sha;
+	uint64_t windowBlock = 0;
+	uint64_t byteOffset;
+	uint64_t streamStart = 0;
+	uint64_t streamTicks = 0;
+	uint64_t caseStart = 0;
+	uint64_t windowStart = 0;
+	uint64_t windowTicks = 0;
+	uint64_t shaStart = 0;
+	uint64_t shaTicks = 0;
+	uint32_t reason;
+	uint32_t stage = GTA4L_EMMC_BLOCK_BULK_STAGE_NONE;
+	int32_t failStatus = 0;
+	uint32_t failWindow = 0;
+	uint32_t failOffset = 0;
+	uint32_t chunk;
+	uint32_t window;
+	uint32_t passed = 0;
+	uint32_t bytes = 0;
+	uint32_t chunks = 0;
+	uint32_t budget = 0;
+	uint32_t cancel = 0;
+	uint32_t published = 0;
+	uint32_t hashed;
+	uint32_t index;
+	int referenceStatus;
+	bool readOk;
+	bool revertOk;
+	bool streamHashed = false;
+	uint8_t digest[32];
+
+	bzero(digest, sizeof(digest));
+	bzero(&result, sizeof(result));
+	widthholdWhole = nullptr;
+	widthholdBoot = nullptr;
+	widthholdClient = nullptr;
+	widthholdBootOpen = false;
+	bulkClient = nullptr;
+	bulkReference = nullptr;
+	bulkReadStart = 0;
+	IOLockLock(reportLock);
+	bulkActive = false;
+	bulkInFlight = false;
+	bulkObservedSubrequests = 0;
+	bulkObservedBlocks = 0;
+	bulkObservedMax = 0;
+	bulkObservedOrder = 0;
+	bulkObservedForeign = 0;
+	report.speed_req = 0;
+	report.speed_fails = 0;
+	report.speed_cancel = 0;
+	report.speed_budget = 0;
+	report.speed_partial = 0;
+	report.speed_pub = 0;
+	report.speed_partdiag = 0;
+	report.speed_bytes1 = 0;
+	report.speed_ticks1 = 0;
+	report.speed_bytes2 = 0;
+	report.speed_ticks2 = 0;
+	report.speed_hz = (uint32_t)gta4l_emmc_platform_counter_hz();
+	bzero(report.speed_dig1, sizeof(report.speed_dig1));
+	bzero(report.speed_dig2, sizeof(report.speed_dig2));
+	report.speedio_req = 0;
+	report.speedio_blk = 0;
+	report.speedio_inh = 0;
+	report.speedio_cmd = 0;
+	report.speedio_dat = 0;
+	report.speedio_stop = 0;
+	report.speedio_core = 0;
+	report.speedio_bus = 0;
+	report.speedio_io = 0;
+	report.speedio_win = 0;
+	report.bulkio_brr = 0;
+	report.bulkio_drain = 0;
+	report.bulkio_cal = 0;
+	report.bulkio_polls = 0;
+	report.bulkio_delays = 0;
+	report.bulkio_sha = 0;
+	report.bulkio_host_control = 0;
+	report.bulkio_clock_control = 0;
+	report.bulkio_present = 0;
+	report.bulkio_caps0 = 0;
+	report.bulkio_caps1 = 0;
+	report.bulkio_dll_config = 0;
+	report.bulkio_dll_status = 0;
+	report.bulkio_vendor_spec = 0;
+	report.bulkio_vendor_spec3 = 0;
+	report.bulkio_rcg_cfg = 0;
+	report.bulkio_rcg_m = 0;
+	report.bulkio_rcg_n = 0;
+	report.bulkio_rcg_d = 0;
+	report.bulk = 1u;
+	report.bulk_region = GTA4L_EMMC_BLOCK_BULK_REGION_BYTES;
+	report.bulk_chunks = 0u;
+	report.bulk_bytes = 0u;
+	report.bulk_windows = GTA4L_EMMC_BLOCK_BULK_WINDOWS;
+	report.bulk_wpass = 0u;
+	report.bulk_wfail = 0u;
+	report.bulk_woffset = 0u;
+	report.bulk_seed = GTA4L_EMMC_BLOCK_BULK_SEED;
+	report.bulk_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_NONE;
+	report.bulk_fail_status = 0;
+	report.bulk_cancel = 0u;
+	report.bulk_budget = 0u;
+	report.bulk_ticks = 0u;
+	report.bulk_hz = gta4l_emmc_platform_counter_hz();
+	bzero(report.bulk_digest, sizeof(report.bulk_digest));
+	IOLockUnlock(reportLock);
+	speedTimingActive = false;
+	speedCoreTicks = 0;
+	speedBusTicks = 0;
+	speedIoTicks = 0;
+	host.timing_inhibit_ticks = 0;
+	host.timing_command_ticks = 0;
+	host.timing_data_ticks = 0;
+	host.timing_stop_ticks = 0;
+	host.timing_requests = 0;
+	host.timing_blocks = 0;
+	host.timing_brr_wait_ticks = 0;
+	host.timing_drain_ticks = 0;
+	host.timing_polls = 0;
+	host.timing_delays = 0;
+	host.drain_cal_ticks = 0;
+	host.diag_valid = 0;
+	host.timing_capture = 0;
+
+	if (reportCancel) {
+		cancel = 1;
+		stage = GTA4L_EMMC_BLOCK_BULK_STAGE_CANCEL;
+	} else {
+		reason = widthholdDiscoverMedia();
+		if (reason == GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {
+			published = 1;
+		} else if (reason ==
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL) {
+			cancel = 1;
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_CANCEL;
+		} else if (reason ==
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_MEDIA) {
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_MEDIA;
+			failStatus = (int32_t)reason;
+		} else if (reason ==
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_PART) {
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_PART;
+			failStatus = (int32_t)reason;
+		} else if (reason !=
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) {
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_MEDIA;
+			failStatus = (int32_t)reason;
+		}
+	}
+
+	if (stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) {
+		bulkClient = new Gta4lEmmcBulkClient();
+		if ((bulkClient == nullptr) || !bulkClient->init() ||
+		    !bulkClient->allocate(
+		    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_ALLOC;
+		} else if (!widthholdBoot->open(bulkClient, 0,
+		    kIOStorageAccessReader)) {
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_OPEN;
+		} else {
+			widthholdBootOpen = true;
+			bulkReference = (uint8_t *)IOMallocContiguous(
+			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES,
+			    PAGE_SIZE, nullptr);
+			if (bulkReference == nullptr) {
+				stage =
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_ALLOC;
+			}
+		}
+	}
+
+	if (stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) {
+		speedTimingActive = true;
+		host.timing_capture = 1;
+		gta4l_emmc_capture_diag_regs(&host);
+		streamStart = gta4l_emmc_platform_counter();
+		bulkReadStart = streamStart;
+		gta4l_emmc_block_sha256_init(&sha);
+		streamHashed = true;
+		gta4l_emmc_deadline_arm(&host,
+		    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS);
+		for (chunk = 0;
+		    chunk < GTA4L_EMMC_BLOCK_BULK_CHUNKS; chunk++) {
+			if (reportCancel) {
+				cancel = 1;
+				stage =
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_CANCEL;
+				break;
+			}
+			if (bulkElapsedMs() >=
+			    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {
+				budget = 1;
+				stage =
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET;
+				break;
+			}
+			byteOffset = (uint64_t)chunk *
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES;
+			caseStart = gta4l_emmc_platform_counter();
+			readOk = bulkRead(widthholdBoot,
+			    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+			    ((uint64_t)chunk *
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS),
+			    byteOffset,
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES,
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS,
+			    GTA4L_EMMC_BLOCK_BULK_TAG, &result);
+			speedIoTicks +=
+			    gta4l_emmc_platform_counter() - caseStart;
+			hashed = (result.actual >
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES) ?
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES :
+			    (uint32_t)result.actual;
+			shaStart = gta4l_emmc_platform_counter();
+			gta4l_emmc_block_sha256_update(&sha,
+			    bulkClient->data(), hashed);
+			shaTicks += gta4l_emmc_platform_counter() - shaStart;
+			bytes += hashed;
+			if (readOk) {
+				chunks++;
+			}
+			IOLockLock(reportLock);
+			report.bulk_chunks = chunks;
+			report.bulk_bytes = bytes;
+			IOLockUnlock(reportLock);
+			if (!readOk) {
+				failStatus = result.status;
+				if (result.status != kIOReturnSuccess) {
+					if (bulkElapsedMs() >=
+					    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS) {
+						budget = 1;
+						stage =
+						    GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET;
+					} else {
+						stage =
+						    GTA4L_EMMC_BLOCK_BULK_STAGE_READ;
+					}
+				} else if ((result.reason ==
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_SHORT) ||
+				    (result.actual !=
+				    (UInt64)GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
+					stage =
+					    GTA4L_EMMC_BLOCK_BULK_STAGE_SHORT;
+				} else {
+					stage = result.reason;
+				}
+				break;
+			}
+		}
+		streamTicks =
+		    gta4l_emmc_platform_counter() - streamStart;
+		gta4l_emmc_block_sha256_final(&sha, digest);
+		/* Time one 512-byte-equivalent set of data-port reads with
+		 * the FIFO idle. Only a clean stream or the controlled budget
+		 * exit leaves a state where this is safe; a data error keeps
+		 * the first failure and skips the calibration. */
+		if ((stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) ||
+		    (stage == GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET)) {
+			(void)gta4l_emmc_calibrate_drain(&host,
+			    GTA4L_EMMC_BLOCK_BYTES / 4u);
+		}
+	}
+
+	if (stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) {
+		windowStart = gta4l_emmc_platform_counter();
+		for (window = 0;
+		    window < GTA4L_EMMC_BLOCK_BULK_WINDOWS; window++) {
+			if (reportCancel) {
+				cancel = 1;
+				stage =
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_CANCEL;
+				break;
+			}
+			if (bulkElapsedMs() >=
+			    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS) {
+				budget = 1;
+				stage =
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET;
+				break;
+			}
+			if (gta4l_emmc_block_bulk_window(window,
+			    &windowBlock) != 0) {
+				stage =
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_SHAPE;
+				failWindow = window + 1u;
+				failOffset = (uint32_t)windowBlock;
+				break;
+			}
+			referenceStatus = 0;
+			IOLockLock(gate);
+			for (index = 0;
+			    index < GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS;
+			    index++) {
+				referenceStatus =
+				    gta4l_emmc_read_block(&host,
+				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+				    windowBlock + index,
+				    bulkReference +
+				    ((uint64_t)index *
+				    GTA4L_EMMC_BLOCK_BYTES));
+				if (referenceStatus != 0) {
+					break;
+				}
+			}
+			IOLockUnlock(gate);
+			if (referenceStatus != 0) {
+				if ((referenceStatus ==
+				    GTA4L_EMMC_ERR_DEADLINE) ||
+				    (bulkElapsedMs() >=
+				    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS)) {
+					budget = 1;
+					stage =
+					    GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET;
+				} else {
+					stage =
+					    GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW;
+				}
+				failStatus = referenceStatus;
+				failWindow = window + 1u;
+				failOffset = (uint32_t)windowBlock;
+				break;
+			}
+			byteOffset = windowBlock *
+			    GTA4L_EMMC_BLOCK_BYTES;
+			caseStart = gta4l_emmc_platform_counter();
+			readOk = bulkRead(widthholdBoot,
+			    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+			    windowBlock, byteOffset,
+			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES,
+			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS,
+			    GTA4L_EMMC_BLOCK_BULK_TAG + 1u, &result);
+			speedIoTicks +=
+			    gta4l_emmc_platform_counter() - caseStart;
+			if (!readOk) {
+				if ((result.status ==
+				    GTA4L_EMMC_ERR_DEADLINE) ||
+				    (bulkElapsedMs() >=
+				    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS)) {
+					budget = 1;
+					stage =
+					    GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET;
+				} else {
+					stage =
+					    GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW;
+				}
+				failStatus = result.status;
+				failWindow = window + 1u;
+				failOffset = (uint32_t)windowBlock;
+				break;
+			}
+			if (memcmp(bulkClient->data(), bulkReference,
+			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0) {
+				stage =
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW;
+				failStatus = 0;
+				failWindow = window + 1u;
+				failOffset = (uint32_t)windowBlock;
+				break;
+			}
+			passed++;
+		}
+		windowTicks = gta4l_emmc_platform_counter() - windowStart;
+	}
+	speedTimingActive = false;
+	host.timing_capture = 0;
+
+	if (stage != GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) {
+		online = false;
+	}
+	gta4l_emmc_deadline_clear(&host);
+	revertOk = speedRecover();
+	if (!revertOk) {
+		online = false;
+	}
+	releaseBulkMedia();
+
+	IOLockLock(reportLock);
+	report.bulk = 1u;
+	report.bulk_chunks = chunks;
+	report.bulk_bytes = bytes;
+	report.bulk_ticks = streamTicks;
+	report.bulk_wpass = passed;
+	report.bulk_wfail = failWindow;
+	report.bulk_woffset = failOffset;
+	report.bulk_fail_stage = stage;
+	report.bulk_fail_status = failStatus;
+	report.bulk_cancel = cancel;
+	report.bulk_budget = budget;
+	report.speedio_req = (uint32_t)host.timing_requests;
+	report.speedio_blk = (uint32_t)host.timing_blocks;
+	report.speedio_inh = host.timing_inhibit_ticks;
+	report.speedio_cmd = host.timing_command_ticks;
+	report.speedio_dat = host.timing_data_ticks;
+	report.speedio_stop = host.timing_stop_ticks;
+	report.speedio_core = speedCoreTicks;
+	report.speedio_bus = speedBusTicks;
+	report.speedio_io = speedIoTicks;
+	report.speedio_win = windowTicks;
+	report.bulkio_brr = (uint32_t)host.timing_brr_wait_ticks;
+	report.bulkio_drain = (uint32_t)host.timing_drain_ticks;
+	report.bulkio_cal = (uint32_t)host.drain_cal_ticks;
+	report.bulkio_polls = (uint32_t)host.timing_polls;
+	report.bulkio_delays = (uint32_t)host.timing_delays;
+	report.bulkio_sha = (uint32_t)shaTicks;
+	report.bulkio_host_control = host.diag_host_control;
+	report.bulkio_clock_control = host.diag_clock_control;
+	report.bulkio_present = host.diag_present_state;
+	report.bulkio_caps0 = host.diag_caps0;
+	report.bulkio_caps1 = host.diag_caps1;
+	report.bulkio_dll_config = host.diag_dll_config;
+	report.bulkio_dll_status = host.diag_dll_status;
+	report.bulkio_vendor_spec = host.diag_vendor_spec;
+	report.bulkio_vendor_spec3 = host.diag_vendor_spec3;
+	report.bulkio_rcg_cfg = host.diag_rcg_cfg;
+	report.bulkio_rcg_m = host.diag_rcg_m;
+	report.bulkio_rcg_n = host.diag_rcg_n;
+	report.bulkio_rcg_d = host.diag_rcg_d;
+	report.speed_pub = published;
+	report.speed_partdiag = report.widthhold_partdiag;
+	if (streamHashed) {
+		memcpy(report.bulk_digest, digest,
+		    sizeof(report.bulk_digest));
+	}
+	IOLockUnlock(reportLock);
+
+	if ((stage != GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) ||
+	    !revertOk) {
+		notifyOfflineOnce();
+	}
+	if (speedGateTimedOut) {
+		panicWithReportNoGate();
+	} else {
+		panicWithReport();
+	}
+	return (stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) && revertOk;
+}
+
+void
 Gta4lEmmcBlock::runPartitionComparison()
 {
 	uint32_t wholeCount = 0;
@@ -9207,7 +10145,7 @@ Gta4lEmmcBlock::notifyOfflineOnce()
 	 * `reportLock` only. The absent-token 1-bit path and the widthhold
 	 * path keep their prior behavior, and the shared latch suppresses a
 	 * duplicate notification when both callers race. */
-	if (!widthpubMode && !speedMode) {
+	if (!widthpubMode && !speedMode && !bulkMode) {
 		return;
 	}
 	IOLockLock(reportLock);
@@ -9567,8 +10505,24 @@ Gta4lEmmcBlock::runReport()
 	report.widthhold_fail_max = widthholdFailMax;
 	memcpy(report.widthhold_fail_digest, widthholdFailDigest,
 	    sizeof(report.widthhold_fail_digest));
-	report.speed = speedMode ? 1u : 0u;
-	if (speedMode) {
+	report.speed = (speedMode || bulkMode) ? 1u : 0u;
+	report.bulk = bulkMode ? 1u : 0u;
+	report.bulk_region = GTA4L_EMMC_BLOCK_BULK_REGION_BYTES;
+	report.bulk_chunks = 0u;
+	report.bulk_bytes = 0u;
+	report.bulk_windows = GTA4L_EMMC_BLOCK_BULK_WINDOWS;
+	report.bulk_wpass = 0u;
+	report.bulk_wfail = 0u;
+	report.bulk_woffset = 0u;
+	report.bulk_seed = GTA4L_EMMC_BLOCK_BULK_SEED;
+	report.bulk_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_NONE;
+	report.bulk_fail_status = 0;
+	report.bulk_cancel = 0u;
+	report.bulk_budget = 0u;
+	report.bulk_ticks = 0u;
+	report.bulk_hz = gta4l_emmc_platform_counter_hz();
+	bzero(report.bulk_digest, sizeof(report.bulk_digest));
+	if (speedMode || bulkMode) {
 		const struct gta4l_emmc_bus_result *winning =
 		    (speedFallback.requested != 0u) ? &speedFallback :
 		    &speedSwitch;
@@ -9599,6 +10553,10 @@ Gta4lEmmcBlock::runReport()
 		report.speed_limit = GTA4L_EMMC_BLOCK_MAX_BLOCKS;
 		report.speed_segments = 1u;
 		report.speed_capacity = capacityBlocks;
+	}
+	if (bulkMode) {
+		runBulk();
+		return;
 	}
 	if (speedMode) {
 		runSpeed();

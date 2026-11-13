@@ -677,6 +677,38 @@ struct gta4l_emmc_host {
 	uint64_t timing_stop_ticks;
 	uint64_t timing_requests;
 	uint64_t timing_blocks;
+	/* S2.1 data-phase split, accumulated only when `timing_capture` is
+	 * set. The CMD18 loop charges the wait for a live BRR sample (from
+	 * command completion or the previous drain end) to `timing_brr_wait`
+	 * and the 128-word FIFO read to `timing_drain`; `timing_polls` counts
+	 * primary poll iterations and `timing_delays` counts the 10 us steps
+	 * taken. The sum is bounded by the caller's deadline. */
+	uint64_t timing_brr_wait_ticks;
+	uint64_t timing_drain_ticks;
+	uint64_t timing_polls;
+	uint64_t timing_delays;
+	/* S2.2 direct calibration: 128 data-port reads with the FIFO idle,
+	 * timed immediately after a controlled stream exit. This isolates the
+	 * host MMIO read cost from the card pacing. */
+	uint64_t drain_cal_ticks;
+	/* One-shot S2.1 register snapshot, filled by
+	 * `gta4l_emmc_capture_diag_regs()` while the link is in HS/8-bit and
+	 * before the bulk stream. These are sequential reads, not an atomic
+	 * snapshot. The vendor and GCC values are raw registers. */
+	uint32_t diag_host_control;
+	uint32_t diag_clock_control;
+	uint32_t diag_present_state;
+	uint32_t diag_caps0;
+	uint32_t diag_caps1;
+	uint32_t diag_dll_config;
+	uint32_t diag_dll_status;
+	uint32_t diag_vendor_spec;
+	uint32_t diag_vendor_spec3;
+	uint32_t diag_rcg_cfg;
+	uint32_t diag_rcg_m;
+	uint32_t diag_rcg_n;
+	uint32_t diag_rcg_d;
+	uint8_t  diag_valid;
 	/* Optional override for the bus-test write-phase software bound in
 	 * microseconds. Zero keeps GTA4L_EMMC_DATA_TIMEOUT_US. The diagnostic
 	 * probe sets a longer bound for the data-timeout audit so a late
@@ -983,6 +1015,20 @@ void gta4l_emmc_deadline_arm(struct gta4l_emmc_host *host,
     uint32_t budget_ms);
 int gta4l_emmc_deadline_check(struct gta4l_emmc_host *host);
 void gta4l_emmc_deadline_clear(struct gta4l_emmc_host *host);
+
+/* Capture the S2.1 one-shot diagnostic snapshot: Host Control 1, Clock
+ * Control, Present State, both Capabilities words, the four documented
+ * Qualcomm v5 vendor registers and the GCC SDCC1 APPS RCG CFG/M/N/D. The
+ * caller runs this in the HS/8-bit state before the stream. The reads are
+ * sequential, not atomic, and the function is a no-op on a null host. */
+void gta4l_emmc_capture_diag_regs(struct gta4l_emmc_host *host);
+
+/* Time 128 reads of the SDHCI buffer data port with the FIFO idle. The
+ * diagnostic calls this only after a clean or budget-exit stop; it changes no
+ * register and is not part of the read path. Returns the counter delta, or 0
+ * when capture is disabled. */
+uint64_t gta4l_emmc_calibrate_drain(struct gta4l_emmc_host *host,
+    uint32_t words);
 
 #ifdef __cplusplus
 }

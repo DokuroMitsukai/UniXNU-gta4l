@@ -34,11 +34,11 @@ criterion and every failed or partial rung.
 | `package/Gta4lEmmcBlockCore.c/.h` | Portable read-only block request helper: validation, per-block loop, bounce copy, counters |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO through the platform object, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 211 scenarios and 128 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 214 scenarios and 132 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls against the host IOKit seam. The block adapter test runs 419 scenarios with 158 adapter mutations, 3 support mutations and 37 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 443 scenarios with 171 adapter mutations, 3 support mutations and 37 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7099,3 +7099,293 @@ line; one adapter mutation zeroes `speedio_req` and is rejected. The
 evidence, count and RAM-root recipe suites pass after the baseline refresh.
 The phase split and the 64-block rate remain `[U]` until the next boot reads
 the `SPEEDIO` line; no sustained or arbitrary I/O is qualified.
+
+### 5.3.105 S2 bulk host implementation (2026-11-13)
+
+Follow-up to §5.3.104 and the S2 shape decision in
+`docs/emmc-b8-overhead-decision-2026-11-13.md` §6. Host-only: this batch adds
+the opt-in diagnostic, the host scenarios and the payload personality. It
+builds no candidate, does not touch a device, does not flash and adds no
+boot.
+
+Diagnostic. `gta4l-emmc-bulk=1` (token `gta4l-emmc-bulk`) is only accepted
+with block mode 3 and is refused on a duplicate token or any conflicting
+mode selection; `emmc-block-3-bulk` maps to
+`gta4l-emmc-block=3 gta4l-emmc-bulk=1`. The run reuses the S1 start path,
+then streams the 85,688,320-byte BOOT image region through the partition
+IOMedia in 2,615 64-block (32 KiB) requests, hashing exactly the bytes read
+with the new incremental SHA-256 context. After the stream it reads 80
+windows through the same client: 64 aligned windows from the shared window
+derivation and 16 unaligned windows, each two blocks, compared byte-for-byte
+against a gate-held reference read. The whole read phase is armed once with
+an inclusive 4,500 ms transport deadline, checked inside the CMD18 data and
+drain polls; the stream loop stops at 4,000 ms. The stop transmission keeps
+its own 2,000 ms CMD12 bound and is still issued after an expiry. With the
+8,000 ms media wait, 2,000 ms BOOT deadline, 2,000 ms stop tail, 2,000 ms
+revert gate and 9,500 ms combined revert the report thread sums to
+28,000 ms, leaving the fixed 2,000 ms under the 30,000 ms watchdog. Both
+limits, the stop tail and the report bounds are compile-time asserted. Bulk
+replaces the S1 two-pass window with the 80-window set while retaining the
+S1 start-path fields.
+
+Report. A successful run emits one `GTA4L-EMMC P5 BULK:` line with the
+region, chunk and byte counts, stream ticks, timebase, seed, window totals
+and a truncated stream digest; a failure emits the first-stage
+`BULKFAIL:` line and takes the same verified combined revert as S1. Bulk
+runs suppress the legacy `READ`/`QUAL` lines through the shared speed
+suppression. Bulk mode enables the same `SPEEDIO` phase capture as S1, so a
+budget failure still reports the inhibit, command, data, stop, core, bus, IO
+and window times. The BULK line is bounded at 249 bytes, the failure line at
+167 and the combined report at 2,272 bytes inside the 2,560-byte buffer.
+
+Host results. The core suite passes 213 scenarios and 130 mutation controls,
+including the new CMD18 data and drain deadline-expiry cases with a stop
+attempt. The block suite passes 47 core scenarios and 35 mutation
+controls, 443 adapter scenarios and 208 adapter/support/policy mutations
+(168 adapter, 3 support, 37 policy). Twenty-five host bulk scenarios cover
+the success shape, stream digest, window mismatch, read CRC and timeout,
+short read, both budget cases, both cancellation points, media, partition
+and open failures, allocation failure, shape rejection, revert failure, gate
+timeout, watchdog formatting, the maximum-format line and the absent and
+refused selector cases; each new bulk mutation removes one check and is
+rejected. The payload builder, packager and payload-contract suites pass with
+the `emmc-block-3-bulk` personality and the `fs-timer-hold` fixture. The
+evidence dispatcher now provides `--mode bulk`, which recomputes the region
+digest from the final image, requires the 2,615/85,688,320/80 success shape
+and the verified revert, and rejects a `BULKFAIL` line or a mutated report.
+The evidence-count summary is reconciled at 443 adapter scenarios and 168
+adapter mutations.
+
+The run requires the BOOT partition to be otherwise idle: a foreign request
+is counted and fails the run at the shape stage rather than being
+misattributed. The S2 candidate, the on-device stream rate, the sustained
+window result and the hardware revert path remain `[U]`; nothing here
+qualifies arbitrary or sustained I/O, a filesystem or a boot.
+
+### 5.3.106 S2 bulk hardware run 1 (2026-11-13)
+
+Follow-up to §5.3.105 and the S2 shape decision in
+`docs/emmc-b8-overhead-decision-2026-11-13.md`. One owner boot of the
+`emmc-block-3-bulk` candidate; the S2 one-boot budget is consumed.
+
+Candidate. Built from the uncommitted working tree after `de7d0d1`
+(candidate kernel `053b5c57…`, storage-ABI `storage-abi-053b5c577cf5`,
+block archive `1613fb52…`, payload `182c3ad4…` at 83,886,080 bytes, BOOT
+image `c6e23141…` at 85,688,320 bytes). The BOOT gate passed 18/18 against
+the v5 baseline `ce4d76e8…`; the payload contract and the bulk host suites
+passed before packaging. Flash was BOOT only, `mmcblk0p69` on the
+100,663,296-byte partition, TWRP 3.7.1, battery 100%, adb state `recovery`.
+The read-only preflight matched the previous post-flash state (BOOT full
+`5342e715…`, prefix `805a5b66…`, tail `a28b4ea2…`, RECOVERY `14e11370…`,
+EFS `51fa824c…`, sec_efs `3a265d58…`); the write covered 20,920 blocks and
+the postflight read `513a0e38…` with the candidate prefix `c6e23141…`, the
+same tail and unchanged protected partitions.
+
+Report. The bulk stream moved 279 of 2,615 64-block requests, then the
+4,000 ms stream budget expired: `region=85688320 chunks=279
+bytes=9142272 ticks=77071679 hz=19200000 seed=47544134 windows=80 wpass=0
+digest=5710fc38b12378dc5786da8d22b4a173`; `BULKFAIL stage=6 status=0
+cancel=0 budget=1`; `SPEEDIO req=279 blk=17856 inh=13447 cmd=18710
+dat=63288896 stop=139839 core=63510393 bus=63798706 io=63884420`. The
+verified combined revert held (`rverified=1 hsverified=1 rclk=400000`) and
+there was no I/O error, cancellation or short transfer (`cfail=0 sfail=0
+fails=0`). The window phase never started, so `wpass=0` is not a window
+failure. The SHA-256 of the first 9,142,272 bytes of the final image is
+`5710fc38b12378dc5786da8d22b4a17339b3a0e76bebc539d5305ba3c12b5106`,
+matching the report prefix exactly. The full-shape bulk verifier is
+expected to reject this report because the success shape was not reached;
+its self-test passes.
+
+Measured breakdown. `hz=19200000`. The CMD18 data phase is 63,288,896
+ticks = 3.296 s, or 82.1% of the 4.014 s stream. That is 184.6 µs per
+512-byte block, 18.0× the 10.24 µs wire time at 8-bit / 50 MHz, and
+11.81 ms per 32 KiB request. Inhibit, command and stop together are
+171,996 ticks = 8.96 ms (0.22%); `core − dat` is 11.54 ms and `io − dat`
+is 31.0 ms. The 0.687 s outside `io` is mostly the incremental SHA-256
+(about 13.3 MB/s). Stream throughput was 2.28 MB/s. The whole region
+projects to 30.90 s of data phase plus 6.44 s of hashing, about 37.3 s,
+which exceeds the 30,000 ms watchdog.
+
+Correction. The S1 §9 attribution of 96.6% to per-request overhead does
+not hold at 64 blocks: per-request I/O together is under 1% here, and the
+cost is in the data phase. S1's 0.60–0.73 ms per-1 KiB request remains its
+own observation; the conclusion drawn from it is superseded by the S1
+erratum and §10 of the B8 document. The enforced budgets are 4,000 ms for
+the stream loop and 4,500 ms for the inclusive transport deadline.
+
+Open cause. Run 1 cannot separate the effective card clock/width (H1) from
+the device-memory FIFO drain cost (H2). 184.6 µs per block is consistent
+with 8-bit at about 2.78 MHz or 1-bit at about 25 MHz; the SDHCI Clock
+Control divider (0x2C) and Host Control 1 width (0x28) were not captured.
+For H2 the implied cost is about 1.44 µs per 32-bit word; the
+unconditional 10 µs poll delay is at most 5.4% of the per-block time.
+S2.1 adds the BRR-wait/drain split, poll and delay counts, the register
+snapshot, the GCC SDCC1 RCG readback and separate SHA timing without
+changing the transport.
+
+Verdict. **INCOMPLETE (controlled stream-budget exit)**. Qualified: on one
+boot, a verified 9,142,272-byte prefix of the BOOT region through the
+partition IOMedia with no I/O error and a verified revert. Not qualified:
+the full-region digest, the 80-window set, sustained or arbitrary I/O, a
+throughput claim, writes, DMA, a filesystem, a mount, repeatability,
+initialization reliability, the electrical margin, pad or DLL state, and
+lifetime fast mode. Do not boot `c6e23141…` again; see
+`docs/emmc-b8-overhead-decision-2026-11-13.md` §9–§12 for the candidate,
+run, verdict and S2.1 plan.
+
+### 5.3.107 S2.1 measurement host batch (2026-11-13)
+
+Instrumentation-only follow-up to §5.3.106. It changes no transport
+behaviour, adds no candidate, does not touch a device and adds no boot.
+
+Core. The CMD18 PIO loop charges the wait for a live BRR sample (from
+command completion or the previous drain end) to
+`timing_brr_wait_ticks`, the 128-word FIFO read to `timing_drain_ticks`,
+and counts primary poll iterations and 10 µs delay steps in
+`timing_polls`/`timing_delays`, all behind `timing_capture`.
+`gta4l_emmc_capture_diag_regs()` takes a one-shot sequential snapshot in
+HS/8-bit: Host Control 1, Clock Control, Present State, Capabilities 0/1,
+`CORE_DLL_CONFIG/STATUS`, `CORE_VENDOR_SPEC`/`SPEC3` and GCC SDCC1 APPS RCG
+CFG/M/N/D.
+
+Report. Bulk mode emits `GTA4L-EMMC P5 BULKIO:` after the BULK line with
+`brr`, `drain`, `polls`, `delays` and `sha` in ticks and the packed
+`cap = caps1:caps0`, `dll = status:config`, `ven = spec3:spec`,
+`rcg = m:cfg`, `rcg2 = d:n` register pairs (`hc`/`cc`/`ps` are separate).
+The SHA-256 update is timed separately from the read. The formatter bound
+is 235 bytes and the combined bulk worst case is 2,508 bytes inside the
+2,560-byte buffer. The host core suite passes 214 scenarios and 132
+mutation controls, including `multi-timing-s21` and two counter-zeroing
+mutations; the block suite passes 47 core scenarios, 35 core mutations,
+443 adapter scenarios and 170 adapter, 3 support and 37 policy mutations.
+The two new adapter mutations drop the BRR or Clock Control copy. The next
+step is the S2.1 candidate build and one owner boot; the measured split,
+register values and fix decision remain `[U]`.
+
+### 5.3.108 S2.1 candidate and BOOT-only flash (2026-11-13)
+
+Candidate from the working tree after `de7d0d1`: kernel `ada70559…`,
+storage-ABI `out/gta4l/storage-abi-ada70559771e` (190 slots, native 4K),
+linked block archive `afad7d2f…` and requalified archive `971687be…`. The
+requalified archive's member objects are byte-identical to the linked
+archive after `llvm-objcopy --strip-debug` (`25cc9adf…`, `1e257c02…`,
+bindings `3e53b66d…`), so only the archive container metadata differs. The
+storage-ABI loop ran through bootstrap `6dd464a2…` and audits
+`a917d854…`, `997d8c93…`, `3811be54…`, ending at `ada70559…`; the final
+audit matches the candidate. Payload `2eb96c0c…` (83,886,080 bytes) and
+BOOT image `fec0f921…` (85,688,320 bytes) passed the 18/18 gate against the
+v5 baseline `ce4d76e8…`, with only the ramdisk differing.
+
+Flash. BOOT only, `mmcblk0p69`, 20,920 × 4,096 bytes. Preflight full p69
+`513a0e38…` matched the protected baseline; postflight full p69 `2c04b63b…`
+with prefix `fec0f921…` and RECOVERY/EFS/sec_efs unchanged. The tail field
+was not separately re-read; the write covered exactly 20,920 blocks. The
+flash record is `result=pass`. One owner boot is pending; do not reboot
+from adb. The `BULKIO` brr/drain split, register values and fix decision
+remain `[U]` until the report is captured. See
+`docs/emmc-b8-overhead-decision-2026-11-13.md` §14.
+
+### 5.3.109 S2.1 run and drain split (2026-11-13)
+
+One owner boot of `fec0f921…` ended in the controlled 4,000 ms stream
+budget after 9,175,040 bytes (280 of 2,615 chunks). The prefix digest
+matches the host SHA-256 exactly (`1ec4d0ce…`); the width/HS revert is
+verified and there is no I/O error. `BULKIO` reports `brr=6003260`,
+`drain=57138691`, `polls=22839`, `delays=22559`, `sha=13203697`,
+`hc=20`, `cc=0007`, `ps=03f800f0`, `cap=0000808f3029c8b2`,
+`dll=000000006000642c`, `ven=0262604000018a9c`, `rcg=000000000000020b`
+and `rcg2=0`.
+
+The CMD18 data phase is 3.293 s; the FIFO drain is 2.976 s (90.4%) at
+166.1 µs per block, or 1.30 µs per 32-bit read. BRR wait is 0.313 s,
+including 0.226 s of 10 µs delays; SHA-256 is 0.688 s. The stream rate is
+3.08 MB/s. The small BRR wait relative to the drain points at the host
+MMIO read, not the card, as the limiting term; `hc=20`/`cc=0007` and the
+`0x20B` RCG row confirm the programmed 8-bit/50 MHz state without measuring
+the parent rate.
+
+Verdict: **INCOMPLETE (controlled stream-budget exit)** with a verified
+9,175,040-byte prefix. The next batch targets the drain: drain all ready
+blocks before the delay, store 32-bit words directly, inline the data-port
+read, and add a `DRAINCAL` timing of 128 data-port reads before the stream.
+ADMA2/SDMA remains a separate rung if the calibrated drain stays near
+166 µs per block. See `docs/emmc-b8-overhead-decision-2026-11-13.md`
+§15–§16.
+
+### 5.3.110 S2.2 drain host batch (2026-11-13)
+
+Follow-up to §5.3.109. The CMD18 PIO loop drains every block that is
+already ready before taking the 10 µs poll delay, stores each 32-bit FIFO
+word directly into the destination, and checks the error status before each
+additional block so the first-failure ordinal keeps its historical value.
+The new `gta4l_emmc_calibrate_drain()` times 128 data-port reads with the
+FIFO idle after a clean or budget-exit stop and records `cal` in the
+`BULKIO` line; the line bound is 250 bytes and the combined bulk worst case
+is 2,523 bytes inside 2,560. The core suite passes 214 scenarios and 132
+mutations; the block suite passes 47 core scenarios, 35 core mutations,
+443 adapter scenarios and 171 adapter, 3 support and 37 policy mutations.
+No candidate, device access, flash or boot is produced by this host batch.
+The candidate build and one owner boot are next; if `cal` remains near the
+S2.1 166 µs per block, ADMA2/SDMA becomes its own rung.
+
+The S2.2 candidate was then built and flashed: kernel `56ec4c1c…`,
+storage-ABI `out/gta4l/storage-abi-56ec4c1c3dd8`, linked archive
+`bea6c8c4…`, requalified archive `e3d9bb9e…` with byte-identical member
+objects, payload `ba6875e8…`, BOOT image `cbc0ee1e…` (18/18 gate) and
+xz `af518f36…`. BOOT-only p69 preflight `2c04b63b…`; postflight full p69
+`5e7028cf…`, image prefix matches and RECOVERY/EFS/sec_efs are unchanged.
+The flash record is `result=pass`; one owner boot is pending and the image
+must not be rebooted from adb.
+
+### 5.3.111 S2.2 run and MMIO-bound verdict (2026-11-13)
+
+One owner boot of `cbc0ee1e…` ended in the controlled 4,000 ms stream
+budget after 9,568,256 bytes (292 of 2,615 chunks). The prefix digest
+matches the host SHA-256 of the final image exactly (`34912093…`); the
+width/HS revert is verified and there is no I/O error. `BULKIO` reports
+`brr=2486257`, `drain=59813569`, `cal=3154`, `polls=5399`, `delays=5107`,
+`sha=13800789`, `hc=20`, `cc=0007`, `ps=03f800f0`,
+`cap=0000808f3029c8b2`, `dll=000000006000642c`,
+`ven=0262604000018a9c`, `rcg=000000000000020b` and `rcg2=0`.
+
+The stream loop is 4.000 s for 9,568,256 bytes (2.39 MB/s end to end).
+The CMD18 data phase is 3.249 s; the FIFO drain is 3.115 s (95.9%) at
+166.7 µs per block, or 1.30 µs per 32-bit read. BRR wait is 0.129 s and
+SHA-256 is 0.719 s. The new idle calibration reads the data port 128
+times in 3,154 ticks, or 1.28 µs per read, which is about the same as the
+in-stream drain cost per block. The PIO drain is therefore bound by the
+host MMIO read latency, not by card pacing. This confirms H2 and removes
+H1 as the limiting term; it does not measure the physical card clock.
+
+The full region projects to about 35.8 s end to end (drain alone about
+27.9 s at the measured per-block cost), which is already above the
+30,000 ms watchdog before the 80 windows. Budget changes cannot make S2
+pass on PIO; the ADMA2 rung (B10) is required. The S2.2 loop fix worked
+as intended: polls fell from 22,839 to 5,399, delays from 22,559 to 5,107,
+BRR wait from 0.313 s to 0.129 s, and bytes per budget rose 4.3%.
+
+Corrections recorded here rather than in the earlier entries:
+
+- The S2.1 "3.08 MB/s stream rate" in §5.3.109 and the B8 document §15 is
+  the drain-only rate (9,175,040 bytes / 2.976 s). The S2.1 end-to-end
+  stream rate is 2.29 MB/s (9,175,040 bytes / 4.011 s).
+- `DRV online=0` in this report is expected: bulk mode clears `online` on
+  any non-clean stage, and the budget exit is stage 6
+  (`Gta4lEmmcBlock.cpp:9716`); a failed revert also clears it (`:9721`).
+- The owner transcript needed no value repairs; the normalizer joined nine
+  wrapped lines and the three transcription artefacts (`rcg=` printed with
+  15 digits, a space lost at a line wrap, and `Gta41` for `Gta4l`) are
+  recorded outside the tracked tree.
+
+Post-flash BOOT full p69 is `5e7028cf…` with image prefix `cbc0ee1e…`;
+RECOVERY/EFS/sec_efs are unchanged. The partition tail and last 1 KiB
+were not separately re-read, so the saved baseline cannot be refreshed
+from this record alone; take a read-only TWRP re-read before the next
+flash.
+
+Verdict: **INCOMPLETE (controlled stream-budget exit)** with a verified
+9,568,256-byte prefix, no I/O error and a verified revert. As a
+measurement it is conclusive: PIO is MMIO-bound at about 2.4 MB/s and
+cannot cover the full region under the watchdog. The next transport is
+polled 32-bit ADMA2 behind a read-only SMMU gate. Do not boot `cbc0ee1e…`
+again. See `docs/emmc-b8-overhead-decision-2026-11-13.md` §17.

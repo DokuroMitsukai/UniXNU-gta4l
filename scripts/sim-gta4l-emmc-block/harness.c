@@ -1230,6 +1230,53 @@ static int scenario_null_block(void)
 	return 0;
 }
 
+static int scenario_sha256_incremental(void)
+{
+	uint8_t data[300];
+	uint8_t oneShot[32];
+	uint8_t streamed[32];
+	struct gta4l_emmc_block_sha256_ctx ctx;
+	uint32_t length;
+	uint32_t offset;
+	uint32_t step;
+	uint32_t index;
+
+	for (index = 0; index < sizeof(data); index++) {
+		data[index] = (uint8_t)((index * 7u) + 3u);
+	}
+	gta4l_emmc_block_sha256((const uint8_t *)"abc", 3u, oneShot);
+	gta4l_emmc_block_sha256_init(&ctx);
+	gta4l_emmc_block_sha256_update(&ctx, (const uint8_t *)"ab", 2u);
+	gta4l_emmc_block_sha256_update(&ctx, (const uint8_t *)"c", 1u);
+	gta4l_emmc_block_sha256_final(&ctx, streamed);
+	CHECK(memcmp(oneShot, streamed, sizeof(oneShot)) == 0);
+	gta4l_emmc_block_sha256(0, 0u, oneShot);
+	gta4l_emmc_block_sha256_init(&ctx);
+	gta4l_emmc_block_sha256_update(&ctx, data, 0u);
+	gta4l_emmc_block_sha256_final(&ctx, streamed);
+	CHECK(memcmp(oneShot, streamed, sizeof(oneShot)) == 0);
+	for (length = 0; length <= sizeof(data); length++) {
+		gta4l_emmc_block_sha256(data, length, oneShot);
+		gta4l_emmc_block_sha256_init(&ctx);
+		offset = 0;
+		step = 1;
+		while (offset < length) {
+			uint32_t take = step;
+
+			if ((offset + take) > length) {
+				take = length - offset;
+			}
+			gta4l_emmc_block_sha256_update(&ctx,
+			    data + offset, take);
+			offset += take;
+			step = ((step * 3u) % 67u) + 1u;
+		}
+		gta4l_emmc_block_sha256_final(&ctx, streamed);
+		CHECK(memcmp(oneShot, streamed, sizeof(oneShot)) == 0);
+	}
+	return 0;
+}
+
 static int run(const char *name, int (*scenario)(void))
 {
 	if (scenario() == 0) {
@@ -1292,6 +1339,7 @@ static const struct scenario_entry scenarios[] = {
 	{ "chunk-bounce-missing", scenario_chunk_bounce_missing },
 	{ "chunk-bounce-small", scenario_chunk_bounce_small },
 	{ "chunk-offline", scenario_chunk_offline },
+	{ "sha256-incremental", scenario_sha256_incremental },
 };
 
 int main(int argc, char **argv)

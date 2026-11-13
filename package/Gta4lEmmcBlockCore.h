@@ -133,6 +133,25 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
     uint64_t block_number, uint32_t nblks, uint64_t buffer_bytes,
     enum gta4l_emmc_block_direction direction, uint64_t *completed_bytes);
 
+/* Incremental SHA-256 (FIPS 180-4) for a streamed region. The context is
+ * caller-owned, performs no allocation and no transport access; update()
+ * may be called with any chunk boundaries and final() writes the same
+ * digest as the one-shot helper. */
+struct gta4l_emmc_block_sha256_ctx {
+	uint32_t state[8];
+	uint64_t total;
+	uint32_t used;
+	uint8_t buffer[64];
+};
+
+void gta4l_emmc_block_sha256_init(
+    struct gta4l_emmc_block_sha256_ctx *ctx);
+void gta4l_emmc_block_sha256_update(
+    struct gta4l_emmc_block_sha256_ctx *ctx, const uint8_t *data,
+    uint32_t length);
+void gta4l_emmc_block_sha256_final(
+    struct gta4l_emmc_block_sha256_ctx *ctx, uint8_t digest[32]);
+
 /* One-shot SHA-256 (FIPS 180-4) over a caller-owned buffer. This is the
  * pinned-content oracle for the read-only IOMedia qualification; it performs
  * no allocation and no transport access. */

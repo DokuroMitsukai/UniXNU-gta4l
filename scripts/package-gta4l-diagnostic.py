@@ -124,7 +124,8 @@ def main():
                                  'emmc-block-3-width4',
                                  'emmc-block-3-widthhold',
                                  'emmc-block-3-widthpub',
-                                 'emmc-block-3-speed'),
+                                 'emmc-block-3-speed',
+                                 'emmc-block-3-bulk'),
                         default='any',
                         help='require this board diagnostic argument in the payload')
     parser.add_argument('--force', action='store_true')

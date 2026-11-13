@@ -24,8 +24,9 @@ MODES = {
     'widthhold': 'check-gta4l-widthhold-evidence.py',
     'widthpub': 'check-gta4l-widthpub-evidence.py',
     'speed': 'check-gta4l-speed-evidence.py',
+    'bulk': 'check-gta4l-bulk-evidence.py',
 }
-FUTURE = ('bulk', 'live', 'windows', 'root', 'dma', 'writes')
+FUTURE = ('live', 'windows', 'root', 'dma', 'writes')
 
 
 def run(mode, arguments):

@@ -375,6 +375,10 @@ struct sim {
 	int premature_fifo_read;
 	int access_violation;
 	int command_error;
+	/* S2.1 timing model: optional per-FIFO-word read cost so the host
+	 * diagnostic sees a nonzero drain phase. It defaults to zero and is
+	 * set only by multi-timing-s21. */
+	int buffer_read_cost_us;
 };
 
 static int
@@ -408,6 +412,7 @@ sim_sdhci_width_ok(uint32_t offset, uint32_t width)
 	case 0x20u: /* BUFFER_DATA_PORT */
 	case 0x24u: /* PRESENT_STATE */
 	case 0x40u: /* CAPABILITIES */
+	case 0x44u: /* CAPABILITIES_1 */
 	case 0x200u: /* CORE_DLL_CONFIG */
 	case 0x208u: /* CORE_DLL_STATUS */
 	case 0x20Cu: /* CORE_VENDOR_SPEC */
@@ -736,6 +741,8 @@ sim_read32(void *context, uint32_t space, uint32_t offset)
 			}
 			value = sim->buffer_data[
 			    sim->buffer_index % (GTA4L_EMMC_BLOCK_BYTES / 4u)];
+			sim->time_us +=
+			    (uint64_t)sim->buffer_read_cost_us;
 			sim->buffer_index++;
 			if ((sim->buffer_index %
 			    (GTA4L_EMMC_BLOCK_BYTES / 4u)) == 0u) {
@@ -2825,6 +2832,8 @@ main(int argc, char **argv)
 		sim.cmd_crc_index = GTA4L_EMMC_CMD12;
 	} else if (scenario_is(scenario, "multi-stop-late-error")) {
 		sim.cmd_late_error_index = GTA4L_EMMC_CMD12;
+	} else if (scenario_is(scenario, "multi-deadline-data")) {
+		sim.mb_last_brr_delay_us = 50000;
 	} else if (scenario_is(scenario, "multi-card-status")) {
 		sim.mb_response_error = 1;
 	} else if (scenario_is(scenario, "bus-width-cmd6-error")) {
@@ -2977,6 +2986,7 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "multi-last-block") ||
 	    scenario_is(scenario, "multi-success") ||
 	    scenario_is(scenario, "multi-repeat") ||
+	    scenario_is(scenario, "multi-timing-s21") ||
 	    scenario_is(scenario, "multi-data-timeout") ||
 	    scenario_is(scenario, "multi-data-crc") ||
 	    scenario_is(scenario, "multi-late-error") ||
@@ -3682,7 +3692,28 @@ main(int argc, char **argv)
 			    "tail block count register mismatch");
 		}
 	} else if (scenario_is(scenario, "multi-success") ||
-	    scenario_is(scenario, "multi-repeat")) {
+	    scenario_is(scenario, "multi-repeat") ||
+	    scenario_is(scenario, "multi-timing-s21")) {
+		if (scenario_is(scenario, "multi-timing-s21")) {
+			sim.buffer_read_cost_us = 1;
+			sim.mb_last_brr_delay_us = 1000;
+			host.timing_capture = 1;
+			gta4l_emmc_capture_diag_regs(&host);
+			check(host.diag_valid == 1u,
+			    "S2.1 diagnostic snapshot was not marked valid");
+			check(host.diag_host_control ==
+			    (uint32_t)sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL],
+			    "S2.1 Host Control readback mismatch");
+			check(host.diag_clock_control ==
+			    ((uint32_t)sim.sdhci[
+			    GTA4L_EMMC_REG_CLOCK_CONTROL] |
+			    ((uint32_t)sim.sdhci[
+			    GTA4L_EMMC_REG_CLOCK_CONTROL + 1u] << 8)),
+			    "S2.1 Clock Control readback mismatch");
+			check(host.diag_rcg_cfg ==
+			    sim.gcc[GTA4L_EMMC_GCC_SDCC1_APPS_CFG / 4u],
+			    "S2.1 GCC RCG readback mismatch");
+		}
 		result = gta4l_emmc_read_multi(&host, 2u,
 		    SIM_MB_TEST_BLOCKS, mb_blocks);
 		check(result == GTA4L_EMMC_OK, "multi-block read failed");
@@ -3718,6 +3749,24 @@ main(int argc, char **argv)
 			    "AUTO_CMD12 was enabled");
 			check(sim.mb_dat_inhibit == 0,
 			    "DAT inhibit survived the CMD12 stop");
+		}
+		if (scenario_is(scenario, "multi-timing-s21")) {
+			check(host.timing_polls > 0u,
+			    "S2.1 did not count poll iterations");
+			check(host.timing_delays > 0u,
+			    "S2.1 did not count the 10 us delays");
+			check(host.timing_delays <= host.timing_polls,
+			    "S2.1 counted more delays than poll iterations");
+			check(host.timing_brr_wait_ticks > 0u,
+			    "S2.1 did not accumulate the BRR wait");
+			check(host.timing_drain_ticks > 0u,
+			    "S2.1 did not accumulate the FIFO drain");
+			check(host.timing_data_ticks > 0u,
+			    "S2.1 lost the data phase");
+			check(host.timing_brr_wait_ticks +
+			    host.timing_drain_ticks <= host.timing_data_ticks,
+			    "S2.1 BRR+drain exceeds the data phase");
+			host.timing_capture = 0;
 		}
 		if (scenario_is(scenario, "multi-repeat")) {
 			uint32_t before = (uint32_t)sim.mb_stop_count;
@@ -3838,6 +3887,45 @@ main(int argc, char **argv)
 		    "drain-path CMD12 encoding mismatch");
 		check(sim.mb_dat_inhibit == 0,
 		    "DAT inhibit survived the drain-path stop");
+	} else if (scenario_is(scenario, "multi-deadline-data") ||
+	    scenario_is(scenario, "multi-deadline-drain")) {
+		if (scenario_is(scenario, "multi-deadline-drain")) {
+			/* Withhold TC after initialization so the primary
+			 * bound expires and the drain window is entered. */
+			sim.mb_no_tc = 1;
+		}
+		gta4l_emmc_deadline_arm(&host,
+		    scenario_is(scenario, "multi-deadline-data") ? 10u : 1100u);
+		result = gta4l_emmc_read_multi(&host, 2u,
+		    SIM_MB_TEST_BLOCKS, mb_blocks);
+		check(result == GTA4L_EMMC_ERR_DEADLINE,
+		    "multi-block deadline expiry was not reported");
+		check(host.deadline_active == 1u,
+		    "the read cleared the caller deadline");
+		check(sim.mb_stop_count == 1,
+		    "deadline expiry did not stop the card");
+		check(host.multi_stop_result == GTA4L_EMMC_OK,
+		    "deadline stop result was not recorded");
+		check(sim.mb_dat_inhibit == 0,
+		    "DAT inhibit survived the deadline stop");
+		if (scenario_is(scenario, "multi-deadline-data")) {
+			check(host.multi_completed < SIM_MB_TEST_BLOCKS,
+			    "data deadline did not stop the prefix");
+			check(host.multi_drain_used == 0u,
+			    "data deadline entered the drain window");
+		} else {
+			check(host.multi_drain_used == 1u,
+			    "drain deadline did not enter the drain window");
+			check(host.multi_drain_resolved == 0u,
+			    "drain deadline was recorded as resolved");
+			check(host.multi_drain_iterations <
+			    GTA4L_EMMC_DATA_DRAIN_US /
+			    GTA4L_EMMC_POLL_STEP_US,
+			    "drain deadline did not shorten the drain");
+		}
+		gta4l_emmc_deadline_clear(&host);
+		check(host.deadline_active == 0u,
+		    "deadline clear did not disarm");
 	} else if (scenario_is(scenario, "multi-card-status")) {
 		result = gta4l_emmc_read_multi(&host, 2u,
 		    SIM_MB_TEST_BLOCKS, mb_blocks);

@@ -140,6 +140,74 @@ gta4l_emmc_deadline_clear(struct gta4l_emmc_host *host)
 	host->deadline_ticks = 0;
 }
 
+/* One-shot S2.1 capture. HOST_CONTROL is 8-bit and CLOCK_CONTROL is 16-bit
+ * in the SDHCI register map, so those two use the narrow accessors; the
+ * remaining registers are 32-bit. This runs in the diagnostic only, before
+ * the bulk stream, and never changes a register. */
+void
+gta4l_emmc_capture_diag_regs(struct gta4l_emmc_host *host)
+{
+	if (host == 0) {
+		return;
+	}
+	host->diag_host_control = gta4l_emmc_read8(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
+	host->diag_clock_control = gta4l_emmc_read16(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CLOCK_CONTROL);
+	host->diag_present_state = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_PRESENT_STATE);
+	host->diag_caps0 = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CAPABILITIES);
+	host->diag_caps1 = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CAPABILITIES + 4u);
+	host->diag_dll_config = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_CONFIG);
+	host->diag_dll_status = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_DLL_STATUS);
+	host->diag_vendor_spec = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_VENDOR_SPEC);
+	host->diag_vendor_spec3 = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_CORE_VENDOR_SPEC3);
+	host->diag_rcg_cfg = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_GCC, GTA4L_EMMC_GCC_SDCC1_APPS_CFG);
+	host->diag_rcg_m = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_GCC, GTA4L_EMMC_GCC_SDCC1_APPS_M);
+	host->diag_rcg_n = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_GCC, GTA4L_EMMC_GCC_SDCC1_APPS_N);
+	host->diag_rcg_d = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_GCC, GTA4L_EMMC_GCC_SDCC1_APPS_D);
+	host->diag_valid = 1;
+}
+
+/* S2.2 drain calibration. The data port is read with the FIFO idle so the
+ * measurement is the host MMIO cost, not the card's block time. The reads are
+ * diagnostic only: their values are discarded and no FIFO state is expected.
+ * A device may return undefined data when BRR is clear; that is acceptable
+ * here because the result is never used as content. */
+uint64_t
+gta4l_emmc_calibrate_drain(struct gta4l_emmc_host *host, uint32_t words)
+{
+	uint64_t start;
+	uint64_t end;
+	uint32_t index;
+	uint32_t value = 0;
+
+	if ((host == 0) || (words == 0u) || (host->ops->counter == 0)) {
+		return 0;
+	}
+	gta4l_emmc_barrier(host);
+	start = gta4l_emmc_counter(host);
+	for (index = 0; index < words; index++) {
+		value ^= gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
+		    GTA4L_EMMC_REG_BUFFER_DATA_PORT);
+	}
+	end = gta4l_emmc_counter(host);
+	/* Keep the compiler from treating the reads as dead. */
+	(void)value;
+	host->drain_cal_ticks = end - start;
+	return host->drain_cal_ticks;
+}
+
 /* Keep the terminal command failure intact before the status latches are
  * cleared. The probe reports these fields, so a hardware panic identifies the
  * command instead of only the final reset log. Recovered CMD1 busy timeouts are
@@ -3953,6 +4021,8 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 	uint32_t byte;
 	uint32_t word;
 	uint64_t timing_stamp = 0;
+	uint64_t block_stamp = 0;
+	uint64_t drain_stamp = 0;
 	uint8_t command_timed = 0;
 	uint8_t data_timed = 0;
 	int command_done = 0;
@@ -4015,11 +4085,23 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 	gta4l_emmc_barrier(host);
 	if (host->timing_capture != 0) {
 		timing_stamp = gta4l_emmc_counter(host);
+		block_stamp = timing_stamp;
 	}
 
 	result = GTA4L_EMMC_OK;
 	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
 	for (step = 0; step < iterations; step++) {
+		if (host->timing_capture != 0) {
+			host->timing_polls++;
+		}
+		/* The caller's optional deadline bounds the whole read phase.
+		 * Check it inside the data poll as well as in the command
+		 * waits so a quiet DAT line cannot outlive the budget. The
+		 * stop below is still issued unconditionally. */
+		if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+			result = GTA4L_EMMC_ERR_DEADLINE;
+			break;
+		}
 		error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_ERROR_INT_STATUS);
 		if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
@@ -4047,39 +4129,57 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 			command_done = 1;
 			gta4l_emmc_timing_close(host, &timing_stamp,
 			    &host->timing_command_ticks);
+			block_stamp = timing_stamp;
 			command_timed = 1;
 		}
 		if ((command_done != 0) && (done < count)) {
 			/* BRR is latched until written back; the FIFO can be
 			 * empty while it is still set. Live buffer readiness
 			 * is the transfer condition; BRR is acknowledged so
-			 * one sector is consumed exactly once. */
+			 * one sector is consumed exactly once. Drain every
+			 * block that is already ready before taking the poll
+			 * delay; the card normally has the next block queued
+			 * while the host is still draining the previous one. */
 			present = gta4l_emmc_read32(host,
 			    GTA4L_EMMC_SPACE_SDHCI,
 			    GTA4L_EMMC_REG_PRESENT_STATE);
-			if ((present &
-			    GTA4L_EMMC_PRESENT_BUFFER_READ_READY) != 0u) {
+			while (((present &
+			    GTA4L_EMMC_PRESENT_BUFFER_READ_READY) != 0u) &&
+			    (done < count)) {
+				error = gta4l_emmc_read16(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_ERROR_INT_STATUS);
+				if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {
+					/* Let the outer loop record the first
+					 * failure so the failing ordinal keeps
+					 * its historical (done) value. */
+					break;
+				}
+				if (host->timing_capture != 0) {
+					drain_stamp =
+					    gta4l_emmc_counter(host);
+					host->timing_brr_wait_ticks +=
+					    drain_stamp - block_stamp;
+				}
+				/* The destination is 512-byte aligned, so a
+				 * direct 32-bit store replaces the four byte
+				 * stores per FIFO word. */
 				for (byte = 0;
 				    byte < GTA4L_EMMC_BLOCK_BYTES;
 				    byte += 4u) {
 					word = gta4l_emmc_read32(host,
 					    GTA4L_EMMC_SPACE_SDHCI,
 					    GTA4L_EMMC_REG_BUFFER_DATA_PORT);
-					bytes[(done *
-					    GTA4L_EMMC_BLOCK_BYTES) + byte] =
-					    (uint8_t)(word & 0xFFu);
-					bytes[(done *
-					    GTA4L_EMMC_BLOCK_BYTES) + byte +
-					    1u] = (uint8_t)((word >> 8) &
-					    0xFFu);
-					bytes[(done *
-					    GTA4L_EMMC_BLOCK_BYTES) + byte +
-					    2u] = (uint8_t)((word >> 16) &
-					    0xFFu);
-					bytes[(done *
-					    GTA4L_EMMC_BLOCK_BYTES) + byte +
-					    3u] = (uint8_t)((word >> 24) &
-					    0xFFu);
+					((uint32_t *)(void *)(bytes +
+					    (done *
+					    GTA4L_EMMC_BLOCK_BYTES)))[
+					    byte / 4u] = word;
+				}
+				if (host->timing_capture != 0) {
+					block_stamp =
+					    gta4l_emmc_counter(host);
+					host->timing_drain_ticks +=
+					    block_stamp - drain_stamp;
 				}
 				gta4l_emmc_log(host, GTA4L_EMMC_LOG_READ,
 				    (uint32_t)(start_lba + done), response);
@@ -4089,6 +4189,12 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 				    GTA4L_EMMC_INT_BRR);
 				done++;
 				host->multi_completed = done;
+				if (done == count) {
+					break;
+				}
+				present = gta4l_emmc_read32(host,
+				    GTA4L_EMMC_SPACE_SDHCI,
+				    GTA4L_EMMC_REG_PRESENT_STATE);
 			}
 		}
 		if ((command_done != 0) && (done == count) &&
@@ -4119,6 +4225,9 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 			completed = 1;
 			break;
 		}
+		if (host->timing_capture != 0) {
+			host->timing_delays++;
+		}
 		gta4l_emmc_delay(host, GTA4L_EMMC_POLL_STEP_US);
 	}
 	if ((completed == 0) && (result == GTA4L_EMMC_OK)) {
@@ -4133,6 +4242,13 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 		    gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_DRAIN_US);
 		for (drain_step = 0; drain_step < drain_iterations;
 		    drain_step++) {
+			/* The drain is a recovery window, not an extension of
+			 * the budget. Expire it early and still stop the
+			 * card below. */
+			if (gta4l_emmc_deadline_check(host) != GTA4L_EMMC_OK) {
+				result = GTA4L_EMMC_ERR_DEADLINE;
+				break;
+			}
 			error = gta4l_emmc_read16(host, GTA4L_EMMC_SPACE_SDHCI,
 			    GTA4L_EMMC_REG_ERROR_INT_STATUS);
 			if ((error & GTA4L_EMMC_INT_ERR_MASK) != 0) {

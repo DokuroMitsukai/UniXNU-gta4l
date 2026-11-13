@@ -525,6 +525,38 @@ gta4l_emmc_platform_delay_us(struct gta4l_emmc_platform *platform,
 	gta4l_test.now_ms += microseconds / 1000u;
 }
 
+void
+gta4l_emmc_capture_diag_regs(struct gta4l_emmc_host *host)
+{
+	if (host == 0) {
+		return;
+	}
+	host->diag_host_control = 0x20u;
+	host->diag_clock_control = 0x0005u;
+	host->diag_present_state = 0x01F801F6u;
+	host->diag_caps0 = 0x21F83264u;
+	host->diag_caps1 = 0x00000000u;
+	host->diag_dll_config = 0x00000000u;
+	host->diag_dll_status = 0x00000000u;
+	host->diag_vendor_spec = GTA4L_EMMC_VENDOR_SPEC_POR;
+	host->diag_vendor_spec3 = GTA4L_EMMC_VENDOR3_PWRSAVE_DLL;
+	host->diag_rcg_cfg = GTA4L_EMMC_RCG_50M_CFG;
+	host->diag_rcg_m = 0u;
+	host->diag_rcg_n = 0u;
+	host->diag_rcg_d = 0u;
+	host->diag_valid = 1;
+}
+
+uint64_t
+gta4l_emmc_calibrate_drain(struct gta4l_emmc_host *host, uint32_t words)
+{
+	if (host == 0) {
+		return 0;
+	}
+	host->drain_cal_ticks = (uint64_t)words * 1000u;
+	return host->drain_cal_ticks;
+}
+
 int
 gta4l_emmc_init(struct gta4l_emmc_host *host)
 {
@@ -672,6 +704,10 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 	if (host->timing_capture != 0) {
 		host->timing_data_ticks +=
 		    gta4l_emmc_platform_counter() - captureStart;
+		host->timing_brr_wait_ticks += (uint64_t)count * 1000u;
+		host->timing_drain_ticks += (uint64_t)count * 100u;
+		host->timing_polls += (uint64_t)count + 1u;
+		host->timing_delays += (uint64_t)count;
 		host->timing_requests++;
 		host->timing_blocks += count;
 	}

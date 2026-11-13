@@ -5888,7 +5888,7 @@ main(int argc, char **argv)
 		    "s=0/2/2/2/0/0/0003/0000/00000900 "
 		    "l=0/21/21/21/0/0/0003/0000/00000900 rec=0/1/0") != NULL,
 		    "the drained MD report lost the qualified contents");
-		check(strstr(panic_message, "mbsame=1 drain=1/1/0/121") != NULL,
+		check(strstr(panic_message, "mbsame=1 drain=1/1/0/101") != NULL,
 		    "the drained MD report lost the completion-only drain "
 		    "resolution");
 		check(mb_stop_count == 2u,
@@ -5914,7 +5914,7 @@ main(int argc, char **argv)
 		    "s=0/2/2/2/0/0/0003/0000/00000900 "
 		    "l=0/21/21/21/0/0/0003/0000/00000900 rec=0/1/0") != NULL,
 		    "the late-BRR MD report lost the qualified contents");
-		check(strstr(panic_message, "mbsame=1 drain=1/1/1/121") != NULL,
+		check(strstr(panic_message, "mbsame=1 drain=1/1/1/102") != NULL,
 		    "the late-BRR MD report lost the block-drain resolution");
 		check(mb_stop_count == 2u,
 		    "the late-BRR MD probe did not issue both stops");

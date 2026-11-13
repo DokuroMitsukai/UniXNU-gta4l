@@ -620,3 +620,19 @@ Failure class: none.
    next flash; the pre-flash value `7e209188…` is superseded by `5342e715…`.
 4. Do not boot the S1 image again: its verdict is recorded and the boot
    budget is consumed.
+
+## 12. Erratum (2026-11-13)
+
+S2 run 1 measured the phase breakdown directly at 64-block requests and
+refutes §9's attribution of 96.6% to per-request overhead. In that run 279
+requests moved 9,142,272 bytes; inhibit, command and stop together were
+under 1% of the stream, the IOKit path was under 1%, and the CMD18 data
+phase was 3.296 s of the 4.014 s stream. The data phase is 184.6 µs per
+512-byte block, 18.0× the 10.24 µs wire time at 8-bit / 50 MHz.
+
+S1's 0.60–0.73 ms per-1 KiB request remains the S1 observation, and the
+per-request cost is real at 1 KiB. It is not the dominant term once
+requests are 64 blocks. The open cause is the effective card clock/width
+or the FIFO drain cost, measured by S2.1. See
+`docs/emmc-b8-overhead-decision-2026-11-13.md` §10 and
+`docs/emmc-driver.md` §5.3.106.
