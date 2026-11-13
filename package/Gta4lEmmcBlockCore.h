@@ -22,7 +22,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_MAX_BLOCKS 64u
 #define GTA4L_EMMC_BLOCK_MAX_BYTES \
 	(GTA4L_EMMC_BLOCK_MAX_BLOCKS * GTA4L_EMMC_BLOCK_BYTES)
-#define GTA4L_EMMC_BLOCK_CHUNK_BLOCKS 2u
+#define GTA4L_EMMC_BLOCK_CHUNK_BLOCKS 64u
 #define GTA4L_EMMC_BLOCK_CHUNK_BYTES \
 	(GTA4L_EMMC_BLOCK_CHUNK_BLOCKS * GTA4L_EMMC_BLOCK_BYTES)
 
@@ -77,7 +77,7 @@ struct gta4l_emmc_block_io {
 	void *context;
 	/* Read one 512-byte block into buffer. Returns zero on success. */
 	int (*read_block)(void *context, uint64_t block, void *buffer);
-	/* Optional two-sector CMD18 read into a caller-owned chunk buffer.
+	/* Optional multi-sector CMD18 read into a caller-owned chunk buffer.
 	 * Returns zero when the callback executed the request and filled
 	 * `result` with a valid outcome, including a failed data phase or
 	 * stop. Nonzero means the callback refused the chunk and `result`
@@ -118,8 +118,11 @@ void gta4l_emmc_block_set_online(struct gta4l_emmc_block *block,
 /* Validate and execute one request. Only READ is accepted; WRITE returns
  * NOT_WRITABLE and INVALID returns BAD_ARGUMENT without touching the
  * callbacks. A singleton uses read_block (CMD17). When read_multi is present,
- * a multi-block request is issued as two-sector chunks plus one CMD17 tail
- * for an odd remainder; otherwise the existing one-block loop is used. On
+ * a multi-block request is issued as chunks of up to CHUNK_BLOCKS whole
+ * blocks; a one-block remainder after a full chunk uses read_block (CMD17
+ * tail). With the current 64-block limit and 64-block chunk every accepted
+ * multi-block request is exactly one CMD18 chunk. Otherwise the existing
+ * one-block loop is used. On
  * return, completed_bytes (when non-null) is the number of bytes copied for
  * this request, including a partial final copy. A callback that reports more
  * than the copied length is counted at most that length. A chunk contributes

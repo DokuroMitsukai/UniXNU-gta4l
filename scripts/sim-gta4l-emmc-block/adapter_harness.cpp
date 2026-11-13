@@ -1928,15 +1928,15 @@ scenario_chunked_read(void)
 	CHECK(g_completion.status == kIOReturnSuccess);
 	CHECK(g_completion.actual == 2560);
 	CHECK(g_completion.lock_depth == 0);
-	CHECK(gta4l_test.multi_calls == 2);
-	CHECK(gta4l_test.read_calls == 2);
+	CHECK(gta4l_test.multi_calls == 1);
+	CHECK(gta4l_test.read_calls == 1);
 	CHECK(g_self->block.counters.requests == 1);
 	CHECK(g_self->block.counters.blocks == 5);
 	CHECK(g_self->block.counters.requested_blocks == 5);
-	CHECK(g_self->block.counters.cmd18_chunks == 2);
-	CHECK(g_self->block.counters.cmd18_blocks == 4);
-	CHECK(g_self->block.counters.cmd17_reads == 1);
-	CHECK(g_self->block.counters.stop_attempts == 2);
+	CHECK(g_self->block.counters.cmd18_chunks == 1);
+	CHECK(g_self->block.counters.cmd18_blocks == 5);
+	CHECK(g_self->block.counters.cmd17_reads == 0);
+	CHECK(g_self->block.counters.stop_attempts == 1);
 	CHECK(g_self->block.counters.stop_failures == 0);
 	CHECK(g_self->block.counters.chunk_failures == 0);
 	CHECK(g_self->block.counters.last_stop_result == 0);
@@ -1949,7 +1949,7 @@ scenario_chunked_read(void)
 }
 
 static int
-scenario_chunked_tail(void)
+scenario_chunked_three(void)
 {
 	IOReturn status;
 
@@ -1960,10 +1960,10 @@ scenario_chunked_tail(void)
 	CHECK(g_completion.status == kIOReturnSuccess);
 	CHECK(g_completion.actual == 1536);
 	CHECK(gta4l_test.multi_calls == 1);
-	CHECK(gta4l_test.read_calls == 2);
+	CHECK(gta4l_test.read_calls == 1);
 	CHECK(g_self->block.counters.cmd18_chunks == 1);
-	CHECK(g_self->block.counters.cmd18_blocks == 2);
-	CHECK(g_self->block.counters.cmd17_reads == 1);
+	CHECK(g_self->block.counters.cmd18_blocks == 3);
+	CHECK(g_self->block.counters.cmd17_reads == 0);
 	CHECK(g_buffer[0] == 2);
 	CHECK(g_buffer[512] == 3);
 	CHECK(g_buffer[1024] == 4);
@@ -2005,13 +2005,13 @@ scenario_chunked_21(void)
 	CHECK(g_completion.calls == 1);
 	CHECK(g_completion.status == kIOReturnSuccess);
 	CHECK(g_completion.actual == 10752);
-	CHECK(gta4l_test.multi_calls == 10);
-	CHECK(gta4l_test.read_calls == 2);
+	CHECK(gta4l_test.multi_calls == 1);
+	CHECK(gta4l_test.read_calls == 1);
 	CHECK(g_self->block.counters.blocks == 21);
-	CHECK(g_self->block.counters.cmd18_chunks == 10);
-	CHECK(g_self->block.counters.cmd18_blocks == 20);
-	CHECK(g_self->block.counters.cmd17_reads == 1);
-	CHECK(g_self->block.counters.stop_attempts == 10);
+	CHECK(g_self->block.counters.cmd18_chunks == 1);
+	CHECK(g_self->block.counters.cmd18_blocks == 21);
+	CHECK(g_self->block.counters.cmd17_reads == 0);
+	CHECK(g_self->block.counters.stop_attempts == 1);
 	CHECK(g_buffer[0] == 2);
 	CHECK(g_buffer[10240] == 22);
 	CHECK(g_buffer[10751] == (uint8_t)(22 + 511));
@@ -2043,30 +2043,6 @@ scenario_chunked_failure(void)
 	CHECK(status == kIOReturnSuccess);
 	CHECK(g_completion.status == kIOReturnNoMedia);
 	CHECK(gta4l_test.read_calls == 1);
-	return 0;
-}
-
-static int
-scenario_chunked_partial(void)
-{
-	IOReturn status;
-
-	begin("gta4l-emmc-block=3");
-	CHECK(g_started);
-	gta4l_test.fail_multi_at = 1;
-	status = issue_read(2, 6, kIODirectionIn, 3072, false);
-	CHECK(status == kIOReturnSuccess);
-	CHECK(g_completion.calls == 1);
-	CHECK(g_completion.status == kIOReturnIOError);
-	CHECK(g_completion.actual == 1024);
-	CHECK(gta4l_test.multi_calls == 2);
-	CHECK(gta4l_test.read_calls == 1);
-	CHECK(!g_self->online);
-	CHECK(g_self->block.counters.blocks == 2);
-	CHECK(g_self->block.counters.cmd18_blocks == 2);
-	CHECK(g_self->block.counters.first_fail_block == 4);
-	CHECK(g_buffer[0] == 2);
-	CHECK(g_buffer[512] == 3);
 	return 0;
 }
 
@@ -2516,7 +2492,7 @@ scenario_qual_success(void)
 	    "two_c18=1 two_c17=0 two_stops=1 two_sfail=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 QUAL3: att=1 ok=1 "
 	    "reason=0 bytes=1536 mismatch=0 off=0 match=1536 c18=1 "
-	    "c17=1 stops=1 sfail=0") != 0);
+	    "c17=0 stops=1 sfail=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 SNAP: locked=1") != 0);
 	CHECK(strstr(gta4l_test.panic, "stop=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 PART: ") != 0);
@@ -2605,14 +2581,14 @@ scenario_qual_three_tail_mismatch(void)
 	CHECK(g_started);
 	add_media(true, 0, (UInt64)g_self->capacityBlocks *
 	    GTA4L_EMMC_BLOCK_BYTES, false, "GUID_partition_scheme", true);
-	gta4l_test.read_corrupt_at = 4;
-	gta4l_test.read_corrupt_block = 4;
+	gta4l_test.multi_corrupt_at = 1;
+	gta4l_test.multi_corrupt_block = 4;
 	CHECK(invoke_thread(0) == 1);
 	CHECK(strstr(gta4l_test.panic, "two_att=1 two_ok=1 "
 	    "two_reason=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 QUAL3: att=1 ok=0 "
 	    "reason=3 bytes=1536 mismatch=1 off=1024 match=1535 c18=1 "
-	    "c17=1 stops=1 sfail=0") != 0);
+	    "c17=0 stops=1 sfail=0") != 0);
 	return 0;
 }
 
@@ -6785,7 +6761,7 @@ scenario_widthhold_match(void)
 	widthhold_setup(true, true);
 	CHECK(gta4l_test.width_switch_calls == 1);
 	CHECK(gta4l_test.width_recover_calls == 0);
-	CHECK(gta4l_test.multi_calls == 4);
+	CHECK(gta4l_test.multi_calls == 1);
 	CHECK(invoke_thread(1) == 1);
 	CHECK(gta4l_test.panic != 0);
 	widthhold_expected_digest(0,
@@ -6800,7 +6776,7 @@ scenario_widthhold_match(void)
 	CHECK(strstr(gta4l_test.panic, expected) != 0);
 	snprintf(expected, sizeof(expected),
 	    "cmd6=1 refs=1 refbytes=4096 refblocks=8 refstatus=0 "
-	    "refchunks=4 refstops=4 refstopfail=0 refdigest=%s "
+	    "refchunks=1 refstops=1 refstopfail=0 refdigest=%s "
 	    "reads=4 bytes=4096 blocks=8 subrequests=4 max=2 c18=4 "
 	    "stops=4 stopfail=0 match=1 mismatches=0 fails=0 "
 	    "foreign=0 cancel=0 budget=0 obsdigest=%s "
@@ -6830,7 +6806,7 @@ scenario_widthhold_match(void)
 	CHECK(gta4l_test.width_recover_calls == 1);
 	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
 	CHECK(gta4l_test.width_host_control == 0);
-	CHECK(g_self->block.counters.cmd18_chunks == 8);
+	CHECK(g_self->block.counters.cmd18_chunks == 5);
 	CHECK(g_self->block.counters.stop_failures == 0);
 	CHECK(g_widthhold_whole_media != 0);
 	CHECK(g_widthhold_whole_media->open_calls == 0);
@@ -7131,7 +7107,7 @@ scenario_widthhold_switch_failure(void)
 	CHECK(g_panicked);
 	CHECK(gta4l_test.width_switch_calls == 1);
 	CHECK(gta4l_test.width_recover_calls == 0);
-	CHECK(gta4l_test.multi_calls == 4);
+	CHECK(gta4l_test.multi_calls == 1);
 	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
 	CHECK(strstr(gta4l_test.panic,
 	    "reason=3 complete=0 switch=4 verified=0 hb=0 ha=0 ") != 0);
@@ -7389,7 +7365,7 @@ scenario_widthhold_media_absent(void)
 	    "GTA4L-EMMC P5 WIDTHHOLD: cases=4 passed=0 failed=1 reason=4 "
 	    "complete=0") != 0);
 	CHECK(strstr(gta4l_test.panic,
-	    "refstatus=0 refchunks=4 refstops=4 refstopfail=0") != 0);
+	    "refstatus=0 refchunks=1 refstops=1 refstopfail=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=1") != 0);
 	CHECK(gta4l_test.now_ms >=
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_MEDIA_WAIT_MS);
@@ -7501,7 +7477,7 @@ scenario_widthhold_part_absent(void)
 	CHECK(invoke_thread(1) == 1);
 	CHECK(widthhold_part_failed(
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_PART_NOTFOUND) == 0);
-	CHECK(gta4l_test.multi_calls == 4);
+	CHECK(gta4l_test.multi_calls == 1);
 	CHECK(g_widthhold_whole_media->open_calls == 0);
 	CHECK(gta4l_test.now_ms >=
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_DEADLINE_MS);
@@ -7813,7 +7789,7 @@ scenario_widthhold_read_error(void)
 	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
 	CHECK(g_started);
 	widthhold_setup(true, true);
-	gta4l_test.fail_multi_at = 4;
+	gta4l_test.fail_multi_at = 1;
 	CHECK(invoke_thread(1) == 1);
 	CHECK(strstr(gta4l_test.panic,
 	    "reason=9 complete=0") != 0);
@@ -7876,7 +7852,7 @@ scenario_widthhold_match_mismatch(void)
 	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthhold=1") == 0);
 	CHECK(g_started);
 	widthhold_setup(true, true);
-	gta4l_test.multi_corrupt_at = 4;
+	gta4l_test.multi_corrupt_at = 1;
 	gta4l_test.multi_corrupt_count = 1;
 	gta4l_test.multi_corrupt_block =
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES /
@@ -7974,7 +7950,7 @@ scenario_widthhold_budget(void)
 	CHECK(g_started);
 	widthhold_setup(true, true);
 	widthhold_hook_reset();
-	g_widthhold_advance_call = 4;
+	g_widthhold_advance_call = 1;
 	g_widthhold_advance_ms =
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_READ_BUDGET_MS;
 	gta4l_test_multi_hook = widthhold_multi_hook;
@@ -7996,7 +7972,7 @@ scenario_widthhold_budget_boundary(void)
 	CHECK(g_started);
 	widthhold_setup(true, true);
 	widthhold_hook_reset();
-	g_widthhold_advance_call = 4;
+	g_widthhold_advance_call = 1;
 	g_widthhold_advance_ms =
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_READ_BUDGET_MS - 1u;
 	gta4l_test_multi_hook = widthhold_multi_hook;
@@ -8033,7 +8009,7 @@ scenario_widthhold_cancel_case(void)
 	CHECK(g_started);
 	widthhold_setup(true, true);
 	widthhold_hook_reset();
-	g_widthhold_cancel_call = 4;
+	g_widthhold_cancel_call = 1;
 	gta4l_test_multi_hook = widthhold_multi_hook;
 	CHECK(invoke_thread(1) == 1);
 	CHECK(strstr(gta4l_test.panic,
@@ -8099,9 +8075,9 @@ scenario_widthhold_cancel_first_failure(void)
 	CHECK(g_started);
 	widthhold_setup(true, true);
 	widthhold_hook_reset();
-	g_widthhold_cancel_call = 4;
+	g_widthhold_cancel_call = 1;
 	gta4l_test_multi_hook = widthhold_multi_hook;
-	gta4l_test.fail_multi_at = 4;
+	gta4l_test.fail_multi_at = 1;
 	CHECK(invoke_thread(1) == 1);
 	CHECK(strstr(gta4l_test.panic,
 	    "reason=9 complete=0") != 0);
@@ -8266,7 +8242,7 @@ scenario_widthpub_match(void)
 	CHECK(g_self->report.widthpub == 1u);
 	CHECK(gta4l_test.width_switch_calls == 1);
 	CHECK(gta4l_test.width_recover_calls == 0);
-	CHECK(gta4l_test.multi_calls == 4);
+	CHECK(gta4l_test.multi_calls == 1);
 	widthhold_setup(true, true);
 	CHECK(invoke_thread(1) == 1);
 	CHECK(gta4l_test.panic != 0);
@@ -8281,7 +8257,7 @@ scenario_widthpub_match(void)
 	    "complete=1 pub=1 switch=4 verified=1 hb=0 ha=2 ") != 0);
 	snprintf(expected, sizeof(expected),
 	    "cmd6=1 refs=1 refbytes=4096 refblocks=8 refstatus=0 "
-	    "refchunks=4 refstops=4 refstopfail=0 refdigest=%s "
+	    "refchunks=1 refstops=1 refstopfail=0 refdigest=%s "
 	    "reads=8 bytes=8192 blocks=16 subrequests=8 max=2 c18=8 "
 	    "stops=8 stopfail=0 match=1 mismatches=0 fails=0 "
 	    "foreign=0 cancel=0 budget=0 obsdigest=%s "
@@ -8307,14 +8283,14 @@ scenario_widthpub_match(void)
 	CHECK(g_self->report.widthhold_last_index == 7u);
 	CHECK(g_self->report.widthhold_last_start == 3072u);
 	CHECK(g_self->report.widthhold_last_lba == 2255366u);
-	CHECK(gta4l_test.multi_calls == 12);
+	CHECK(gta4l_test.multi_calls == 9);
 	CHECK(gta4l_test.message_count == 0);
 	CHECK(!g_self->offlineNotified);
 	CHECK(gta4l_test.width_switch_calls == 1);
 	CHECK(gta4l_test.width_recover_calls == 1);
 	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
 	CHECK(gta4l_test.width_host_control == 0);
-	CHECK(g_self->block.counters.cmd18_chunks == 12);
+	CHECK(g_self->block.counters.cmd18_chunks == 9);
 	CHECK(g_self->block.counters.stop_failures == 0);
 	CHECK(g_widthhold_whole_media != 0);
 	CHECK(g_widthhold_whole_media->open_calls == 0);
@@ -8353,7 +8329,7 @@ scenario_widthpub_media_absent(void)
 	    "GTA4L-EMMC P5 WIDTHPUB: cases=8 passed=0 failed=1 reason=4 "
 	    "complete=0 pub=0") != 0);
 	CHECK(strstr(gta4l_test.panic,
-	    "refstatus=0 refchunks=4 refstops=4 refstopfail=0") != 0);
+	    "refstatus=0 refchunks=1 refstops=1 refstopfail=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=1") != 0);
 	CHECK(gta4l_test.now_ms >=
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_MEDIA_WAIT_MS);
@@ -8482,7 +8458,7 @@ scenario_widthpub_budget(void)
 	CHECK(g_started);
 	widthhold_setup(true, true);
 	widthhold_hook_reset();
-	g_widthhold_advance_call = 7;
+	g_widthhold_advance_call = 4;
 	g_widthhold_advance_ms =
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_READ_BUDGET_MS;
 	gta4l_test_multi_hook = widthhold_multi_hook;
@@ -8507,7 +8483,7 @@ scenario_widthpub_budget_boundary(void)
 	CHECK(g_started);
 	widthhold_setup(true, true);
 	widthhold_hook_reset();
-	g_widthhold_advance_call = 7;
+	g_widthhold_advance_call = 4;
 	g_widthhold_advance_ms =
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_READ_BUDGET_MS - 1u;
 	gta4l_test_multi_hook = widthhold_multi_hook;
@@ -8528,7 +8504,7 @@ scenario_widthpub_read_error(void)
 	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthpub=1") == 0);
 	CHECK(g_started);
 	widthhold_setup(true, true);
-	gta4l_test.fail_multi_at = 8;
+	gta4l_test.fail_multi_at = 5;
 	CHECK(invoke_thread(1) == 1);
 	CHECK(strstr(gta4l_test.panic,
 	    "reason=9 complete=0") != 0);
@@ -8575,7 +8551,7 @@ scenario_widthpub_match_mismatch(void)
 	CHECK(begin("gta4l-emmc-block=3 gta4l-emmc-widthpub=1") == 0);
 	CHECK(g_started);
 	widthhold_setup(true, true);
-	gta4l_test.multi_corrupt_at = 8;
+	gta4l_test.multi_corrupt_at = 5;
 	gta4l_test.multi_corrupt_count = 1;
 	gta4l_test.multi_corrupt_block =
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_BASE_BYTES /
@@ -8626,7 +8602,7 @@ scenario_widthpub_cancel_case(void)
 	CHECK(g_started);
 	widthhold_setup(true, true);
 	widthhold_hook_reset();
-	g_widthhold_cancel_call = 8;
+	g_widthhold_cancel_call = 5;
 	gta4l_test_multi_hook = widthhold_multi_hook;
 	CHECK(invoke_thread(1) == 1);
 	CHECK(strstr(gta4l_test.panic,
@@ -8706,7 +8682,7 @@ scenario_widthpub_switch_failure(void)
 	CHECK(g_panicked);
 	CHECK(gta4l_test.width_switch_calls == 1);
 	CHECK(gta4l_test.width_recover_calls == 0);
-	CHECK(gta4l_test.multi_calls == 4);
+	CHECK(gta4l_test.multi_calls == 1);
 	CHECK(g_self->host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1);
 	CHECK(strstr(gta4l_test.panic,
 	    "reason=3 complete=0 pub=0 switch=4 verified=0 hb=0 ha=0 ") != 0);
@@ -12193,11 +12169,10 @@ static const struct scenario_entry scenarios[] = {
 	{ "chunked-start", scenario_chunked_start },
 	{ "chunked-conflict", scenario_chunked_conflict },
 	{ "chunked-read", scenario_chunked_read },
-	{ "chunked-tail", scenario_chunked_tail },
+	{ "chunked-three", scenario_chunked_three },
 	{ "chunked-max", scenario_chunked_max },
 	{ "chunked-21", scenario_chunked_21 },
 	{ "chunked-failure", scenario_chunked_failure },
-	{ "chunked-partial", scenario_chunked_partial },
 	{ "chunked-stop-failure", scenario_chunked_stop_failure },
 	{ "chunked-short-count", scenario_chunked_short_count },
 	{ "read-failure", scenario_read_failure },

@@ -90,9 +90,18 @@ static_assert(GTA4L_EMMC_BLOCK_WIDTHHOLD_WORST_MS <
 static_assert(GTA4L_EMMC_BLOCK_PARTMAP_WORST_MS <
     GTA4L_EMMC_BLOCK_WATCHDOG_MS,
     "PARTMAP worst case must stay below the watchdog");
-static_assert(GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS ==
+static_assert(GTA4L_EMMC_BLOCK_CHUNK_BLOCKS >=
+    GTA4L_EMMC_BLOCK_MAX_BLOCKS,
+    "one advertised request must fit one core chunk");
+static_assert(GTA4L_EMMC_BLOCK_QUAL_THREE_BLOCKS <=
     GTA4L_EMMC_BLOCK_CHUNK_BLOCKS,
-    "PARTMAP chunk must match the core chunk");
+    "QUAL cases must fit one core chunk");
+static_assert(GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS <=
+    GTA4L_EMMC_BLOCK_CHUNK_BLOCKS,
+    "WIDTHHOLD reference must fit one core chunk");
+static_assert(GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS <=
+    GTA4L_EMMC_BLOCK_MAX_BLOCKS,
+    "PARTMAP chunk must fit the advertised request limit");
 static_assert(GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES >=
     GTA4L_EMMC_BLOCK_BYTES,
     "PARTMAP bounce must hold at least one block");
@@ -210,9 +219,9 @@ static_assert(GTA4L_EMMC_BLOCK_WIDTHFAIL_LINE_BYTES <
 static_assert(GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES <=
     GTA4L_EMMC_BLOCK_MAX_BYTES,
     "WIDTH case must stay inside the 64-block request limit");
-static_assert(GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS ==
+static_assert(GTA4L_EMMC_BLOCK_WIDTH_CASE_BLOCKS <=
     GTA4L_EMMC_BLOCK_CHUNK_BLOCKS,
-    "WIDTH case must use the production two-block chunk");
+    "WIDTH case must fit one production chunk");
 static_assert(GTA4L_EMMC_BLOCK_WIDTH_LINE_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "WIDTH summary line must fit the report buffer");
@@ -612,7 +621,7 @@ private:
 	struct gta4l_emmc_block block;
 	struct gta4l_emmc_block_io io;
 	IOMemoryDescriptor *requestBuffer = nullptr;
-	uint8_t chunk[GTA4L_EMMC_BLOCK_CHUNK_BYTES];
+	uint8_t *chunk = nullptr;
 	uint32_t capacityBlocks = 0;
 	bool chunkedMode = false;
 	volatile bool online = false;
@@ -1999,6 +2008,19 @@ Gta4lEmmcBlock::start(IOService *provider)
 	}
 	reportMode = true;
 	chunkedMode = (mode == GTA4L_EMMC_BLOCK_SELECT_REPORT_CHUNKED);
+	if (chunkedMode) {
+		/* One 64-block CMD18 reads into this bounce. The 32 KiB
+		 * buffer is too large for the adapter instance, so it is
+		 * allocated with the same checked failure path as the
+		 * report buffers. */
+		chunk = (uint8_t *)IOMallocAligned(
+		    GTA4L_EMMC_BLOCK_CHUNK_BYTES, PAGE_SIZE);
+		if (chunk == nullptr) {
+			IOLog("GTA4L-EMMC P5 FAILED: chunk buffer "
+			    "allocation\n");
+			return false;
+		}
+	}
 	if (!initializeHardware()) {
 		panicWithReport();
 		return false;
@@ -2656,6 +2678,10 @@ Gta4lEmmcBlock::free()
 		IOFreeAligned(partmapDma,
 		    GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES);
 		partmapDma = nullptr;
+	}
+	if (chunk != nullptr) {
+		IOFreeAligned(chunk, GTA4L_EMMC_BLOCK_CHUNK_BYTES);
+		chunk = nullptr;
 	}
 	if (partmapScratch != nullptr) {
 		IOFree(partmapScratch, sizeof(*partmapScratch));
@@ -7424,27 +7450,19 @@ Gta4lEmmcBlock::readWidthholdReference()
 	widthholdRefStops = stopDelta;
 	widthholdRefStopFail = stopFailDelta;
 	widthholdRefMax = (chunkDelta != 0u) ?
-	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS : 0u;
+	    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS : 0u;
 	widthholdRefStopOk = (result == GTA4L_EMMC_BLOCK_OK) &&
 	    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&
-	    (chunkDelta ==
-	    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /
-	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&
+	    (chunkDelta == 1u) &&
 	    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&
-	    (stopDelta ==
-	    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /
-	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&
+	    (stopDelta == 1u) &&
 	    (stopFailDelta == 0u) && (after.last_stop_result == 0);
 	return (result == GTA4L_EMMC_BLOCK_OK) &&
 	    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&
 	    (widthholdRefSubrequests == 1u) &&
 	    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&
-	    (chunkDelta ==
-	    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /
-	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&
-	    (stopDelta ==
-	    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /
-	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&
+	    (chunkDelta == 1u) &&
+	    (stopDelta == 1u) &&
 	    (stopFailDelta == 0u) && (after.last_stop_result == 0);
 }
 
@@ -8419,11 +8437,13 @@ Gta4lEmmcBlock::runWidthhold()
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&
 	    (report.widthhold_refstatus == 0) &&
 	    (report.widthhold_refchunks ==
-	    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /
-	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&
+	    ((GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS +
+	    GTA4L_EMMC_BLOCK_CHUNK_BLOCKS - 1u) /
+	    GTA4L_EMMC_BLOCK_CHUNK_BLOCKS)) &&
 	    (report.widthhold_refstops ==
-	    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /
-	    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&
+	    ((GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS +
+	    GTA4L_EMMC_BLOCK_CHUNK_BLOCKS - 1u) /
+	    GTA4L_EMMC_BLOCK_CHUNK_BLOCKS)) &&
 	    (report.widthhold_refstopfail == 0u) &&
 	    (report.widthhold_reads == cases) &&
 	    (report.widthhold_bytes ==
@@ -9297,10 +9317,10 @@ Gta4lEmmcBlock::qualifyMediaRead(IOMedia *media, uint32_t blocks,
 		out->reason = 3;
 		return;
 	}
-	expected_cmd17 = (blocks > GTA4L_EMMC_BLOCK_CHUNK_BLOCKS) ? 1u : 0u;
+	expected_cmd17 = 0u;
 	shape_ok = (capture.cmd18 == 1u) &&
 	    (capture.cmd17 == expected_cmd17) &&
-	    (capture.cmd18_blocks == GTA4L_EMMC_BLOCK_CHUNK_BLOCKS) &&
+	    (capture.cmd18_blocks == blocks) &&
 	    (capture.stops == 1u) &&
 	    (capture.stop_failures == 0u) &&
 	    (capture.last_stop_result == 0);

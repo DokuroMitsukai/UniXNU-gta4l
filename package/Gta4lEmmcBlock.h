@@ -94,6 +94,9 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_PARTMAP_READ_BUDGET_MS 4000u
 #define GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS 128u
 #define GTA4L_EMMC_BLOCK_PARTMAP_MAX_MEDIA 128u
+/* The GPT comparator keeps its own proven two-block read shape; the core
+ * chunk is a transport amortization choice and does not resize the GPT
+ * bounce or its scratch array. */
 #define GTA4L_EMMC_BLOCK_PARTMAP_CHUNK_BLOCKS 2u
 #define GTA4L_EMMC_BLOCK_PARTMAP_ARRAY_BYTES \
 	(GTA4L_EMMC_BLOCK_PARTMAP_MAX_SLOTS * 128u)

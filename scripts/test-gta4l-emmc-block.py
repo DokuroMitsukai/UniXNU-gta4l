@@ -301,30 +301,11 @@ MUTATIONS = [
      '\t\t\t\t    GTA4L_EMMC_BLOCK_IO_ERROR);\n'
      '\t\t\t\tbreak;\n',
      'chunk-fail-first'),
-    ('chunk-tail-bounce',
-     '\t\t\t\tresult = block->io->read_block(block->io->context,\n'
-     '\t\t\t\t    block_number + chunk_index, block->bounce);\n',
-     '\t\t\t\tresult = block->io->read_block(block->io->context,\n'
-     '\t\t\t\t    block_number + chunk_index,\n'
-     '\t\t\t\t    block->io->chunk_buffer);\n',
-     'chunk-split'),
     ('chunk-blocks-counter',
      '\t\t\tblock->counters.blocks += chunk_blocks;\n'
      '\t\t\tblock->counters.cmd18_blocks += chunk_blocks;\n',
      '\t\t\t(void)chunk_blocks;\n',
      'chunk-pair'),
-    ('chunk-tail-lba',
-     '\t\t\t\tresult = block->io->read_block(block->io->context,\n'
-     '\t\t\t\t    block_number + chunk_index, block->bounce);\n',
-     '\t\t\t\tresult = block->io->read_block(block->io->context,\n'
-     '\t\t\t\t    block_number, block->bounce);\n',
-     'chunk-split'),
-    ('chunk-copy-offset',
-     '\t\t\tcopied = block->io->copy_out(block->io->context,\n'
-     '\t\t\t    chunk_index * GTA4L_EMMC_BLOCK_BYTES,\n',
-     '\t\t\tcopied = block->io->copy_out(block->io->context,\n'
-     '\t\t\t    0,\n',
-     'chunk-boundary'),
     ('chunk-fail-counter',
      '\t\t\t\tblock->counters.chunk_failures++;\n'
      '\t\t\t\treturn gta4l_emmc_block_record_failure(block,\n'
@@ -1132,23 +1113,15 @@ ADAPTER_MUTATIONS = [
        '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
        '\t    (widthholdRefSubrequests == 1u) &&\n'
        '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
-       '\t    (chunkDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
-       '\t    (stopDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (chunkDelta == 1u) &&\n'
+       '\t    (stopDelta == 1u) &&\n'
        '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n',
        '\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
        '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
        '\t    (widthholdRefSubrequests == 1u) &&\n'
        '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
-       '\t    (chunkDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS) + 1u) &&\n'
-       '\t    (stopDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (chunkDelta == 2u) &&\n'
+       '\t    (stopDelta == 1u) &&\n'
        '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n')],
      'widthhold-match'),
     ('widthhold-refstop-expect',
@@ -1156,23 +1129,15 @@ ADAPTER_MUTATIONS = [
        '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
        '\t    (widthholdRefSubrequests == 1u) &&\n'
        '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
-       '\t    (chunkDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
-       '\t    (stopDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (chunkDelta == 1u) &&\n'
+       '\t    (stopDelta == 1u) &&\n'
        '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n',
        '\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
        '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
        '\t    (widthholdRefSubrequests == 1u) &&\n'
        '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
-       '\t    (chunkDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
-       '\t    (stopDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS) + 1u) &&\n'
+       '\t    (chunkDelta == 1u) &&\n'
+       '\t    (stopDelta == 2u) &&\n'
        '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n')],
      'widthhold-match'),
     ('widthhold-refstopfail-expect',
@@ -1180,23 +1145,15 @@ ADAPTER_MUTATIONS = [
        '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
        '\t    (widthholdRefSubrequests == 1u) &&\n'
        '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
-       '\t    (chunkDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
-       '\t    (stopDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (chunkDelta == 1u) &&\n'
+       '\t    (stopDelta == 1u) &&\n'
        '\t    (stopFailDelta == 0u) && (after.last_stop_result == 0);\n',
        '\treturn (result == GTA4L_EMMC_BLOCK_OK) &&\n'
        '\t    (completed == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BYTES) &&\n'
        '\t    (widthholdRefSubrequests == 1u) &&\n'
        '\t    (blockDelta == GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS) &&\n'
-       '\t    (chunkDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
-       '\t    (stopDelta ==\n'
-       '\t    (GTA4L_EMMC_BLOCK_WIDTHHOLD_REF_BLOCKS /\n'
-       '\t    GTA4L_EMMC_BLOCK_WIDTHHOLD_CASE_BLOCKS)) &&\n'
+       '\t    (chunkDelta == 1u) &&\n'
+       '\t    (stopDelta == 1u) &&\n'
        '\t    (stopFailDelta != 0u) && (after.last_stop_result == 0);\n')],
      'widthhold-match'),
     ('widthhold-short-ignore',
@@ -2598,7 +2555,7 @@ def main():
             'baseline scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block core' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 49, f'expected 49 PASS lines, got {passes}'
+        assert passes == 47, f'expected 47 PASS lines, got {passes}'
         for name, old, new, scenario in MUTATIONS:
             text = CORE.read_text()
             assert text.count(old) == 1, \
@@ -2627,7 +2584,7 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 420, f'expected 420 adapter PASS lines, got {passes}'
+        assert passes == 419, f'expected 419 adapter PASS lines, got {passes}'
         print('PASS adapter: 419 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
@@ -2668,7 +2625,7 @@ def main():
                 f'policy mutation {name} did not fail {scenario}:\n' + \
                 (run.stdout + run.stderr)
             print(f'PASS policy mutation {name} rejected ({scenario})')
-    print(f'PASS gta4l eMMC block core: 48 scenarios, '
+    print(f'PASS gta4l eMMC block core: 46 scenarios, '
           f'{len(MUTATIONS)} mutation controls')
     return 0
 

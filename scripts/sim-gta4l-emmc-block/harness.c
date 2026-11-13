@@ -616,7 +616,7 @@ static int scenario_chunk_pair(void)
 	return 0;
 }
 
-static int scenario_chunk_split(void)
+static int scenario_chunk_three(void)
 {
 	struct mock mock;
 	struct gta4l_emmc_block block;
@@ -628,16 +628,17 @@ static int scenario_chunk_split(void)
 	    GTA4L_EMMC_BLOCK_READ, &completed) == GTA4L_EMMC_BLOCK_OK);
 	CHECK(completed == 1536);
 	CHECK(mock.multi_reads == 1);
-	CHECK(mock.reads == 1);
-	CHECK(mock.copies == 2);
+	CHECK(mock.reads == 0);
+	CHECK(mock.copies == 1);
 	CHECK(mock.last_block == 4);
 	CHECK(mock.last_multi_block == 2);
-	CHECK(mock.last_multi_count == 2);
+	CHECK(mock.last_multi_count == 3);
 	CHECK(mock.last_multi_buffer == g_chunk);
-	CHECK(mock.last_read_buffer == block.bounce);
 	CHECK(block.counters.blocks == 3);
-	CHECK(block.counters.cmd18_blocks == 2);
-	CHECK(block.counters.cmd17_reads == 1);
+	CHECK(block.counters.cmd18_chunks == 1);
+	CHECK(block.counters.cmd18_blocks == 3);
+	CHECK(block.counters.cmd17_reads == 0);
+	CHECK(block.counters.stop_attempts == 1);
 	CHECK(mock.out[0] == 2);
 	CHECK(mock.out[512] == 3);
 	CHECK(mock.out[1024] == 4);
@@ -656,12 +657,13 @@ static int scenario_chunk_boundary(void)
 	CHECK(gta4l_emmc_block_read(&block, 2, 4, 2048,
 	    GTA4L_EMMC_BLOCK_READ, &completed) == GTA4L_EMMC_BLOCK_OK);
 	CHECK(completed == 2048);
-	CHECK(mock.multi_reads == 2);
+	CHECK(mock.multi_reads == 1);
 	CHECK(mock.reads == 0);
-	CHECK(mock.copies == 2);
+	CHECK(mock.copies == 1);
 	CHECK(block.counters.blocks == 4);
 	CHECK(block.counters.cmd18_blocks == 4);
 	CHECK(block.counters.cmd17_reads == 0);
+	CHECK(block.counters.stop_attempts == 1);
 	CHECK(mock.out[1024] == 4);
 	CHECK(mock.out[2047] == (uint8_t)(5 + 511));
 	return 0;
@@ -713,15 +715,15 @@ static int scenario_chunk_21(void)
 	CHECK(gta4l_emmc_block_read(&block, 2, 21, 10752,
 	    GTA4L_EMMC_BLOCK_READ, &completed) == GTA4L_EMMC_BLOCK_OK);
 	CHECK(completed == 10752);
-	CHECK(mock.multi_reads == 10);
-	CHECK(mock.reads == 1);
-	CHECK(mock.copies == 11);
+	CHECK(mock.multi_reads == 1);
+	CHECK(mock.reads == 0);
+	CHECK(mock.copies == 1);
 	CHECK(mock.last_block == 22);
 	CHECK(block.counters.blocks == 21);
-	CHECK(block.counters.cmd18_chunks == 10);
-	CHECK(block.counters.cmd18_blocks == 20);
-	CHECK(block.counters.cmd17_reads == 1);
-	CHECK(block.counters.stop_attempts == 10);
+	CHECK(block.counters.cmd18_chunks == 1);
+	CHECK(block.counters.cmd18_blocks == 21);
+	CHECK(block.counters.cmd17_reads == 0);
+	CHECK(block.counters.stop_attempts == 1);
 	CHECK(mock.out[0] == 2);
 	CHECK(mock.out[10240] == 22);
 	CHECK(mock.out[10751] == (uint8_t)(22 + 511));
@@ -776,30 +778,6 @@ static int scenario_chunk_fail_first(void)
 	CHECK(completed == 0);
 	CHECK(mock.multi_reads == 1);
 	CHECK(block.counters.requests == 1);
-	return 0;
-}
-
-static int scenario_chunk_fail_middle(void)
-{
-	struct mock mock;
-	struct gta4l_emmc_block block;
-	uint64_t completed = 0xdead;
-
-	reset_mock(&mock);
-	init_chunk_block(&block, &mock, 10);
-	mock.fail_multi_at = 1;
-	CHECK(gta4l_emmc_block_read(&block, 2, 6, 3072,
-	    GTA4L_EMMC_BLOCK_READ, &completed) ==
-	    GTA4L_EMMC_BLOCK_IO_ERROR);
-	CHECK(completed == 1024);
-	CHECK(mock.multi_reads == 2);
-	CHECK(mock.reads == 0);
-	CHECK(mock.copies == 1);
-	CHECK(block.counters.blocks == 2);
-	CHECK(block.counters.cmd18_blocks == 2);
-	CHECK(block.counters.chunk_failures == 1);
-	CHECK(block.counters.first_fail_block == 4);
-	CHECK(block.online == 0);
 	return 0;
 }
 
@@ -1040,30 +1018,6 @@ static int scenario_chunk_data_result(void)
 	return 0;
 }
 
-static int scenario_chunk_tail_fail(void)
-{
-	struct mock mock;
-	struct gta4l_emmc_block block;
-	uint64_t completed = 0xdead;
-
-	reset_mock(&mock);
-	init_chunk_block(&block, &mock, 10);
-	mock.fail_read_at = 0;
-	CHECK(gta4l_emmc_block_read(&block, 2, 3, 1536,
-	    GTA4L_EMMC_BLOCK_READ, &completed) ==
-	    GTA4L_EMMC_BLOCK_IO_ERROR);
-	CHECK(completed == 1024);
-	CHECK(mock.multi_reads == 1);
-	CHECK(mock.reads == 0);
-	CHECK(block.counters.blocks == 2);
-	CHECK(block.counters.cmd18_blocks == 2);
-	CHECK(block.counters.cmd17_reads == 0);
-	CHECK(block.counters.first_fail_block == 4);
-	CHECK(block.counters.first_fail_error == -5);
-	CHECK(block.online == 0);
-	return 0;
-}
-
 static int scenario_chunk_copy_fail(void)
 {
 	struct mock mock;
@@ -1072,16 +1026,16 @@ static int scenario_chunk_copy_fail(void)
 
 	reset_mock(&mock);
 	init_chunk_block(&block, &mock, 10);
-	mock.fail_copy_at = 1;
+	mock.fail_copy_at = 0;
 	CHECK(gta4l_emmc_block_read(&block, 2, 4, 2048,
 	    GTA4L_EMMC_BLOCK_READ, &completed) ==
 	    GTA4L_EMMC_BLOCK_SHORT_COPY);
-	CHECK(completed == 1124);
-	CHECK(mock.multi_reads == 2);
-	CHECK(mock.copies == 1);
-	CHECK(block.counters.blocks == 2);
-	CHECK(block.counters.cmd18_blocks == 2);
-	CHECK(block.counters.first_fail_block == 4);
+	CHECK(completed == 100);
+	CHECK(mock.multi_reads == 1);
+	CHECK(mock.copies == 0);
+	CHECK(block.counters.blocks == 0);
+	CHECK(block.counters.cmd18_blocks == 0);
+	CHECK(block.counters.first_fail_block == 2);
 	CHECK(block.counters.first_fail_error == 100);
 	CHECK(block.online == 0);
 	return 0;
@@ -1317,13 +1271,12 @@ static const struct scenario_entry scenarios[] = {
 	{ "max-counter-preserved", scenario_max_counter_preserved },
 	{ "chunk-single", scenario_chunk_single },
 	{ "chunk-pair", scenario_chunk_pair },
-	{ "chunk-split", scenario_chunk_split },
+	{ "chunk-three", scenario_chunk_three },
 	{ "chunk-boundary", scenario_chunk_boundary },
 	{ "chunk-max", scenario_chunk_max },
 	{ "chunk-21", scenario_chunk_21 },
 	{ "chunk-last", scenario_chunk_last },
 	{ "chunk-fail-first", scenario_chunk_fail_first },
-	{ "chunk-fail-middle", scenario_chunk_fail_middle },
 	{ "chunk-stop-fail", scenario_chunk_stop_fail },
 	{ "chunk-stop-missing", scenario_chunk_stop_missing },
 	{ "chunk-stop-fail-return", scenario_chunk_stop_fail_return },
@@ -1334,7 +1287,6 @@ static const struct scenario_entry scenarios[] = {
 	{ "chunk-first-failure-preserved", scenario_chunk_first_failure_preserved },
 	{ "chunk-short-count", scenario_chunk_short_count },
 	{ "chunk-data-result", scenario_chunk_data_result },
-	{ "chunk-tail-fail", scenario_chunk_tail_fail },
 	{ "chunk-copy-fail", scenario_chunk_copy_fail },
 	{ "chunk-overlong-copy", scenario_chunk_overlong_copy },
 	{ "chunk-bounce-missing", scenario_chunk_bounce_missing },
