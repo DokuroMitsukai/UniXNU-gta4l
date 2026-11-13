@@ -8863,6 +8863,21 @@ scenario_speed_match_8bit(void)
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 WIDTHPUB") == 0);
 	CHECK(speed_counter_positive("ticks1="));
 	CHECK(speed_counter_positive("ticks2="));
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SPEEDIO: req=8 blk=16 inh=") != 0);
+	CHECK(strstr(gta4l_test.panic, " core=") != 0);
+	CHECK(strstr(gta4l_test.panic, " win=") != 0);
+	CHECK(g_self->report.speedio_req == 8u);
+	CHECK(g_self->report.speedio_blk == 16u);
+	CHECK(g_self->report.speedio_core > 0u);
+	CHECK(g_self->report.speedio_bus >= g_self->report.speedio_core);
+	CHECK(g_self->report.speedio_io >= g_self->report.speedio_bus);
+	CHECK(g_self->report.speedio_win >= g_self->report.speedio_io);
+	CHECK(g_self->report.speedio_win ==
+	    g_self->report.speed_ticks1 + g_self->report.speed_ticks2);
+	CHECK(g_self->report.speedio_inh + g_self->report.speedio_cmd +
+	    g_self->report.speedio_dat + g_self->report.speedio_stop <=
+	    g_self->report.speedio_core);
 	CHECK(g_self->report.speed == 1u);
 	CHECK(g_self->report.speed_wid == 8u);
 	CHECK(g_self->report.speed_wfall == 0u);
@@ -10059,6 +10074,16 @@ scenario_speed_format_max(void)
 	report.speed_limit = 0xffffffffu;
 	report.speed_segments = 0xffffffffu;
 	report.speed_capacity = 0xffffffffu;
+	report.speedio_req = 0xffffffffu;
+	report.speedio_blk = 0xffffffffu;
+	report.speedio_inh = UINT64_MAX;
+	report.speedio_cmd = UINT64_MAX;
+	report.speedio_dat = UINT64_MAX;
+	report.speedio_stop = UINT64_MAX;
+	report.speedio_core = UINT64_MAX;
+	report.speedio_bus = UINT64_MAX;
+	report.speedio_io = UINT64_MAX;
+	report.speedio_win = UINT64_MAX;
 	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
 	    &report);
 	CHECK(length != 0u);
@@ -10069,8 +10094,17 @@ scenario_speed_format_max(void)
 	CHECK(end != 0);
 	CHECK((uint32_t)(end - line) ==
 	    GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES);
+	line = strstr(buffer, "GTA4L-EMMC P5 SPEEDIO: ");
+	CHECK(line != 0);
+	end = strchr(line, '\n');
+	CHECK(end != 0);
+	CHECK((uint32_t)(end - line) ==
+	    GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES);
 	CHECK(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES ==
 	    (GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES + 838u + 2u));
+	CHECK(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES +
+	    GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u <=
+	    GTA4L_EMMC_BLOCK_REPORT_BYTES);
 	return 0;
 }
 

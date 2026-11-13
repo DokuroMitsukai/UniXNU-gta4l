@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls against the host IOKit seam. The block adapter test runs 419 scenarios with 157 adapter mutations, 3 support mutations and 37 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 48 scenarios plus 38 mutation controls against the host IOKit seam. The block adapter test runs 419 scenarios with 158 adapter mutations, 3 support mutations and 37 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7054,3 +7054,48 @@ ordinal were not recorded. The S1 image must not be booted again; its boot
 budget is consumed and the protected baseline must be refreshed to
 `5342e715…` before the next flash. Next rung: S2 `bulk`, starting with a
 per-request breakdown and a transport-shape decision.
+
+### 5.3.104 B8 per-request breakdown and S2 shape decision (2026-11-13)
+
+Follow-up to §5.3.103 and the B8 record
+`docs/emmc-b8-overhead-decision-2026-11-13.md`. Host-only: no candidate,
+device access, flash or boot, and the S1 image stays grounded.
+
+Instrumentation. The diagnostic now carries one opt-in `SPEEDIO` line with
+the matched request/block counts, the command-inhibit, CMD18 issue, data and
+CMD12 phases, the block-core and IOKit round-trip times, the two-pass window
+time and the timebase. `timing_capture` is off for every production caller;
+`gta4l_emmc_timing_close()` moves the stamp and adds the delta, and each
+phase closes before the stop so a failed wait cannot be charged to CMD12.
+The line is bounded at 267 bytes and the combined S1 report at 1,854 bytes,
+both compile-time asserted; the watchdog's second report copy moved to an
+explicit allocation so the enlarged struct does not double the instance.
+
+Model. The S1 passes were 55,912 and 46,348 ticks for 4,096 bytes, so the
+81.92 µs wire time was 2.8–3.4% of the pass and the fixed cost was 583–708 µs
+per 1 KiB request. The source model projects 8 KiB at 9.4–11.0 MB/s, 32 KiB at
+24.0–26.5 MB/s and 128 KiB at 39.4–40.9 MB/s; the 85,688,320-byte region is
+exactly 2,615 32 KiB requests.
+
+Decision. S2 raises `GTA4L_EMMC_BLOCK_CHUNK_BLOCKS` to 64 and keeps the
+advertised 64-block limit, so one request is one CMD18 plus CMD12 and the
+projected region time drops from about 50 s to 3.2–3.6 s. A 256-block limit
+is rejected for the first S2 batch: it scales every `MAX_BLOCKS`-derived
+bound and buffer for a 1.6× gain that still misses the current additive
+loop allowance. One request being one chunk keeps the 4,500 ms in-flight term
+unchanged; a larger limit without the matching chunk would multiply it. S2
+also owes a separate 32 KiB chunk allocation, a decoupled two-block partmap
+chunk, and the hardcoded chunk-shape test updates. The S2 budget must keep
+the 28,000 ms report-thread sum: a 6,000 ms bulk loop is only safe after the
+armed deadline is checked inside the CMD18 data and CMD12 polls, otherwise
+the loop stays at 2,000 ms and the run reports a verified prefix.
+
+Host results. The core suite passes 211 scenarios and 128 mutation controls;
+the probe suite 196 and 100; the block suite 48 core scenarios with 38
+mutation controls, 419 adapter scenarios, 158 adapter, 3 support and 37
+policy mutation controls. `speed-match-8bit` asserts the phase containment
+and `win = ticks1 + ticks2`; `speed-format-max` asserts the exact 267-byte
+line; one adapter mutation zeroes `speedio_req` and is rejected. The
+evidence, count and RAM-root recipe suites pass after the baseline refresh.
+The phase split and the 64-block rate remain `[U]` until the next boot reads
+the `SPEEDIO` line; no sustained or arbitrary I/O is qualified.

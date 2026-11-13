@@ -593,9 +593,13 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 {
 	uint32_t index;
 	uint32_t completed;
+	uint64_t captureStart = 0;
 
 	if (result == 0) {
 		return GTA4L_EMMC_ERR_ARG;
+	}
+	if (host->timing_capture != 0) {
+		captureStart = gta4l_emmc_platform_counter();
 	}
 	result->transport_result = GTA4L_EMMC_ERR_ARG;
 	result->requested_blocks = count;
@@ -665,6 +669,12 @@ gta4l_emmc_read_multi_result(struct gta4l_emmc_host *host, uint64_t start_lba,
 		result->stop_result = 0;
 	}
 	result->transport_result = gta4l_test.multi_data_result;
+	if (host->timing_capture != 0) {
+		host->timing_data_ticks +=
+		    gta4l_emmc_platform_counter() - captureStart;
+		host->timing_requests++;
+		host->timing_blocks += count;
+	}
 	gta4l_test.multi_calls++;
 	return gta4l_test.multi_rc;
 }

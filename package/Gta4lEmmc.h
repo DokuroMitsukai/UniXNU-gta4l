@@ -661,6 +661,22 @@ struct gta4l_emmc_host {
 	uint32_t multi_drain_iterations; /* poll iterations it consumed */
 	uint8_t  multi_drain_used;
 	uint8_t  multi_drain_resolved;   /* transfer completion observed */
+	/* Caller opt-in per-request phase accounting for the diagnostic
+	 * report. The portable core only accumulates when `timing_capture`
+	 * is set; production callers leave it zero and pay no counter reads.
+	 * All values are platform-counter deltas in ticks: command-inhibit
+	 * entry, CMD18 issue to CC, CC to data completion, and the complete
+	 * CMD12 stop. Every phase is closed before the stop on success and
+	 * failure, so an unresolved command or data wait stays in its own
+	 * bucket. `timing_requests`/`timing_blocks` are the matched request
+	 * and sector counts. */
+	uint8_t  timing_capture;
+	uint64_t timing_inhibit_ticks;
+	uint64_t timing_command_ticks;
+	uint64_t timing_data_ticks;
+	uint64_t timing_stop_ticks;
+	uint64_t timing_requests;
+	uint64_t timing_blocks;
 	/* Optional override for the bus-test write-phase software bound in
 	 * microseconds. Zero keeps GTA4L_EMMC_DATA_TIMEOUT_US. The diagnostic
 	 * probe sets a longer bound for the data-timeout audit so a late

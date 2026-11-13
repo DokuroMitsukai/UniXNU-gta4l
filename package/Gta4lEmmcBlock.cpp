@@ -78,6 +78,10 @@ static_assert(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_MS +
 static_assert(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "S1 report worst case must fit the report buffer");
+static_assert(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES +
+    GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "S1 report with SPEEDIO must fit the report buffer");
 
 static_assert(GTA4L_EMMC_BLOCK_WIDTHHOLD_WORST_MS <
     GTA4L_EMMC_BLOCK_WATCHDOG_MS,
@@ -741,6 +745,10 @@ private:
 	int32_t speedFailStatus = 0;
 	bool speedGateTimedOut = false;
 	uint32_t speedClockHz = GTA4L_EMMC_BLOCK_CLOCK_HZ;
+	bool speedTimingActive = false;
+	uint64_t speedCoreTicks = 0;
+	uint64_t speedBusTicks = 0;
+	uint64_t speedIoTicks = 0;
 	uint8_t *widthholdReference = nullptr;
 	uint8_t *widthholdObserved = nullptr;
 	uint8_t widthholdReferenceDigest[32];
@@ -809,7 +817,7 @@ private:
 	uint8_t qualRead[GTA4L_EMMC_BLOCK_QUAL_BYTES];
 	struct qual_capture qualCapture;
 	struct gta4l_emmc_block_report report;
-	struct gta4l_emmc_block_report watchdogReport;
+	struct gta4l_emmc_block_report *watchdogReport = nullptr;
 	char *reportBuffer = nullptr;
 	char *watchdogBuffer = nullptr;
 	char mediaContent[GTA4L_EMMC_BLOCK_CONTENT_BYTES];
@@ -944,10 +952,18 @@ Gta4lEmmcBlock::readMultiCallback(void *context, uint64_t blockNumber,
 {
 	Gta4lEmmcBlock *self = static_cast<Gta4lEmmcBlock *>(context);
 	struct gta4l_emmc_multi_result multi;
+	uint64_t startTicks = 0;
 	int rc;
 
+	if (self->speedTimingActive) {
+		startTicks = gta4l_emmc_platform_counter();
+	}
 	rc = gta4l_emmc_read_multi_result(&self->host, blockNumber, count,
 	    buffer, &multi);
+	if (self->speedTimingActive) {
+		self->speedCoreTicks +=
+		    gta4l_emmc_platform_counter() - startTicks;
+	}
 	result->transport_result = multi.transport_result;
 	result->requested_blocks = multi.requested_blocks;
 	result->completed_blocks = multi.completed_blocks;
@@ -1968,6 +1984,19 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	watchdogBuffer = reportBuffer + GTA4L_EMMC_BLOCK_REPORT_BYTES;
+	watchdogReport = (struct gta4l_emmc_block_report *)IOMalloc(
+	    sizeof(*watchdogReport));
+	if (watchdogReport == nullptr) {
+		IOLog("GTA4L-EMMC P5 FAILED: watchdog report allocation\n");
+		IOFree(reportBuffer, 2u * GTA4L_EMMC_BLOCK_REPORT_BYTES);
+		reportBuffer = nullptr;
+		watchdogBuffer = nullptr;
+		IOLockFree(reportLock);
+		reportLock = nullptr;
+		IOLockFree(gate);
+		gate = nullptr;
+		return false;
+	}
 	reportMode = true;
 	chunkedMode = (mode == GTA4L_EMMC_BLOCK_SELECT_REPORT_CHUNKED);
 	if (!initializeHardware()) {
@@ -2632,6 +2661,10 @@ Gta4lEmmcBlock::free()
 		IOFree(partmapScratch, sizeof(*partmapScratch));
 		partmapScratch = nullptr;
 	}
+	if (watchdogReport != nullptr) {
+		IOFree(watchdogReport, sizeof(*watchdogReport));
+		watchdogReport = nullptr;
+	}
 	if (reportBuffer != nullptr) {
 		IOFree(reportBuffer, 2u * GTA4L_EMMC_BLOCK_REPORT_BYTES);
 		reportBuffer = nullptr;
@@ -2658,6 +2691,7 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	struct gta4l_emmc_block_counters countersBefore;
 	struct gta4l_emmc_block_counters countersAfter;
 	uint64_t completed = 0;
+	uint64_t busStartTicks = 0;
 	int result;
 	IOReturn status;
 	bool wentOffline = false;
@@ -2745,8 +2779,14 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	}
 	direction = GTA4L_EMMC_BLOCK_READ;
 	countersBefore = block.counters;
+	if (widthholdAttributed && speedTimingActive) {
+		busStartTicks = gta4l_emmc_platform_counter();
+	}
 	result = gta4l_emmc_block_read(&block, blockNumber, (uint32_t)nblks,
 	    (uint64_t)buffer->getLength(), direction, &completed);
+	if (widthholdAttributed && speedTimingActive) {
+		speedBusTicks += gta4l_emmc_platform_counter() - busStartTicks;
+	}
 	countersAfter = block.counters;
 	if (qualCapture.active) {
 		qualCapture.result = result;
@@ -3500,6 +3540,16 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		target->speed_limit = report.speed_limit;
 		target->speed_segments = report.speed_segments;
 		target->speed_capacity = report.speed_capacity;
+		target->speedio_req = report.speedio_req;
+		target->speedio_blk = report.speedio_blk;
+		target->speedio_inh = report.speedio_inh;
+		target->speedio_cmd = report.speedio_cmd;
+		target->speedio_dat = report.speedio_dat;
+		target->speedio_stop = report.speedio_stop;
+		target->speedio_core = report.speedio_core;
+		target->speedio_bus = report.speedio_bus;
+		target->speedio_io = report.speedio_io;
+		target->speedio_win = report.speedio_win;
 		if (speedMode) {
 			target->clock_hz = speedClockHz;
 			target->timing = (speedClockHz ==
@@ -8512,6 +8562,7 @@ Gta4lEmmcBlock::runSpeed()
 	uint32_t published = 0;
 	uint64_t passStart;
 	uint64_t passTicks;
+	uint64_t caseStart;
 	uint8_t digest[32];
 	uint8_t *slice;
 
@@ -8543,7 +8594,28 @@ Gta4lEmmcBlock::runSpeed()
 	report.speed_hz = (uint32_t)gta4l_emmc_platform_counter_hz();
 	bzero(report.speed_dig1, sizeof(report.speed_dig1));
 	bzero(report.speed_dig2, sizeof(report.speed_dig2));
+	report.speedio_req = 0;
+	report.speedio_blk = 0;
+	report.speedio_inh = 0;
+	report.speedio_cmd = 0;
+	report.speedio_dat = 0;
+	report.speedio_stop = 0;
+	report.speedio_core = 0;
+	report.speedio_bus = 0;
+	report.speedio_io = 0;
+	report.speedio_win = 0;
 	IOLockUnlock(reportLock);
+	speedTimingActive = false;
+	speedCoreTicks = 0;
+	speedBusTicks = 0;
+	speedIoTicks = 0;
+	host.timing_inhibit_ticks = 0;
+	host.timing_command_ticks = 0;
+	host.timing_data_ticks = 0;
+	host.timing_stop_ticks = 0;
+	host.timing_requests = 0;
+	host.timing_blocks = 0;
+	host.timing_capture = 0;
 
 	if (reportCancel) {
 		reason = GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_CANCEL;
@@ -8569,6 +8641,8 @@ Gta4lEmmcBlock::runSpeed()
 				widthholdBootOpen = true;
 				widthholdReadStart =
 				    gta4l_emmc_platform_counter();
+				speedTimingActive = true;
+				host.timing_capture = 1;
 				for (passIndex = 0;
 				    passIndex < GTA4L_EMMC_BLOCK_SPEED_PASSES;
 				    passIndex++) {
@@ -8610,6 +8684,8 @@ Gta4lEmmcBlock::runSpeed()
 						    GTA4L_EMMC_BLOCK_SPEED_CASE_BLOCKS;
 						widthholdCaseMax =
 						    GTA4L_EMMC_BLOCK_SPEED_CASE_BLOCKS;
+						caseStart =
+						    gta4l_emmc_platform_counter();
 						reason = widthholdReadCase(
 						    widthholdBoot, index,
 						    slice, &status, &actual,
@@ -8620,6 +8696,9 @@ Gta4lEmmcBlock::runSpeed()
 						    (reason !=
 						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_DESC)) {
 							requests++;
+							speedIoTicks +=
+							    gta4l_emmc_platform_counter() -
+							    caseStart;
 						}
 						if ((reason !=
 						    GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) &&
@@ -8706,6 +8785,8 @@ Gta4lEmmcBlock::runSpeed()
 		online = false;
 	}
 
+	speedTimingActive = false;
+	host.timing_capture = 0;
 	revertOk = speedRecover();
 	if (!revertOk) {
 		online = false;
@@ -8722,6 +8803,16 @@ Gta4lEmmcBlock::runSpeed()
 	report.speed_partdiag = report.widthhold_partdiag;
 	report.speed_fail_stage = speedFailStage;
 	report.speed_fail_status = speedFailStatus;
+	report.speedio_req = (uint32_t)host.timing_requests;
+	report.speedio_blk = (uint32_t)host.timing_blocks;
+	report.speedio_inh = host.timing_inhibit_ticks;
+	report.speedio_cmd = host.timing_command_ticks;
+	report.speedio_dat = host.timing_data_ticks;
+	report.speedio_stop = host.timing_stop_ticks;
+	report.speedio_core = speedCoreTicks;
+	report.speedio_bus = speedBusTicks;
+	report.speedio_io = speedIoTicks;
+	report.speedio_win = report.speed_ticks1 + report.speed_ticks2;
 	IOLockUnlock(reportLock);
 
 	if ((reason != GTA4L_EMMC_BLOCK_WIDTHHOLD_REASON_NONE) ||
@@ -9731,12 +9822,12 @@ Gta4lEmmcBlock::fillWatchdogReport(void)
 {
 	/* The watchdog must not stall on the controller gate: a bounded
 	 * try-lock snapshot is reported as coherent (1) or not (0). */
-	(void)snapshotReport(&watchdogReport, false);
-	watchdogReport.rc = 16;
-	watchdogReport.stop = 16;
-	watchdogReport.fail_valid = 1;
-	watchdogReport.fail_stage = 16;
-	watchdogReport.fail_code = 16;
+	(void)snapshotReport(watchdogReport, false);
+	watchdogReport->rc = 16;
+	watchdogReport->stop = 16;
+	watchdogReport->fail_valid = 1;
+	watchdogReport->fail_stage = 16;
+	watchdogReport->fail_code = 16;
 }
 
 void
@@ -9747,6 +9838,12 @@ Gta4lEmmcBlock::watchdogEntry(void *context, wait_result_t waitResult)
 
 	(void)waitResult;
 	if (self == nullptr) {
+		thread_terminate(current_thread());
+		return;
+	}
+	if (self->watchdogReport == nullptr) {
+		panic("GTA4L-EMMC P5 REPORT: watchdog snapshot unavailable");
+		self->release();
 		thread_terminate(current_thread());
 		return;
 	}
@@ -9762,11 +9859,11 @@ Gta4lEmmcBlock::watchdogEntry(void *context, wait_result_t waitResult)
 	if (!self->reportDone && self->claimTerminal()) {
 		uint32_t length;
 
-		bzero(&self->watchdogReport, sizeof(self->watchdogReport));
+		bzero(self->watchdogReport, sizeof(*self->watchdogReport));
 		self->fillWatchdogReport();
 		self->reportDone = true;
 		length = gta4l_emmc_block_report_format(self->watchdogBuffer,
-		    GTA4L_EMMC_BLOCK_REPORT_BYTES, &self->watchdogReport);
+		    GTA4L_EMMC_BLOCK_REPORT_BYTES, self->watchdogReport);
 		if (length == 0) {
 			panic("GTA4L-EMMC P5 REPORT: watchdog format failed");
 		} else {

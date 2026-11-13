@@ -1440,6 +1440,10 @@ ADAPTER_MUTATIONS = [
      [('\t\t\t\t\t\t\trequests++;\n',
        '\t\t\t\t\t\t\t;\n')],
      'speed-match-8bit'),
+    ('speed-report-io-dropped',
+     [('\treport.speedio_req = (uint32_t)host.timing_requests;\n',
+       '\treport.speedio_req = 0u;\n')],
+     'speed-match-8bit'),
     ('speed-report-fails-dropped',
      [('\t\t\t\t\t\t\tfails++;\n',
        '\t\t\t\t\t\t\t;\n')],
@@ -2219,6 +2223,8 @@ def check_adapter_source():
         policy_header, 'an unknown speed reason must have a distinct stage'
     assert '#define GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES 746u' in \
         policy_header, 'the SPEED formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES 267u' in \
+        policy_header, 'the SPEEDIO formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u' in \
         policy_header, 'the SPEED report bound must match the base block'
     assert adapter.index(

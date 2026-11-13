@@ -84,6 +84,23 @@ gta4l_emmc_counter(struct gta4l_emmc_host *host)
 	return 0;
 }
 
+/* Close one opt-in diagnostic phase. The movement is added to `total` and
+ * the stamp moves to now; with capture off this is a no-op so production
+ * callers pay neither the counter read nor the branch cost of a sum. */
+static void
+gta4l_emmc_timing_close(struct gta4l_emmc_host *host, uint64_t *stamp,
+    uint64_t *total)
+{
+	uint64_t now;
+
+	if (host->timing_capture == 0) {
+		return;
+	}
+	now = gta4l_emmc_counter(host);
+	*total += now - *stamp;
+	*stamp = now;
+}
+
 /* Arm, check and clear the caller's optional wait deadline. One absolute
  * counter value is shared by every nested wait, so a TRAN poll's
  * command-inhibit wait cannot extend the bound the caller set. The block
@@ -3935,6 +3952,9 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 	uint32_t response = 0;
 	uint32_t byte;
 	uint32_t word;
+	uint64_t timing_stamp = 0;
+	uint8_t command_timed = 0;
+	uint8_t data_timed = 0;
 	int command_done = 0;
 	int completed = 0;
 	int result;
@@ -3966,6 +3986,9 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 	command = (uint16_t)((GTA4L_EMMC_CMD18 << 8) |
 	    GTA4L_EMMC_CMD_RESP_SHORT | GTA4L_EMMC_CMD_CRC |
 	    GTA4L_EMMC_CMD_INDEX | GTA4L_EMMC_CMD_DATA);
+	if (host->timing_capture != 0) {
+		timing_stamp = gta4l_emmc_counter(host);
+	}
 	if (gta4l_emmc_wait_inhibit(host) != GTA4L_EMMC_OK) {
 		present = gta4l_emmc_read32(host, GTA4L_EMMC_SPACE_SDHCI,
 		    GTA4L_EMMC_REG_PRESENT_STATE);
@@ -3973,6 +3996,8 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 		    (uint32_t)start_lba, command, 0, 0, present);
 		return GTA4L_EMMC_ERR_INHIBIT;
 	}
+	gta4l_emmc_timing_close(host, &timing_stamp,
+	    &host->timing_inhibit_ticks);
 	gta4l_emmc_clear_interrupts(host);
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_BLOCK_SIZE, GTA4L_EMMC_BLOCK_BYTES);
@@ -3988,6 +4013,9 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_COMMAND, command);
 	gta4l_emmc_barrier(host);
+	if (host->timing_capture != 0) {
+		timing_stamp = gta4l_emmc_counter(host);
+	}
 
 	result = GTA4L_EMMC_OK;
 	iterations = gta4l_emmc_poll_iterations(GTA4L_EMMC_DATA_TIMEOUT_US);
@@ -4017,6 +4045,9 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 			    GTA4L_EMMC_SPACE_SDHCI,
 			    GTA4L_EMMC_REG_RESPONSE);
 			command_done = 1;
+			gta4l_emmc_timing_close(host, &timing_stamp,
+			    &host->timing_command_ticks);
+			command_timed = 1;
 		}
 		if ((command_done != 0) && (done < count)) {
 			/* BRR is latched until written back; the FIFO can be
@@ -4082,6 +4113,9 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 			}
 			host->multi_block = count - 1u;
 			host->multi_completed = count;
+			gta4l_emmc_timing_close(host, &timing_stamp,
+			    &host->timing_data_ticks);
+			data_timed = 1;
 			completed = 1;
 			break;
 		}
@@ -4126,6 +4160,10 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 				    GTA4L_EMMC_SPACE_SDHCI,
 				    GTA4L_EMMC_REG_RESPONSE);
 				command_done = 1;
+				gta4l_emmc_timing_close(host,
+				    &timing_stamp,
+				    &host->timing_command_ticks);
+				command_timed = 1;
 			}
 			if ((command_done != 0) && (done < count)) {
 				present = gta4l_emmc_read32(host,
@@ -4197,6 +4235,10 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 				}
 				host->multi_block = count - 1u;
 				host->multi_completed = count;
+				gta4l_emmc_timing_close(host,
+				    &timing_stamp,
+				    &host->timing_data_ticks);
+				data_timed = 1;
 				completed = 1;
 				break;
 			}
@@ -4229,7 +4271,25 @@ gta4l_emmc_read_multi(struct gta4l_emmc_host *host, uint64_t start_lba,
 	}
 
 	host->multi_data_result = result;
+	if (host->timing_capture != 0) {
+		/* Close any unresolved phase before the stop so a failed
+		 * command or data wait cannot be charged to CMD12. */
+		if (command_timed == 0) {
+			gta4l_emmc_timing_close(host, &timing_stamp,
+			    &host->timing_command_ticks);
+		}
+		if (data_timed == 0) {
+			gta4l_emmc_timing_close(host, &timing_stamp,
+			    &host->timing_data_ticks);
+		}
+	}
 	stop_result = gta4l_emmc_send_stop(host);
+	if (host->timing_capture != 0) {
+		gta4l_emmc_timing_close(host, &timing_stamp,
+		    &host->timing_stop_ticks);
+		host->timing_requests++;
+		host->timing_blocks += count;
+	}
 	if ((result == GTA4L_EMMC_OK) && (stop_result != GTA4L_EMMC_OK)) {
 		result = stop_result;
 	}

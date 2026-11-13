@@ -440,8 +440,12 @@ extern "C" {
  * field at its widest (31 u32 fields, two u64 ticks, one i32 status, six
  * two/four-byte hex fields at fixed width and two 32-hex digests). The
  * established base REPORT/DRV/XFER/MEDIA/SNAP/FAIL block is 838, so the
- * worst case is 838 + 746 + newline + NUL = 1,586. */
+ * worst case is 838 + 746 + newline + NUL = 1,586. The SPEEDIO line is
+ * 267 bytes with its two u32 and eight u64 fields at their widest
+ * (23-byte label plus 244 bytes of key, digits and separator spaces), so
+ * the combined S1 report is 1,586 + 267 + newline = 1,854. */
 #define GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES 746u
+#define GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES 267u
 #define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u
 
 /* Start-path failure stages, in execution order. A failure latch keeps the
@@ -1019,6 +1023,21 @@ struct gta4l_emmc_block_report {
 	uint32_t speed_limit;
 	uint32_t speed_segments;
 	uint32_t speed_capacity;
+	/* B8 per-request phase accounting for the same S1 window. Ticks are
+	 * platform-counter deltas at speed_hz. `req`/`blk` match the eight
+	 * two-block requests; `io` is the client call, `bus` the adapter's
+	 * block read, and `core` the CMD18 helper; `inh`/`cmd`/`dat`/`stop`
+	 * are the core phases. `win` is ticks1 + ticks2. */
+	uint32_t speedio_req;
+	uint32_t speedio_blk;
+	uint64_t speedio_inh;
+	uint64_t speedio_cmd;
+	uint64_t speedio_dat;
+	uint64_t speedio_stop;
+	uint64_t speedio_core;
+	uint64_t speedio_bus;
+	uint64_t speedio_io;
+	uint64_t speedio_win;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
