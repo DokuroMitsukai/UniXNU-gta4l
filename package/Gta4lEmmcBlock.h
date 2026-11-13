@@ -496,6 +496,51 @@ extern "C" {
 	GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS)
 #define GTA4L_EMMC_BLOCK_BULK_REPORT_MARGIN_MS 2000u
 
+/* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
+ * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
+ * and ID0, scans every valid SMR for the SDHC stream 0x00c0 and reads the
+ * matching S2CR. It never writes an SMMU register. CLIENTPD=1 or a bypass
+ * S2CR (or no match with USFCFG=0) allows DMA; a fault S2CR (or no match
+ * with USFCFG=1) and a translate S2CR are skip reasons. Register offsets
+ * and fields follow the pinned arm-smmu.h and Mu-Silicium SmmuV2.h. */
+#define GTA4L_EMMC_BLOCK_SMMU_REG_SCR0 0x0000u
+#define GTA4L_EMMC_BLOCK_SMMU_REG_ID0 0x0020u
+#define GTA4L_EMMC_BLOCK_SMMU_REG_SMR(index) \
+	(0x0800u + ((index) << 2))
+#define GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(index) \
+	(0x0c00u + ((index) << 2))
+#define GTA4L_EMMC_BLOCK_SMMU_SCR0_CLIENTPD (1u << 0)
+#define GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG (1u << 10)
+#define GTA4L_EMMC_BLOCK_SMMU_ID0_NUMSMRG_MASK 0xffu
+#define GTA4L_EMMC_BLOCK_SMMU_SMR_VALID (1u << 31)
+#define GTA4L_EMMC_BLOCK_SMMU_SMR_ID_MASK 0xffffu
+#define GTA4L_EMMC_BLOCK_SMMU_SMR_MASK_SHIFT 16
+#define GTA4L_EMMC_BLOCK_SMMU_S2CR_CBNDX_MASK 0xffu
+#define GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT 16
+#define GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_MASK 0x3u
+#define GTA4L_EMMC_BLOCK_SMMU_TYPE_TRANSLATE 0u
+#define GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS 1u
+#define GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT 2u
+#define GTA4L_EMMC_BLOCK_SMMU_STREAM_ID 0x00c0u
+#define GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS 256u
+
+#define GTA4L_EMMC_BLOCK_SMMU_STAGE_NONE 0u
+#define GTA4L_EMMC_BLOCK_SMMU_STAGE_PRE 1u
+#define GTA4L_EMMC_BLOCK_SMMU_STAGE_READ 2u
+#define GTA4L_EMMC_BLOCK_SMMU_STAGE_DONE 3u
+
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE 0u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS 1u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT 2u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE 3u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_MAP_FAIL 4u
+
+/* Formatter-exact bound: the SMMU line is 139 bytes with the stage, the
+ * two 8-hex registers, the stream count and index at ten digits, the SMR
+ * and S2CR at 8 hex, the context bank at ten digits and the nine-character
+ * `translate` decision token. */
+#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 139u
+
 /* Bulk-only failure stages. The stream and window reads share the S1
  * transport; the stage names the first bulk failure, not the S1 start
  * path. */
@@ -520,13 +565,13 @@ extern "C" {
  * six u32 counters at ten digits, the 8-bit Host Control and 16-bit Clock
  * Control at two and four hex digits, Present State at eight, five packed
  * sixteen-digit register pairs and thirteen separators. The S1 worst case
- * is 1,586 bytes; adding the SPEEDIO, BULK, BULKIO and optional BULKFAIL
- * lines keeps the combined report at 2,523 bytes inside the 2,560-byte
- * buffer. */
+ * is 1,586 bytes; adding the SPEEDIO, BULK, BULKIO, SMMU and optional
+ * BULKFAIL lines keeps the combined report at 2,663 bytes inside the
+ * 3,072-byte buffer. The extra space leaves room for the B10.3 DMA line. */
 #define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
 #define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
 #define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 250u
-#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2523u
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2663u
 
 /* Start-path failure stages, in execution order. A failure latch keeps the
  * first stage so a later cleanup failure cannot mask it. */
@@ -558,7 +603,7 @@ extern "C" {
  * reported as a data read failure. */
 #define GTA4L_EMMC_BLOCK_SPEED_STAGE_UNKNOWN 23u
 
-#define GTA4L_EMMC_BLOCK_REPORT_BYTES 2560u
+#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3072u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u
 #define GTA4L_EMMC_BLOCK_QUAL_LBA 2u
@@ -1168,6 +1213,22 @@ struct gta4l_emmc_block_report {
 	uint32_t bulkio_rcg_m;
 	uint32_t bulkio_rcg_n;
 	uint32_t bulkio_rcg_d;
+	/* B10.2 read-only SMMU gate. smmu selects the line; stage is the
+	 * pre/read/done marker, scr0/id0 the global registers, nsmrg the
+	 * ID0 stream count, index/smr the matching entry (index is
+	 * 0xffffffff when none matched), s2cr its value, cb the S2CR
+	 * context bank and decision the bypass/fault/translate/map-fail
+	 * verdict. */
+	uint32_t smmu;
+	uint32_t smmu_stage;
+	uint32_t smmu_scr0;
+	uint32_t smmu_id0;
+	uint32_t smmu_nsmrg;
+	uint32_t smmu_index;
+	uint32_t smmu_smr;
+	uint32_t smmu_s2cr;
+	uint32_t smmu_cb;
+	uint32_t smmu_decision;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;
@@ -1347,6 +1408,14 @@ int gta4l_emmc_block_bulk_select(int token_present, int token_value,
  * are forced off a chunk boundary. The mapping is pure so the host can
  * recompute every offset from the seed printed in the report. */
 int gta4l_emmc_block_bulk_window(uint32_t index, uint64_t *start_block);
+
+/* B10.2 pure gate helpers. `match` applies the SMR VALID bit and the
+ * 16-bit mask to one stream ID; `decide` maps sCR0, the matched S2CR value
+ * and the match flag to one of the SMMU_DECISION_* values. Both are pure
+ * so the host can exercise every decision row without MMIO. */
+int gta4l_emmc_block_smmu_match(uint32_t stream, uint32_t smr);
+uint32_t gta4l_emmc_block_smmu_decide(uint32_t scr0, uint32_t s2cr,
+    int matched);
 
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u

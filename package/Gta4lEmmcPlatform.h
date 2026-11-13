@@ -18,12 +18,14 @@ extern "C" {
 #define GTA4L_EMMC_PLATFORM_SDHCI_BASE 0x04744000u
 #define GTA4L_EMMC_PLATFORM_GCC_BASE   0x01438000u
 #define GTA4L_EMMC_PLATFORM_TLMM_BASE  0x00575000u
+#define GTA4L_EMMC_PLATFORM_SMMU_BASE  0x0c600000u
 #define GTA4L_EMMC_PLATFORM_WINDOW     0x00001000u
 
 struct gta4l_emmc_platform {
 	uintptr_t sdhci;
 	uintptr_t gcc;
 	uintptr_t tlmm;
+	uintptr_t smmu;
 	uint64_t counter_hz;
 };
 
@@ -31,6 +33,13 @@ struct gta4l_emmc_platform {
  * Returns 0 when all three windows mapped, -1 when any mapping is absent;
  * the address fields are zero for the windows that failed. */
 int gta4l_emmc_platform_map(struct gta4l_emmc_platform *platform);
+
+/* Map the SMMU global page separately. The probe and the non-DMA block
+ * paths never call this, so an absent or restricted SMMU cannot fail the
+ * eMMC bring-up; the bulk gate treats a failure as a skip reason. */
+int gta4l_emmc_platform_map_smmu(struct gta4l_emmc_platform *platform);
+uint32_t gta4l_emmc_platform_smmu_read32(
+    const struct gta4l_emmc_platform *platform, uint32_t offset);
 
 uint64_t gta4l_emmc_platform_counter(void);
 uint64_t gta4l_emmc_platform_counter_hz(void);

@@ -10180,6 +10180,51 @@ bulk_fixture(void)
 	gta4l_test_multi_hook = bulk_multi_hook;
 }
 
+static void
+bulk_smmu_fault_fixture(void)
+{
+	bulk_fixture();
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(0) / 4u] =
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT;
+}
+
+static void
+bulk_smmu_translate_fixture(void)
+{
+	bulk_fixture();
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(0) / 4u] =
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_TRANSLATE <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT;
+}
+
+static void
+bulk_smmu_nomatch_fixture(void)
+{
+	bulk_fixture();
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_SMR(0) / 4u] = 0u;
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_SCR0 / 4u] =
+	    GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG;
+}
+
+static void
+bulk_smmu_clientpd_fixture(void)
+{
+	bulk_fixture();
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_SCR0 / 4u] =
+	    GTA4L_EMMC_BLOCK_SMMU_SCR0_CLIENTPD;
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(0) / 4u] =
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT;
+}
+
+static void
+bulk_smmu_map_fail_fixture(void)
+{
+	bulk_fixture();
+	gta4l_test.smmu_map_result = -1;
+}
+
 #define BULK_FAILURE_COMMON(stage) \
 	do { \
 		CHECK(invoke_thread(1) == 1); \
@@ -10209,6 +10254,67 @@ bulk_fixture(void)
 		CHECK(g_self->bulkClient == 0); \
 		CHECK(g_self->bulkReference == 0); \
 	} while (0)
+
+static int
+bulk_smmu_case(void (*fixture)(void), uint32_t decision, const char *token,
+    uint32_t reads)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1",
+	    fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(gta4l_test.panic[0] != 0);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_NONE);
+	CHECK(g_self->report.smmu == 1u);
+	CHECK(g_self->report.smmu_stage ==
+	    GTA4L_EMMC_BLOCK_SMMU_STAGE_DONE);
+	CHECK(g_self->report.smmu_decision == decision);
+	CHECK(gta4l_test.smmu_maps == 1u);
+	CHECK(gta4l_test.smmu_reads == reads);
+	CHECK(strstr(gta4l_test.panic, token) != 0);
+	return 0;
+}
+
+static int
+scenario_bulk_smmu_fault(void)
+{
+	return bulk_smmu_case(bulk_smmu_fault_fixture,
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT, "dec=fault", 4u);
+}
+
+static int
+scenario_bulk_smmu_translate(void)
+{
+	return bulk_smmu_case(bulk_smmu_translate_fixture,
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE,
+	    "dec=translate", 4u);
+}
+
+static int
+scenario_bulk_smmu_nomatch(void)
+{
+	return bulk_smmu_case(bulk_smmu_nomatch_fixture,
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT,
+	    "dec=fault", 3u);
+}
+
+static int
+scenario_bulk_smmu_clientpd(void)
+{
+	return bulk_smmu_case(bulk_smmu_clientpd_fixture,
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS,
+	    "dec=bypass", 4u);
+}
+
+static int
+scenario_bulk_smmu_map_fail(void)
+{
+	return bulk_smmu_case(bulk_smmu_map_fail_fixture,
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_MAP_FAIL,
+	    "dec=map-fail", 0u);
+}
 
 static int
 scenario_bulk_success(void)
@@ -10253,6 +10359,27 @@ scenario_bulk_success(void)
 	CHECK(g_self->report.bulkio_vendor_spec ==
 	    GTA4L_EMMC_VENDOR_SPEC_POR);
 	CHECK(g_self->report.bulkio_rcg_cfg == GTA4L_EMMC_RCG_50M_CFG);
+	CHECK(g_self->report.smmu == 1u);
+	CHECK(g_self->report.smmu_stage ==
+	    GTA4L_EMMC_BLOCK_SMMU_STAGE_DONE);
+	CHECK(g_self->report.smmu_scr0 == 0u);
+	CHECK(g_self->report.smmu_id0 == 1u);
+	CHECK(g_self->report.smmu_nsmrg == 1u);
+	CHECK(g_self->report.smmu_index == 0u);
+	CHECK(g_self->report.smmu_smr ==
+	    (GTA4L_EMMC_BLOCK_SMMU_SMR_VALID |
+	    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID));
+	CHECK(g_self->report.smmu_s2cr ==
+	    (GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT));
+	CHECK(g_self->report.smmu_cb == 0u);
+	CHECK(g_self->report.smmu_decision ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS);
+	CHECK(gta4l_test.smmu_maps == 1u);
+	CHECK(gta4l_test.smmu_reads == 4u);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 SMMU: st=3 scr0=00000000 id0=00000001 "
+	    "n=1 smr=0/800000c0 s2cr=00010000 cb=0 dec=bypass") != 0);
 	CHECK(g_self->report.speed_pub == 1u);
 	CHECK(g_self->report.speed_partdiag == 0u);
 	CHECK(g_self->report.speedio_req ==
@@ -10732,6 +10859,16 @@ scenario_bulk_format_max(void)
 	report.bulkio_rcg_m = 0xffffffffu;
 	report.bulkio_rcg_n = 0xffffffffu;
 	report.bulkio_rcg_d = 0xffffffffu;
+	report.smmu = 1u;
+	report.smmu_stage = 0xffffffffu;
+	report.smmu_scr0 = 0xffffffffu;
+	report.smmu_id0 = 0xffffffffu;
+	report.smmu_nsmrg = 0xffffffffu;
+	report.smmu_index = 0xffffffffu;
+	report.smmu_smr = 0xffffffffu;
+	report.smmu_s2cr = 0xffffffffu;
+	report.smmu_cb = 0xffffffffu;
+	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE;
 	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
 	    &report);
 	CHECK(length != 0u);
@@ -10740,6 +10877,11 @@ scenario_bulk_format_max(void)
 	    GTA4L_EMMC_BLOCK_BULK_LINE_BYTES);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 BULKIO: ") ==
 	    GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 SMMU: ") ==
+	    GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES);
+	CHECK(strstr(buffer, "dec=translate") != 0);
+	CHECK(strstr(buffer,
+	    "smr=4294967295/ffffffff s2cr=ffffffff cb=4294967295") != 0);
 	CHECK(strstr(buffer, " cal=4294967295 ") != 0);
 	CHECK(strstr(buffer, "cap=ffffffffffffffff") != 0);
 	CHECK(strstr(buffer, "dll=ffffffffffffffff") != 0);
@@ -10753,6 +10895,7 @@ scenario_bulk_format_max(void)
 	    GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_BULK_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES + 1u +
+	    GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES + 1u));
 	CHECK(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES <=
 	    GTA4L_EMMC_BLOCK_REPORT_BYTES);
@@ -12128,6 +12271,58 @@ scenario_policy(void)
 			}
 		}
 	}
+	CHECK(gta4l_emmc_block_smmu_match(0x00c0u,
+	    GTA4L_EMMC_BLOCK_SMMU_SMR_VALID |
+	    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID) == 1);
+	CHECK(gta4l_emmc_block_smmu_match(0x00c1u,
+	    GTA4L_EMMC_BLOCK_SMMU_SMR_VALID |
+	    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID) == 0);
+	CHECK(gta4l_emmc_block_smmu_match(0x00c0u,
+	    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID) == 0);
+	CHECK(gta4l_emmc_block_smmu_match(0x00c1u,
+	    GTA4L_EMMC_BLOCK_SMMU_SMR_VALID |
+	    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID | (1u << 16)) == 1);
+	CHECK(gta4l_emmc_block_smmu_match(0x01c0u,
+	    GTA4L_EMMC_BLOCK_SMMU_SMR_VALID |
+	    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID | (1u << 24)) == 1);
+	CHECK(gta4l_emmc_block_smmu_match(0x01c1u,
+	    GTA4L_EMMC_BLOCK_SMMU_SMR_VALID |
+	    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID | (1u << 24)) == 0);
+	CHECK(gta4l_emmc_block_smmu_decide(
+	    GTA4L_EMMC_BLOCK_SMMU_SCR0_CLIENTPD, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS);
+	CHECK(gta4l_emmc_block_smmu_decide(0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS);
+	CHECK(gta4l_emmc_block_smmu_decide(
+	    GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT);
+	CHECK(gta4l_emmc_block_smmu_decide(0,
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT, 1) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS);
+	CHECK(gta4l_emmc_block_smmu_decide(0,
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT, 1) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT);
+	CHECK(gta4l_emmc_block_smmu_decide(0,
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_TRANSLATE <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT, 1) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE);
+	CHECK(gta4l_emmc_block_smmu_decide(
+	    GTA4L_EMMC_BLOCK_SMMU_SCR0_CLIENTPD |
+	    GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG,
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT, 1) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS);
+	CHECK(gta4l_emmc_block_smmu_decide(0,
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT, 0) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS);
+	CHECK(gta4l_emmc_block_smmu_decide(
+	    GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG,
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT, 0) ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT);
 	CHECK(gta4l_emmc_block_consume_validate(0,
 	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES,
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) == 0);
@@ -13488,6 +13683,11 @@ static const struct scenario_entry scenarios[] = {
 	{ "bulk-gate-timeout", scenario_bulk_gate_timeout },
 	{ "bulk-watchdog", scenario_bulk_watchdog },
 	{ "bulk-format-max", scenario_bulk_format_max },
+	{ "bulk-smmu-fault", scenario_bulk_smmu_fault },
+	{ "bulk-smmu-translate", scenario_bulk_smmu_translate },
+	{ "bulk-smmu-nomatch", scenario_bulk_smmu_nomatch },
+	{ "bulk-smmu-clientpd", scenario_bulk_smmu_clientpd },
+	{ "bulk-smmu-map-fail", scenario_bulk_smmu_map_fail },
 	{ "bulk-absent", scenario_bulk_absent },
 	{ "bulk-refused-orphan", scenario_bulk_refused_orphan },
 	{ "bulk-refused-block", scenario_bulk_refused_block },

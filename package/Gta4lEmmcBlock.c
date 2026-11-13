@@ -92,6 +92,9 @@ _Static_assert(GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES <=
 _Static_assert(GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "BULKIO line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "SMMU line must fit the report buffer");
 _Static_assert(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "BULK worst case must fit the report buffer");
@@ -478,6 +481,44 @@ gta4l_emmc_block_bulk_window(uint32_t index, uint64_t *start_block)
 		*start_block += 1u;
 	}
 	return 0;
+}
+
+int
+gta4l_emmc_block_smmu_match(uint32_t stream, uint32_t smr)
+{
+	uint32_t mask;
+
+	if ((smr & GTA4L_EMMC_BLOCK_SMMU_SMR_VALID) == 0u) {
+		return 0;
+	}
+	mask = (smr >> GTA4L_EMMC_BLOCK_SMMU_SMR_MASK_SHIFT) &
+	    GTA4L_EMMC_BLOCK_SMMU_SMR_ID_MASK;
+	return (((stream ^ smr) & ~mask &
+	    GTA4L_EMMC_BLOCK_SMMU_SMR_ID_MASK) == 0u) ? 1 : 0;
+}
+
+uint32_t
+gta4l_emmc_block_smmu_decide(uint32_t scr0, uint32_t s2cr, int matched)
+{
+	uint32_t type;
+
+	if ((scr0 & GTA4L_EMMC_BLOCK_SMMU_SCR0_CLIENTPD) != 0u) {
+		return GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;
+	}
+	if (matched == 0) {
+		return ((scr0 & GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG) != 0u) ?
+		    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT :
+		    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;
+	}
+	type = (s2cr >> GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT) &
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_MASK;
+	if (type == GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS) {
+		return GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;
+	}
+	if (type == GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT) {
+		return GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT;
+	}
+	return GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE;
 }
 
 static struct gta4l_emmc_block_deblock_case gta4l_emmc_block_deblock_cases[] = {
@@ -1863,6 +1904,23 @@ gta4l_emmc_block_put_hex64(struct gta4l_emmc_block_writer *writer,
 	for (shift = digits; shift != 0; shift--) {
 		gta4l_emmc_block_put_char(writer,
 		    hex[(value >> ((shift - 1u) * 4u)) & 0x0fu]);
+	}
+}
+
+static const char *
+gta4l_emmc_block_smmu_decision_name(uint32_t decision)
+{
+	switch (decision) {
+	case GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS:
+		return "bypass";
+	case GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT:
+		return "fault";
+	case GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE:
+		return "translate";
+	case GTA4L_EMMC_BLOCK_SMMU_DECISION_MAP_FAIL:
+		return "map-fail";
+	default:
+		return "none";
 	}
 }
 
@@ -3535,6 +3593,39 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_hex64(&writer,
 		    ((uint64_t)report->bulkio_rcg_d << 32) |
 		    report->bulkio_rcg_n, 16u);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
+
+	if (report->smmu != 0) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 SMMU: ");
+		gta4l_emmc_block_put_key(&writer, "st");
+		gta4l_emmc_block_put_u64(&writer, report->smmu_stage);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "scr0");
+		gta4l_emmc_block_put_hex(&writer, report->smmu_scr0, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "id0");
+		gta4l_emmc_block_put_hex(&writer, report->smmu_id0, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "n");
+		gta4l_emmc_block_put_u64(&writer, report->smmu_nsmrg);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "smr");
+		gta4l_emmc_block_put_u64(&writer, report->smmu_index);
+		gta4l_emmc_block_put_char(&writer, '/');
+		gta4l_emmc_block_put_hex(&writer, report->smmu_smr, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "s2cr");
+		gta4l_emmc_block_put_hex(&writer, report->smmu_s2cr, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "cb");
+		gta4l_emmc_block_put_u64(&writer, report->smmu_cb);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "dec");
+		gta4l_emmc_block_put_string(&writer,
+		    gta4l_emmc_block_smmu_decision_name(
+		    report->smmu_decision));
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 

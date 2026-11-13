@@ -27,6 +27,15 @@ gta4l_test_reset(void)
 	gta4l_test.boot_args = "";
 	gta4l_test.init_result = 0;
 	gta4l_test.capacity_blocks = 61071360u;
+	/* One valid bypass entry for the SDHC stream is the neutral gate
+	 * state; scenarios override the registers for the other rows. */
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_ID0 / 4u] = 1u;
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_SMR(0) / 4u] =
+	    GTA4L_EMMC_BLOCK_SMMU_SMR_VALID |
+	    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID;
+	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(0) / 4u] =
+	    GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS <<
+	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT;
 	gta4l_test.reporter_start_result = 0;
 	gta4l_test.watchdog_start_result = 0;
 	gta4l_test.thread_start_fail_at = -1;
@@ -435,6 +444,34 @@ gta4l_emmc_platform_map(struct gta4l_emmc_platform *platform)
 		platform->counter_hz = 1000000;
 	}
 	return 0;
+}
+
+int
+gta4l_emmc_platform_map_smmu(struct gta4l_emmc_platform *platform)
+{
+	gta4l_test.smmu_maps++;
+	if (gta4l_test.smmu_map_result != 0) {
+		return gta4l_test.smmu_map_result;
+	}
+	if (platform != 0) {
+		platform->smmu = 4;
+	}
+	return 0;
+}
+
+uint32_t
+gta4l_emmc_platform_smmu_read32(
+    const struct gta4l_emmc_platform *platform, uint32_t offset)
+{
+	uint32_t index;
+
+	(void)platform;
+	gta4l_test.smmu_reads++;
+	index = offset >> 2;
+	if (index >= 1024u) {
+		return 0;
+	}
+	return gta4l_test.smmu_regs[index];
 }
 
 uint64_t

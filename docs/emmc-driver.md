@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 443 scenarios with 171 adapter mutations, 3 support mutations and 37 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 448 scenarios with 172 adapter mutations, 3 support mutations and 42 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7389,3 +7389,29 @@ measurement it is conclusive: PIO is MMIO-bound at about 2.4 MB/s and
 cannot cover the full region under the watchdog. The next transport is
 polled 32-bit ADMA2 behind a read-only SMMU gate. Do not boot `cbc0ee1e…`
 again. See `docs/emmc-b8-overhead-decision-2026-11-13.md` §17.
+
+### 5.3.112 B10.2 read-only SMMU gate (2026-11-14)
+
+Host-only B10.2 batch. Bulk mode (`gta4l-emmc-block=3 gta4l-emmc-bulk=1`)
+now maps only the 4 KiB `apps_smmu` GR0 page at `0x0c600000` and reads
+`sCR0`, `ID0`, every valid `SMR` and the matching `S2CR` for the SDHC
+stream `0x00c0` before the BOOT stream. No SMMU register is written.
+
+The gate publishes
+`SMMU: st=<n> scr0=… id0=… n=… smr=<index>/<value> s2cr=… cb=… dec=…`
+and sets `st=pre` before the map, `st=read` before the first register read
+and `st=done` at exit. `CLIENTPD=1`, a bypass `S2CR`, or no match with
+`USFCFG=0` allows DMA; a fault `S2CR` or no match with `USFCFG=1` is a
+skip reason; a translate `S2CR` is a skip with the context bank index. A
+map failure reports `dec=map-fail` and leaves the PIO stream unchanged.
+B10.3 consumes the verdict; B10.2 only reports it.
+
+The report buffer grows from 2,560 to 3,072 bytes because the exact
+139-byte `SMMU:` line does not fit the 37-byte headroom. The bulk worst
+case is 2,663 bytes and still fits the 4,096-byte panic buffer. The host
+suite adds five gate scenarios (fault, translate, no-match/USFCFG,
+CLIENTPD, map-fail) and six mutations (match, decision, USFCFG, CLIENTPD,
+map failure ignored, line dropped). Core passes 214/132, probe 196/100,
+and the block suite 448 scenarios with 172 adapter, 3 support and 42
+policy mutations. Host-only: no candidate, device access, flash or boot;
+the first hardware exercise is the B10.5 DMA image.

@@ -1632,6 +1632,16 @@ ADAPTER_MUTATIONS = [
        '\t}\n'
        '\treleaseBulkMedia();\n')],
      'bulk-revert-fail'),
+    ('smmu-map-fail-ignored',
+     [('\tif (gta4l_emmc_platform_map_smmu(&platform) != 0) {\n'
+       '\t\tdecision = GTA4L_EMMC_BLOCK_SMMU_DECISION_MAP_FAIL;\n'
+       '\t\tgoto done;\n'
+       '\t}\n',
+       '\tif (0) {\n'
+       '\t\tdecision = GTA4L_EMMC_BLOCK_SMMU_DECISION_MAP_FAIL;\n'
+       '\t\tgoto done;\n'
+       '\t}\n')],
+     'bulk-smmu-map-fail'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2026,6 +2036,47 @@ POLICY_MUTATIONS = [
        '\tif ((report->consume == 0) && (report->width == 0) &&\n'
        '\t    (report->widthhold == 0)) {\n')],
      'speed-match-8bit'),
+    ('smmu-decision-inverted',
+     [('\tif (type == GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;\n'
+       '\t}\n'
+       '\tif (type == GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT;\n'
+       '\t}\n',
+       '\tif (type == GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT;\n'
+       '\t}\n'
+       '\tif (type == GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;\n'
+       '\t}\n')],
+     'bulk-smmu-fault'),
+    ('smmu-match-inverted',
+     [('\treturn (((stream ^ smr) & ~mask &\n'
+       '\t    GTA4L_EMMC_BLOCK_SMMU_SMR_ID_MASK) == 0u) ? 1 : 0;\n',
+       '\treturn (((stream ^ smr) & ~mask &\n'
+       '\t    GTA4L_EMMC_BLOCK_SMMU_SMR_ID_MASK) == 0u) ? 0 : 1;\n')],
+     'bulk-smmu-fault'),
+    ('smmu-usfcfg-inverted',
+     [('\t\treturn ((scr0 & GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG) != 0u) ?\n'
+       '\t\t    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT :\n'
+       '\t\t    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;\n',
+       '\t\treturn ((scr0 & GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG) != 0u) ?\n'
+       '\t\t    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS :\n'
+       '\t\t    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT;\n')],
+     'bulk-smmu-nomatch'),
+    ('smmu-clientpd-inverted',
+     [('\tif ((scr0 & GTA4L_EMMC_BLOCK_SMMU_SCR0_CLIENTPD) != 0u) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;\n'
+       '\t}\n',
+       '\tif ((scr0 & GTA4L_EMMC_BLOCK_SMMU_SCR0_CLIENTPD) != 0u) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT;\n'
+       '\t}\n')],
+     'bulk-smmu-clientpd'),
+    ('smmu-formatter-line-dropped',
+     [('\t\tgta4l_emmc_block_put_string(&writer,\n'
+       '\t\t    "GTA4L-EMMC P5 SMMU: ");\n',
+       '')],
+     'bulk-success'),
 ]
 
 
@@ -2233,7 +2284,7 @@ def check_adapter_source():
         'widthhold mode must suppress the legacy PART lines'
     assert '(report->widthhold == 0)' in policy, \
         'widthhold mode must suppress the legacy READ/QUAL lines'
-    assert '#define GTA4L_EMMC_BLOCK_REPORT_BYTES 2560u' in policy_header, \
+    assert '#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3072u' in policy_header, \
         'widthhold report must raise the report buffer to 2,560 bytes'
     assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES <=' in policy, \
         'widthhold summary must stay inside the report buffer'
@@ -2370,10 +2421,27 @@ def check_adapter_source():
         policy_header, 'the BULKFAIL formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 250u' in \
         policy_header, 'the BULKIO formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2523u' in \
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2663u' in \
         policy_header, 'the BULK report bound must match the base block'
     assert 'GTA4L-EMMC P5 BULKIO: ' in policy, \
         'bulk mode must emit the S2.1 data-phase and register line'
+    assert '#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 139u' in \
+        policy_header, 'the SMMU formatter bound must stay exact'
+    assert 'GTA4L-EMMC P5 SMMU: ' in policy, \
+        'bulk mode must emit the read-only SMMU state line'
+    assert 'gta4l_emmc_block_smmu_match' in policy and \
+        'gta4l_emmc_block_smmu_decide' in policy, \
+        'the SMMU match and decision matrix must live in the policy'
+    assert 'gta4l_emmc_platform_map_smmu' in adapter and \
+        'gta4l_emmc_platform_smmu_read32' in adapter, \
+        'the gate must map and read only the SMMU global page'
+    assert 'GTA4L_EMMC_BLOCK_SMMU_STAGE_PRE' in adapter, \
+        'the gate must set the pre-access marker'
+    assert 'report.smmu_decision = decision;' in adapter, \
+        'the gate must publish its decision'
+    assert adapter.index('(void)runSmmuGate();') < \
+        adapter.index('for (chunk = 0;'), \
+        'the SMMU gate must run before the BOOT stream'
     assert 'gta4l_emmc_capture_diag_regs(&host);' in adapter, \
         'bulk mode must snapshot the link registers before the stream'
     assert 'report.bulkio_brr = (uint32_t)host.timing_brr_wait_ticks;' in \
@@ -2799,8 +2867,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 444, f'expected 444 adapter PASS lines, got {passes}'
-        print('PASS adapter: 444 scenarios against the host IOKit seam')
+        assert passes == 449, f'expected 449 adapter PASS lines, got {passes}'
+        print('PASS adapter: 449 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

@@ -778,6 +778,7 @@ private:
 	void speedFatal(uint32_t stage, int32_t status);
 	void runSpeed(void);
 	bool runBulk(void);
+	bool runSmmuGate(void);
 	void releaseBulkMedia(void);
 	bool bulkRead(IOMedia *boot, uint64_t firstBlock,
 	    uint64_t byteOffset, uint32_t length, uint32_t blocks,
@@ -9342,6 +9343,86 @@ Gta4lEmmcBlock::bulkRead(IOMedia *boot, uint64_t firstBlock,
 }
 
 bool
+Gta4lEmmcBlock::runSmmuGate()
+{
+	uint32_t scr0 = 0;
+	uint32_t id0 = 0;
+	uint32_t nsmrg = 0;
+	uint32_t index = 0;
+	uint32_t smr = 0;
+	uint32_t s2cr = 0;
+	uint32_t cb = 0;
+	uint32_t decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
+	bool matched = false;
+
+	IOLockLock(reportLock);
+	report.smmu = 1u;
+	report.smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_PRE;
+	report.smmu_scr0 = 0;
+	report.smmu_id0 = 0;
+	report.smmu_nsmrg = 0;
+	report.smmu_index = 0xffffffffu;
+	report.smmu_smr = 0;
+	report.smmu_s2cr = 0;
+	report.smmu_cb = 0;
+	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
+	IOLockUnlock(reportLock);
+	/* Visible before the first SMMU access so an abort on the global
+	 * page is identifiable from the boot log/panic context; the line
+	 * below still carries the full register state when the read works. */
+	IOLog("GTA4L-EMMC P5 SMMU: stage=pre\n");
+
+	if (gta4l_emmc_platform_map_smmu(&platform) != 0) {
+		decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_MAP_FAIL;
+		goto done;
+	}
+
+	IOLockLock(reportLock);
+	report.smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_READ;
+	IOLockUnlock(reportLock);
+	scr0 = gta4l_emmc_platform_smmu_read32(&platform,
+	    GTA4L_EMMC_BLOCK_SMMU_REG_SCR0);
+	id0 = gta4l_emmc_platform_smmu_read32(&platform,
+	    GTA4L_EMMC_BLOCK_SMMU_REG_ID0);
+	nsmrg = id0 & GTA4L_EMMC_BLOCK_SMMU_ID0_NUMSMRG_MASK;
+	if (nsmrg > GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS) {
+		nsmrg = GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS;
+	}
+	for (index = 0; index < nsmrg; index++) {
+		smr = gta4l_emmc_platform_smmu_read32(&platform,
+		    GTA4L_EMMC_BLOCK_SMMU_REG_SMR(index));
+		if (gta4l_emmc_block_smmu_match(
+		    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID, smr) != 0) {
+			matched = true;
+			break;
+		}
+	}
+	if (matched) {
+		s2cr = gta4l_emmc_platform_smmu_read32(&platform,
+		    GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(index));
+		cb = s2cr & GTA4L_EMMC_BLOCK_SMMU_S2CR_CBNDX_MASK;
+	} else {
+		index = 0xffffffffu;
+	}
+	decision = gta4l_emmc_block_smmu_decide(scr0, s2cr,
+	    matched ? 1 : 0);
+
+done:
+	IOLockLock(reportLock);
+	report.smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_DONE;
+	report.smmu_scr0 = scr0;
+	report.smmu_id0 = id0;
+	report.smmu_nsmrg = nsmrg;
+	report.smmu_index = index;
+	report.smmu_smr = smr;
+	report.smmu_s2cr = s2cr;
+	report.smmu_cb = cb;
+	report.smmu_decision = decision;
+	IOLockUnlock(reportLock);
+	return decision == GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;
+}
+
+bool
 Gta4lEmmcBlock::runBulk()
 {
 	struct gta4l_emmc_bulk_result result;
@@ -9452,7 +9533,21 @@ Gta4lEmmcBlock::runBulk()
 	report.bulk_ticks = 0u;
 	report.bulk_hz = gta4l_emmc_platform_counter_hz();
 	bzero(report.bulk_digest, sizeof(report.bulk_digest));
+	report.smmu = 0u;
+	report.smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_NONE;
+	report.smmu_scr0 = 0u;
+	report.smmu_id0 = 0u;
+	report.smmu_nsmrg = 0u;
+	report.smmu_index = 0xffffffffu;
+	report.smmu_smr = 0u;
+	report.smmu_s2cr = 0u;
+	report.smmu_cb = 0u;
+	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
 	IOLockUnlock(reportLock);
+	/* B10.2: the read-only SMMU state gate runs before any DMA or card
+	 * stream work. B10.2 only reports the verdict; B10.3 consumes the
+	 * return value to skip DMA on fault/translate/map-fail. */
+	(void)runSmmuGate();
 	speedTimingActive = false;
 	speedCoreTicks = 0;
 	speedBusTicks = 0;
@@ -10507,6 +10602,16 @@ Gta4lEmmcBlock::runReport()
 	    sizeof(report.widthhold_fail_digest));
 	report.speed = (speedMode || bulkMode) ? 1u : 0u;
 	report.bulk = bulkMode ? 1u : 0u;
+	report.smmu = 0u;
+	report.smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_NONE;
+	report.smmu_scr0 = 0u;
+	report.smmu_id0 = 0u;
+	report.smmu_nsmrg = 0u;
+	report.smmu_index = 0xffffffffu;
+	report.smmu_smr = 0u;
+	report.smmu_s2cr = 0u;
+	report.smmu_cb = 0u;
+	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
 	report.bulk_region = GTA4L_EMMC_BLOCK_BULK_REGION_BYTES;
 	report.bulk_chunks = 0u;
 	report.bulk_bytes = 0u;

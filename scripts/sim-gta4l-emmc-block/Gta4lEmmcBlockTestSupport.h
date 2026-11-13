@@ -459,6 +459,10 @@ struct gta4l_test_state {
 	int thread_start_fail_result;
 	int lock_alloc_fail;
 	uint32_t platform_maps;
+	uint32_t smmu_maps;
+	uint32_t smmu_reads;
+	int smmu_map_result;
+	uint32_t smmu_regs[1024];
 	uint32_t init_calls;
 	uint32_t read_calls;
 	int fail_read_at;

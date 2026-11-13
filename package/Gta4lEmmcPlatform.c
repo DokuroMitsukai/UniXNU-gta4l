@@ -32,6 +32,27 @@ gta4l_emmc_platform_map(struct gta4l_emmc_platform *platform)
 	return 0;
 }
 
+int
+gta4l_emmc_platform_map_smmu(struct gta4l_emmc_platform *platform)
+{
+	if (platform == 0) {
+		return -1;
+	}
+	if (platform->smmu == 0) {
+		platform->smmu = (uintptr_t)ml_io_map(
+		    GTA4L_EMMC_PLATFORM_SMMU_BASE,
+		    GTA4L_EMMC_PLATFORM_WINDOW);
+	}
+	return (platform->smmu == 0) ? -1 : 0;
+}
+
+uint32_t
+gta4l_emmc_platform_smmu_read32(
+    const struct gta4l_emmc_platform *platform, uint32_t offset)
+{
+	return *(volatile uint32_t *)(platform->smmu + offset);
+}
+
 uint64_t
 gta4l_emmc_platform_counter(void)
 {
