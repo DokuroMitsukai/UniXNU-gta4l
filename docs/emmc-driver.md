@@ -7470,8 +7470,52 @@ v5 baseline.
 Evidence:
 `out/gta4l/ram-root-emmc-b10.3-dma-candidate-evidence/` (kernel, audit
 log, archive, build report, payload, image, gate JSON). The first DMA flash
-is **not authorized** yet: it needs an owner "go" naming the image SHA-256
-above. Risk: the controller becomes a bus master for the first time, the
-SMMU gate is read-only, card writes stay disabled, one owner boot; worst
-case is a panic or hang with eMMC contents unaffected. BOOT-only write,
-protected partitions and the full p69 backup rule still apply.
+was authorized by the owner's "go" naming the image SHA-256 above and run
+BOOT-only on 2026-11-14; the boot result is §5.3.115. Risk statement
+correction: the controller becomes a bus master for the first time, the
+SMMU gate is read-only, and card writes stay disabled, but the worst case
+is not limited to a panic or hang. First-time DMA can corrupt RAM; disabled
+card writes reduce storage risk but are not an absolute guarantee for eMMC
+contents. BOOT-only write, protected partitions and the full p69 backup
+rule still apply.
+
+### 5.3.115 B10.5 owner boot: SMMU translate skip (2026-11-14)
+
+One owner cold boot of `a1e26c34…`. The SMMU gate completed without an
+abort and reported `scr0=00250406 id0=4c017e32 n=50 smr=0/800000c0
+s2cr=00000000 cb=0 dec=translate`: stream `0xc0` matches SMR(0) exactly
+(ID `0xc0`, mask 0) and is routed to context bank 0 for translation. DMA
+was therefore skipped (`DMA … cmp=0/0 chunks=0 bytes=0 … skip=1`); **no DMA
+transfer was issued and DMA remains unqualified.** PIO ran unchanged,
+read 9,797,632 bytes in 4.009 s (2.44 MB/s; BRR 0.133 s, drain 3.093 s,
+SHA 0.745 s) and took the controlled `BULKFAIL stage=6 budget=1` exit.
+The verified prefix digest `62ddc953…` matches the first 9,797,632 bytes of
+the flashed image. Speed revert to 1-bit/400 kHz was verified and card
+writes stayed disabled. The panic site `Gta4lEmmcBlock.cpp:10579` is the
+intentional report panic.
+
+`ID0` reports `S1TS=1, S2TS=0, NTS=0` with 50 stream groups. A physical
+MMU-500 implements both stages, so this is evidence of a
+hypervisor-virtualized SMMU for the HLOS that keeps stage 2 to itself. The
+mainline Qualcomm bypass quirk (`arm-smmu-qcom.c:489-515`) probably applies,
+and the hypervisor's stage-2 mapping for SDCC1 is not visible here. SCTLR
+and CBAR of context bank 0 were not read in this rung; whether the matched
+bank is a firmware page table or an identity (translation-off) bank decides
+the next step. Reading them read-only, and running DMA only if the bank is
+provably identity, is B10.7. No SMMU register was written.
+
+Post-boot read-only TWRP re-measure: p69 full `2deff433…`, prefix
+`a1e26c34…`, tail `a28b4ea2…`; RECOVERY `14e11370…`, EFS `51fa824c…`,
+sec_efs `3a265d58…`; battery 99%. All unchanged from the post-flash record.
+Evidence: `out/gta4l/ram-root-emmc-b10.5-dma-hardware-evidence/`
+(report raw/normalized/joins, transcription notes, post-boot re-measure,
+flash record with the boot object, backups). The transcript has the same
+`Gta41` typo, the 15-digit `BULKIO rcg=` and the lost `chunks=299window=0`
+space as S2.2; the normalizer joined 11 lines with zero warnings.
+
+The untracked flash helper `out/gta4l/tools/flash-boot.sh` had a real tail
+check bug: `hash_range()` passed `dd count=0`, hashing zero bytes and
+making the pre/post tail comparison vacuous. It was fixed before this
+flash to omit `count` when zero, so preflight and postflight hashed the
+real 14,974,976-byte tail. The fix is outside the tracked tree and is
+recorded here and in the evidence `verification.txt`.
