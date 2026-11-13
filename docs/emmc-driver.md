@@ -6996,3 +6996,61 @@ with 38 mutation controls, 419 adapter scenarios (420 PASS lines), 157
 adapter, 3 support and 37 policy mutation controls, including all
 report-thread and formatter controls. Host-only; no candidate, device access,
 flash or boot.
+
+### 5.3.103 S1 speed hardware PASS (2026-11-13)
+
+Follow-up to §5.3.102 and the S1 rung record
+`docs/emmc-s1-speed-design-2026-11-12.md` §8.6–§11. This batch builds the
+first S1 candidate, flashes BOOT only and records the run. It adds no driver
+code: the candidate is the committed tree at `5d82708`.
+
+Candidate. Native kernel, storage-ABI audit of *that* kernel, then archive
+reconciliation to a fixpoint. The ABI chain needed four relinks
+(`9abaefdb` → `3882e089` → `25a48026` → `fbf14156` → `a2fdd945`) before the
+candidate and the block archive agreed; the final archive `03e581e5…` was
+requalified against the final kernel and packaged. Kernel `a2fdd945…`,
+payload `d8967f74…` with the `emmc-block-3-speed` personality and the
+`fs-timer-hold` fixture, BOOT image `805a5b66…` (85,688,320 bytes) passing
+17/17 `check-gta4l-boot-image.py` checks against the v5 baseline
+`ce4d76e8…`, report digest source `19b66b41…` (first 4,096 bytes).
+
+Flash. BOOT only, `mmcblk0p69` (100,663,296 bytes), TWRP 3.7.1, battery 100%,
+adb state `recovery`. Preflight matched the protected baseline
+(`7e209188…` full, `d737414c…` partition-end last 1 KiB, RECOVERY/EFS/sec_efs
+`14e11370…`/`51fa824c…`/`3a265d58…`); the postflight read `5342e715…` full
+with the image prefix and unchanged tail, last 1 KiB and protected
+partitions.
+
+Run. One owner boot, zero pre-identification stops. The report reached the
+intentional terminal stop at `Gta4lEmmcBlock.cpp:9070` with `rc=0 stop=0
+mode=3` and every S1 predicate term: `hs=1 hsrb=0 hsa=1 rcg=0000020b
+hispd=00 wtry=8 wfall=0 wroll=0 wid=8 verified=1 hb=00 ha=20 cmd6=1 base=1
+bytes1=bytes2=4096 req=8 fails=0 cancel=0 budget=0 partial=0 pub=1
+partdiag=0 revert=1 rverified=1 rhb=20 rha=00 rcmd6=2 rstatus=0 hsrevert=1
+hsverified=1 rhsb=1 rhs=0 rclk=400000 limit=64 seg=1 cap=61071360` and
+`dig1=dig2=19b66b41…` equal to the host digest. `MEDIA` reports `whole=1
+base=0 size=31268536320 content=GUID_partition_scheme writable=0`; `XFER`
+reports `cfail=0 sfail=0`; `SNAP locked=1`; `FAIL valid=0`. The checker
+passes against the exact image and rejects the uncorrected transcription
+and a one-character digest mutation. A read-only post-boot re-measure
+matched the post-flash values, so the boot did not write BOOT.
+
+Timing. `hz=19200000`; pass 1 = 55,912 ticks = 2.912 ms, pass 2 = 46,348
+ticks = 2.414 ms for 4,096 bytes (1.41 and 1.70 MB/s). The 8-bit / 50 MHz
+wire time for 4 KiB is 81.9 µs, so about 96.6% of the measured pass is
+per-request overhead: four 1 KiB requests, each a CMD18 plus CMD12 over
+two-block PIO chunks, at about 0.60–0.73 ms per request. A 1-bit / 400 kHz
+bus needs at least 81.9 ms for the same bytes. At the measured rate the
+85,688,320-byte BOOT region would need about 50 s, so S2 cannot stream it
+inside the 30,000 ms watchdog until the per-request cost drops.
+
+Limits. The result qualifies the first 4 KiB of BOOT on one boot at 8-bit /
+50 MHz, `HISPD` clear, with a verified revert. It does not qualify
+sustained or arbitrary I/O, throughput beyond the two passes, writes,
+persistence, DMA, interrupts, CQE, HS200/HS400, a filesystem, a mount,
+repeatability, initialization reliability, the electrical timing margin,
+pad or DLL state, or lifetime fast mode. The cold/warm class and boot
+ordinal were not recorded. The S1 image must not be booted again; its boot
+budget is consumed and the protected baseline must be refreshed to
+`5342e715…` before the next flash. Next rung: S2 `bulk`, starting with a
+per-request breakdown and a transport-shape decision.

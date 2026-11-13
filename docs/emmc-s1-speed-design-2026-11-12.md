@@ -1,15 +1,17 @@
 # gta4l S1 speed design and record (2026-11-12)
 
-Status: start path, report thread and formatter implemented, host-only. The
-combined width/timing revert helper and the S1 block-driver selector exist
-and are host-tested; the S1 start path, report thread, formatter and speed
-diagnostic personality are in the current host batch. No candidate has
-been built, flashed or booted. The start-path budget is fixed at 25,000 ms
-and the combined revert budget at 9,500 ms (worst pre-watchdog path
-34,500 ms). This document is the rung record for S1: the
-design sections below are corrected after the 2026-11-12 audit; the
-candidate, run and verdict sections are appended after the implementation
-batch and the owner boot.
+Status: **hardware PASS on one owner boot (2026-11-13)**. The candidate was
+built from committed tree `5d82708`, flashed to BOOT only and booted once.
+The driver entered HS timing at the 50 MHz RCG row, switched to 8-bit on the
+first attempt, read the bounded 4 KiB window through the published BOOT
+partition in two passes with both digests equal to the host digest of the
+final image, and reverted to 1-bit / legacy timing / 400 kHz with a verified
+revert. §8.6 records the candidate, §9 the run and §10 the verdict. The
+start-path budget is fixed at 25,000 ms and the combined revert budget at
+9,500 ms (worst pre-watchdog path 34,500 ms). This document is the rung
+record for S1: the design sections below are corrected after the 2026-11-12
+audit; the candidate, run and verdict sections are appended after the
+implementation batch and the owner boot.
 
 Risk class R1: a new combination of measured modes (HS timing plus a wider
 bus) with reference support and a verified pre-report revert. Standing owner
@@ -302,24 +304,38 @@ reads and two clock/CMD operations. Neither bound was supportable.
 
 ## 7. Open items
 
+Status 2026-11-13: the first six items are closed by the B6 candidate (§8.6)
+and the run (§9). The last two remain the scope limits and are carried into
+§10 and §11.
+
 - The S1 start path, report thread, formatter, selector and the
   `emmc-block-3-speed` diagnostic personality are implemented and covered by
   the host report-thread batch recorded in §8.5. Do not flash until every
-  host gate passes.
+  host gate passes. **Closed:** every B5 gate passed on the committed tree
+  before the candidate was built (§8.6).
 - The combined width/timing revert helper exists and passes the core
   scenarios. Its S1 budget is enforced by a shared 9,500 ms deadline and the
   report-thread worst case is statically tied to the 30,000 ms watchdog with
-  a 2,000 ms margin.
+  a 2,000 ms margin. **Closed:** the boot used 9,500 ms at most and the
+  revert verified (§9).
 - The speed archive compiles with the kernel toolchain and the consumer probe
   still imports exactly 187 symbols, but archive generation refuses the stale
   storage-ABI audit (`candidate does not match kernel.macho`). B6 rebuilds
   the candidate and re-audits it before any archive or boot image is used.
+  **Closed:** the candidate reached the ABI fixpoint at
+  `storage-abi-a2fdd9452ea5` and the archive was requalified against that
+  kernel.
 - `HISPD` remains unset in the primary image; S1b is the fallback.
+  **Closed:** `hispd=00` and the window passed at 8-bit, so S1b is not
+  triggered.
 - The 8-bit / 50 MHz timing margin, pad state and DLL state are unmeasured
-  until the boot.
+  until the boot. **Closed as far as S1 claims:** the boot measured correct
+  content at 8-bit / 50 MHz, but the electrical margin, pad and DLL state
+  remain unmeasured and stay unqualified.
 - A PASS only qualifies the first 4 KiB of the BOOT image on that boot.
+  **Remains:** see §10.
 - Sustained throughput is S2 and needs a transport or deadline change; it
-  is not part of S1.
+  is not part of S1. **Remains:** §9 measures the overhead that sizes S2.
 
 ## 8. Host helper and selector batches
 
@@ -470,3 +486,137 @@ and reconciles the archive; no archive from this batch is used for a boot.
 The block suite result for this batch is recorded with the B5 gates in
 `docs/emmc-driver.md` §5.3.102 and `porting.toml`. All work in this
 subsection is host-only: no candidate build, flash, device access or boot.
+
+### 8.6 S1 candidate (2026-11-13)
+
+Built from the committed tree at `5d82708`; the working tree was clean at
+packaging and flash time. The native kernel was built without the block
+archive first, audited, then relinked against the new storage-ABI directory
+until the candidate and the archive import check reached a fixpoint.
+
+| Input | Value |
+| --- | --- |
+| Source commit | `5d82708` |
+| Candidate kernel | `a2fdd9452ea535be1179c8f9c6a7b4da91f81d7aab5ea841d213c381c6fe12a0` |
+| Storage-ABI artifacts | `storage-abi-a2fdd9452ea5` (`test-gta4l-storage-abi.py` PASS) |
+| Block archive | `03e581e5f5a014fb51249c985b277bf21d708be81e192ee921f7857b93a184d2`, requalified against the final kernel |
+| Diagnostic | `emmc-block-3-speed`, `gta4l-emmc-block=3 gta4l-emmc-speed=1` |
+| Data ramdisk | `fs-timer-hold` fixture, 57,344 bytes, `327ac826…`, owner trust cache |
+| Payload | `d8967f74884e98ba5896b53f99922e8736535b102fa1b28abcd92f4aa8cad0c9` (83,886,080 bytes) |
+| BOOT image | `805a5b66312a8fbc69864c472fabd0c4c3b3edc26831a33187c1e33bacb63fba` (85,688,320 bytes) |
+| BOOT gate | PASS, 17/17 `check-gta4l-boot-image.py` checks against the v5 baseline `ce4d76e8…`, payload bound by `--expected-ramdisk-sha256` |
+| Report digest source | first 4,096 bytes of the final image, `19b66b41401e75a6e561f11ecc8a5071e1713b09f81bd7833f89629438487f21` |
+
+The ABI chain needed four relinks (`9abaefdb` → `3882e089` → `25a48026` →
+`fbf14156` → `a2fdd945`) because the block archive's imported symbol set and
+the kernel's exported set moved together. The archive was rebuilt once more
+against the final kernel and its sha256 did not change, so the packaged
+payload used the qualified archive. The payload contract passed 91 checks,
+including `speed_requires_block_three` and the speed conflicts with the
+other instruments.
+
+## 9. Run (2026-11-13)
+
+Flash. BOOT only, `mmcblk0p69` on a 100,663,296-byte partition. TWRP
+3.7.1, battery 100%, adb state `recovery`. The read-only preflight
+matched the protected baseline: BOOT full `7e209188…`, partition-end last
+1 KiB `d737414c…`, RECOVERY `14e11370…`, EFS `51fa824c…`, sec_efs
+`3a265d58…`. The write covered 20,920 blocks; the postflight read
+`5342e715…` for the full partition with the image prefix `805a5b66…`, the
+same tail and last 1 KiB, and unchanged protected partitions. Record:
+`flash-record.json` (`result=pass`) in the gitignored evidence directory.
+
+Boot accounting. One boot, zero pre-identification stops. The owner booted
+once and returned to TWRP after the report panic; the cold/warm class and
+the boot ordinal were not recorded.
+
+Report (owner transcription, normalized at 66 columns, then two
+owner-confirmed character fixes: `hswerified`→`hsverified` and `Gta41`→
+`Gta4l`; no value was repaired by the normalizer):
+
+| Line | Values |
+| --- | --- |
+| REPORT | `rc=0 stop=0 mode=3 blocks=61071360 bs=512 bytes=31268536320 wid=0 tim=0 clk=400000` |
+| DRV | `online=1 wp=1 reads=17 blocks=45 fails=0 max=8` |
+| XFER | `req=45 c17=7 c18=19 c18b=38 cfail=0 stops=19 sfail=0 last_stop=0` |
+| MEDIA | `whole=1 base=0 size=31268536320 content=GUID_partition_scheme writable=0` |
+| SPEED | `hs=1 hsrb=0 hsa=1 rcg=0000020b hispd=00 wtry=8 wfall=0 wroll=0 wid=8 verified=1 hb=00 ha=20 cmd6=1 base=1 bytes1=4096 ticks1=55912 hz=19200000 dig1=19b66b41401e75a6e561f11ecc8a5071 bytes2=4096 ticks2=46348 dig2=19b66b41401e75a6e561f11ecc8a5071 req=8 fails=0 cancel=0 budget=0 partial=0 pub=1 partdiag=0 revert=1 rverified=1 rhb=20 rha=00 rcmd6=2 rstatus=0 hsrevert=1 hsverified=1 rhsb=1 rhs=0 rclk=400000 limit=64 seg=1 cap=61071360` |
+| SNAP | `locked=1` |
+| FAIL | `valid=0 stage=0 code=0 block=0 error=0 @Gta4lEmmcBlock.cpp:9070` |
+
+Every §3.5 term holds. `ha=20` is exactly the 8-bit host bit, `hb=00` and
+`rha=00` carry no width bits, `rhb=20` still reports the wide width at the
+revert, and `rclk=400000` with `wid=0 tim=0` is the reverted controller.
+The panic site is the intentional terminal report stop, not a fault.
+
+Host checks. `check-gta4l-speed-evidence.py --image
+<final BOOT image> --report <corrected normalized report>` passes and
+reports `SPEED digest and fields match 19b66b41…`. The same checker rejects
+the uncorrected transcript (`missing fields hsverified`) and a
+one-character `dig2` mutation (`dig1 and dig2 disagree`). The raw transcript,
+the normalizer join log (4 joins, 0 warnings) and the correction note are in
+the gitignored evidence directory.
+
+Post-boot re-measure (read-only). The partition still reads
+`5342e715…`, the image prefix `805a5b66…`, the tail `ad7facb2…`, the
+partition-end last 1 KiB `d737414c…`; RECOVERY, EFS and sec_efs are
+unchanged; battery 100%. The boot did not write BOOT.
+
+Measured transfer. `hz=19200000` is the 19.2 MHz XO counter. Pass 1 is
+55,912 ticks = **2.912 ms** for 4,096 bytes (1.41 MB/s); pass 2 is 46,348
+ticks = **2.414 ms** (1.70 MB/s). The pass-1/pass-2 difference is consistent
+with cold-path cost, not a data error, because both digests match the host.
+
+| Configuration | Time for 4 KiB | Ratio |
+| --- | ---: | ---: |
+| 1-bit SDR, 400 kHz (bound, no measured sample) | ≥ 81.9 ms | ≥ 28× slower |
+| 8-bit SDR, 50 MHz (wire time only) | 81.9 µs | 0.029× |
+| **measured pass 2** | **2.414 ms** | 1× |
+
+The wire occupies 3.4% of the measured pass time, so about 96.6% is
+per-request overhead: four 1 KiB requests per pass, each a CMD18 plus a
+CMD12 stop over two-block PIO chunks and the IOKit request path. The
+measured cost is about 0.60–0.73 ms per 1 KiB request.
+
+Consequence for S2. At 0.6 ms per KiB, the 85,688,320-byte BOOT region
+needs about 50 s, which cannot fit a report thread under the 30 s watchdog.
+S2 must reduce per-request overhead before it can stream the region; until
+then it reports a verified prefix.
+
+## 10. Verdict
+
+Result: **PASS**.
+
+Qualified claim. On one owner boot of the image `805a5b66…`, the block
+driver entered HS timing at the 50 MHz RCG row, switched the card and host
+to 8-bit on the first attempt with read-only EXT_CSD verification, read the
+first 4 KiB of the published BOOT partition through the partition IOMedia
+in two passes of four two-block requests with zero failures, cancellation,
+budget expiry or partial transfers, reproduced the host digest of the final
+image in both passes, and reverted to 1-bit / legacy timing / 400 kHz with
+the card and host verified. `HISPD` stayed clear and the 1-bit baseline
+read passed.
+
+Not qualified. Sustained or arbitrary I/O, any throughput claim beyond the
+two 4 KiB passes, the full BOOT region, writes, persistence, DMA,
+interrupts, CQE, HS200/HS400, a filesystem, a mount, initialization
+reliability, repeatability (one boot), the electrical timing margin, pad
+state and DLL state, and lifetime fast mode (S3). The absolute 1-bit
+reference time in §9 is a wire-time bound, not a sample.
+
+Failure class: none.
+
+## 11. Follow-up
+
+1. S2 (`bulk`) with the S1 numbers as the baseline. Add a per-request
+   breakdown (command issue, data poll, CMD12, IOKit round trip) before
+   changing the transport shape, then decide between a larger
+   `GTA4L_EMMC_BLOCK_CHUNK_BLOCKS`, a larger advertised `limit`, or both.
+   Re-derive the in-flight term and the report-thread sum from source and
+   add the `static_assert` against the watchdog.
+2. Keep the verified pre-report revert and every S1 success field in the S2
+   image so S1 coverage is re-asserted on every boot.
+3. Refresh the protected baseline to the post-flash BOOT state before the
+   next flash; the pre-flash value `7e209188…` is superseded by `5342e715…`.
+4. Do not boot the S1 image again: its verdict is recorded and the boot
+   budget is consumed.
