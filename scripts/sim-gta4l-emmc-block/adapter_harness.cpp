@@ -10442,6 +10442,81 @@ scenario_dma_short(void)
 }
 
 static int
+scenario_dma_canary(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.adma_canary_byte = 1;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA);
+	CHECK(g_self->report.dma_stage ==
+	    GTA4L_EMMC_BLOCK_DMA_STAGE_COMPARE);
+	CHECK(g_self->report.dma_fails == 1u);
+	CHECK(g_self->report.dma_cmp_pass == 0u);
+	CHECK(gta4l_test.speed_recover_calls == 1u);
+	return 0;
+}
+
+static int
+scenario_dma_poison_untouched(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.adma_partial_blocks = 1;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA);
+	CHECK(g_self->report.dma_stage ==
+	    GTA4L_EMMC_BLOCK_DMA_STAGE_COMPARE);
+	CHECK(g_self->report.dma_fails == 1u);
+	CHECK(gta4l_test.speed_recover_calls == 1u);
+	return 0;
+}
+
+static int
+scenario_dma_data_timeout(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.adma_status_override = GTA4L_EMMC_ERR_DATA_TIMEOUT;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA);
+	CHECK(g_self->report.dma_stage ==
+	    GTA4L_EMMC_BLOCK_DMA_STAGE_READ);
+	CHECK(g_self->report.dma_fails == 1u);
+	CHECK(g_self->report.dma_ast == 0u);
+	CHECK(gta4l_test.speed_recover_calls == 1u);
+	return 0;
+}
+
+static int
+scenario_dma_physical_high(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.descriptor_physical_high = 1;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA);
+	CHECK(g_self->report.dma_stage ==
+	    GTA4L_EMMC_BLOCK_DMA_STAGE_ALLOC);
+	CHECK(g_self->report.dma_cmp_total == 0u);
+	CHECK(gta4l_test.adma_calls == 0u);
+	CHECK(gta4l_test.speed_recover_calls == 1u);
+	return 0;
+}
+
+static int
 scenario_dma_refused_orphan(void)
 {
 	begin("gta4l-emmc-block=3 gta4l-emmc-dma=1");
@@ -12535,6 +12610,28 @@ scenario_policy(void)
 	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 1,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0) ==
 	    GTA4L_EMMC_BLOCK_DMA_REFUSED);
+	{
+		uint8_t table[64];
+
+		memset(table, 0, sizeof(table));
+		CHECK(gta4l_emmc_block_adma_build(table, sizeof(table),
+		    0x1000u, 2048u, 1024u) == 2u);
+		CHECK((table[0] & GTA4L_EMMC_BLOCK_ADMA_DESC_VALID) != 0u);
+		CHECK((table[0] & GTA4L_EMMC_BLOCK_ADMA_DESC_ACT_TRAN) != 0u);
+		CHECK((table[0] & GTA4L_EMMC_BLOCK_ADMA_DESC_END) == 0u);
+		CHECK((table[8] & GTA4L_EMMC_BLOCK_ADMA_DESC_END) != 0u);
+		CHECK(table[2] == 0x00u && table[3] == 0x04u);
+		CHECK(table[4] == 0x00u && table[5] == 0x10u);
+		CHECK(table[12] == 0x00u && table[13] == 0x14u);
+		CHECK(gta4l_emmc_block_adma_build(table, sizeof(table),
+		    0xfffff000u, 0x2000u, 1024u) == 0u);
+		CHECK(gta4l_emmc_block_adma_build(table, 8u,
+		    0x1000u, 2048u, 1024u) == 0u);
+		CHECK(gta4l_emmc_block_adma_build(table, sizeof(table),
+		    0x1000u, 0u, 1024u) == 0u);
+		CHECK(gta4l_emmc_block_adma_build(table, sizeof(table),
+		    0x1000u, 1024u, 0u) == 0u);
+	}
 	CHECK(gta4l_emmc_block_consume_validate(0,
 	    GTA4L_EMMC_BLOCK_CONSUME_CASE_BYTES,
 	    GTA4L_EMMC_BLOCK_PARTREAD_BOOT_SIZE_BYTES) == 0);
@@ -13905,6 +14002,10 @@ static const struct scenario_entry scenarios[] = {
 	{ "dma-compare-mismatch", scenario_dma_compare_mismatch },
 	{ "dma-adma-error", scenario_dma_adma_error },
 	{ "dma-short", scenario_dma_short },
+	{ "dma-canary", scenario_dma_canary },
+	{ "dma-poison-untouched", scenario_dma_poison_untouched },
+	{ "dma-data-timeout", scenario_dma_data_timeout },
+	{ "dma-physical-high", scenario_dma_physical_high },
 	{ "dma-refused-orphan", scenario_dma_refused_orphan },
 	{ "dma-refused-value", scenario_dma_refused_value },
 	{ "dma-refused-duplicate", scenario_dma_refused_duplicate },

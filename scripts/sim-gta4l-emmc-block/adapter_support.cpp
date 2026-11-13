@@ -804,12 +804,27 @@ gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
 		return result->transport_result;
 	}
 	for (index = 0; index < count; index++) {
+		if ((gta4l_test.adma_partial_blocks > 0) &&
+		    (index >= (count -
+		    (uint32_t)gta4l_test.adma_partial_blocks))) {
+			break;
+		}
 		gta4l_test_fill_sector(start_lba + index,
 		    buffer + (index * GTA4L_EMMC_BLOCK_BYTES));
 		if ((gta4l_test.adma_corrupt_at >= 0) &&
 		    ((uint32_t)gta4l_test.adma_corrupt_at == index)) {
 			buffer[index * GTA4L_EMMC_BLOCK_BYTES] ^= 0x5Au;
 		}
+	}
+	if (gta4l_test.adma_canary_byte != 0) {
+		buffer[bytes] = 0x11u;
+	}
+	if (gta4l_test.adma_status_override != 0) {
+		result->transport_result =
+		    gta4l_test.adma_status_override;
+		result->stop_attempted = 1;
+		gta4l_test.adma_calls++;
+		return result->transport_result;
 	}
 	completed = count;
 	if ((gta4l_test.adma_short_blocks > 0) &&
@@ -1205,6 +1220,10 @@ IOMemoryDescriptor::getPhysicalSegment(IOByteCount offset, IOByteCount *length,
 	}
 	if (gta4l_test.consume_segment_zero != 0) {
 		return 0;
+	}
+	if ((gta4l_test.descriptor_physical_high != 0) &&
+	    (length_ == PAGE_SIZE)) {
+		return (IOPhysicalAddress)0x100000000ull;
 	}
 	if (length != 0) {
 		*length = length_ - offset;

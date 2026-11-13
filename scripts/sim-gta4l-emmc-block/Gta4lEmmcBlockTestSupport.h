@@ -469,6 +469,10 @@ struct gta4l_test_state {
 	int adma_fail_at;
 	int adma_corrupt_at;
 	int adma_short_blocks;
+	int adma_partial_blocks;
+	int adma_canary_byte;
+	int adma_status_override;
+	int descriptor_physical_high;
 	uint8_t *adma_buffer;
 	uint32_t adma_buffer_bytes;
 	uint32_t init_calls;

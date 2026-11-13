@@ -1656,6 +1656,10 @@ ADAPTER_MUTATIONS = [
        '\t\tdmaSkip = 1;\n'
        '\t}\n')],
      'dma-smmu-skip'),
+    ('dma-canary-check-removed',
+     [('\t\t\tif (dmaBuffer[bytes + canary] != 0u) {\n',
+       '\t\t\tif (0) {\n')],
+     'dma-canary'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2091,6 +2095,31 @@ POLICY_MUTATIONS = [
        '\t\t    "GTA4L-EMMC P5 SMMU: ");\n',
        '')],
      'bulk-success'),
+    ('adma-desc-end-dropped',
+     [('\t\t    GTA4L_EMMC_BLOCK_ADMA_DESC_ACT_TRAN |\n'
+       '\t\t    ((index + 1u == entries) ? '
+       'GTA4L_EMMC_BLOCK_ADMA_DESC_END : 0u));\n',
+       '\t\t    GTA4L_EMMC_BLOCK_ADMA_DESC_ACT_TRAN);\n')],
+     'policy'),
+    ('adma-desc-act-wrong',
+     [('\t\t    GTA4L_EMMC_BLOCK_ADMA_DESC_VALID |\n'
+       '\t\t    GTA4L_EMMC_BLOCK_ADMA_DESC_ACT_TRAN |\n',
+       '\t\t    GTA4L_EMMC_BLOCK_ADMA_DESC_VALID |\n')],
+     'policy'),
+    ('adma-desc-length-short',
+     [('\t\ttable[index * 8u + 3u] = '
+       '(uint8_t)(entry_length >> 8);\n',
+       '\t\ttable[index * 8u + 3u] = '
+       '(uint8_t)((entry_length >> 8) + 1u);\n')],
+     'policy'),
+    ('dma-value-accepted',
+     [('\tif (token_value != (int)GTA4L_EMMC_BLOCK_DMA_ON) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_DMA_REFUSED;\n'
+       '\t}\n',
+       '\tif ((token_value != (int)GTA4L_EMMC_BLOCK_DMA_ON) && 0) {\n'
+       '\t\treturn GTA4L_EMMC_BLOCK_DMA_REFUSED;\n'
+       '\t}\n')],
+     'dma-refused-value'),
 ]
 
 
@@ -2892,8 +2921,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 457, f'expected 457 adapter PASS lines, got {passes}'
-        print('PASS adapter: 457 scenarios against the host IOKit seam')
+        assert passes == 461, f'expected 461 adapter PASS lines, got {passes}'
+        print('PASS adapter: 461 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

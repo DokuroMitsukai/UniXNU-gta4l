@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 456 scenarios with 174 adapter mutations, 3 support mutations and 42 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 460 scenarios with 175 adapter mutations, 3 support mutations and 46 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7446,7 +7446,7 @@ watchdog. This rung keeps the proven 4,000/4,500 ms bulk budget; DMA+SHA
 is expected to hit the controlled budget exit until corecrypto SHA-256 is
 imported.
 
-Host suite: 456 scenarios with 174 adapter, 3 support and 42 policy
-mutations, including eight DMA scenarios and two DMA mutations. Host-only:
+Host suite: 460 scenarios with 175 adapter, 3 support and 46 policy
+mutations, including twelve DMA scenarios and seven DMA mutations. Host-only:
 no candidate, device access, flash or boot; the first DMA boot still
 needs the B10.5 hash-specific go.
