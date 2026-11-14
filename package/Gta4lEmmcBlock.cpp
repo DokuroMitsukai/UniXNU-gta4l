@@ -787,6 +787,7 @@ private:
 	bool dmaCacheFlush(uint32_t bytes);
 	void dmaDiagCapture(const struct gta4l_emmc_adma_result *result);
 	bool dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes);
+	bool dmaReadLocked(uint32_t lba, uint32_t blocks, uint32_t bytes);
 	bool dmaCompare(void);
 	void releaseBulkMedia(void);
 	bool bulkRead(IOMedia *boot, uint64_t firstBlock,
@@ -1031,6 +1032,9 @@ private:
 	uint32_t dmaBytes = 0;
 	uint32_t dmaFails = 0;
 	uint32_t dmaBudget = 0;
+	uint64_t dmaRequests = 0;
+	uint64_t dmaBlocks = 0;
+	bool dmaEnabled = false;
 	uint64_t dmaTicks = 0;
 	uint64_t dmaDat = 0;
 	uint32_t smmuCbBase = 0;
@@ -1185,16 +1189,53 @@ Gta4lEmmcBlock::readMultiCallback(void *context, uint64_t blockNumber,
 	Gta4lEmmcBlock *self = static_cast<Gta4lEmmcBlock *>(context);
 	struct gta4l_emmc_multi_result multi;
 	uint64_t startTicks = 0;
-	int rc;
+	uint32_t bytes;
+	bool usedDma = false;
+	bool dmaOk;
+	int rc = GTA4L_EMMC_OK;
 
 	if (self->speedTimingActive) {
 		startTicks = gta4l_emmc_platform_counter();
 	}
-	rc = gta4l_emmc_read_multi_result(&self->host, blockNumber, count,
-	    buffer, &multi);
-	if (self->speedTimingActive) {
-		self->speedCoreTicks +=
-		    gta4l_emmc_platform_counter() - startTicks;
+	bytes = count * GTA4L_EMMC_BLOCK_BYTES;
+	if (self->dmaEnabled && (buffer != nullptr) &&
+	    (count > 1u) && (count <= GTA4L_EMMC_BLOCK_MAX_BLOCKS) &&
+	    (bytes <= GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
+		/* The diagnostic comparison qualified this bounce-buffer
+		 * path. The caller already holds the one controller gate
+		 * through doAsyncReadWrite; dmaReadLocked records that
+		 * ownership for the host gate witness. */
+		self->dmaRequests++;
+		self->dmaBlocks += count;
+		dmaOk = self->dmaReadLocked((uint32_t)blockNumber, count,
+		    bytes);
+		if (self->speedTimingActive) {
+			self->speedCoreTicks +=
+			    gta4l_emmc_platform_counter() - startTicks;
+		}
+		if (!dmaOk) {
+			/* A transport or maintenance failure latches DMA
+			 * off for every later request. The failed request
+			 * keeps its own failure result; it is not retried
+			 * as PIO inside this verdict. */
+			self->dmaEnabled = false;
+			return GTA4L_EMMC_ERR_ADMA;
+		}
+		memcpy(buffer, self->dmaBuffer, bytes);
+		usedDma = true;
+		multi.transport_result = GTA4L_EMMC_OK;
+		multi.requested_blocks = count;
+		multi.completed_blocks = count;
+		multi.stop_attempted = 1;
+		multi.stop_result = GTA4L_EMMC_OK;
+	}
+	if (!usedDma) {
+		rc = gta4l_emmc_read_multi_result(&self->host, blockNumber,
+		    count, buffer, &multi);
+		if (self->speedTimingActive) {
+			self->speedCoreTicks +=
+			    gta4l_emmc_platform_counter() - startTicks;
+		}
 	}
 	result->transport_result = multi.transport_result;
 	result->requested_blocks = multi.requested_blocks;
@@ -3047,6 +3088,7 @@ Gta4lEmmcBlock::free()
 		bulkClient->release();
 		bulkClient = nullptr;
 	}
+	dmaRelease();
 	if (partmapDma != nullptr) {
 		IOFreeAligned(partmapDma,
 		    GTA4L_EMMC_BLOCK_PARTMAP_DMA_BYTES);
@@ -9581,6 +9623,20 @@ Gta4lEmmcBlock::dmaDiagCapture(
 bool
 Gta4lEmmcBlock::dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes)
 {
+	bool ok;
+
+	if (gate == nullptr) {
+		return false;
+	}
+	IOLockLock(gate);
+	ok = dmaReadLocked(lba, blocks, bytes);
+	IOLockUnlock(gate);
+	return ok;
+}
+
+bool
+Gta4lEmmcBlock::dmaReadLocked(uint32_t lba, uint32_t blocks, uint32_t bytes)
+{
 	struct gta4l_emmc_adma_result result;
 	uint64_t start;
 	uint64_t elapsed;
@@ -9593,6 +9649,14 @@ Gta4lEmmcBlock::dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes)
 	    (bytes == 0u) || (bytes > GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
 		return false;
 	}
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+	/* One gate owns every controller command. Record the lock depth at
+	 * the transfer so a caller that forgets the gate is visible. */
+	gta4l_test.dma_lock_depth = gta4l_test.lock_depth;
+	if (gta4l_test.lock_depth == 0) {
+		gta4l_test.dma_lock_violations++;
+	}
+#endif
 	report.dma_diag = 0u;
 	report.dma_cache = 0u;
 	entries = gta4l_emmc_block_adma_build(dmaTable,
@@ -9666,6 +9730,7 @@ Gta4lEmmcBlock::dmaCompare()
 	uint32_t bytes;
 	uint32_t canary;
 	uint32_t cases[GTA4L_EMMC_BLOCK_DMA_COMPARE_CASES][2];
+	int multiRc;
 
 	cases[0][0] = GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA;
 	cases[0][1] = GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS;
@@ -9690,8 +9755,12 @@ Gta4lEmmcBlock::dmaCompare()
 		lba = cases[index][0];
 		blocks = cases[index][1];
 		bytes = blocks * GTA4L_EMMC_BLOCK_BYTES;
-		if (gta4l_emmc_read_multi(&host, lba, blocks, dmaPio) !=
-		    GTA4L_EMMC_OK) {
+		/* The PIO reference read is a controller command too; take the
+		 * same gate the DMA transfer uses. */
+		IOLockLock(gate);
+		multiRc = gta4l_emmc_read_multi(&host, lba, blocks, dmaPio);
+		IOLockUnlock(gate);
+		if (multiRc != GTA4L_EMMC_OK) {
 			return false;
 		}
 		memset(dmaBuffer, 0xA5, bytes);
@@ -10126,6 +10195,8 @@ Gta4lEmmcBlock::runBulk()
 	report.dma_poison = 0u;
 	report.dma_chunks = 0u;
 	report.dma_bytes = 0u;
+	report.dma_requests = 0u;
+	report.dma_blocks = 0u;
 	report.dma_ticks = 0u;
 	report.dma_dat = 0u;
 	report.dma_fails = 0u;
@@ -10143,6 +10214,9 @@ Gta4lEmmcBlock::runBulk()
 	dmaBudget = 0;
 	dmaTicks = 0;
 	dmaDat = 0;
+	dmaRequests = 0;
+	dmaBlocks = 0;
+	dmaEnabled = false;
 	IOLockUnlock(reportLock);
 	/* B10.2: the read-only SMMU state gate runs before any DMA or card
 	 * stream work. B10.2 only reports the verdict; B10.3 consumes the
@@ -10242,6 +10316,14 @@ Gta4lEmmcBlock::runBulk()
 				stage =
 				    GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU;
 				dmaFails++;
+			} else {
+				/* The comparison qualified the bounce path.
+				 * From here every eligible multi-block read,
+				 * including the stream and windows below,
+				 * goes through the block-stack read path. */
+				IOLockLock(gate);
+				dmaEnabled = true;
+				IOLockUnlock(gate);
 			}
 		}
 	}
@@ -10273,33 +10355,24 @@ Gta4lEmmcBlock::runBulk()
 			byteOffset = (uint64_t)chunk *
 			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES;
 			caseStart = gta4l_emmc_platform_counter();
-			if (useDma) {
-				readOk = dmaRead(
-				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
-				    ((uint64_t)chunk *
-				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS),
-				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS,
-				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES);
-				source = dmaBuffer;
-				hashed = GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES;
-			} else {
-				readOk = bulkRead(widthholdBoot,
-				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
-				    ((uint64_t)chunk *
-				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS),
-				    byteOffset,
-				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES,
-				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS,
-				    GTA4L_EMMC_BLOCK_BULK_TAG, &result);
-				source = bulkClient->data();
-				hashed = (result.actual >
-				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES) ?
-				    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES :
-				    (uint32_t)result.actual;
-			}
+			readOk = bulkRead(widthholdBoot,
+			    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+			    ((uint64_t)chunk *
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS),
+			    byteOffset,
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES,
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS,
+			    GTA4L_EMMC_BLOCK_BULK_TAG, &result);
+			source = bulkClient->data();
+			hashed = (result.actual >
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES) ?
+			    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES :
+			    (uint32_t)result.actual;
 			speedIoTicks +=
 			    gta4l_emmc_platform_counter() - caseStart;
-			if (!readOk && useDma) {
+			if (!readOk && useDma &&
+			    (report.dma_stage !=
+			    GTA4L_EMMC_BLOCK_DMA_STAGE_NONE)) {
 				dmaStage = report.dma_stage;
 				stage = GTA4L_EMMC_BLOCK_BULK_STAGE_DMA;
 				failStatus = 0;
@@ -10427,24 +10500,18 @@ Gta4lEmmcBlock::runBulk()
 			byteOffset = windowBlock *
 			    GTA4L_EMMC_BLOCK_BYTES;
 			caseStart = gta4l_emmc_platform_counter();
-			if (useDma) {
-				readOk = dmaRead(
-				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
-				    windowBlock,
-				    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS,
-				    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES);
-			} else {
-				readOk = bulkRead(widthholdBoot,
-				    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
-				    windowBlock, byteOffset,
-				    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES,
-				    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS,
-				    GTA4L_EMMC_BLOCK_BULK_TAG + 1u, &result);
-			}
+			readOk = bulkRead(widthholdBoot,
+			    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA +
+			    windowBlock, byteOffset,
+			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES,
+			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS,
+			    GTA4L_EMMC_BLOCK_BULK_TAG + 1u, &result);
 			speedIoTicks +=
 			    gta4l_emmc_platform_counter() - caseStart;
 			if (!readOk) {
-				if (useDma) {
+				if (useDma &&
+				    (report.dma_stage !=
+				    GTA4L_EMMC_BLOCK_DMA_STAGE_NONE)) {
 					dmaStage = report.dma_stage;
 					stage =
 					    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA;
@@ -10466,8 +10533,7 @@ Gta4lEmmcBlock::runBulk()
 				failOffset = (uint32_t)windowBlock;
 				break;
 			}
-			if (memcmp(useDma ? dmaBuffer :
-			    bulkClient->data(), bulkReference,
+			if (memcmp(bulkClient->data(), bulkReference,
 			    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0) {
 				stage =
 				    GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW;
@@ -10482,7 +10548,10 @@ Gta4lEmmcBlock::runBulk()
 	}
 	speedTimingActive = false;
 	host.timing_capture = 0;
-	if (dmaMode) {
+	if (dmaMode && !useDma) {
+		/* A skipped or failed qualification never arms the stack DMA
+		 * path, so the diagnostic buffers can go. A qualified run
+		 * keeps them for later normal reads; free() releases them. */
 		dmaRelease();
 	}
 
@@ -10547,6 +10616,8 @@ Gta4lEmmcBlock::runBulk()
 	report.dma_poison = (dmaCmpTotal != 0u) ? 1u : 0u;
 	report.dma_chunks = useDma ? chunks : 0u;
 	report.dma_bytes = useDma ? bytes : 0u;
+	report.dma_requests = (uint32_t)dmaRequests;
+	report.dma_blocks = (uint32_t)dmaBlocks;
 	report.dma_ticks = (dmaStart != 0u) ?
 	    gta4l_emmc_platform_counter() - dmaStart : 0u;
 	report.dma_dat = dmaDat;

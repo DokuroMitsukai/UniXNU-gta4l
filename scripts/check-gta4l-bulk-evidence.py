@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Check a gta4l S2 BULK line against the final BOOT image.
+"""Check a gta4l S2 BULK and DMA line against the final BOOT image.
 
 The S2 report prints the SHA-256 prefix of the streamed 85,688,320-byte BOOT
 region, the 2,615 64-block request count, the 80-window result and the
-verified combined revert. This host-only checker recomputes the digest from
-the final packaged image, requires the success shape, checks the modelled
-read budget, rejects a BULKFAIL line, and rejects mutated reports or a changed
-image. It never reads a device.
+verified combined revert. B10.13 adds the DMA line: the block-stack request
+and block counts must equal the same workload (2,695 requests and 167,520
+blocks), the four comparisons must pass, the stream counters must be clean and
+a DMADIAG line must be absent. This host-only checker recomputes the digest
+from the final packaged image, requires both success shapes, checks the
+modelled read budget, rejects a BULKFAIL line, and rejects mutated reports or
+a changed image. It never reads a device.
 """
 import argparse
 import hashlib
@@ -17,11 +20,14 @@ from pathlib import Path
 REGION_BYTES = 85688320
 CHUNKS = 2615
 WINDOWS = 80
+WINDOW_BLOCKS = 2
 STREAM_BUDGET_MS = 4000
 SEED = '47544134'
 HEX32 = re.compile(r'^[0-9a-f]{32}$')
 LABEL = 'GTA4L-EMMC P5 BULK: '
 FAIL_LABEL = 'GTA4L-EMMC P5 BULKFAIL: '
+DMA_LABEL = 'GTA4L-EMMC P5 DMA: '
+DMADIAG_LABEL = 'GTA4L-EMMC P5 DMADIAG: '
 FIELDS = (
     'region', 'chunks', 'bytes', 'ticks', 'hz', 'seed', 'windows',
     'wpass', 'wfail', 'woffset', 'digest')
@@ -36,6 +42,29 @@ FIXED = {
     'woffset': '0',
 }
 UNSIGNED = ('ticks', 'hz')
+DMA_FIELDS = (
+    'mode', 'smmu', 'cmp', 'canary', 'poison', 'chunks', 'bytes',
+    'ticks', 'dat', 'fails', 'stage', 'ast', 'aaddr', 'desc',
+    'budget', 'skip', 'req', 'blk')
+DMA_FIXED = {
+    'mode': 'adma2-32',
+    'cmp': '4/4',
+    'canary': '1',
+    'poison': '1',
+    'chunks': str(CHUNKS),
+    'bytes': str(REGION_BYTES),
+    'fails': '0',
+    'stage': '0',
+    'ast': '00000000',
+    'aaddr': '00000000',
+    'desc': '4294967295',
+    'budget': '0',
+    'skip': '0',
+    'req': str(CHUNKS + WINDOWS),
+    'blk': str(REGION_BYTES // 512 + WINDOWS * WINDOW_BLOCKS),
+}
+DMA_UNSIGNED = ('ticks', 'dat')
+DMA_SMMU = ('bypass', 'cb-off')
 SPEED_LABEL = 'GTA4L-EMMC P5 SPEED: '
 SPEED_REVERT = {
     'revert': '1',
@@ -78,6 +107,27 @@ def parse_line(line):
     return fields
 
 
+def parse_dma(line):
+    line = line.strip()
+    if not line.startswith(DMA_LABEL):
+        raise ValueError('not a DMA line')
+    fields = {}
+    for token in line[len(DMA_LABEL):].split():
+        if '=' not in token:
+            raise ValueError(f'malformed field {token!r}')
+        name, value = token.split('=', 1)
+        if name in fields:
+            raise ValueError(f'duplicate field {name}')
+        fields[name] = value
+    missing = [name for name in DMA_FIELDS if name not in fields]
+    extra = sorted(set(fields) - set(DMA_FIELDS))
+    if missing:
+        raise ValueError('missing fields ' + ','.join(missing))
+    if extra:
+        raise ValueError('unexpected fields ' + ','.join(extra))
+    return fields
+
+
 def extract_report(lines):
     bulk = [line.strip() for line in lines
             if line.strip().startswith(LABEL)]
@@ -88,6 +138,18 @@ def extract_report(lines):
     if failures:
         raise ValueError('BULKFAIL line present')
     return bulk[0]
+
+
+def extract_dma(lines):
+    found = [line.strip() for line in lines
+             if line.strip().startswith(DMA_LABEL)]
+    diagnostics = [line.strip() for line in lines
+                   if line.strip().startswith(DMADIAG_LABEL)]
+    if len(found) != 1:
+        raise ValueError(f'expected one DMA line, found {len(found)}')
+    if diagnostics:
+        raise ValueError('DMADIAG line present')
+    return found[0]
 
 
 def parse_speed(lines):
@@ -132,9 +194,35 @@ def check(line, expected_digest, speed_fields=None):
     return errors
 
 
+def check_dma(line):
+    fields = parse_dma(line)
+    errors = []
+    for name, value in DMA_FIXED.items():
+        if fields[name] != value:
+            errors.append(f'DMA {name}={fields[name]} expected {value}')
+    if fields['smmu'] not in DMA_SMMU:
+        errors.append(f'DMA smmu={fields["smmu"]} is not a clean decision')
+    for name in DMA_UNSIGNED:
+        if not fields[name].isdigit():
+            errors.append(
+                f'DMA {name}={fields[name]} is not an unsigned integer')
+    if fields['ticks'].isdigit() and int(fields['ticks']) == 0:
+        errors.append('DMA ticks is zero')
+    if fields['dat'].isdigit() and int(fields['dat']) == 0:
+        errors.append('DMA dat is zero')
+    return errors
+
+
 def check_errors(line, expected_digest, speed_fields=None):
     try:
         return check(line, expected_digest, speed_fields)
+    except ValueError as error:
+        return [str(error)]
+
+
+def check_dma_errors(line):
+    try:
+        return check_dma(line)
     except ValueError as error:
         return [str(error)]
 
@@ -191,15 +279,65 @@ def self_test():
         )
         for text, label in mutations:
             assert check_errors(text, digest, speed), f'{label} was accepted'
+        dma = (
+            f'{DMA_LABEL}mode=adma2-32 smmu=cb-off cmp=4/4 canary=1 '
+            f'poison=1 chunks={CHUNKS} bytes={REGION_BYTES} '
+            f'ticks=2500000 dat=2000000 fails=0 stage=0 ast=00000000 '
+            f'aaddr=00000000 desc=4294967295 budget=0 skip=0 '
+            f'req={CHUNKS + WINDOWS} '
+            f'blk={REGION_BYTES // 512 + WINDOWS * WINDOW_BLOCKS}')
+        assert not check_dma_errors(dma), check_dma_errors(dma)
+        dma_mutations = (
+            (dma.replace('mode=adma2-32', 'mode=none'), 'DMA mode'),
+            (dma.replace('smmu=cb-off', 'smmu=fault'), 'DMA SMMU fault'),
+            (dma.replace('cmp=4/4', 'cmp=3/4'), 'DMA compare'),
+            (dma.replace('canary=1', 'canary=0'), 'DMA canary'),
+            (dma.replace('poison=1', 'poison=0'), 'DMA poison'),
+            (dma.replace(f'chunks={CHUNKS}', 'chunks=2614'), 'DMA chunks'),
+            (dma.replace(f'bytes={REGION_BYTES}', 'bytes=85688319'),
+             'DMA bytes'),
+            (dma.replace('ticks=2500000', 'ticks=0'), 'DMA ticks'),
+            (dma.replace('dat=2000000', 'dat=0'), 'DMA dat'),
+            (dma.replace('fails=0', 'fails=1'), 'DMA failure count'),
+            (dma.replace('stage=0', 'stage=4'), 'DMA failure stage'),
+            (dma.replace('ast=00000000', 'ast=00000001'), 'DMA ADMA state'),
+            (dma.replace('aaddr=00000000', 'aaddr=875c3018'),
+             'DMA ADMA address'),
+            (dma.replace('desc=4294967295', 'desc=1'), 'DMA descriptor'),
+            (dma.replace('budget=0', 'budget=1'), 'DMA budget exit'),
+            (dma.replace('skip=0', 'skip=1'), 'DMA skip'),
+            (dma.replace(f'req={CHUNKS + WINDOWS}', 'req=2615'),
+             'DMA request count'),
+            (dma.replace(
+                f'blk={REGION_BYTES // 512 + WINDOWS * WINDOW_BLOCKS}',
+                'blk=167360'), 'DMA block count'),
+            (dma + ' extra=1', 'DMA extra field'),
+        )
+        for text, label in dma_mutations:
+            assert check_dma_errors(text), f'{label} was accepted'
         bad_speed = dict(speed)
         bad_speed['rverified'] = '0'
         assert check_errors(line, digest, bad_speed), \
             'an unverified revert was accepted'
         report = 'GTA4L-EMMC P5 SPEED: ' + ' '.join(
             f'{name}={value}' for name, value in speed.items()) + '\n'
-        report += line + '\n'
+        report += line + '\n' + dma + '\n'
         assert extract_report(report.splitlines()) == line
+        assert extract_dma(report.splitlines()) == dma
         assert parse_speed(report.splitlines()) == speed
+        try:
+            extract_dma((dma + '\n' + DMADIAG_LABEL +
+                         'tp=00000000').splitlines())
+        except ValueError as error:
+            assert 'DMADIAG' in str(error)
+        else:
+            raise AssertionError('a DMADIAG line was accepted')
+        try:
+            extract_dma((dma + '\n' + dma).splitlines())
+        except ValueError as error:
+            assert 'expected one' in str(error)
+        else:
+            raise AssertionError('a duplicate DMA line was accepted')
         try:
             extract_report(('BULK\n' + line + '\n' +
                             f'{FAIL_LABEL}stage=1').splitlines())
@@ -213,7 +351,8 @@ def self_test():
             assert 'expected one' in str(error)
         else:
             raise AssertionError('a duplicate BULK line was accepted')
-    print('PASS: BULK digest, counts, budget, revert and mutation checks')
+    print('PASS: BULK digest, counts, budget, revert, DMA line and '
+          'mutation checks')
 
 
 def main():
@@ -229,10 +368,12 @@ def main():
     if args.image is None or (args.report is None and args.line is None):
         parser.error('--image and one of --report/--line are required')
     digest = region_digest(args.image)
+    dma_line = None
     try:
         if args.report is not None:
             lines = args.report.read_text().splitlines()
             line = extract_report(lines)
+            dma_line = extract_dma(lines)
             speed = parse_speed(lines)
         else:
             line = args.line
@@ -241,11 +382,16 @@ def main():
         print(f'FAIL: {error}')
         return 1
     errors = check_errors(line, digest, speed)
+    if dma_line is not None:
+        errors.extend(check_dma_errors(dma_line))
     if errors:
         for error in errors:
             print(f'FAIL: {error}')
         return 1
-    print(f'PASS: BULK digest and fields match {digest}')
+    if dma_line is not None:
+        print(f'PASS: BULK digest and DMA stack path match {digest}')
+    else:
+        print(f'PASS: BULK digest and fields match {digest}')
     return 0
 
 

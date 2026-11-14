@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 476 scenarios with 180 adapter mutations, 3 support mutations and 51 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 477 scenarios with 185 adapter mutations, 3 support mutations and 51 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7780,8 +7780,10 @@ Present state), `dma_hc1`/`dma_hc2` (Host Control 1/2 at command time),
 words `dma_d0`–`dma_d3`. `gta4l_emmc_read_multi_adma` captures HC1, HC2
 and SA0 after programming the transfer mode and before the command kick;
 the reads are side-effect free. The `GTA4L-EMMC P5 DMADIAG:` line is
-gated on `(dma != 0) && (dma_diag != 0)` and is 218 bytes; with its
-separator the worst-case combined report is 3,259 of 3,328 bytes.
+gated on `(dma != 0) && (dma_diag != 0)` and is 218 bytes. The DMA line
+is 308 bytes in B10.12 and grows to 338 bytes in B10.13 when the
+block-stack `req`/`blk` counters are added; with the DMADIAG separator
+the worst-case combined report is therefore 3,289 of 3,328 bytes.
 
 The host fake controller is now non-coherent by default: it fetches
 descriptors from a DRAM shadow and writes data into a buffer shadow, and
@@ -7795,7 +7797,7 @@ maintenance failure stages, the captured register/table values and the
 line format and gate. Mutations `cache-table-store-dropped`,
 `cache-buffer-store-dropped`, `cache-canary-store-dropped`,
 `cache-flush-dropped`, `dmadiag-gate-dropped` and `dmadiag-gate-always`
-are rejected. Host suite: block 476 scenarios with 180 adapter, 3 support
+are rejected. Host suite: block 477 scenarios with 185 adapter, 3 support
 and 51 policy mutations; core 220 scenarios with 136 controls; probe 196
 scenarios with 100 controls; the evidence count test passes. Host-only;
 **not flashed**, no device access or boot.
@@ -7816,3 +7818,113 @@ firmware `1e8a3132…` and DTB `dc4c719d…` unchanged) are built but
 naming `ddbe2eb7…`; card writes remain disabled, and `fcb1603b…`,
 `0d77d602…` and `a1e26c34…` must not be booted again. See
 `candidate-verification.txt` in the B10.12 evidence directory.
+
+### 5.3.122 B10.12 owner boot: cache maintenance confirms H1 (2026-11-14)
+
+One owner-approved BOOT-only write of `ddbe2eb7…` to p69 (100,663,296
+bytes) was hash-verified end to end: pre-flash p69 full `cf5fcc51…`,
+post-flash full `3be5ca33…`, image prefix `ddbe2eb7…`, unchanged tail
+`a28b4ea2…` and unchanged last 1 KiB `a4f065b4…`; RECOVERY
+`14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` stayed identical,
+and fresh compressed backups were saved before the write. One
+owner-controlled cold boot then returned `rc=0 stop=0 wp=1` with DMA
+`mode=adma2-32 smmu=cb-off cmp=4/4 canary=1 poison=1 chunks=2615
+bytes=85688320 fails=0 stage=0 ast=00000000 aaddr=00000000 budget=0
+skip=0 desc=4294967295`. The BULK line covered the full 85,688,320-byte
+region with `windows=80 wpass=80 wfail=0 woffset=0` and digest
+`ddbe2eb7…`; `dec=cb-off` and `pfsr=00000400 pgfsr=00000000` are the
+FORMAT-only value with no fault bits, and the 1-bit/400 kHz revert was
+verified. At `hz=19200000` the BULK interval is 58,711,128 ticks
+(3.058 s, about 28 MB/s including SHA), the DMA interval is 60,915,834
+ticks (3.173 s) and the data counter is 43,499,753 ticks (2.266 s,
+about 38 MB/s); the intervals have different scopes. The 4,000 ms stream
+budget held with the plan's approximately 30% margin and the 30 s
+watchdog is unchanged.
+
+H1 is confirmed: the B10.11 `ST_FDS` was the missing CPU cache
+maintenance on the write-back descriptor table and bounce buffer. All
+four DMA-vs-PIO comparisons matched and both buffer guards held, so H2,
+H3 and H4 are not supported by this boot. The DMADIAG line is correctly
+absent on success and `desc=4294967295` is the no-failing-descriptor
+sentinel. The deliberate end-of-report panic is the success-shape
+sentinel, not a transport failure.
+
+Qualification boundary: this is one successful boot, not repeatability
+or lifetime-service evidence. The bulk stream and window branches still
+called `dmaRead()` directly instead of reading through the partition
+IOMedia, and normal multi-block reads still used the PIO path, so the
+result proves the DMA transport and content but not DMA through the
+block-storage stack. `SPEEDIO req=0 blk=0` is expected because those
+counters increment only on the PIO multi-block path; it is not a DMA
+fault. S2 is transport-proven with the block-stack DMA path open, which
+is the B10.13 work. Evidence:
+`out/gta4l/ram-root-emmc-b10.12-dma-cache-evidence/`
+(`flash-result-b10.12.txt` and `boot-report-b10.12.txt`; the raw wrapped
+owner paste was not retained in the tracked tree).
+
+### 5.3.123 B10.13 DMA through the block-storage stack (2026-11-14)
+
+Normal multi-block reads now use the qualified bounce-buffer DMA path.
+`readMultiCallback` (`package/Gta4lEmmcBlock.cpp:1186`) takes the DMA
+branch when `dmaEnabled` is set, the caller buffer is non-null, the
+request has more than one block and the byte count fits
+`GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES`; it calls `dmaReadLocked()` and
+copies the result out with `memcpy(buffer, self->dmaBuffer, bytes)`.
+`doAsyncReadWrite` already holds the one controller gate, so the
+callback does not lock recursively; `dmaReadLocked` records the host-test
+lock depth at the transfer and counts a violation when the gate is not
+held. `dmaRead()` remains the gated wrapper and the diagnostic
+comparison keeps using it, while the PIO reference reads in
+`dmaCompare()` now take the same gate.
+
+A transport or maintenance failure returns `GTA4L_EMMC_ERR_ADMA` for the
+failed request and latches `dmaEnabled` off, so later eligible requests
+fall back to PIO after recovery. The failed request is not silently
+retried as PIO inside its own verdict. `runBulk()` arms `dmaEnabled`
+only after `dmaCompare()` and the post-comparison SMMU re-read pass, and
+both the stream and window phases now call `bulkRead()` on the partition
+IOMedia in either mode; the DMA branch no longer reads `dmaBuffer`
+directly and the window comparison always reads `bulkClient->data()`. A
+bulk read failure is classified as `BULK_STAGE_DMA` only when
+`dma_stage` is set, so a stack-level media failure is not relabelled as a
+DMA fault. A run that skipped or failed qualification releases the DMA
+buffers at the end of the bulk pass; a run that armed the path keeps
+them for later normal reads and `free()` releases them.
+
+The report DMA line gains `req=` and `blk=` after `skip=`: they count
+only the transfers that went through the block-stack DMA path (stream
+plus windows), excluding the PIO comparison and reference traffic, so a
+diagnostic bypass cannot satisfy the same workload. For the unchanged
+85,688,320-byte workload the expected values are 2,695 requests and
+167,520 blocks (2,615 x 64 stream blocks plus 80 x 2 window blocks).
+`SPEEDIO req/blk` remains zero on a DMA run because those counters cover
+only the PIO multi-block path. The DMA line bound grows from 308 to 338
+bytes and the combined report worst case from 3,259 to 3,289 of 3,328
+bytes; the header constants, the formatter check and the maximum-field
+fixture were updated together.
+
+Host gates: the block adapter test runs 477 scenarios with 185 adapter
+mutations, 3 support mutations and 51 policy mutations. The new
+`dma-stack-fallback` scenario fails the first stream transfer
+(`adma_fail_at=4` after the four comparison transfers), expects
+`BULKFAIL stage=12` (`BULK_STAGE_DMA`), `dma_stage=READ`, one request and
+64 blocks, DMA latched off and a later eligible read served by PIO with
+the counters unchanged. `dma-success` now asserts 2,695 requests,
+167,520 blocks, exactly four PIO multi calls, zero `SPEEDIO` requests
+and blocks, zero gate violations and a positive gate depth at the
+transfer. The five new mutations `stack-dma-bypass`,
+`stack-dma-no-bounce-copy`, `stack-dma-gate-dropped`,
+`stack-dma-counter-dropped` and `stack-dma-fallback-latch-dropped` are
+rejected, and `bulk-window-compare-skip` follows the new comparison
+text. `scripts/check-gta4l-bulk-evidence.py` now validates the DMA line
+when a report is supplied: it requires one line, rejects a DMADIAG line,
+pins the fixed fields including `req=2695 blk=167520`, accepts the
+`bypass`/`cb-off` SMMU decisions, requires non-zero unsigned `ticks` and
+`dat`, and rejects about twenty mutations of the individual predicates.
+The checker prints `PASS: BULK digest and DMA stack path match <digest>`
+and its self-test passes.
+
+Host-only: no candidate was built, nothing was flashed or booted, and
+the S2 acceptance remains open until an image-bound DMA-through-stack
+boot passes the content, window, counter, budget and verified-revert
+criteria.

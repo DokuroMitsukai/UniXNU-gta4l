@@ -153,20 +153,36 @@ def bulk_case():
                 f'bytes={region_bytes} ticks=2500000 hz=1000000 '
                 f'seed=47544134 windows=80 wpass=80 wfail=0 woffset=0 '
                 f'digest={digest}')
+        dma = ('GTA4L-EMMC P5 DMA: mode=adma2-32 smmu=cb-off cmp=4/4 '
+               'canary=1 poison=1 chunks=2615 bytes=85688320 '
+               'ticks=2500000 dat=2000000 fails=0 stage=0 ast=00000000 '
+               'aaddr=00000000 desc=4294967295 budget=0 skip=0 req=2695 '
+               'blk=167520')
         report = base / 'report.txt'
-        report.write_text(speed + '\n' + bulk + '\n')
+        report.write_text(speed + '\n' + bulk + '\n' + dma + '\n')
         ok = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
                  '--image', image, '--report', report)
         if ok.returncode != 0:
             raise AssertionError(
                 f'bulk: valid report was rejected: {ok.stdout} {ok.stderr}')
         report.write_text(speed + '\n' +
-                          bulk.replace(digest, '0' * 32) + '\n')
+                          bulk.replace(digest, '0' * 32) + '\n' + dma + '\n')
         bad = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
                   '--image', image, '--report', report)
         if bad.returncode == 0:
             raise AssertionError('bulk: a wrong digest was accepted')
-    print('PASS: bulk dispatcher digest and window check')
+        report.write_text(speed + '\n' + bulk + '\n' +
+                          dma.replace('req=2695', 'req=2615') + '\n')
+        bad = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
+                  '--image', image, '--report', report)
+        if bad.returncode == 0:
+            raise AssertionError('bulk: a bypassed DMA stack path was accepted')
+        report.write_text(speed + '\n' + bulk + '\n')
+        bad = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
+                  '--image', image, '--report', report)
+        if bad.returncode == 0:
+            raise AssertionError('bulk: a missing DMA line was accepted')
+    print('PASS: bulk dispatcher digest, window and DMA stack checks')
 
 
 def main():

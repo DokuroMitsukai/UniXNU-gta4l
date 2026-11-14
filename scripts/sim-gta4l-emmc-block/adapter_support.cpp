@@ -43,6 +43,8 @@ gta4l_test_reset(void)
 	gta4l_test.adma_corrupt_at = -1;
 	gta4l_test.adma_noncoherent = 1;
 	gta4l_test.cache_fail_at = -1;
+	gta4l_test.dma_lock_depth = 0;
+	gta4l_test.dma_lock_violations = 0;
 	gta4l_test.adma_table_shadow_valid = 0;
 	gta4l_test.adma_buffer_shadow_valid = 0;
 	memset(gta4l_test_table_shadow, 0x5A, sizeof(gta4l_test_table_shadow));

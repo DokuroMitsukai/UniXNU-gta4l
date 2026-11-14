@@ -649,18 +649,20 @@ extern "C" {
  * digits, Present State at eight, five packed sixteen-digit register pairs
  * and fourteen separators. The bulk SPEED worst case is 1,418 bytes;
  * adding the SPEEDIO, BULK, BULKIO, SMMU, DMA and optional BULKFAIL lines
- * keeps the combined report at 2,812 bytes; adding the SMMUCB census line
- * and its separator gives 3,040 bytes inside the 3,328-byte buffer. The
- * failure-only DMADIAG line is 218 bytes: the prefix, six 8-hex physical/
- * status words, a 3-hex entry count, a 4-hex descriptor-byte count, a
- * 2-hex cache mask, 2/4-hex Host Control readbacks and four 16-hex table
- * words; with its separator the worst case is 3,259 bytes. */
+ * keeps the combined report at 2,842 bytes; adding the SMMUCB census line
+ * and its separator gives 3,070 bytes inside the 3,328-byte buffer. The
+ * DMA line adds the stack-path `req`/`blk` counters to the 308-byte
+ * transport line, so its bound grows by 30 bytes to 338. The failure-only
+ * DMADIAG line is 218 bytes: the prefix, six 8-hex physical/status words,
+ * a 3-hex entry count, a 4-hex descriptor-byte count, a 2-hex cache mask,
+ * 2/4-hex Host Control readbacks and four 16-hex table words; with its
+ * separator the worst case is 3,289 bytes. */
 #define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
 #define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
 #define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u
-#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u
+#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 338u
 #define GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES 218u
-#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3259u
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3289u
 
 /* Start-path failure stages, in execution order. A failure latch keeps the
  * first stage so a later cleanup failure cannot mask it. */
@@ -1347,8 +1349,11 @@ struct gta4l_emmc_block_report {
 	/* B10.3 ADMA2 sub-mode. `dma` selects the DMA line; mode is 1 for
 	 * 32-bit ADMA2, smmu mirrors the gate decision, cmp_pass/total the
 	 * fixed comparison window, canary/poison its integrity checks, and
-	 * the stream fields mirror BULK. ast/aaddr/desc identify the first
-	 * ADMA fault, stage the first failure and budget the stream exit. */
+	 * the stream fields mirror BULK. req/blk count the DMA transfers that
+	 * went through the block-stack read path (stream plus windows) so a
+	 * diagnostic bypass cannot satisfy the same workload. ast/aaddr/desc
+	 * identify the first ADMA fault, stage the first failure and budget
+	 * the stream exit. */
 	uint32_t dma;
 	uint32_t dma_mode;
 	uint32_t dma_smmu;
@@ -1358,6 +1363,8 @@ struct gta4l_emmc_block_report {
 	uint32_t dma_poison;
 	uint32_t dma_chunks;
 	uint32_t dma_bytes;
+	uint32_t dma_requests;
+	uint32_t dma_blocks;
 	uint64_t dma_ticks;
 	uint64_t dma_dat;
 	uint32_t dma_fails;

@@ -10521,6 +10521,21 @@ scenario_dma_success(void)
 	    GTA4L_EMMC_BLOCK_BULK_CHUNKS);
 	CHECK(g_self->report.dma_bytes ==
 	    GTA4L_EMMC_BLOCK_BULK_REGION_BYTES);
+	CHECK(g_self->report.dma_requests ==
+	    (uint32_t)(GTA4L_EMMC_BLOCK_BULK_CHUNKS +
+	    GTA4L_EMMC_BLOCK_BULK_WINDOWS));
+	CHECK(g_self->report.dma_blocks ==
+	    (uint32_t)(GTA4L_EMMC_BLOCK_BULK_REGION_BYTES /
+	    GTA4L_EMMC_BLOCK_BYTES +
+	    GTA4L_EMMC_BLOCK_BULK_WINDOWS *
+	    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS));
+	/* Only the four compare references used the PIO multi path; the
+	 * stream and the windows went through the media's DMA read. */
+	CHECK(gta4l_test.multi_calls == 4u);
+	CHECK(g_self->report.speedio_req == 0u);
+	CHECK(g_self->report.speedio_blk == 0u);
+	CHECK(gta4l_test.dma_lock_violations == 0u);
+	CHECK(gta4l_test.dma_lock_depth > 0);
 	CHECK(g_self->report.dma_fails == 0u);
 	CHECK(g_self->report.dma_stage == 0u);
 	CHECK(g_self->report.dma_budget == 0u);
@@ -10534,8 +10549,56 @@ scenario_dma_success(void)
 	CHECK(gta4l_test.adma_calls ==
 	    (uint32_t)(4u + GTA4L_EMMC_BLOCK_BULK_CHUNKS +
 	    GTA4L_EMMC_BLOCK_BULK_WINDOWS));
+	CHECK(strstr(gta4l_test.panic, "req=2695 blk=167520") != 0);
 	CHECK(gta4l_test.speed_recover_calls == 1u);
 	CHECK(g_self->online);
+	return 0;
+}
+
+static int
+scenario_dma_stack_fallback(void)
+{
+	uint8_t buffer[GTA4L_EMMC_BLOCK_MAX_BYTES];
+	struct gta4l_emmc_block_multi_result result;
+	int rc;
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	/* The four compare transfers succeed; the first stream transfer
+	 * fails, which must latch DMA off and stop the stream. */
+	gta4l_test.adma_fail_at = 4;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA);
+	CHECK(g_self->report.dma_stage ==
+	    GTA4L_EMMC_BLOCK_DMA_STAGE_READ);
+	CHECK(g_self->report.dma_requests == 1u);
+	CHECK(g_self->report.dma_blocks ==
+	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS);
+	CHECK(g_self->report.dma_fails == 1u);
+	CHECK(!g_self->dmaEnabled);
+	CHECK(gta4l_test.adma_calls == 5u);
+	CHECK(gta4l_test.dma_lock_violations == 0u);
+	/* A later eligible read must use PIO, not another DMA transfer. */
+	gta4l_test.adma_fail_at = -1;
+	gta4l_test.multi_calls = 0;
+	memset(buffer, 0, sizeof(buffer));
+	memset(&result, 0, sizeof(result));
+	IOLockLock(g_self->gate);
+	rc = g_self->readMultiCallback(g_self, 2, 4, buffer, &result);
+	IOLockUnlock(g_self->gate);
+	CHECK(rc == 0);
+	CHECK(result.transport_result == GTA4L_EMMC_OK);
+	CHECK(result.completed_blocks == 4u);
+	CHECK(gta4l_test.multi_calls == 1u);
+	CHECK(gta4l_test.adma_calls == 5u);
+	CHECK(g_self->report.dma_requests == 1u);
+	CHECK(g_self->report.dma_blocks ==
+	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BLOCKS);
+	CHECK(buffer[0] == 2u);
+	CHECK(buffer[3 * GTA4L_EMMC_BLOCK_BYTES] == 5u);
 	return 0;
 }
 
@@ -11621,6 +11684,8 @@ scenario_bulk_format_max(void)
 	report.dma_desc = 0xffffffffu;
 	report.dma_budget = 0xffffffffu;
 	report.dma_skip = 0xffffffffu;
+	report.dma_requests = 0xffffffffu;
+	report.dma_blocks = 0xffffffffu;
 	report.dma_diag = 1u;
 	report.dma_cache = 0xffu;
 	report.dma_tp = 0xffffffffu;
@@ -14576,6 +14641,7 @@ static const struct scenario_entry scenarios[] = {
 	{ "bulk-smmu-clientpd", scenario_bulk_smmu_clientpd },
 	{ "bulk-smmu-map-fail", scenario_bulk_smmu_map_fail },
 	{ "dma-success", scenario_dma_success },
+	{ "dma-stack-fallback", scenario_dma_stack_fallback },
 	{ "dma-cb-off", scenario_dma_cb_off },
 	{ "dma-cb-off-format", scenario_dma_cb_off_format },
 	{ "dma-post-fault", scenario_dma_post_fault },

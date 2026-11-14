@@ -1566,8 +1566,7 @@ ADAPTER_MUTATIONS = [
        '\t\t\t    GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS) {\n')],
      'bulk-cancel-during'),
     ('bulk-window-compare-skip',
-     [('\t\t\tif (memcmp(useDma ? dmaBuffer :\n'
-       '\t\t\t    bulkClient->data(), bulkReference,\n'
+     [('\t\t\tif (memcmp(bulkClient->data(), bulkReference,\n'
        '\t\t\t    GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0) {\n',
        '\t\t\tif (0) {\n')],
      'bulk-window-mismatch'),
@@ -1706,6 +1705,29 @@ ADAPTER_MUTATIONS = [
        '\trc = kIOReturnSuccess;\n'
        '\t(void)rc;\n')],
      'dma-cache-success'),
+    ('stack-dma-bypass',
+     [('\tif (self->dmaEnabled && (buffer != nullptr) &&\n',
+       '\tif (0 && (buffer != nullptr) &&\n')],
+     'dma-success'),
+    ('stack-dma-no-bounce-copy',
+     [('\t\tmemcpy(buffer, self->dmaBuffer, bytes);\n',
+       '\t\tmemset(buffer, 0, bytes);\n')],
+     'dma-success'),
+    ('stack-dma-gate-dropped',
+     [('\tIOLockLock(gate);\n'
+       '\tif (!online) {\n',
+       '\tif (!online) {\n')],
+     'dma-success'),
+    ('stack-dma-counter-dropped',
+     [('\t\tself->dmaRequests++;\n'
+       '\t\tself->dmaBlocks += count;\n',
+       '\t\t/* stack counters dropped */\n')],
+     'dma-success'),
+    ('stack-dma-fallback-latch-dropped',
+     [('\t\t\tself->dmaEnabled = false;\n'
+       '\t\t\treturn GTA4L_EMMC_ERR_ADMA;\n',
+       '\t\t\treturn GTA4L_EMMC_ERR_ADMA;\n')],
+     'dma-stack-fallback'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2552,9 +2574,9 @@ def check_adapter_source():
         policy_header, 'the BULKFAIL formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u' in \
         policy_header, 'the BULKIO formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3259u' in \
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3289u' in \
         policy_header, 'the BULK report bound must match the base block'
-    assert '#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u' in \
+    assert '#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 338u' in \
         policy_header, 'the DMA formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES 218u' in \
         policy_header, 'the DMADIAG formatter bound must stay exact'
@@ -2618,9 +2640,27 @@ def check_adapter_source():
         'bulk mode must reject foreign and overlapping requests'
     assert 'bulkObserve(buffer, blockNumber, nblks)' in adapter, \
         'adapter must observe the actual bulk subrequest decomposition'
-    assert 'memcmp(useDma ? dmaBuffer :' in adapter and \
-        'bulkClient->data(), bulkReference' in adapter, \
+    assert 'memcmp(bulkClient->data(), bulkReference,' in adapter and \
+        'GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES) != 0' in adapter, \
         'bulk windows must compare the whole observed window'
+    assert 'dmaReadLocked' in adapter and \
+        'ok = dmaReadLocked(lba, blocks, bytes);' in adapter, \
+        'the direct DMA read must run under the one controller gate'
+    assert 'self->dmaEnabled && (buffer != nullptr) &&' in adapter and \
+        'dmaReadLocked((uint32_t)blockNumber, count,' in adapter, \
+        'the block-stack multi-block path must use the qualified DMA read'
+    assert 'memcpy(buffer, self->dmaBuffer, bytes);' in adapter, \
+        'the block-stack DMA path must copy out of the bounce buffer'
+    assert 'report.dma_requests = (uint32_t)dmaRequests;' in adapter and \
+        'report.dma_blocks = (uint32_t)dmaBlocks;' in adapter, \
+        'the DMA line must report the stack-path request and block counts'
+    assert 'gta4l_test.dma_lock_violations++;' in adapter, \
+        'the host seam must witness a DMA transfer outside the gate'
+    assert 'readOk = dmaRead(' not in adapter and \
+        'source = dmaBuffer' not in adapter, \
+        'the bulk stream must read through the media in both modes'
+    assert 'if (dmaMode && !useDma) {' in adapter, \
+        'an unqualified DMA run must release its diagnostic buffers'
     assert 'gta4l_emmc_deadline_arm(&host,\n' \
         '\t\t    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS)' in adapter, \
         'bulk stream must arm the inclusive transport budget once'
@@ -3075,8 +3115,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 477, f'expected 477 adapter PASS lines, got {passes}'
-        print('PASS adapter: 477 scenarios against the host IOKit seam')
+        assert passes == 478, f'expected 478 adapter PASS lines, got {passes}'
+        print('PASS adapter: 478 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

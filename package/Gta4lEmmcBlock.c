@@ -3883,6 +3883,12 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "skip");
 		gta4l_emmc_block_put_u64(&writer, report->dma_skip);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "req");
+		gta4l_emmc_block_put_u64(&writer, report->dma_requests);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "blk");
+		gta4l_emmc_block_put_u64(&writer, report->dma_blocks);
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 

@@ -500,6 +500,13 @@ struct gta4l_test_state {
 	int cache_fail_at;
 	int adma_table_shadow_valid;
 	int adma_buffer_shadow_valid;
+	/* B10.13 stack-path gate witness. dmaReadLocked records the controller
+	 * lock depth at every transfer; a zero depth means the command ran
+	 * outside the one gate. The mutation controls remove the gate lock
+	 * from doAsyncReadWrite or the dmaRead wrapper and require a
+	 * violation. */
+	int dma_lock_depth;
+	uint32_t dma_lock_violations;
 	uint32_t init_calls;
 	uint32_t read_calls;
 	int fail_read_at;
