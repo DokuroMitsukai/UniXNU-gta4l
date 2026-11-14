@@ -41,7 +41,7 @@ gta4l_emmc_platform_map_smmu(struct gta4l_emmc_platform *platform)
 	if (platform->smmu == 0) {
 		platform->smmu = (uintptr_t)ml_io_map(
 		    GTA4L_EMMC_PLATFORM_SMMU_BASE,
-		    GTA4L_EMMC_PLATFORM_WINDOW);
+		    GTA4L_EMMC_PLATFORM_SMMU_WINDOW);
 	}
 	return (platform->smmu == 0) ? -1 : 0;
 }
@@ -51,6 +51,16 @@ gta4l_emmc_platform_smmu_read32(
     const struct gta4l_emmc_platform *platform, uint32_t offset)
 {
 	return *(volatile uint32_t *)(platform->smmu + offset);
+}
+
+uint64_t
+gta4l_emmc_platform_smmu_read64(
+    const struct gta4l_emmc_platform *platform, uint32_t offset)
+{
+	uint64_t low = gta4l_emmc_platform_smmu_read32(platform, offset);
+	uint64_t high = gta4l_emmc_platform_smmu_read32(platform,
+	    offset + 4u);
+	return low | (high << 32);
 }
 
 uint64_t

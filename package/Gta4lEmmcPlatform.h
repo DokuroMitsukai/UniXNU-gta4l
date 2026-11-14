@@ -19,6 +19,7 @@ extern "C" {
 #define GTA4L_EMMC_PLATFORM_GCC_BASE   0x01438000u
 #define GTA4L_EMMC_PLATFORM_TLMM_BASE  0x00575000u
 #define GTA4L_EMMC_PLATFORM_SMMU_BASE  0x0c600000u
+#define GTA4L_EMMC_PLATFORM_SMMU_WINDOW 0x00080000u
 #define GTA4L_EMMC_PLATFORM_WINDOW     0x00001000u
 
 struct gta4l_emmc_platform {
@@ -39,6 +40,8 @@ int gta4l_emmc_platform_map(struct gta4l_emmc_platform *platform);
  * eMMC bring-up; the bulk gate treats a failure as a skip reason. */
 int gta4l_emmc_platform_map_smmu(struct gta4l_emmc_platform *platform);
 uint32_t gta4l_emmc_platform_smmu_read32(
+    const struct gta4l_emmc_platform *platform, uint32_t offset);
+uint64_t gta4l_emmc_platform_smmu_read64(
     const struct gta4l_emmc_platform *platform, uint32_t offset);
 
 uint64_t gta4l_emmc_platform_counter(void);

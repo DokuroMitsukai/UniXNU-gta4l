@@ -1649,7 +1649,9 @@ ADAPTER_MUTATIONS = [
     ('dma-smmu-skip-ignored',
      [('\tif (dmaMode &&\n'
        '\t    (report.smmu_decision !=\n'
-       '\t    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS)) {\n'
+       '\t    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS) &&\n'
+       '\t    (report.smmu_decision !=\n'
+       '\t    GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF)) {\n'
        '\t\tdmaSkip = 1;\n'
        '\t}\n',
        '\tif (0) {\n'
@@ -2335,8 +2337,8 @@ def check_adapter_source():
         'widthhold mode must suppress the legacy PART lines'
     assert '(report->widthhold == 0)' in policy, \
         'widthhold mode must suppress the legacy READ/QUAL lines'
-    assert '#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3072u' in policy_header, \
-        'widthhold report must raise the report buffer to 2,560 bytes'
+    assert '#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3328u' in policy_header, \
+        'the SMMUCB census must raise the report buffer to 3,328 bytes'
     assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES <=' in policy, \
         'widthhold summary must stay inside the report buffer'
     assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_REPORT_WORST_BYTES <=' in policy, \
@@ -2470,9 +2472,9 @@ def check_adapter_source():
         'the BULK formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u' in \
         policy_header, 'the BULKFAIL formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 250u' in \
+    assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u' in \
         policy_header, 'the BULKIO formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2972u' in \
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3208u' in \
         policy_header, 'the BULK report bound must match the base block'
     assert '#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u' in \
         policy_header, 'the DMA formatter bound must stay exact'
@@ -2515,10 +2517,20 @@ def check_adapter_source():
     assert 'GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES' in adapter and \
         'IOFreeContiguous(bulkReference' in adapter, \
         'bulk window reference must be allocated and freed'
-    assert 'gta4l_emmc_block_sha256_init(&sha)' in adapter and \
-        'gta4l_emmc_block_sha256_update(&sha,' in adapter and \
-        'gta4l_emmc_block_sha256_final(&sha, digest)' in adapter, \
+    assert 'gta4l_emmc_bulk_sha_init(&sha)' in adapter and \
+        'gta4l_emmc_bulk_sha_update(&sha,' in adapter and \
+        'gta4l_emmc_bulk_sha_final(&sha, digest)' in adapter, \
         'bulk stream must hash exactly the bytes read'
+    assert '#include "Gta4lEmmcBlockSha.h"' in adapter and \
+        'report.bulkio_sha_provider =' in adapter and \
+        'gta4l_emmc_bulk_sha_is_libkern(&sha)' in adapter, \
+        'bulk stream must select and report the SHA provider'
+    sha_header = (ROOT / 'package' / 'Gta4lEmmcBlockSha.h').read_text()
+    assert 'g_crypto_funcs != 0' in sha_header and \
+        'gta4l_emmc_block_sha256_init(&ctx->portable)' in sha_header and \
+        'gta4l_emmc_block_sha256_update(&ctx->portable' in sha_header and \
+        'gta4l_emmc_block_sha256_final(&ctx->portable' in sha_header, \
+        'SHA provider must check corecrypto and keep the portable fallback'
     assert 'gta4l_emmc_block_bulk_window(window' in adapter, \
         'bulk windows must use the shared window derivation'
     assert 'bulkObservedOrder' in adapter and \
@@ -2875,6 +2887,67 @@ def check_speed_report_roundtrip(stdout, temp):
     print('PASS speed checker roundtrip: adapter line and mismatch binding')
 
 
+def check_sha_provider(compiler, temp):
+    """Compile and run the bulk SHA-256 provider equivalence test."""
+    cxx = shutil.which('g++') or shutil.which('clang++')
+    if not cxx:
+        print('SKIP: no C++ compiler for the SHA provider test')
+        return
+    package = ROOT / 'package'
+    core = temp / 'sha-core.o'
+    built = subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra',
+                            '-Werror', '-DGTA4L_EMMC_BLOCK_HOST_TEST',
+                            '-I', str(package), '-c', str(CORE),
+                            '-o', str(core)], text=True,
+                           capture_output=True)
+    assert built.returncode == 0, \
+        'SHA core compile failed:\n' + (built.stdout + built.stderr)
+
+    def build_and_run(extra_include, label):
+        obj = temp / f'sha-provider-{label}.o'
+        binary = temp / f'sha-provider-{label}'
+        built = subprocess.run([cxx, '-std=c++17', '-Wall', '-Wextra',
+                                '-Werror',
+                                '-DGTA4L_EMMC_BLOCK_SHA_STUB_TEST',
+                                '-I', str(extra_include),
+                                '-I', str(package), '-I', str(SIM),
+                                '-c',
+                                str(SIM / 'sha_provider_test.cpp'),
+                                '-o', str(obj)], text=True,
+                               capture_output=True)
+        assert built.returncode == 0, \
+            f'SHA provider {label} compile failed:\n' + \
+            (built.stdout + built.stderr)
+        linked = subprocess.run([cxx, str(core), str(obj), '-o',
+                                 str(binary)], text=True,
+                                capture_output=True)
+        assert linked.returncode == 0, \
+            f'SHA provider {label} link failed:\n' + \
+            (linked.stdout + linked.stderr)
+        return subprocess.run([str(binary)], text=True,
+                              capture_output=True)
+
+    run = build_and_run(package, 'ok')
+    assert run.returncode == 0, \
+        'SHA provider test failed:\n' + (run.stdout + run.stderr)
+    assert 'PASS sha-provider' in run.stdout, run.stdout
+    print('PASS sha-provider: 4 vectors, both providers, chunk boundaries')
+
+    mirror = temp / 'sha-provider-mutation'
+    mirror.mkdir()
+    header = (package / 'Gta4lEmmcBlockSha.h').read_text()
+    anchor = 'if (g_crypto_funcs != 0) {'
+    assert header.count(anchor) == 1, \
+        'SHA provider mutation anchor count changed'
+    (mirror / 'Gta4lEmmcBlockSha.h').write_text(
+        header.replace(anchor, 'if (0) {'))
+    run = build_and_run(mirror, 'mutated')
+    assert run.returncode != 0, \
+        'SHA provider mutation (corecrypto ignored) was accepted'
+    assert 'FAIL' in run.stdout, run.stdout
+    print('PASS mutation sha-provider-corecrypto-ignored rejected')
+
+
 def main():
     compiler = shutil.which('gcc') or shutil.which('clang')
     if not compiler:
@@ -2910,6 +2983,7 @@ def main():
                 (run.stdout + run.stderr)
             print(f'PASS mutation {name} rejected ({scenario})')
         check_adapter_source()
+        check_sha_provider(compiler, temp)
         run, built, policy_objects = compile_adapter(compiler, temp)
         if run is None:
             if built is None:
@@ -2921,8 +2995,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 461, f'expected 461 adapter PASS lines, got {passes}'
-        print('PASS adapter: 461 scenarios against the host IOKit seam')
+        assert passes == 468, f'expected 468 adapter PASS lines, got {passes}'
+        print('PASS adapter: 468 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

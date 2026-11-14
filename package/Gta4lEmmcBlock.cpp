@@ -38,6 +38,7 @@
 #include "Gta4lEmmcPlatform.h"
 #include "Gta4lEmmcBlock.h"
 #include "Gta4lEmmcBlockCore.h"
+#include "Gta4lEmmcBlockSha.h"
 
 #ifndef GTA4L_EMMC_BLOCK_HOST_TEST
 extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t),
@@ -779,6 +780,7 @@ private:
 	void runSpeed(void);
 	bool runBulk(void);
 	bool runSmmuGate(void);
+	bool runSmmuPostDma(void);
 	bool dmaAllocate(void);
 	void dmaRelease(void);
 	bool dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes);
@@ -1027,6 +1029,8 @@ private:
 	uint32_t dmaBudget = 0;
 	uint64_t dmaTicks = 0;
 	uint64_t dmaDat = 0;
+	uint32_t smmuCbBase = 0;
+	uint32_t smmuCbIndex = 0xffffffffu;
 	uint32_t widthCaptureLimit =
 	    GTA4L_EMMC_BLOCK_WIDTH_CASE_BYTES;
 	bool registered = false;
@@ -3966,6 +3970,7 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		target->bulkio_polls = report.bulkio_polls;
 		target->bulkio_delays = report.bulkio_delays;
 		target->bulkio_sha = report.bulkio_sha;
+		target->bulkio_sha_provider = report.bulkio_sha_provider;
 		target->bulkio_host_control = report.bulkio_host_control;
 		target->bulkio_clock_control = report.bulkio_clock_control;
 		target->bulkio_present = report.bulkio_present;
@@ -9606,26 +9611,71 @@ Gta4lEmmcBlock::runSmmuGate()
 {
 	uint32_t scr0 = 0;
 	uint32_t id0 = 0;
+	uint32_t id1 = 0;
+	uint32_t id2 = 0;
+	uint32_t gfsr = 0;
+	uint32_t gfsynr0 = 0;
 	uint32_t nsmrg = 0;
 	uint32_t index = 0;
 	uint32_t smr = 0;
 	uint32_t s2cr = 0;
 	uint32_t cb = 0;
+	uint32_t valid = 0;
+	uint32_t matches = 0;
+	uint32_t share = 0;
+	uint32_t matchIndex = 0xffffffffu;
+	uint32_t matchedSmr = 0;
+	uint32_t lastSctlr = 0;
+	uint32_t lastCbar = 0;
+	bool cbCensus = false;
+	uint32_t pgshift = 12u;
+	uint32_t numpage = 0;
+	uint32_t numcb = 0;
+	uint32_t gr1 = 0;
+	uint32_t cbBase = 0;
+	uint32_t lastBase = 0;
+	uint32_t lastIndex = 0;
+	uint32_t layout = 0;
+	uint32_t peer;
 	uint32_t decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
+	uint32_t smrValues[GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS];
+	struct gta4l_emmc_block_smmu_cb_state cbState;
 	bool matched = false;
 
+	memset(&cbState, 0, sizeof(cbState));
+	memset(smrValues, 0, sizeof(smrValues));
 	IOLockLock(reportLock);
 	report.smmu = 1u;
 	report.smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_PRE;
 	report.smmu_scr0 = 0;
 	report.smmu_id0 = 0;
+	report.smmu_id1 = 0;
+	report.smmu_id2 = 0;
+	report.smmu_gfsr = 0;
+	report.smmu_gfsynr0 = 0;
 	report.smmu_nsmrg = 0;
 	report.smmu_index = 0xffffffffu;
 	report.smmu_smr = 0;
 	report.smmu_s2cr = 0;
 	report.smmu_cb = 0;
 	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE;
+	report.smmu_cb_line = 0;
+	report.smmu_valid = 0;
+	report.smmu_matches = 0;
+	report.smmu_share = 0;
+	report.smmu_cbar = 0;
+	report.smmu_sctlr = 0;
+	report.smmu_tcr = 0;
+	report.smmu_ttbr0 = 0;
+	report.smmu_fsr = 0;
+	report.smmu_last_index = 0;
+	report.smmu_last_sctlr = 0;
+	report.smmu_last_cbar = 0;
+	report.smmu_pfsr = 0;
+	report.smmu_pgfsr = 0;
 	IOLockUnlock(reportLock);
+	smmuCbBase = 0;
+	smmuCbIndex = 0xffffffffu;
 	/* Visible before the first SMMU access so an abort on the global
 	 * page is identifiable from the boot log/panic context; the line
 	 * below still carries the full register state when the read works. */
@@ -9643,6 +9693,14 @@ Gta4lEmmcBlock::runSmmuGate()
 	    GTA4L_EMMC_BLOCK_SMMU_REG_SCR0);
 	id0 = gta4l_emmc_platform_smmu_read32(&platform,
 	    GTA4L_EMMC_BLOCK_SMMU_REG_ID0);
+	id1 = gta4l_emmc_platform_smmu_read32(&platform,
+	    GTA4L_EMMC_BLOCK_SMMU_REG_ID1);
+	id2 = gta4l_emmc_platform_smmu_read32(&platform,
+	    GTA4L_EMMC_BLOCK_SMMU_REG_ID2);
+	gfsr = gta4l_emmc_platform_smmu_read32(&platform,
+	    GTA4L_EMMC_BLOCK_SMMU_REG_GFSR);
+	gfsynr0 = gta4l_emmc_platform_smmu_read32(&platform,
+	    GTA4L_EMMC_BLOCK_SMMU_REG_GFSYNR0);
 	nsmrg = id0 & GTA4L_EMMC_BLOCK_SMMU_ID0_NUMSMRG_MASK;
 	if (nsmrg > GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS) {
 		nsmrg = GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS;
@@ -9650,42 +9708,182 @@ Gta4lEmmcBlock::runSmmuGate()
 	for (index = 0; index < nsmrg; index++) {
 		smr = gta4l_emmc_platform_smmu_read32(&platform,
 		    GTA4L_EMMC_BLOCK_SMMU_REG_SMR(index));
+		smrValues[index] = smr;
+		if ((smr & GTA4L_EMMC_BLOCK_SMMU_SMR_VALID) == 0u) {
+			continue;
+		}
+		valid++;
 		if (gta4l_emmc_block_smmu_match(
 		    GTA4L_EMMC_BLOCK_SMMU_STREAM_ID, smr) != 0) {
-			matched = true;
-			break;
+			matches++;
+			if (matchIndex == 0xffffffffu) {
+				matchIndex = index;
+				matchedSmr = smr;
+			}
 		}
 	}
+	matched = matches != 0u;
 	if (matched) {
 		s2cr = gta4l_emmc_platform_smmu_read32(&platform,
-		    GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(index));
+		    GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(matchIndex));
 		cb = s2cr & GTA4L_EMMC_BLOCK_SMMU_S2CR_CBNDX_MASK;
-	} else {
-		index = 0xffffffffu;
 	}
 	decision = gta4l_emmc_block_smmu_decide(scr0, s2cr,
 	    matched ? 1 : 0);
+
+	if (decision == GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE) {
+		/* The stream is routed to a context bank. Read the bank's
+		 * type and state before any DMA; the read-only gate never
+		 * writes an SMMU register. */
+		cbCensus = true;
+		pgshift = ((id1 & GTA4L_EMMC_BLOCK_SMMU_ID1_PAGESIZE) != 0u) ?
+		    16u : 12u;
+		numpage = 1u << (((id1 >>
+		    GTA4L_EMMC_BLOCK_SMMU_ID1_NUMPAGENDXB_SHIFT) &
+		    GTA4L_EMMC_BLOCK_SMMU_ID1_NUMPAGENDXB_MASK) + 1u);
+		numcb = id1 & GTA4L_EMMC_BLOCK_SMMU_ID1_NUMCB_MASK;
+		gr1 = 1u << pgshift;
+		if ((numcb != 0u) && (cb < numcb)) {
+			cbBase = (numpage + cb) << pgshift;
+			lastIndex = numcb - 1u;
+			lastBase = (numpage + lastIndex) << pgshift;
+			layout = ((cbBase + 0x100u) <=
+			    GTA4L_EMMC_PLATFORM_SMMU_WINDOW) &&
+			    ((lastBase + 0x100u) <=
+			    GTA4L_EMMC_PLATFORM_SMMU_WINDOW) &&
+			    ((gr1 + 0x1000u) <=
+			    GTA4L_EMMC_PLATFORM_SMMU_WINDOW);
+		}
+		if (layout != 0u) {
+			IOLockLock(reportLock);
+			report.smmu_stage =
+			    GTA4L_EMMC_BLOCK_SMMU_STAGE_GR1_PRE;
+			IOLockUnlock(reportLock);
+			IOLog("GTA4L-EMMC P5 SMMU: stage=gr1-pre\n");
+			cbState.cbar = gta4l_emmc_platform_smmu_read32(
+			    &platform, gr1 + (cb << 2));
+			cbState.cba2r = gta4l_emmc_platform_smmu_read32(
+			    &platform, gr1 + 0x800u + (cb << 2));
+			IOLockLock(reportLock);
+			report.smmu_stage =
+			    GTA4L_EMMC_BLOCK_SMMU_STAGE_CB_PRE;
+			IOLockUnlock(reportLock);
+			IOLog("GTA4L-EMMC P5 SMMU: stage=cb-pre\n");
+			cbState.sctlr = gta4l_emmc_platform_smmu_read32(
+			    &platform, cbBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_SCTLR);
+			cbState.tcr2 = gta4l_emmc_platform_smmu_read32(
+			    &platform, cbBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_TCR2);
+			cbState.ttbr0 = gta4l_emmc_platform_smmu_read64(
+			    &platform, cbBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_TTBR0);
+			cbState.tcr = gta4l_emmc_platform_smmu_read32(
+			    &platform, cbBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_TCR);
+			cbState.mair0 = gta4l_emmc_platform_smmu_read32(
+			    &platform, cbBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_MAIR0);
+			cbState.fsr = gta4l_emmc_platform_smmu_read32(
+			    &platform, cbBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_FSR);
+			cbState.far = gta4l_emmc_platform_smmu_read64(
+			    &platform, cbBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_FAR);
+			cbState.fsynr0 = gta4l_emmc_platform_smmu_read32(
+			    &platform, cbBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_FSYNR0);
+			lastSctlr = gta4l_emmc_platform_smmu_read32(
+			    &platform, lastBase +
+			    GTA4L_EMMC_BLOCK_SMMU_CB_SCTLR);
+			lastCbar = gta4l_emmc_platform_smmu_read32(
+			    &platform, gr1 + (lastIndex << 2));
+			/* Count every stream that shares this bank; a write
+			 * rung must not repoint a bank another master uses. */
+			for (index = 0; index < nsmrg; index++) {
+				if ((smrValues[index] &
+				    GTA4L_EMMC_BLOCK_SMMU_SMR_VALID) == 0u) {
+					continue;
+				}
+				peer = gta4l_emmc_platform_smmu_read32(
+				    &platform,
+				    GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(index));
+				if (((peer &
+				    GTA4L_EMMC_BLOCK_SMMU_S2CR_CBNDX_MASK) ==
+				    cb) &&
+				    (((peer >>
+				    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT) &
+				    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_MASK) ==
+				    GTA4L_EMMC_BLOCK_SMMU_TYPE_TRANSLATE)) {
+					share++;
+				}
+			}
+			smmuCbBase = cbBase;
+			smmuCbIndex = cb;
+			decision = gta4l_emmc_block_smmu_decide_cb(matches,
+			    layout, gfsr, &cbState);
+		} else {
+			decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_LAYOUT;
+		}
+	}
 
 done:
 	IOLockLock(reportLock);
 	report.smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_DONE;
 	report.smmu_scr0 = scr0;
 	report.smmu_id0 = id0;
+	report.smmu_id1 = id1;
+	report.smmu_id2 = id2;
+	report.smmu_gfsr = gfsr;
+	report.smmu_gfsynr0 = gfsynr0;
 	report.smmu_nsmrg = nsmrg;
-	report.smmu_index = index;
-	report.smmu_smr = smr;
+	report.smmu_index = matchIndex;
+	report.smmu_smr = matchedSmr;
 	report.smmu_s2cr = s2cr;
 	report.smmu_cb = cb;
+	report.smmu_valid = valid;
+	report.smmu_matches = matches;
+	report.smmu_share = share;
+	report.smmu_cb_line = cbCensus ? 1u : 0u;
+	report.smmu_cbar = cbState.cbar;
+	report.smmu_sctlr = cbState.sctlr;
+	report.smmu_tcr = cbState.tcr;
+	report.smmu_ttbr0 = cbState.ttbr0;
+	report.smmu_fsr = cbState.fsr;
+	report.smmu_last_index = lastIndex;
+	report.smmu_last_sctlr = lastSctlr;
+	report.smmu_last_cbar = lastCbar;
 	report.smmu_decision = decision;
 	IOLockUnlock(reportLock);
-	return decision == GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;
+	return (decision == GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS) ||
+	    (decision == GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF);
+}
+
+bool
+Gta4lEmmcBlock::runSmmuPostDma()
+{
+	uint32_t fsr;
+	uint32_t gfsr;
+
+	if (smmuCbBase == 0u) {
+		return true;
+	}
+	fsr = gta4l_emmc_platform_smmu_read32(&platform,
+	    smmuCbBase + GTA4L_EMMC_BLOCK_SMMU_CB_FSR);
+	gfsr = gta4l_emmc_platform_smmu_read32(&platform,
+	    GTA4L_EMMC_BLOCK_SMMU_REG_GFSR);
+	IOLockLock(reportLock);
+	report.smmu_pfsr = fsr;
+	report.smmu_pgfsr = gfsr;
+	IOLockUnlock(reportLock);
+	return (fsr == 0u) && (gfsr == 0u);
 }
 
 bool
 Gta4lEmmcBlock::runBulk()
 {
 	struct gta4l_emmc_bulk_result result;
-	struct gta4l_emmc_block_sha256_ctx sha;
+	struct gta4l_emmc_bulk_sha_ctx sha;
 	uint64_t windowBlock = 0;
 	uint64_t byteOffset;
 	uint64_t streamStart = 0;
@@ -9768,6 +9966,7 @@ Gta4lEmmcBlock::runBulk()
 	report.bulkio_polls = 0;
 	report.bulkio_delays = 0;
 	report.bulkio_sha = 0;
+	report.bulkio_sha_provider = 0;
 	report.bulkio_host_control = 0;
 	report.bulkio_clock_control = 0;
 	report.bulkio_present = 0;
@@ -9840,7 +10039,9 @@ Gta4lEmmcBlock::runBulk()
 	(void)runSmmuGate();
 	if (dmaMode &&
 	    (report.smmu_decision !=
-	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS)) {
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS) &&
+	    (report.smmu_decision !=
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF)) {
 		dmaSkip = 1;
 	}
 	speedTimingActive = false;
@@ -9922,6 +10123,15 @@ Gta4lEmmcBlock::runBulk()
 			    GTA4L_EMMC_BLOCK_DMA_STAGE_COMPARE;
 		} else {
 			useDma = true;
+			/* Re-read the bank and global fault registers after
+			 * the comparison window, before the stream. */
+			if (!runSmmuPostDma()) {
+				dmaStage =
+				    GTA4L_EMMC_BLOCK_DMA_STAGE_SMMU;
+				stage =
+				    GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU;
+				dmaFails++;
+			}
 		}
 	}
 	if (stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) {
@@ -9930,7 +10140,7 @@ Gta4lEmmcBlock::runBulk()
 		gta4l_emmc_capture_diag_regs(&host);
 		streamStart = gta4l_emmc_platform_counter();
 		bulkReadStart = streamStart;
-		gta4l_emmc_block_sha256_init(&sha);
+		gta4l_emmc_bulk_sha_init(&sha);
 		streamHashed = true;
 		gta4l_emmc_deadline_arm(&host,
 		    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS);
@@ -9985,7 +10195,7 @@ Gta4lEmmcBlock::runBulk()
 				break;
 			}
 			shaStart = gta4l_emmc_platform_counter();
-			gta4l_emmc_block_sha256_update(&sha, source, hashed);
+			gta4l_emmc_bulk_sha_update(&sha, source, hashed);
 			shaTicks += gta4l_emmc_platform_counter() - shaStart;
 			bytes += hashed;
 			if (readOk) {
@@ -10021,7 +10231,9 @@ Gta4lEmmcBlock::runBulk()
 		}
 		streamTicks =
 		    gta4l_emmc_platform_counter() - streamStart;
-		gta4l_emmc_block_sha256_final(&sha, digest);
+		gta4l_emmc_bulk_sha_final(&sha, digest);
+		report.bulkio_sha_provider =
+		    gta4l_emmc_bulk_sha_is_libkern(&sha) ? 1u : 0u;
 		/* Time one 512-byte-equivalent set of data-port reads with
 		 * the FIFO idle. Only a clean stream or the controlled budget
 		 * exit leaves a state where this is safe; a data error keeps
@@ -10030,6 +10242,15 @@ Gta4lEmmcBlock::runBulk()
 		    (stage == GTA4L_EMMC_BLOCK_BULK_STAGE_BUDGET)) {
 			(void)gta4l_emmc_calibrate_drain(&host,
 			    GTA4L_EMMC_BLOCK_BYTES / 4u);
+		}
+	}
+
+	if ((stage == GTA4L_EMMC_BLOCK_BULK_STAGE_NONE) && useDma) {
+		/* A fault raised during the stream must stop the windows. */
+		if (!runSmmuPostDma()) {
+			dmaStage = GTA4L_EMMC_BLOCK_DMA_STAGE_SMMU;
+			stage = GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU;
+			dmaFails++;
 		}
 	}
 

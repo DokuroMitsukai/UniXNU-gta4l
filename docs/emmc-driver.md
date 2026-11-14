@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 460 scenarios with 175 adapter mutations, 3 support mutations and 46 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 467 scenarios with 175 adapter mutations, 3 support mutations and 46 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7446,7 +7446,7 @@ watchdog. This rung keeps the proven 4,000/4,500 ms bulk budget; DMA+SHA
 is expected to hit the controlled budget exit until corecrypto SHA-256 is
 imported.
 
-Host suite: 460 scenarios with 175 adapter, 3 support and 46 policy
+Host suite: 467 scenarios with 175 adapter, 3 support and 46 policy
 mutations, including twelve DMA scenarios and seven DMA mutations. Host-only:
 no candidate, device access, flash or boot; the first DMA boot still
 needs the B10.5 hash-specific go.
@@ -7519,3 +7519,72 @@ making the pre/post tail comparison vacuous. It was fixed before this
 flash to omit `count` when zero, so preflight and postflight hashed the
 real 14,974,976-byte tail. The fix is outside the tracked tree and is
 recorded here and in the evidence `verification.txt`.
+
+### 5.3.116 B10.9 libkern SHA-256 provider (host-only) (2026-11-14)
+
+The B10.5 PIO run measured portable SHA at 13.1 MB/s, so hashing the full
+85,688,320-byte region needs about 6.5 s, over the 4,000 ms stream budget
+even with instant DMA. The candidate kernel exports `SHA256_Init`,
+`SHA256_Update`, `SHA256_Final` and `g_crypto_funcs`. The new
+`package/Gta4lEmmcBlockSha.h` selects libkern SHA-256 when
+`g_crypto_funcs` is registered and falls back to the portable core
+otherwise; the choice is latched per bulk run and reported as
+`shap=lk|pt` in `BULKIO`. The line grows from 250 to 258 bytes and the
+bulk worst case from 2,980 to 3,208 bytes with the SMMUCB line below.
+
+`scripts/sim-gta4l-emmc-block/sha_provider_test.cpp` checks four known
+vectors (empty, `abc`, the 56-byte two-block vector and 1,000,000 `a`) with
+both provider selections and chunk boundaries. A host mutation that
+ignores `g_crypto_funcs` is rejected. The stub `SHA256_*` is implemented
+with the portable core, so the test validates the selection latch and the
+digest, not corecrypto itself; the next boot's `shap=lk` and `sha=` ticks
+measure the real path. This is host-only; no device access or boot.
+
+### 5.3.117 B10.7 SMMU context census and candidate (2026-11-14)
+
+The B10.5 boot showed stream `0xc0` translating through context bank 0 but
+did not read the bank. B10.7 maps the full 512 KiB `apps_smmu` window and
+reads `ID1`, `ID2`, `sGFSR` and `sGFSYNR0`, all valid SMRs (up to the
+128-group hypervisor-safe limit), the match count and the bank-sharing
+count. On a translate verdict it derives `pgshift`, `numpage` and `NUMCB`
+from `ID1`, reads `CBAR`/`CBA2R` and the matched bank's
+`SCTLR`/`TCR2`/`TTBR0`/`TCR`/`MAIR0`/`FSR`/`FAR`/`FSYNR0`, and the last
+bank's `SCTLR`/`CBAR`. Markers `gr1-pre` and `cb-pre` precede the first
+GR1 and CB reads. **No SMMU register is written.**
+
+Only `cb-off` allows DMA: `CBAR.TYPE = S1_TRANS_S2_BYPASS`,
+`SCTLR.M = 0`, both fault registers zero, one match and a valid layout.
+`layout`, `conflict`, `cb-type`, `translate-live` and `cb-fault` all skip
+to PIO. `runSmmuPostDma()` re-reads the CB FSR and `sGFSR` after the
+comparison window and after the stream; a new fault latches
+`BULKFAIL stage=13` and stops before the next DMA. The new `SMMUCB:` line
+is 227 bytes and reports `id1/id2/gfsr/gfsynr0`, `v/m/sh`,
+`cbar/sctlr/tcr/ttbr0/fsr`, the last-bank triple and `pfsr/pgfsr`. The
+report buffer grows from 3,072 to 3,328 bytes; the bulk worst case is
+3,208 bytes.
+
+Candidate: kernel
+`e0634e31d5fae9582fd58dd958280c3a9819bcd4faa8d9e977f5ad7436fea550`
+(51,621,888 bytes). The first build `25df0570` used the previous audit and
+moved the service metaclass to `0xfffffff007b3f5b8`; the audit → relink
+fixpoint rebuilt with `out/gta4l/storage-abi-25df0570` and produced
+`e0634e31`. Its audit `out/gta4l/storage-abi-e0634e31` PASSes with the
+same addresses (vtable `0xfffffff005cb44c0`, metaclass
+`0xfffffff006add1d0`, service `0xfffffff007b3f5b8`), 190 slots, 181
+bindings and native 4K. The requalified archive
+`bacd358ab0933aaaa74e5b41b8a959f5d0f98cd8d4148efaeb9087df591a2fd6` is
+byte-identical to the archive linked into the kernel. Payload
+`23c7c7710afd44ea9eaf770e048ec5606cf9a0b4e2122b08118c1d3efbcc307d`
+(83,886,080 bytes) with `gta4l-emmc-block=3 gta4l-emmc-bulk=1
+gta4l-emmc-dma=1 rd=md0`; BOOT image
+`0d77d602273cf8c41dabd4d4634714ae09c73277b16b3b0fc01928a09269e60e`
+(85,688,320 bytes) against the v5 baseline `ce4d76e8…`. Payload contract
+105/105 and boot gate 18/18; only the ramdisk differs.
+
+Host coverage: block 467 scenarios with 175 adapter, 3 support and 46
+policy mutations, including `bulk-smmu-cb-off`, `-cb-type`, `-cb-fault`,
+`-conflict`, `-layout`, the translate-live row, `dma-cb-off` and
+`dma-post-fault` (FSR after the comparison → stage 13). **Not flashed.**
+The next boot that allows DMA is the first DMA rung in effect and needs an
+owner "go" naming `0d77d602…`; card writes remain disabled. BOOT still
+holds the B10.5 image, which must not be booted again.

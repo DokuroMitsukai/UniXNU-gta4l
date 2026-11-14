@@ -469,11 +469,29 @@ gta4l_emmc_platform_smmu_read32(
 
 	(void)platform;
 	gta4l_test.smmu_reads++;
+	if ((offset == 0x40000u + GTA4L_EMMC_BLOCK_SMMU_CB_FSR) &&
+	    (gta4l_test.smmu_fault_after != 0u)) {
+		gta4l_test.smmu_fault_count++;
+		if (gta4l_test.smmu_fault_count >=
+		    gta4l_test.smmu_fault_after) {
+			return 1u;
+		}
+	}
 	index = offset >> 2;
-	if (index >= 1024u) {
+	if (index >= (GTA4L_EMMC_PLATFORM_SMMU_WINDOW / 4u)) {
 		return 0;
 	}
 	return gta4l_test.smmu_regs[index];
+}
+
+uint64_t
+gta4l_emmc_platform_smmu_read64(
+    const struct gta4l_emmc_platform *platform, uint32_t offset)
+{
+	uint64_t low = gta4l_emmc_platform_smmu_read32(platform, offset);
+	uint64_t high = gta4l_emmc_platform_smmu_read32(platform,
+	    offset + 4u);
+	return low | (high << 32);
 }
 
 uint64_t

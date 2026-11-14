@@ -505,6 +505,10 @@ extern "C" {
  * and fields follow the pinned arm-smmu.h and Mu-Silicium SmmuV2.h. */
 #define GTA4L_EMMC_BLOCK_SMMU_REG_SCR0 0x0000u
 #define GTA4L_EMMC_BLOCK_SMMU_REG_ID0 0x0020u
+#define GTA4L_EMMC_BLOCK_SMMU_REG_ID1 0x0024u
+#define GTA4L_EMMC_BLOCK_SMMU_REG_ID2 0x0028u
+#define GTA4L_EMMC_BLOCK_SMMU_REG_GFSR 0x0048u
+#define GTA4L_EMMC_BLOCK_SMMU_REG_GFSYNR0 0x0050u
 #define GTA4L_EMMC_BLOCK_SMMU_REG_SMR(index) \
 	(0x0800u + ((index) << 2))
 #define GTA4L_EMMC_BLOCK_SMMU_REG_S2CR(index) \
@@ -512,6 +516,10 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SMMU_SCR0_CLIENTPD (1u << 0)
 #define GTA4L_EMMC_BLOCK_SMMU_SCR0_USFCFG (1u << 10)
 #define GTA4L_EMMC_BLOCK_SMMU_ID0_NUMSMRG_MASK 0xffu
+#define GTA4L_EMMC_BLOCK_SMMU_ID1_PAGESIZE (1u << 31)
+#define GTA4L_EMMC_BLOCK_SMMU_ID1_NUMPAGENDXB_SHIFT 28
+#define GTA4L_EMMC_BLOCK_SMMU_ID1_NUMPAGENDXB_MASK 0x7u
+#define GTA4L_EMMC_BLOCK_SMMU_ID1_NUMCB_MASK 0xffu
 #define GTA4L_EMMC_BLOCK_SMMU_SMR_VALID (1u << 31)
 #define GTA4L_EMMC_BLOCK_SMMU_SMR_ID_MASK 0xffffu
 #define GTA4L_EMMC_BLOCK_SMMU_SMR_MASK_SHIFT 16
@@ -521,8 +529,22 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SMMU_TYPE_TRANSLATE 0u
 #define GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS 1u
 #define GTA4L_EMMC_BLOCK_SMMU_TYPE_FAULT 2u
+#define GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_SHIFT 16
+#define GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_MASK 0x3u
+#define GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_S1_TRANS_S2_BYPASS 1u
+#define GTA4L_EMMC_BLOCK_SMMU_CB_SCTLR 0x0000u
+#define GTA4L_EMMC_BLOCK_SMMU_CB_TCR2 0x0010u
+#define GTA4L_EMMC_BLOCK_SMMU_CB_TTBR0 0x0020u
+#define GTA4L_EMMC_BLOCK_SMMU_CB_TCR 0x0030u
+#define GTA4L_EMMC_BLOCK_SMMU_CB_MAIR0 0x0038u
+#define GTA4L_EMMC_BLOCK_SMMU_CB_FSR 0x0058u
+#define GTA4L_EMMC_BLOCK_SMMU_CB_FAR 0x0060u
+#define GTA4L_EMMC_BLOCK_SMMU_CB_FSYNR0 0x0068u
+#define GTA4L_EMMC_BLOCK_SMMU_SCTLR_M (1u << 0)
 #define GTA4L_EMMC_BLOCK_SMMU_STREAM_ID 0x00c0u
-#define GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS 256u
+/* The hypervisor-safe stream-match scan limit; mainline Qualcomm limits to
+ * 128 groups when the implementation reports more. */
+#define GTA4L_EMMC_BLOCK_SMMU_MAX_STREAMS 128u
 
 /* B10.3 polled 32-bit ADMA2 sub-mode of bulk. The token is valid only with
  * gta4l-emmc-block=3 gta4l-emmc-bulk=1 and no other selector. The fixed
@@ -549,6 +571,7 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_DMA_STAGE_CANARY 7u
 #define GTA4L_EMMC_BLOCK_DMA_STAGE_WINDOW 8u
 #define GTA4L_EMMC_BLOCK_DMA_STAGE_SHAPE 9u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_SMMU 10u
 #define GTA4L_EMMC_BLOCK_ADMA_DESC_VALID 0x0001u
 #define GTA4L_EMMC_BLOCK_ADMA_DESC_END 0x0002u
 #define GTA4L_EMMC_BLOCK_ADMA_DESC_ACT_TRAN 0x0020u
@@ -557,18 +580,30 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SMMU_STAGE_PRE 1u
 #define GTA4L_EMMC_BLOCK_SMMU_STAGE_READ 2u
 #define GTA4L_EMMC_BLOCK_SMMU_STAGE_DONE 3u
+#define GTA4L_EMMC_BLOCK_SMMU_STAGE_GR1_PRE 4u
+#define GTA4L_EMMC_BLOCK_SMMU_STAGE_CB_PRE 5u
 
 #define GTA4L_EMMC_BLOCK_SMMU_DECISION_NONE 0u
 #define GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS 1u
 #define GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT 2u
 #define GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE 3u
 #define GTA4L_EMMC_BLOCK_SMMU_DECISION_MAP_FAIL 4u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_LAYOUT 5u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_CONFLICT 6u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT 7u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_TYPE 8u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE 9u
+#define GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF 10u
 
 /* Formatter-exact bound: the SMMU line is 139 bytes with the stage, the
  * two 8-hex registers, the stream count and index at ten digits, the SMR
  * and S2CR at 8 hex, the context bank at ten digits and the nine-character
  * `translate` decision token. */
 #define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 139u
+/* The SMMUCB line is 227 bytes: the census counts at two hex digits,
+ * eight 8-hex registers (id1/id2/gfsr/gfsynr0/cbar/sctlr/tcr/fsr), the
+ * 16-hex TTBR0, the last-bank triple and the post-DMA fault pair. */
+#define GTA4L_EMMC_BLOCK_SMMUCB_LINE_BYTES 227u
 
 /* Bulk-only failure stages. The stream and window reads share the S1
  * transport; the stage names the first bulk failure, not the S1 start
@@ -586,23 +621,25 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_BULK_STAGE_OPEN 10u
 #define GTA4L_EMMC_BLOCK_BULK_STAGE_SHAPE 11u
 #define GTA4L_EMMC_BLOCK_BULK_STAGE_DMA 12u
+#define GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU 13u
 
 /* Formatter-exact bounds: the BULK line is 249 bytes with its eleven
  * fields at their widest (seven u32 at ten digits, two u64 at twenty, one
  * u32 hex at eight, one 32-hex digest and ten separator spaces); the
  * failure-only BULKFAIL line is 167 bytes with seven u32 at ten digits,
- * one i32 at eleven and seven separators. The BULKIO line is 250 bytes:
- * six u32 counters at ten digits, the 8-bit Host Control and 16-bit Clock
- * Control at two and four hex digits, Present State at eight, five packed
- * sixteen-digit register pairs and thirteen separators. The S1 worst case
- * is 1,586 bytes; adding the SPEEDIO, BULK, BULKIO, SMMU, DMA and optional
- * BULKFAIL lines keeps the combined report at 2,972 bytes inside the
- * 3,072-byte buffer. */
+ * one i32 at eleven and seven separators. The BULKIO line is 258 bytes:
+ * six u32 counters at ten digits, the two-character `shap` provider token,
+ * the 8-bit Host Control and 16-bit Clock Control at two and four hex
+ * digits, Present State at eight, five packed sixteen-digit register pairs
+ * and fourteen separators. The S1 worst case is 1,586 bytes; adding the
+ * SPEEDIO, BULK, BULKIO, SMMU, DMA and optional BULKFAIL lines keeps the
+ * combined report at 2,980 bytes; adding the SMMUCB census line and its
+ * separator gives 3,208 bytes inside the 3,328-byte buffer. */
 #define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
 #define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
-#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 250u
+#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u
 #define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u
-#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2972u
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3208u
 
 /* Start-path failure stages, in execution order. A failure latch keeps the
  * first stage so a later cleanup failure cannot mask it. */
@@ -634,7 +671,7 @@ extern "C" {
  * reported as a data read failure. */
 #define GTA4L_EMMC_BLOCK_SPEED_STAGE_UNKNOWN 23u
 
-#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3072u
+#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3328u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u
 #define GTA4L_EMMC_BLOCK_QUAL_LBA 2u
@@ -1231,6 +1268,10 @@ struct gta4l_emmc_block_report {
 	uint32_t bulkio_polls;
 	uint32_t bulkio_delays;
 	uint32_t bulkio_sha;
+	/* Bulk digest provider: 0 = portable core transform, 1 = libkern
+	 * SHA-256 (corecrypto). The choice is latched in the bulk context so
+	 * init/update/final cannot disagree. */
+	uint32_t bulkio_sha_provider;
 	uint32_t bulkio_host_control;
 	uint32_t bulkio_clock_control;
 	uint32_t bulkio_present;
@@ -1260,6 +1301,28 @@ struct gta4l_emmc_block_report {
 	uint32_t smmu_s2cr;
 	uint32_t smmu_cb;
 	uint32_t smmu_decision;
+	/* B10.7 read-only context-bank census. cb_line selects the SMMUCB
+	 * line; id1/gfsr and valid/matches/share summarize the global scan;
+	 * cbar/sctlr/tcr/ttbr0/fsr are the matched bank; last_* is the
+	 * highest context bank; pfsr/pgfsr are the post-DMA re-read. */
+	uint32_t smmu_cb_line;
+	uint32_t smmu_id1;
+	uint32_t smmu_id2;
+	uint32_t smmu_gfsr;
+	uint32_t smmu_gfsynr0;
+	uint32_t smmu_valid;
+	uint32_t smmu_matches;
+	uint32_t smmu_share;
+	uint32_t smmu_cbar;
+	uint32_t smmu_sctlr;
+	uint32_t smmu_tcr;
+	uint64_t smmu_ttbr0;
+	uint32_t smmu_fsr;
+	uint32_t smmu_last_index;
+	uint32_t smmu_last_sctlr;
+	uint32_t smmu_last_cbar;
+	uint32_t smmu_pfsr;
+	uint32_t smmu_pgfsr;
 	/* B10.3 ADMA2 sub-mode. `dma` selects the DMA line; mode is 1 for
 	 * 32-bit ADMA2, smmu mirrors the gate decision, cmp_pass/total the
 	 * fixed comparison window, canary/poison its integrity checks, and
@@ -1485,6 +1548,28 @@ int gta4l_emmc_block_bulk_window(uint32_t index, uint64_t *start_block);
 int gta4l_emmc_block_smmu_match(uint32_t stream, uint32_t smr);
 uint32_t gta4l_emmc_block_smmu_decide(uint32_t scr0, uint32_t s2cr,
     int matched);
+
+/* B10.7 read-only context-bank census. The adapter reads CBAR/CBA2R and
+ * the context-bank state, then this pure function refines a translate
+ * verdict. `cb_off` is the only value that permits DMA: TYPE must be
+ * S1_TRANS_S2_BYPASS, SCTLR.M must be clear, and both the global and this
+ * bank's fault registers must be zero. Every other value is a skip. */
+struct gta4l_emmc_block_smmu_cb_state {
+	uint32_t cbar;
+	uint32_t cba2r;
+	uint32_t sctlr;
+	uint32_t tcr;
+	uint32_t tcr2;
+	uint32_t mair0;
+	uint32_t fsr;
+	uint32_t fsynr0;
+	uint64_t ttbr0;
+	uint64_t far;
+};
+
+uint32_t gta4l_emmc_block_smmu_decide_cb(uint32_t matches,
+    uint32_t layout_valid, uint32_t gfsr,
+    const struct gta4l_emmc_block_smmu_cb_state *state);
 
 /* PARTMAP reason codes (section 4.6 of the N9.1 design). */
 #define GTA4L_EMMC_BLOCK_PARTMAP_REASON_NONE 0u
