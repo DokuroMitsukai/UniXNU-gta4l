@@ -185,6 +185,117 @@ def bulk_case():
     print('PASS: bulk dispatcher digest, window and DMA stack checks')
 
 
+def live_window_digest(image):
+    region_blocks = 85688320 // 512
+    state = 0x47544134
+    for _ in range(80 - 64):
+        state ^= (state << 13) & 0xffffffff
+        state ^= state >> 17
+        state ^= (state << 5) & 0xffffffff
+        state &= 0xffffffff
+    block = state % (region_blocks - 2)
+    if block % 64 == 0:
+        block += 1
+    with image.open('rb') as handle:
+        handle.seek(block * 512)
+        data = handle.read(1024)
+    return hashlib.sha256(data).hexdigest()[:32]
+
+
+def live_case():
+    """Exercise the LIVE held and force-slow shapes through the dispatcher."""
+    region_bytes = 85688320
+    zero = '0' * 32
+    with tempfile.TemporaryDirectory(prefix='gta4l-live-') as tmp:
+        base = Path(tmp)
+        image = base / 'boot.img'
+        pattern = bytes((index * 7 + 3) & 0xff for index in range(4096))
+        with image.open('wb') as handle:
+            remaining = region_bytes
+            while remaining:
+                take = min(remaining, len(pattern))
+                handle.write(pattern[:take])
+                remaining -= take
+        digest = hashlib.sha256(image.read_bytes()).hexdigest()[:32]
+        reread = live_window_digest(image)
+        speed = ('GTA4L-EMMC P5 SPEED: hs=1 hsrb=0 hsa=1 rcg=0000020b '
+                 'hispd=00 wtry=8 wfall=0 wroll=0 wid=8 verified=1 hb=00 '
+                 'ha=20 cmd6=1 base=1 bytes1=0 ticks1=0 hz=1000000 '
+                 f'dig1={zero} bytes2=0 ticks2=0 dig2={zero} req=0 '
+                 'fails=0 cancel=0 budget=0 partial=0 pub=1 partdiag=0 '
+                 'revert=0 rverified=0 rhb=00 rha=00 rcmd6=0 rstatus=0 '
+                 'hsrevert=0 hsverified=0 rhsb=0 rhs=0 rclk=0 limit=64 '
+                 'seg=1 cap=61071360')
+        bulk = (f'GTA4L-EMMC P5 BULK: region={region_bytes} chunks=2615 '
+                f'bytes={region_bytes} ticks=2500000 hz=1000000 '
+                'seed=47544134 windows=80 wpass=80 wfail=0 woffset=0 '
+                f'digest={digest}')
+        dma = ('GTA4L-EMMC P5 DMA: mode=adma2-32 smmu=cb-off cmp=4/4 '
+               'canary=1 poison=1 chunks=2615 bytes=85688320 '
+               'ticks=2500000 dat=2000000 fails=0 stage=0 ast=00000000 '
+               'aaddr=00000000 desc=4294967295 budget=0 skip=0 req=2696 '
+               'blk=167522')
+        live = ('GTA4L-EMMC P5 LIVE: mode=held held=1 degraded=0 online=1 '
+                'errors=0 recoveries=0 notified=0 bytes=85688320 '
+                f'digest={digest} idle_ms=5000 reread=1 '
+                f'reread_digest={reread} revert=0 rverified=0 rclk=0 '
+                'budget=0')
+        report = base / 'report.txt'
+        report.write_text(speed + '\n' + bulk + '\n' + dma + '\n' +
+                          live + '\n')
+        ok = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
+                 '--image', image, '--report', report)
+        if ok.returncode != 0:
+            raise AssertionError(
+                f'live: valid held report was rejected: {ok.stdout} '
+                f'{ok.stderr}')
+        for label, text in (
+                ('LIVEFAIL line', live + '\nGTA4L-EMMC P5 LIVEFAIL: '
+                 'mode=held held=0\n'),
+                ('verified revert', live.replace('revert=0', 'revert=1')),
+                ('re-read digest', live.replace(reread, zero))):
+            report.write_text(speed + '\n' + bulk + '\n' + dma + '\n' +
+                              text + '\n')
+            bad = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode',
+                      'bulk', '--image', image, '--report', report)
+            if bad.returncode == 0:
+                raise AssertionError(
+                    f'live: a mutated {label} was accepted')
+        slow_speed = ('GTA4L-EMMC P5 SPEED: hs=0 hsrb=0 hsa=0 rcg=00000000 '
+                      'hispd=00 wtry=8 wfall=0 wroll=0 wid=0 verified=0 '
+                      f'hb=00 ha=00 cmd6=0 base=0 bytes1=0 ticks1=0 '
+                      f'hz=1000000 dig1={zero} bytes2=0 ticks2=0 '
+                      f'dig2={zero} req=0 fails=0 cancel=0 budget=0 '
+                      'partial=0 pub=1 partdiag=0 revert=0 rverified=0 '
+                      'rhb=00 rha=00 rcmd6=0 rstatus=0 hsrevert=0 '
+                      'hsverified=0 rhsb=0 rhs=0 rclk=0 limit=64 seg=1 '
+                      'cap=61071360')
+        slow_bulk = (f'GTA4L-EMMC P5 BULK: region={region_bytes} chunks=0 '
+                     f'bytes=0 ticks=0 hz=1000000 seed=47544134 '
+                     f'windows=80 wpass=80 wfail=0 woffset=0 digest={zero}')
+        slow_live = ('GTA4L-EMMC P5 LIVE: mode=slow held=1 degraded=0 '
+                     f'online=1 errors=0 recoveries=0 notified=0 bytes=0 '
+                     f'digest={zero} idle_ms=5000 reread=1 '
+                     f'reread_digest={reread} revert=0 rverified=0 rclk=0 '
+                     'budget=0')
+        report.write_text(slow_speed + '\n' + slow_bulk + '\n' +
+                          slow_live + '\n')
+        ok = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
+                 '--image', image, '--report', report)
+        if ok.returncode != 0:
+            raise AssertionError(
+                f'live: valid force-slow report was rejected: {ok.stdout} '
+                f'{ok.stderr}')
+        report.write_text(slow_speed + '\n' +
+                          slow_bulk.replace('bytes=0', 'bytes=512') + '\n' +
+                          slow_live + '\n')
+        bad = run(SCRIPTS / 'check-gta4l-emmc-evidence.py', '--mode', 'bulk',
+                  '--image', image, '--report', report)
+        if bad.returncode == 0:
+            raise AssertionError('live: slow stream bytes were accepted')
+    print('PASS: live held and force-slow dispatcher checks')
+
+
 def main():
     for script, label in (
             ('normalize-gta4l-report.py', 'normalizer'),
@@ -197,6 +308,7 @@ def main():
     cases()
     speed_case()
     bulk_case()
+    live_case()
     print('PASS: evidence normalizer and dispatcher host test')
     return 0
 

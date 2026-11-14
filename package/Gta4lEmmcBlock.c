@@ -124,6 +124,21 @@ _Static_assert(GTA4L_EMMC_BLOCK_BULK_WINDOWS ==
     (GTA4L_EMMC_BLOCK_BULK_ALIGNED_WINDOWS +
     GTA4L_EMMC_BLOCK_BULK_UNALIGNED_WINDOWS),
     "BULK window count must cover both sets");
+_Static_assert(GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "LIVE line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "LIVEFAIL line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_LIVE_SUCCESS_WORST_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "LIVE success worst case must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "LIVE failure worst case must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_LIVE_SLOW_MAX_MS <=
+    GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS,
+    "slow force-slow cap must stay within the bulk total budget");
 
 static int
 gta4l_emmc_block_is_space(char value)
@@ -487,6 +502,58 @@ gta4l_emmc_block_dma_select(int token_present, int token_value,
 		return GTA4L_EMMC_BLOCK_DMA_REFUSED;
 	}
 	return GTA4L_EMMC_BLOCK_DMA_ON;
+}
+
+int
+gta4l_emmc_block_live_select(int token_present, int token_value,
+    int duplicate_tokens, int slow_present, int slow_value,
+    int slow_duplicate, int block_selected, int block_value,
+    int bulk_selected, int bulk_value, int dma_selected, int dma_value,
+    int speed_selected, int widthhold_selected, int widthpub_selected)
+{
+	if (token_present == 0) {
+		if (slow_present != 0) {
+			return GTA4L_EMMC_BLOCK_LIVE_REFUSED;
+		}
+		return GTA4L_EMMC_BLOCK_LIVE_OFF;
+	}
+	if ((duplicate_tokens != 0) || (slow_duplicate != 0) ||
+	    (block_selected == 0) ||
+	    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||
+	    (bulk_selected == 0) ||
+	    (bulk_value != (int)GTA4L_EMMC_BLOCK_BULK_ON) ||
+	    (dma_selected == 0) ||
+	    (dma_value != (int)GTA4L_EMMC_BLOCK_DMA_ON) ||
+	    (speed_selected != 0) || (widthhold_selected != 0) ||
+	    (widthpub_selected != 0)) {
+		return GTA4L_EMMC_BLOCK_LIVE_REFUSED;
+	}
+	if (token_value != (int)GTA4L_EMMC_BLOCK_LIVE_ON) {
+		return GTA4L_EMMC_BLOCK_LIVE_REFUSED;
+	}
+	if (slow_present != 0) {
+		if (slow_value != (int)GTA4L_EMMC_BLOCK_SLOW_ON) {
+			return GTA4L_EMMC_BLOCK_LIVE_REFUSED;
+		}
+	}
+	return GTA4L_EMMC_BLOCK_LIVE_ON;
+}
+
+int
+gta4l_emmc_block_slow_select(int token_present, int token_value,
+    int duplicate_tokens, int live_selected)
+{
+	if (token_present == 0) {
+		return GTA4L_EMMC_BLOCK_SLOW_OFF;
+	}
+	if ((duplicate_tokens != 0) ||
+	    (live_selected != (int)GTA4L_EMMC_BLOCK_LIVE_ON)) {
+		return GTA4L_EMMC_BLOCK_SLOW_REFUSED;
+	}
+	if (token_value != (int)GTA4L_EMMC_BLOCK_SLOW_ON) {
+		return GTA4L_EMMC_BLOCK_SLOW_REFUSED;
+	}
+	return GTA4L_EMMC_BLOCK_SLOW_ON;
 }
 
 uint32_t
@@ -3975,6 +4042,117 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_key(&writer, "budget");
 		gta4l_emmc_block_put_u64(&writer,
 		    report->bulk_budget);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
+
+	if (report->live != 0) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 LIVE: ");
+		gta4l_emmc_block_put_key(&writer, "mode");
+		gta4l_emmc_block_put_string(&writer,
+		    (report->live_mode ==
+		    GTA4L_EMMC_BLOCK_LIVE_MODE_SLOW) ? "slow" : "held");
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "held");
+		gta4l_emmc_block_put_u64(&writer, report->live_held);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "degraded");
+		gta4l_emmc_block_put_u64(&writer, report->live_degraded);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "online");
+		gta4l_emmc_block_put_u64(&writer, report->live_online);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "errors");
+		gta4l_emmc_block_put_u64(&writer, report->live_errors);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "recoveries");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->live_recoveries);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "notified");
+		gta4l_emmc_block_put_u64(&writer, report->live_notified);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "bytes");
+		gta4l_emmc_block_put_u64(&writer, report->live_bytes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "digest");
+		gta4l_emmc_block_put_digest(&writer, report->live_digest,
+		    16u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "idle_ms");
+		gta4l_emmc_block_put_u64(&writer, report->live_idle_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reread");
+		gta4l_emmc_block_put_u64(&writer, report->live_reread);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reread_digest");
+		gta4l_emmc_block_put_digest(&writer,
+		    report->live_reread_digest, 16u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "revert");
+		gta4l_emmc_block_put_u64(&writer, report->live_revert);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rverified");
+		gta4l_emmc_block_put_u64(&writer, report->live_rverified);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rclk");
+		gta4l_emmc_block_put_u64(&writer, report->live_rclk);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "budget");
+		gta4l_emmc_block_put_u64(&writer, report->live_budget);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
+
+	if ((report->live != 0) && (report->live_fail_stage != 0u)) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 LIVEFAIL: ");
+		gta4l_emmc_block_put_key(&writer, "mode");
+		gta4l_emmc_block_put_string(&writer,
+		    (report->live_mode ==
+		    GTA4L_EMMC_BLOCK_LIVE_MODE_SLOW) ? "slow" : "held");
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "held");
+		gta4l_emmc_block_put_u64(&writer, report->live_held);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "stage");
+		gta4l_emmc_block_put_u64(&writer, report->live_fail_stage);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "status");
+		gta4l_emmc_block_put_i32(&writer,
+		    report->live_fail_status);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "window");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->live_fail_window);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "offset");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->live_fail_offset);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "online");
+		gta4l_emmc_block_put_u64(&writer, report->live_online);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "errors");
+		gta4l_emmc_block_put_u64(&writer, report->live_errors);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "recoveries");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->live_recoveries);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "notified");
+		gta4l_emmc_block_put_u64(&writer, report->live_notified);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "revert");
+		gta4l_emmc_block_put_u64(&writer, report->live_revert);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rverified");
+		gta4l_emmc_block_put_u64(&writer, report->live_rverified);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rclk");
+		gta4l_emmc_block_put_u64(&writer, report->live_rclk);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "budget");
+		gta4l_emmc_block_put_u64(&writer, report->live_budget);
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 

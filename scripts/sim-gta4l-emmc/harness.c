@@ -1551,6 +1551,11 @@ sim_command(struct sim *sim, uint16_t command)
 
 	switch (index) {
 	case GTA4L_EMMC_CMD0:
+		/* JEDEC GO_IDLE_STATE resets the card's volatile BUS_WIDTH
+		 * and HS_TIMING selections, so a warm re-init must identify
+		 * at 1-bit even when the previous boot left HS/8-bit. */
+		sim->ext_csd[SIM_BUS_WIDTH_OFF] = 0;
+		sim->ext_csd[SIM_HS_TIMING_OFF] = 0;
 		sim->normal_int |= GTA4L_EMMC_INT_CC;
 		break;
 	case GTA4L_EMMC_CMD1:
@@ -2731,6 +2736,14 @@ main(int argc, char **argv)
 		 * The failure record must already hold the raw words. */
 		sim.cmd_crc_index = GTA4L_EMMC_CMD2;
 		sim.clear_response_on_w1c = 1;
+	} else if (scenario_is(scenario, "warm-from-held")) {
+		/* The previous boot left the card in HS/8-bit. CMD0 must
+		 * return the volatile bus mode to the reset selection before
+		 * the new identification runs. */
+		sim.ext_csd[SIM_BUS_WIDTH_OFF] = 2;
+		sim.ext_csd[SIM_HS_TIMING_OFF] = 1;
+		sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] =
+		    (uint8_t)SIM_HOST_CONTROL_8BIT;
 	} else if (scenario_is(scenario, "cmd0-crc")) {
 		sim.cmd_crc_index = GTA4L_EMMC_CMD0;
 	} else if (scenario_is(scenario, "cmd1-crc")) {
@@ -3312,6 +3325,7 @@ main(int argc, char **argv)
 	    scenario_is(scenario, "cmd1-crc-retire-not-ready") ||
 	    scenario_is(scenario, "cmd1-clear-invalidates-window") ||
 	    scenario_is(scenario, "reinit-clears-windows") ||
+	    scenario_is(scenario, "warm-from-held") ||
 	    scenario_is(scenario, "cmd3-timeline-clean") ||
 	    scenario_is(scenario, "cmd3-timeline-reinit") ||
 	    scenario_is(scenario, "cmd2-normalized") ||
@@ -3723,6 +3737,24 @@ main(int argc, char **argv)
 		    host.cmd7_term_response[2] == 0u &&
 		    host.cmd7_term_response[3] == 0u,
 		    "reinit left CMD7 response windows");
+	} else if (scenario_is(scenario, "warm-from-held")) {
+		check(sim.cmd0_time_us != 0u,
+		    "warm-from-held run did not issue CMD0");
+		check(sim.ext_csd[SIM_BUS_WIDTH_OFF] == 0u,
+		    "CMD0 did not reset the card bus width");
+		check(sim.ext_csd[SIM_HS_TIMING_OFF] == 0u,
+		    "CMD0 did not reset the card HS timing");
+		check(host.bus_width == GTA4L_EMMC_EXT_CSD_BUS_WIDTH_1,
+		    "warm-from-held identification was not 1-bit");
+		check((sim.sdhci[GTA4L_EMMC_REG_HOST_CONTROL] &
+		    (SIM_HOST_CONTROL_4BIT | SIM_HOST_CONTROL_8BIT)) == 0u,
+		    "warm-from-held host kept a wide bus selection");
+		result = gta4l_emmc_read_block(&host, 0, block0);
+		check(result == GTA4L_EMMC_OK,
+		    "warm-from-held block 0 read failed");
+		if (result == GTA4L_EMMC_OK) {
+			check_block(&sim, 0, block0, "block 0");
+		}
 	} else if (scenario_is(scenario, "power-delayed-bus") ||
 	    scenario_is(scenario, "power-bus-then-io")) {
 		check(sim.bus_acked == 1,

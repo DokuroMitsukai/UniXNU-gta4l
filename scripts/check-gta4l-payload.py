@@ -65,6 +65,9 @@ WIDTHHOLD_PREFIX = 'gta4l-emmc-widthhold='
 WIDTHPUB_PREFIX = 'gta4l-emmc-widthpub='
 SPEED_PREFIX = 'gta4l-emmc-speed='
 BULK_PREFIX = 'gta4l-emmc-bulk='
+DMA_PREFIX = 'gta4l-emmc-dma='
+LIVE_PREFIX = 'gta4l-emmc-live='
+SLOW_PREFIX = 'gta4l-emmc-slow='
 BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
 # The partobs, partcmp, partread, deblock, breakup, sweep, consume, width,
 # widthhold, widthpub, speed and bulk tokens are modifiers, not independent
@@ -113,6 +116,9 @@ SPEED_DIAGNOSTICS = {
 BULK_DIAGNOSTICS = {
     'emmc-block-3-bulk': 'emmc-block-3',
     'emmc-block-3-bulk-dma': 'emmc-block-3',
+}
+LIVE_DIAGNOSTICS = {
+    'emmc-block-3-live': 'emmc-block-3',
 }
 
 
@@ -248,6 +254,12 @@ def diagnostic_contract(args, expected='any'):
                     if item.startswith(SPEED_PREFIX)]
     bulk_tokens = [item for item in tokens
                    if item.startswith(BULK_PREFIX)]
+    dma_tokens = [item for item in tokens
+                  if item.startswith(DMA_PREFIX)]
+    live_tokens = [item for item in tokens
+                   if item.startswith(LIVE_PREFIX)]
+    slow_tokens = [item for item in tokens
+                   if item.startswith(SLOW_PREFIX)]
     checks = {'exactly_one_diagnostic_argument': len(found) == 1}
     block_selected = [DIAGNOSTIC_NAMES[name] for name in BLOCK_DIAGNOSTICS
                       if DIAGNOSTIC_NAMES[name] in found]
@@ -435,6 +447,51 @@ def diagnostic_contract(args, expected='any'):
             bulk_tokens and widthpub_tokens)
         checks['bulk_speed_exclusive'] = not (
             bulk_tokens and speed_tokens)
+        checks['at_most_one_dma_token'] = len(dma_tokens) <= 1
+        checks['dma_value_one'] = all(
+            item == DMA_PREFIX + '1' for item in dma_tokens)
+        checks['dma_requires_block_three'] = (
+            not dma_tokens or block_tokens == [BLOCK_PREFIX + '3'])
+        checks['dma_requires_bulk'] = (
+            not dma_tokens or bulk_tokens == [BULK_PREFIX + '1'])
+        checks['at_most_one_live_token'] = len(live_tokens) <= 1
+        checks['live_value_one'] = all(
+            item == LIVE_PREFIX + '1' for item in live_tokens)
+        checks['live_requires_block_three'] = (
+            not live_tokens or block_tokens == [BLOCK_PREFIX + '3'])
+        checks['live_requires_bulk'] = (
+            not live_tokens or bulk_tokens == [BULK_PREFIX + '1'])
+        checks['live_requires_dma'] = (
+            not live_tokens or dma_tokens == [DMA_PREFIX + '1'])
+        checks['live_partobs_exclusive'] = not (
+            live_tokens and partobs_tokens)
+        checks['live_partcmp_exclusive'] = not (
+            live_tokens and partcmp_tokens)
+        checks['live_partread_exclusive'] = not (
+            live_tokens and partread_tokens)
+        checks['live_deblock_exclusive'] = not (
+            live_tokens and deblock_tokens)
+        checks['live_breakup_exclusive'] = not (
+            live_tokens and breakup_tokens)
+        checks['live_sweep_exclusive'] = not (
+            live_tokens and sweep_tokens)
+        checks['live_consume_exclusive'] = not (
+            live_tokens and consume_tokens)
+        checks['live_width_exclusive'] = not (
+            live_tokens and width_tokens)
+        checks['live_widthhold_exclusive'] = not (
+            live_tokens and widthhold_tokens)
+        checks['live_widthpub_exclusive'] = not (
+            live_tokens and widthpub_tokens)
+        checks['live_speed_exclusive'] = not (
+            live_tokens and speed_tokens)
+        checks['at_most_one_slow_token'] = len(slow_tokens) <= 1
+        checks['slow_value_one'] = all(
+            item == SLOW_PREFIX + '1' for item in slow_tokens)
+        checks['slow_requires_live'] = (
+            not slow_tokens or live_tokens == [LIVE_PREFIX + '1'])
+        checks['slow_speed_exclusive'] = not (
+            slow_tokens and speed_tokens)
     else:
         checks['no_block_token_outside_block_mode'] = not block_tokens
         checks['no_partobs_token_outside_block_mode'] = not partobs_tokens
@@ -451,6 +508,9 @@ def diagnostic_contract(args, expected='any'):
             not widthpub_tokens)
         checks['no_speed_token_outside_block_mode'] = not speed_tokens
         checks['no_bulk_token_outside_block_mode'] = not bulk_tokens
+        checks['no_dma_token_outside_block_mode'] = not dma_tokens
+        checks['no_live_token_outside_block_mode'] = not live_tokens
+        checks['no_slow_token_outside_block_mode'] = not slow_tokens
     if expected != 'any':
         if expected in PARTOBS_DIAGNOSTICS:
             base = PARTOBS_DIAGNOSTICS[expected]
@@ -582,6 +642,20 @@ def diagnostic_contract(args, expected='any'):
                 not consume_tokens and not width_tokens and
                 not widthhold_tokens and not widthpub_tokens and
                 not speed_tokens)
+        elif expected in LIVE_DIAGNOSTICS:
+            base = LIVE_DIAGNOSTICS[expected]
+            checks[f'{expected}_diagnostic_selected'] = (
+                found == [DIAGNOSTIC_NAMES[base]] and
+                bulk_tokens == [BULK_PREFIX + '1'] and
+                dma_tokens == [DMA_PREFIX + '1'] and
+                live_tokens == [LIVE_PREFIX + '1'] and
+                not slow_tokens and
+                not partobs_tokens and not partcmp_tokens and
+                not partread_tokens and not deblock_tokens and
+                not breakup_tokens and not sweep_tokens and
+                not consume_tokens and not width_tokens and
+                not widthhold_tokens and not widthpub_tokens and
+                not speed_tokens)
         else:
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[expected]] and
@@ -591,7 +665,15 @@ def diagnostic_contract(args, expected='any'):
                 not consume_tokens and not width_tokens and
                 not widthhold_tokens and not widthpub_tokens and
                 not speed_tokens)
-        if bulk_tokens and expected not in BULK_DIAGNOSTICS:
+        if bulk_tokens and expected not in (*BULK_DIAGNOSTICS,
+                                           *LIVE_DIAGNOSTICS):
+            checks[f'{expected}_diagnostic_selected'] = False
+        if dma_tokens and expected not in (*BULK_DIAGNOSTICS,
+                                           *LIVE_DIAGNOSTICS):
+            checks[f'{expected}_diagnostic_selected'] = False
+        if live_tokens and expected not in LIVE_DIAGNOSTICS:
+            checks[f'{expected}_diagnostic_selected'] = False
+        if slow_tokens:
             checks[f'{expected}_diagnostic_selected'] = False
     checks['unixnu_toml_has_xnu_args'] = bool(args)
     return checks
@@ -664,7 +746,8 @@ def main():
                                  *WIDTHHOLD_DIAGNOSTICS,
                                  *WIDTHPUB_DIAGNOSTICS,
                                  *SPEED_DIAGNOSTICS,
-                                 *BULK_DIAGNOSTICS),
+                                 *BULK_DIAGNOSTICS,
+                                 *LIVE_DIAGNOSTICS),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

@@ -16,6 +16,7 @@ gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 gta4l_test_width_sample_fn gta4l_test_width_hook;
 gta4l_test_widthhold_sample_fn gta4l_test_widthhold_hook;
 gta4l_test_speed_sample_fn gta4l_test_speed_hook;
+gta4l_test_live_idle_fn gta4l_test_live_idle_hook;
 IOMedia *gta4l_test_media[GTA4L_TEST_MAX_MEDIA];
 int gta4l_test_media_count;
 IOService *gta4l_test_schemes[GTA4L_TEST_MAX_SCHEMES];
@@ -147,6 +148,7 @@ gta4l_test_reset(void)
 	gta4l_test_width_hook = 0;
 	gta4l_test_widthhold_hook = 0;
 	gta4l_test_speed_hook = 0;
+	gta4l_test_live_idle_hook = 0;
 	gta4l_test_media_count = 0;
 	gta4l_test_scheme_count = 0;
 }
@@ -327,6 +329,10 @@ IOSleep(unsigned milliseconds)
 	}
 	gta4l_test.sleeps++;
 	gta4l_test.now_ms += milliseconds;
+	if ((milliseconds == GTA4L_EMMC_BLOCK_LIVE_IDLE_MS) &&
+	    (gta4l_test_live_idle_hook != 0)) {
+		gta4l_test_live_idle_hook();
+	}
 	if (gta4l_test.width_wait_active &&
 	    (gta4l_test.width_gate != 0) &&
 	    (gta4l_test.width_gate->depth != 0) &&

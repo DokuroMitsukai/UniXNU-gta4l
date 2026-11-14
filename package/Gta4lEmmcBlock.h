@@ -26,6 +26,8 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SWEEP_ARG "gta4l-emmc-sweep"
 #define GTA4L_EMMC_BLOCK_CONSUME_ARG "gta4l-emmc-consume"
 #define GTA4L_EMMC_BLOCK_WIDTH_ARG "gta4l-emmc-width"
+#define GTA4L_EMMC_BLOCK_LIVE_ARG "gta4l-emmc-live"
+#define GTA4L_EMMC_BLOCK_SLOW_ARG "gta4l-emmc-slow"
 
 #define GTA4L_EMMC_BLOCK_MODE_OFF 0
 #define GTA4L_EMMC_BLOCK_MODE_REPORT 1
@@ -502,6 +504,67 @@ extern "C" {
 	GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS)
 #define GTA4L_EMMC_BLOCK_BULK_REPORT_MARGIN_MS 2000u
 
+/* S3 live held-terminal rung. Live reuses the S2 stream, the 80-window set
+ * and the DMA sub-mode, then idles 5,000 ms, re-reads the last window and
+ * ends in the terminal panic report with held=1 and no card commands. The
+ * report-thread bound replaces the 9,500 ms combined revert with the idle
+ * and one 4,500 ms re-read case: 8,000 + 2,000 + 4,500 + 2,000 + 2,000 +
+ * 5,000 + 4,500 = 28,000 ms, leaving 2,000 ms under the watchdog. Force-slow
+ * is live-only, host-tested and never one of the hardware boots: it skips
+ * the HS/width switch and the stream, runs the same 80 two-block windows
+ * (80 two-block media reads plus 160 single-block CMD17 references) and the
+ * 2-block re-read at 1-bit/400 kHz PIO. Its clock-derived 3.599 s bound is
+ * capped by the existing 4,500 ms bulk total. */
+#define GTA4L_EMMC_BLOCK_LIVE_OFF 0
+#define GTA4L_EMMC_BLOCK_LIVE_ON 1
+#define GTA4L_EMMC_BLOCK_LIVE_REFUSED (-1)
+#define GTA4L_EMMC_BLOCK_SLOW_OFF 0
+#define GTA4L_EMMC_BLOCK_SLOW_ON 1
+#define GTA4L_EMMC_BLOCK_SLOW_REFUSED (-1)
+#define GTA4L_EMMC_BLOCK_LIVE_MODE_HELD 0u
+#define GTA4L_EMMC_BLOCK_LIVE_MODE_SLOW 1u
+#define GTA4L_EMMC_BLOCK_LIVE_IDLE_MS 5000u
+#define GTA4L_EMMC_BLOCK_LIVE_REREAD_BLOCKS 2u
+#define GTA4L_EMMC_BLOCK_LIVE_REREAD_MS \
+	GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS
+#define GTA4L_EMMC_BLOCK_LIVE_SLOW_MAX_MS 3599u
+#define GTA4L_EMMC_BLOCK_LIVE_REPORT_WORST_MS \
+	(GTA4L_EMMC_BLOCK_WIDTHHOLD_MEDIA_WAIT_MS + \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_DEADLINE_MS + \
+	GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS + \
+	GTA4L_EMMC_BLOCK_BULK_CMD12_TAIL_MS + \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_MS + \
+	GTA4L_EMMC_BLOCK_LIVE_IDLE_MS + \
+	GTA4L_EMMC_BLOCK_LIVE_REREAD_MS)
+#define GTA4L_EMMC_BLOCK_LIVE_REPORT_MARGIN_MS 2000u
+#define GTA4L_EMMC_BLOCK_LIVE_RECOVERY_WAIT_MS \
+	(GTA4L_EMMC_BLOCK_SPEED_RECOVER_MS + \
+	GTA4L_EMMC_BLOCK_WIDTHHOLD_GATE_MS + 500u)
+#define GTA4L_EMMC_BLOCK_LIVE_STOP_STEP_MS 10u
+#define GTA4L_EMMC_BLOCK_LIVE_STOP_WAIT_MS 1000u
+#define GTA4L_EMMC_BLOCK_LIVE_STATE_FAST 0u
+#define GTA4L_EMMC_BLOCK_LIVE_STATE_RECOVERING 1u
+#define GTA4L_EMMC_BLOCK_LIVE_STATE_DEGRADED 2u
+#define GTA4L_EMMC_BLOCK_LIVE_STATE_OFFLINE 3u
+
+/* Formatter-exact bounds. The LIVE line is 367 bytes with the `mode` token
+ * at four characters, twelve u32 facts at ten digits, `bytes` at twenty,
+ * two 32-hex digests, sixteen `=` signs and fifteen separators. The
+ * failure-only LIVEFAIL line is 272 bytes with fourteen fields, one i32 at
+ * eleven digits, fourteen `=` signs and thirteen separators. The success
+ * combination is the 3,070-byte bulk success worst case plus LIVE; the
+ * failure combination is the 3,289-byte bulk failure worst case (DMADIAG
+ * included) plus LIVEFAIL. Both fit the raised 3,584-byte report buffer. */
+#define GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES 367u
+#define GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES 272u
+#define GTA4L_EMMC_BLOCK_BULK_SUCCESS_WORST_BYTES 3070u
+#define GTA4L_EMMC_BLOCK_LIVE_SUCCESS_WORST_BYTES \
+	(GTA4L_EMMC_BLOCK_BULK_SUCCESS_WORST_BYTES + \
+	GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES + 1u)
+#define GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES \
+	(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES + \
+	GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES + 1u)
+
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
  * and ID0, scans every valid SMR for the SDHC stream 0x00c0 and reads the
@@ -650,13 +713,15 @@ extern "C" {
  * and fourteen separators. The bulk SPEED worst case is 1,418 bytes;
  * adding the SPEEDIO, BULK, BULKIO, SMMU, DMA and optional BULKFAIL lines
  * keeps the combined report at 2,842 bytes; adding the SMMUCB census line
- * and its separator gives 3,070 bytes inside the 3,328-byte buffer. The
- * DMA line adds the stack-path `req`/`blk` counters to the 308-byte
- * transport line, so its bound grows by 30 bytes to 338. The failure-only
- * DMADIAG line is 218 bytes: the prefix, six 8-hex physical/status words,
- * a 3-hex entry count, a 4-hex descriptor-byte count, a 2-hex cache mask,
- * 2/4-hex Host Control readbacks and four 16-hex table words; with its
- * separator the worst case is 3,289 bytes. */
+ * and its separator gives 3,070 bytes. The DMA line adds the stack-path
+ * `req`/`blk` counters to the 308-byte transport line, so its bound grows
+ * by 30 bytes to 338. The failure-only DMADIAG line is 218 bytes: the
+ * prefix, six 8-hex physical/status words, a 3-hex entry count, a 4-hex
+ * descriptor-byte count, a 2-hex cache mask, 2/4-hex Host Control readbacks
+ * and four 16-hex table words; with its separator the worst case is 3,289
+ * bytes. The S3 LIVE line and separator add 368 bytes to the success shape
+ * and the LIVEFAIL line and separator add 273 bytes to the failure shape,
+ * so both live shapes fit the raised 3,584-byte buffer. */
 #define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
 #define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
 #define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u
@@ -694,7 +759,7 @@ extern "C" {
  * reported as a data read failure. */
 #define GTA4L_EMMC_BLOCK_SPEED_STAGE_UNKNOWN 23u
 
-#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3328u
+#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3584u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u
 #define GTA4L_EMMC_BLOCK_PART_REPORT 3u
 #define GTA4L_EMMC_BLOCK_QUAL_LBA 2u
@@ -1437,6 +1502,37 @@ struct gta4l_emmc_block_report {
 	uint32_t fail_valid;
 	uint32_t fail_stage;
 	int32_t fail_code;
+	/* S3 live held-terminal rung. `live` selects the LIVE/LIVEFAIL lines
+	 * and `live_mode` is 0 held (S3a) or 1 force-slow. `live_held` is 1
+	 * only when the bus was left at HS/8-bit with no revert, in which
+	 * case `live_revert`/`live_rverified`/`live_rclk` stay zero.
+	 * `live_bytes`/`live_digest` cover the verified stream prefix and
+	 * `live_idle_ms`/`live_reread`/`live_reread_digest` the 5,000 ms
+	 * hold and the deterministic 2-block re-read. `live_errors`,
+	 * `live_recoveries` and `live_notified` are the S3b lifetime
+	 * counters and stay zero in S3a; `live_budget` is the re-read
+	 * budget exit. */
+	uint32_t live;
+	uint32_t live_mode;
+	uint32_t live_held;
+	uint32_t live_degraded;
+	uint32_t live_online;
+	uint32_t live_errors;
+	uint32_t live_recoveries;
+	uint32_t live_notified;
+	uint64_t live_bytes;
+	uint8_t live_digest[16];
+	uint32_t live_idle_ms;
+	uint32_t live_reread;
+	uint8_t live_reread_digest[16];
+	uint32_t live_revert;
+	uint32_t live_rverified;
+	uint32_t live_rclk;
+	uint32_t live_budget;
+	uint32_t live_fail_stage;
+	int32_t live_fail_status;
+	uint32_t live_fail_window;
+	uint32_t live_fail_offset;
 };
 
 /* Count whole boot-argument tokens with this exact name (name=value). A
@@ -1577,6 +1673,20 @@ int gta4l_emmc_block_dma_select(int token_present, int token_value,
     int partread_selected, int deblock_selected, int breakup_selected,
     int sweep_selected, int consume_selected, int width_selected,
     int widthhold_selected, int widthpub_selected, int speed_selected);
+
+/* Select the S3 live held-terminal rung. Valid only with exactly one
+ * block=3 token, the bulk and DMA tokens selected, value 1 and no speed,
+ * widthhold or widthpub selector. */
+int gta4l_emmc_block_live_select(int token_present, int token_value,
+    int duplicate_tokens, int slow_present, int slow_value,
+    int slow_duplicate, int block_selected, int block_value,
+    int bulk_selected, int bulk_value, int dma_selected, int dma_value,
+    int speed_selected, int widthhold_selected, int widthpub_selected);
+
+/* Select the live-only force-slow sub-mode. Accepted only when live is
+ * exactly ON and the value is 1. */
+int gta4l_emmc_block_slow_select(int token_present, int token_value,
+    int duplicate_tokens, int live_selected);
 
 /* Build a 32-bit ADMA2 descriptor table from one contiguous buffer and
  * return the entry count, or 0 on a bad range/table. The caller owns the

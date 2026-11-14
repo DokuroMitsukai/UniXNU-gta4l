@@ -526,6 +526,39 @@ def test_emmc_block_3_bulk(base):
     check_observation_personality(base, 'emmc-block-3-bulk', 3, 'bulk')
 
 
+def test_emmc_block_3_live(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    record = base / 'argv.json'
+    os.environ['FAKE_UNIXNU_RECORD'] = str(record)
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base)
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-live'
+    code = run(module, [
+        *args,
+        '--data-ramdisk-manifest', str(fixture),
+        '--kernel', str(kernel),
+        '--output', str(output),
+        '--manifest', str(manifest),
+    ])
+    assert code == 0
+    argv = json.loads(record.read_text())
+    kernel_args = [argv[index + 1] for index, value in enumerate(argv)
+                   if value == '--kernel-arg']
+    expected = ['gta4l-emmc-block=3', 'gta4l-emmc-bulk=1',
+                'gta4l-emmc-dma=1', 'gta4l-emmc-live=1']
+    assert kernel_args[-4:] == expected, kernel_args
+    argument = ' '.join(expected)
+    manifest_record = json.loads(manifest.read_text())
+    assert manifest_record['diagnostic_argument'] == argument
+    assert manifest_record['data_ramdisk']['diagnostic'] == 'fs-timer-hold'
+    assert manifest_record['data_ramdisk']['hold_after_success'] is True
+    print(f'PASS emmc-block-3-live maps to {argument} with the hold fixture')
+
+
 def test_partcmp_rejects_early_panic_fixture(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
@@ -831,6 +864,34 @@ def test_bulk_rejects_early_panic_fixture(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS bulk rejects the early-panic fs-timer fixture')
+
+
+def test_live_rejects_early_panic_fixture(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base, 'fs-timer')
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-live'
+    try:
+        run(module, [
+            *args,
+            '--data-ramdisk-manifest', str(fixture),
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'fs-timer-hold' in str(error), error
+    else:
+        raise AssertionError(
+            'the early-panic fixture was accepted for live')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS live rejects the early-panic fs-timer fixture')
 
 
 def test_diagnostic_contract(_base):
@@ -1463,6 +1524,52 @@ def test_diagnostic_contract(_base):
         'gta4l-emmc-bulk=1', 'emmc-block-3-widthhold')
     assert not widthhold_with_bulk[
         'emmc-block-3-widthhold_diagnostic_selected']
+    good_live = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 '
+        'gta4l-emmc-live=1', 'emmc-block-3-live')
+    assert all(good_live.values()), good_live
+    live_missing_dma = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-live=1',
+        'emmc-block-3-live')
+    assert not live_missing_dma['live_requires_dma']
+    assert not live_missing_dma[
+        'emmc-block-3-live_diagnostic_selected']
+    live_missing_bulk = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-dma=1 gta4l-emmc-live=1',
+        'emmc-block-3-live')
+    assert not live_missing_bulk['live_requires_bulk']
+    assert not live_missing_bulk[
+        'emmc-block-3-live_diagnostic_selected']
+    live_block_one = checks(
+        'gta4l-emmc-block=1 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 '
+        'gta4l-emmc-live=1', 'emmc-block-3-live')
+    assert not live_block_one['live_requires_block_three']
+    assert not live_block_one[
+        'emmc-block-3-live_diagnostic_selected']
+    slow_without_live = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 '
+        'gta4l-emmc-slow=1')
+    assert not slow_without_live['slow_requires_live']
+    live_with_slow = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 '
+        'gta4l-emmc-live=1 gta4l-emmc-slow=1', 'emmc-block-3-live')
+    assert not live_with_slow['emmc-block-3-live_diagnostic_selected']
+    orphan_live = checks('gta4l-emmc-probe=1 gta4l-emmc-live=1')
+    assert not orphan_live['no_live_token_outside_block_mode']
+    duplicate_live = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 '
+        'gta4l-emmc-live=1 gta4l-emmc-live=1', 'emmc-block-3-live')
+    assert not duplicate_live['at_most_one_live_token']
+    live_speed_conflict = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 '
+        'gta4l-emmc-live=1 gta4l-emmc-speed=1', 'emmc-block-3-live')
+    assert not live_speed_conflict['live_speed_exclusive']
+    assert not live_speed_conflict[
+        'emmc-block-3-live_diagnostic_selected']
+    plain_live_expected = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 '
+        'gta4l-emmc-live=1', 'emmc-block-3')
+    assert not plain_live_expected['emmc-block-3_diagnostic_selected']
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -1485,6 +1592,7 @@ def main():
              test_emmc_block_3_consume, test_emmc_block_3_width4,
              test_emmc_block_3_widthhold, test_emmc_block_3_widthpub,
              test_emmc_block_3_speed, test_emmc_block_3_bulk,
+             test_emmc_block_3_live,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,
@@ -1497,6 +1605,7 @@ def main():
              test_widthpub_rejects_early_panic_fixture,
              test_speed_rejects_early_panic_fixture,
              test_bulk_rejects_early_panic_fixture,
+             test_live_rejects_early_panic_fixture,
              test_partobs_rejects_missing_fixture_manifest,
              test_fixture_manifest_hold_mismatch,
              test_diagnostic_contract)

@@ -10158,6 +10158,26 @@ bulk_expected_window(uint32_t index)
 	return block;
 }
 
+static void
+live_window_digest(uint32_t index, uint8_t digest[32])
+{
+	struct gta4l_emmc_block_sha256_ctx ctx;
+	uint8_t sector[GTA4L_EMMC_BLOCK_BYTES];
+	uint64_t block = bulk_expected_window(index);
+	uint32_t step;
+
+	gta4l_emmc_block_sha256_init(&ctx);
+	for (step = 0; step < GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS;
+	    step++) {
+		gta4l_test_fill_sector(
+		    GTA4L_EMMC_BLOCK_WIDTHHOLD_LBA + block + step,
+		    sector);
+		gta4l_emmc_block_sha256_update(&ctx, sector,
+		    GTA4L_EMMC_BLOCK_BYTES);
+	}
+	gta4l_emmc_block_sha256_final(&ctx, digest);
+}
+
 static uint32_t g_bulk_advance_ms = 1;
 static int g_bulk_cancel_call = -1;
 
@@ -11755,6 +11775,497 @@ scenario_bulk_format_max(void)
 	    GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES + 1u));
 	CHECK(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES <=
 	    GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	return 0;
+}
+
+static int
+scenario_live_held_success(void)
+{
+	uint8_t digest[32];
+	uint8_t reread[32];
+	char digestText[33];
+	char rereadText[33];
+	char expected[512];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1 gta4l-emmc-live=1",
+	    bulk_fixture) == 0);
+	CHECK(g_started);
+	CHECK(g_self->bulkMode);
+	CHECK(g_self->dmaMode);
+	CHECK(g_self->liveMode);
+	CHECK(!g_self->slowMode);
+	widthhold_setup(true, true);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.live == 1u);
+	CHECK(g_self->report.live_mode ==
+	    GTA4L_EMMC_BLOCK_LIVE_MODE_HELD);
+	CHECK(g_self->report.live_held == 1u);
+	CHECK(g_self->report.live_degraded == 0u);
+	CHECK(g_self->report.live_online == 1u);
+	CHECK(g_self->report.live_errors == 0u);
+	CHECK(g_self->report.live_recoveries == 0u);
+	CHECK(g_self->report.live_notified == 0u);
+	CHECK(g_self->report.live_bytes ==
+	    GTA4L_EMMC_BLOCK_BULK_REGION_BYTES);
+	bulk_full_digest(digest);
+	CHECK(memcmp(g_self->report.live_digest, digest, 16u) == 0);
+	CHECK(g_self->report.live_idle_ms ==
+	    GTA4L_EMMC_BLOCK_LIVE_IDLE_MS);
+	CHECK(g_self->report.live_reread == 1u);
+	live_window_digest(GTA4L_EMMC_BLOCK_BULK_WINDOWS - 1u, reread);
+	CHECK(memcmp(g_self->report.live_reread_digest, reread,
+	    16u) == 0);
+	CHECK(g_self->report.live_revert == 0u);
+	CHECK(g_self->report.live_rverified == 0u);
+	CHECK(g_self->report.live_rclk == 0u);
+	CHECK(g_self->report.live_budget == 0u);
+	CHECK(g_self->report.live_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_NONE);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_NONE);
+	CHECK(g_self->report.bulk_wpass ==
+	    GTA4L_EMMC_BLOCK_BULK_WINDOWS);
+	CHECK(g_self->online);
+	CHECK(!g_self->offlineNotified);
+	CHECK(gta4l_test.speed_recover_calls == 0u);
+	CHECK(g_self->report.dma_requests ==
+	    (uint32_t)(GTA4L_EMMC_BLOCK_BULK_CHUNKS +
+	    GTA4L_EMMC_BLOCK_BULK_WINDOWS + 1u));
+	CHECK(g_self->report.dma_blocks ==
+	    (uint32_t)(GTA4L_EMMC_BLOCK_BULK_REGION_BYTES /
+	    GTA4L_EMMC_BLOCK_BYTES +
+	    GTA4L_EMMC_BLOCK_BULK_WINDOWS *
+	    GTA4L_EMMC_BLOCK_BULK_WINDOW_BLOCKS + 2u));
+	CHECK(gta4l_test.sleeps >= 1u);
+	CHECK(gta4l_test.now_ms >= GTA4L_EMMC_BLOCK_LIVE_IDLE_MS);
+	CHECK(g_widthhold_boot_media->open_calls == 1u);
+	CHECK(g_widthhold_boot_media->close_calls == 0u);
+	CHECK(gta4l_test.message_count == 0u);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 LIVE: mode=held held=1 degraded=0 "
+	    "online=1 errors=0 recoveries=0 notified=0") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    " revert=0 rverified=0 rclk=0 budget=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "LIVEFAIL") == 0);
+	CHECK(report_line_bytes(gta4l_test.panic,
+	    "GTA4L-EMMC P5 LIVE: ") <=
+	    GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES);
+	partread_digest_hex(digest, digestText);
+	partread_digest_hex(reread, rereadText);
+	snprintf(expected, sizeof(expected),
+	    " bytes=85688320 digest=%s", digestText);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	snprintf(expected, sizeof(expected),
+	    " idle_ms=5000 reread=1 reread_digest=%s", rereadText);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	return 0;
+}
+
+static int
+scenario_live_force_slow(void)
+{
+	uint8_t digest[32];
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1 gta4l-emmc-live=1 "
+	    "gta4l-emmc-slow=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	CHECK(g_self->liveMode);
+	CHECK(g_self->slowMode);
+	CHECK(g_self->bulkMode);
+	widthhold_setup(true, true);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.live_mode ==
+	    GTA4L_EMMC_BLOCK_LIVE_MODE_SLOW);
+	CHECK(g_self->report.live_held == 1u);
+	CHECK(g_self->report.live_online == 1u);
+	CHECK(g_self->report.live_bytes == 0u);
+	bzero(digest, sizeof(digest));
+	CHECK(memcmp(g_self->report.live_digest, digest, 16u) == 0);
+	CHECK(g_self->report.live_reread == 1u);
+	live_window_digest(GTA4L_EMMC_BLOCK_BULK_WINDOWS - 1u, digest);
+	CHECK(memcmp(g_self->report.live_reread_digest, digest,
+	    16u) == 0);
+	CHECK(g_self->report.bulk_chunks == 0u);
+	CHECK(g_self->report.bulk_bytes == 0u);
+	CHECK(g_self->report.bulk_wpass ==
+	    GTA4L_EMMC_BLOCK_BULK_WINDOWS);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_NONE);
+	CHECK(g_self->report.dma == 0u);
+	CHECK(gta4l_test.adma_calls == 0u);
+	CHECK(gta4l_test.speed_recover_calls == 0u);
+	CHECK(gta4l_test.multi_calls ==
+	    (uint32_t)(GTA4L_EMMC_BLOCK_BULK_WINDOWS + 1u));
+	CHECK(gta4l_test.sleeps >= 1u);
+	CHECK(strstr(gta4l_test.panic, "mode=slow") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "bytes=0 digest=00000000000000000000000000000000") != 0);
+	CHECK(strstr(gta4l_test.panic, "LIVEFAIL") == 0);
+	return 0;
+}
+
+static void
+live_idle_corrupt_hook(void)
+{
+	gta4l_test.adma_corrupt_at = 0;
+}
+
+static int
+scenario_live_reread_mismatch(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1 gta4l-emmc-live=1",
+	    bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test_live_idle_hook = live_idle_corrupt_hook;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.live_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_WINDOW);
+	CHECK(g_self->report.live_held == 0u);
+	CHECK(g_self->report.live_online == 0u);
+	CHECK(g_self->report.live_reread == 0u);
+	CHECK(g_self->report.live_revert == 1u);
+	CHECK(g_self->report.live_rverified == 1u);
+	CHECK(g_self->report.live_rclk != 0u);
+	CHECK(gta4l_test.speed_recover_calls == 1u);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 LIVEFAIL: mode=held held=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=1") != 0);
+	CHECK(strstr(gta4l_test.panic, "LIVE: mode=held held=0") != 0);
+	return 0;
+}
+
+static int
+scenario_live_selector(void)
+{
+	CHECK(gta4l_emmc_block_live_select(0, 0, 0, 0, 0, 0,
+	    1, 3, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_OFF);
+	CHECK(gta4l_emmc_block_live_select(0, 0, 0, 1, 1, 0,
+	    1, 3, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 3, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_ON);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 1, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 3, 0, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 3, 1, 0, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 3, 1, 1, 0, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 3, 1, 1, 1, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 3, 1, 1, 1, 1, 1, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 3, 1, 1, 1, 1, 0, 1, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 0, 0, 0,
+	    1, 3, 1, 1, 1, 1, 0, 0, 1) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 0, 0, 0, 0, 0,
+	    1, 3, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 1, 0, 0, 0,
+	    1, 3, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 1, 1, 1,
+	    1, 3, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 1, 0, 0,
+	    1, 3, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_REFUSED);
+	CHECK(gta4l_emmc_block_live_select(1, 1, 0, 1, 1, 0,
+	    1, 3, 1, 1, 1, 1, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_LIVE_ON);
+	CHECK(gta4l_emmc_block_slow_select(0, 0, 0,
+	    GTA4L_EMMC_BLOCK_LIVE_ON) == GTA4L_EMMC_BLOCK_SLOW_OFF);
+	CHECK(gta4l_emmc_block_slow_select(1, 1, 0,
+	    GTA4L_EMMC_BLOCK_LIVE_OFF) ==
+	    GTA4L_EMMC_BLOCK_SLOW_REFUSED);
+	CHECK(gta4l_emmc_block_slow_select(1, 1, 1,
+	    GTA4L_EMMC_BLOCK_LIVE_ON) ==
+	    GTA4L_EMMC_BLOCK_SLOW_REFUSED);
+	CHECK(gta4l_emmc_block_slow_select(1, 0, 0,
+	    GTA4L_EMMC_BLOCK_LIVE_ON) ==
+	    GTA4L_EMMC_BLOCK_SLOW_REFUSED);
+	CHECK(gta4l_emmc_block_slow_select(1, 1, 0,
+	    GTA4L_EMMC_BLOCK_LIVE_ON) == GTA4L_EMMC_BLOCK_SLOW_ON);
+	return 0;
+}
+
+static int
+scenario_live_refused_orphan(void)
+{
+	begin("gta4l-emmc-live=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-live requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_live_refused_block(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-live=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-live requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_live_refused_bulk(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-live=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-live requires gta4l-emmc-bulk=1") != 0);
+	return 0;
+}
+
+static int
+scenario_live_refused_dma(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-live=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-live requires gta4l-emmc-dma=1") != 0);
+	return 0;
+}
+
+static int
+scenario_live_refused_value(void)
+{
+	static const int values[] = { 0, 2 };
+	char arguments[128];
+	unsigned int index;
+
+	for (index = 0;
+	    index < sizeof(values) / sizeof(values[0]); index++) {
+		snprintf(arguments, sizeof(arguments),
+		    "gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+		    "gta4l-emmc-dma=1 gta4l-emmc-live=%d",
+		    values[index]);
+		begin(arguments);
+		CHECK(!g_started);
+		CHECK(strstr(gta4l_test.log,
+		    "gta4l-emmc-live value must be 1") != 0);
+	}
+	return 0;
+}
+
+static int
+scenario_live_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1 gta4l-emmc-live=1 "
+	    "gta4l-emmc-live=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "duplicate gta4l-emmc-live token") != 0);
+	return 0;
+}
+
+static int
+scenario_slow_refused_orphan(void)
+{
+	begin("gta4l-emmc-slow=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-slow requires gta4l-emmc-live=1") != 0);
+	return 0;
+}
+
+static int
+scenario_slow_refused_value(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1 gta4l-emmc-live=1 "
+	    "gta4l-emmc-slow=0");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-slow value must be 1") != 0);
+	return 0;
+}
+
+static int
+scenario_slow_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1 gta4l-emmc-live=1 "
+	    "gta4l-emmc-slow=1 gta4l-emmc-slow=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "duplicate gta4l-emmc-slow token") != 0);
+	return 0;
+}
+
+static int
+scenario_live_report_max(void)
+{
+	struct gta4l_emmc_block_report report;
+	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	uint32_t length;
+
+	bzero(&report, sizeof(report));
+	speed_report_max(&report);
+	report.bulk = 1u;
+	report.bulk_region = 0xffffffffu;
+	report.bulk_chunks = 0xffffffffu;
+	report.bulk_bytes = 0xffffffffu;
+	report.bulk_ticks = UINT64_MAX;
+	report.bulk_hz = UINT64_MAX;
+	report.bulk_seed = 0xffffffffu;
+	report.bulk_windows = 0xffffffffu;
+	report.bulk_wpass = 0xffffffffu;
+	report.bulk_wfail = 0xffffffffu;
+	report.bulk_woffset = 0xffffffffu;
+	memset(report.bulk_digest, 0xff, sizeof(report.bulk_digest));
+	report.bulk_fail_stage = 0xffffffffu;
+	report.bulk_fail_status = INT32_MIN;
+	report.bulk_cancel = 0xffffffffu;
+	report.bulk_budget = 0xffffffffu;
+	report.bulkio_brr = 0xffffffffu;
+	report.bulkio_drain = 0xffffffffu;
+	report.bulkio_cal = 0xffffffffu;
+	report.bulkio_polls = 0xffffffffu;
+	report.bulkio_delays = 0xffffffffu;
+	report.bulkio_sha = 0xffffffffu;
+	report.bulkio_sha_provider = 1u;
+	report.bulkio_host_control = 0xffffffffu;
+	report.bulkio_clock_control = 0xffffffffu;
+	report.bulkio_present = 0xffffffffu;
+	report.bulkio_caps0 = 0xffffffffu;
+	report.bulkio_caps1 = 0xffffffffu;
+	report.bulkio_dll_config = 0xffffffffu;
+	report.bulkio_dll_status = 0xffffffffu;
+	report.bulkio_vendor_spec = 0xffffffffu;
+	report.bulkio_vendor_spec3 = 0xffffffffu;
+	report.bulkio_rcg_cfg = 0xffffffffu;
+	report.bulkio_rcg_m = 0xffffffffu;
+	report.bulkio_rcg_n = 0xffffffffu;
+	report.bulkio_rcg_d = 0xffffffffu;
+	report.smmu = 1u;
+	report.smmu_stage = 0xffffffffu;
+	report.smmu_scr0 = 0xffffffffu;
+	report.smmu_id0 = 0xffffffffu;
+	report.smmu_nsmrg = 0xffffffffu;
+	report.smmu_index = 0xffffffffu;
+	report.smmu_smr = 0xffffffffu;
+	report.smmu_s2cr = 0xffffffffu;
+	report.smmu_cb = 0xffffffffu;
+	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE;
+	report.smmu_cb_line = 1u;
+	report.smmu_id1 = 0xffffffffu;
+	report.smmu_id2 = 0xffffffffu;
+	report.smmu_gfsr = 0xffffffffu;
+	report.smmu_gfsynr0 = 0xffffffffu;
+	report.smmu_valid = 0xffffffffu;
+	report.smmu_matches = 0xffffffffu;
+	report.smmu_share = 0xffffffffu;
+	report.smmu_cbar = 0xffffffffu;
+	report.smmu_sctlr = 0xffffffffu;
+	report.smmu_tcr = 0xffffffffu;
+	report.smmu_ttbr0 = UINT64_MAX;
+	report.smmu_fsr = 0xffffffffu;
+	report.smmu_last_index = 0xffffffffu;
+	report.smmu_last_sctlr = 0xffffffffu;
+	report.smmu_last_cbar = 0xffffffffu;
+	report.smmu_pfsr = 0xffffffffu;
+	report.smmu_pgfsr = 0xffffffffu;
+	report.dma = 1u;
+	report.dma_mode = GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32;
+	report.dma_smmu = GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE;
+	report.dma_cmp_pass = 0xffffffffu;
+	report.dma_cmp_total = 0xffffffffu;
+	report.dma_canary = 0xffffffffu;
+	report.dma_poison = 0xffffffffu;
+	report.dma_chunks = 0xffffffffu;
+	report.dma_bytes = 0xffffffffu;
+	report.dma_ticks = UINT64_MAX;
+	report.dma_dat = UINT64_MAX;
+	report.dma_fails = 0xffffffffu;
+	report.dma_stage = 0xffffffffu;
+	report.dma_ast = 0xffffffffu;
+	report.dma_aaddr = 0xffffffffu;
+	report.dma_desc = 0xffffffffu;
+	report.dma_budget = 0xffffffffu;
+	report.dma_skip = 0xffffffffu;
+	report.dma_requests = 0xffffffffu;
+	report.dma_blocks = 0xffffffffu;
+	report.dma_diag = 1u;
+	report.dma_cache = 0xffu;
+	report.dma_tp = 0xffffffffu;
+	report.dma_bp = 0xffffffffu;
+	report.dma_ent = 0xffffffffu;
+	report.dma_db = 0xffffffffu;
+	report.dma_err = 0xffffffffu;
+	report.dma_nrm = 0xffffffffu;
+	report.dma_ps = 0xffffffffu;
+	report.dma_hc1 = 0xffu;
+	report.dma_hc2 = 0xffffu;
+	report.dma_sa0 = 0xffffffffu;
+	report.dma_d0 = UINT64_MAX;
+	report.dma_d1 = UINT64_MAX;
+	report.dma_d2 = UINT64_MAX;
+	report.dma_d3 = UINT64_MAX;
+	report.live = 1u;
+	report.live_mode = GTA4L_EMMC_BLOCK_LIVE_MODE_SLOW;
+	report.live_held = 0xffffffffu;
+	report.live_degraded = 0xffffffffu;
+	report.live_online = 0xffffffffu;
+	report.live_errors = 0xffffffffu;
+	report.live_recoveries = 0xffffffffu;
+	report.live_notified = 0xffffffffu;
+	report.live_bytes = UINT64_MAX;
+	memset(report.live_digest, 0xff, sizeof(report.live_digest));
+	report.live_idle_ms = 0xffffffffu;
+	report.live_reread = 0xffffffffu;
+	memset(report.live_reread_digest, 0xff,
+	    sizeof(report.live_reread_digest));
+	report.live_revert = 0xffffffffu;
+	report.live_rverified = 0xffffffffu;
+	report.live_rclk = 0xffffffffu;
+	report.live_budget = 0xffffffffu;
+	report.live_fail_stage = 0xffffffffu;
+	report.live_fail_status = INT32_MIN;
+	report.live_fail_window = 0xffffffffu;
+	report.live_fail_offset = 0xffffffffu;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(length < sizeof(buffer));
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 LIVE: ") ==
+	    GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 LIVEFAIL: ") ==
+	    GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES);
+	CHECK(strstr(buffer, "mode=slow held=4294967295") != 0);
+	CHECK(strstr(buffer,
+	    "revert=4294967295 rverified=4294967295") != 0);
+	CHECK(GTA4L_EMMC_BLOCK_LIVE_SUCCESS_WORST_BYTES ==
+	    (GTA4L_EMMC_BLOCK_BULK_SUCCESS_WORST_BYTES +
+	    GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES + 1u));
+	CHECK(GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES ==
+	    (GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES +
+	    GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES + 1u));
+	CHECK(GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES <=
+	    GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(length <= GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES);
 	return 0;
 }
 
@@ -14667,6 +15178,20 @@ static const struct scenario_entry scenarios[] = {
 	{ "bulk-refused-value", scenario_bulk_refused_value },
 	{ "bulk-refused-duplicate", scenario_bulk_refused_duplicate },
 	{ "bulk-refused-conflicts", scenario_bulk_refused_conflicts },
+	{ "live-held-success", scenario_live_held_success },
+	{ "live-force-slow", scenario_live_force_slow },
+	{ "live-reread-mismatch", scenario_live_reread_mismatch },
+	{ "live-selector", scenario_live_selector },
+	{ "live-refused-orphan", scenario_live_refused_orphan },
+	{ "live-refused-block", scenario_live_refused_block },
+	{ "live-refused-bulk", scenario_live_refused_bulk },
+	{ "live-refused-dma", scenario_live_refused_dma },
+	{ "live-refused-value", scenario_live_refused_value },
+	{ "live-refused-duplicate", scenario_live_refused_duplicate },
+	{ "slow-refused-orphan", scenario_slow_refused_orphan },
+	{ "slow-refused-value", scenario_slow_refused_value },
+	{ "slow-refused-duplicate", scenario_slow_refused_duplicate },
+	{ "live-report-max", scenario_live_report_max },
 	{ "policy", scenario_policy },
 };
 

@@ -706,6 +706,12 @@ extern gta4l_test_widthhold_sample_fn gta4l_test_widthhold_hook;
 typedef void (*gta4l_test_speed_sample_fn)(uint32_t phase);
 extern gta4l_test_speed_sample_fn gta4l_test_speed_hook;
 
+/* S3a live idle seam. The report thread sleeps for the held-mode idle
+ * before the deterministic re-read; the hook lets a scenario change the
+ * next ADMA read's expected data without touching the pre-idle stream. */
+typedef void (*gta4l_test_live_idle_fn)(void);
+extern gta4l_test_live_idle_fn gta4l_test_live_idle_hook;
+
 extern gta4l_test_state gta4l_test;
 
 typedef IOReturn (*gta4l_test_media_read_fn)(IOMedia *media, UInt64 byteStart,

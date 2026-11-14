@@ -34,11 +34,11 @@ criterion and every failed or partial rung.
 | `package/Gta4lEmmcBlockCore.c/.h` | Portable read-only block request helper: validation, per-block loop, bounce copy, counters |
 | `package/Gta4lEmmcProbe.c` | Opt-in staged XNU probe: maps MMIO through the platform object, runs the core and reports |
 | `scripts/sim-gta4l-emmc/harness.c` | Simulated controller and eMMC card with injectable failures and independent register/command checks |
-| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 220 scenarios and 136 mutation controls |
+| `scripts/test-gta4l-emmc.py` | Compiles the core against the simulator, runs 221 scenarios and 137 mutation controls |
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 477 scenarios with 185 adapter mutations, 3 support mutations and 51 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 491 scenarios with 185 adapter mutations, 3 support mutations and 51 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,7 +7903,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 477 scenarios with 185 adapter
+Host gates: the block adapter test runs 491 scenarios with 185 adapter
 mutations, 3 support mutations and 51 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
@@ -8225,3 +8225,84 @@ check. Boot 1 cold must report LIVE `held=1 revert=0`; boot 2 must
 identify the card normally at 1-bit and repeat the held pass. Fast mode
 does not become the default until a visible log channel or S5; S3b is
 not part of the two-boot hardware exit.
+
+### 5.3.126 S3a live held-terminal host implementation (2026-11-14)
+
+Follow-up to §5.3.125 revision 2 (R1-R3) and plan B. Host-only: this
+batch adds the opt-in live/slow diagnostics, the adapter and core
+scenarios and the LIVE evidence checks. It builds no candidate, does
+not touch a device, does not flash and adds no boot.
+
+Selectors. `gta4l-emmc-live=1` (token `gta4l-emmc-live`) is accepted
+only with block mode 3, `gta4l-emmc-bulk=1` and `gta4l-emmc-dma=1`, and
+is refused on a duplicate token, a wrong value, `gta4l-emmc-slow`
+without live, or any of speed, widthhold and widthpub.
+`gta4l-emmc-slow=1` (token `gta4l-emmc-slow`) is accepted only with live
+selected and refused otherwise. Refusals keep the existing `REFUSED:`
+report shape. The `emmc-block-3-live` payload personality maps to
+`gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1
+gta4l-emmc-live=1` and requires the `fs-timer-hold` fixture; force-slow
+is a host-only token and is not a payload personality.
+
+Held run. The run reuses the S2 start path, stream, 80-window set and
+DMA sub-mode, keeps the bus at the verified HS/8-bit selection, idles
+5,000 ms, re-reads the last deterministic two-block window and ends in
+the terminal panic report. The `LIVE:` line carries `mode=held held=1
+degraded=0 online=1 revert=0 rverified=0 rclk=0` plus the error,
+recovery and notification counters, the stream bytes and digest, the
+idle time and the re-read count and digest. The panic path issues no
+card command and performs no revert. The report thread bound is 8,000 +
+2,000 + 4,500 + 2,000 + 2,000 + 5,000 + 4,500 = 28,000 ms, leaving
+2,000 ms under the 30,000 ms watchdog; a static assert ties the worst
+case plus margin to the watchdog and another ties the re-read case to
+the 4,500 ms bulk total.
+
+Recovery. One `liveState` field in {FAST, RECOVERING, DEGRADED, OFFLINE}
+is read and written only under the gate. A failing fast-mode request
+latches the first error, clears `dmaEnabled` and sets RECOVERING before
+it releases the gate; its own result is preserved and it does not retry
+over PIO. Later requests drop the gate and sleep in steps while
+RECOVERING, bounded by the 9,500 ms recovery budget plus the 2,000 ms
+gate and 500 ms margin. The recovery thread calls
+`gta4l_emmc_recover_width_and_timing()` directly, moves to DEGRADED
+(1-bit/400 kHz PIO, `degraded=1`) on success and to OFFLINE with one
+client notification on failure. Stop/terminate quiesces and reverts.
+
+Force-slow. `gta4l-emmc-slow` is a host-tested safety token, not one of
+the S3 hardware boots. It skips the HS/width switch and the stream, runs
+the 80 two-block windows (80 media reads plus 160 single-block CMD17
+reference reads) and the two-block re-read at 1-bit/400 kHz PIO, and
+reports `mode=slow`. The 160 reference reads call the core helper
+directly, bypass `readBlockCallback()` and do not appear in the `c17`
+counter. The clock-derived bound is 3.599 s under the 4,500 ms bulk
+total (901 ms margin); a static assert keeps the slow cap at or below
+the bulk budget.
+
+Report. The LIVE line is bounded at 367 bytes and the failure-only
+LIVEFAIL line at 272 bytes. `GTA4L_EMMC_BLOCK_REPORT_BYTES` rises from
+2,560 to 3,584; the success combination is the 3,070-byte bulk success
+worst case plus the LIVE line (3,438 bytes), the failure combination is
+the 3,289-byte bulk failure worst case plus LIVEFAIL (3,562 bytes), and
+static asserts cover the line, success and failure shapes.
+
+Host results. The core suite passes 221 scenarios and 137 mutation
+controls, including the warm-from-held CMD0 reinit case and a CMD0-skip
+mutation. The block suite passes 47 core scenarios and 35 core
+mutations, 491 adapter scenarios with 185 adapter, 3 support and 51
+policy mutations. Fourteen new adapter scenarios cover the held
+success, force-slow, re-read mismatch, the selector matrix and the
+live/slow refusal cases (`live-refused-orphan`, `-block`, `-bulk`,
+`-dma`, `-value`, `-duplicate`, `slow-refused-orphan`, `-value`,
+`-duplicate`) and the maximum-format line. The evidence dispatcher
+accepts an optional LIVE line in the held and force-slow shapes,
+requires exactly one, rejects LIVEFAIL on success and rejects each field
+mutation, leaving the historical BULK/DMA fixtures unchanged. The
+evidence-count summary is reconciled at 491 adapter scenarios with 185
+adapter mutations. The payload builder, packager and payload-contract
+suites pass with the `emmc-block-3-live` personality and the
+`fs-timer-hold` fixture.
+
+The S3a candidate, the cold and warm-from-held boots, the hardware held
+re-read, the recovery/degraded/offline paths and the stop/terminate
+revert remain `[U]`; nothing here qualifies sustained I/O, a filesystem
+or a boot.

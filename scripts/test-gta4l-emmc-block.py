@@ -1620,16 +1620,16 @@ ADAPTER_MUTATIONS = [
        '\t    (nblks != bulkActiveBlocks)) {\n')],
      'bulk-shape'),
     ('bulk-revert-ignore',
-     [('\trevertOk = speedRecover();\n'
-       '\tif (!revertOk) {\n'
-       '\t\tonline = false;\n'
-       '\t}\n'
-       '\treleaseBulkMedia();\n',
-       '\trevertOk = speedRecover();\n'
-       '\tif (0) {\n'
-       '\t\tonline = false;\n'
-       '\t}\n'
-       '\treleaseBulkMedia();\n')],
+     [('\t\trevertOk = speedRecover();\n'
+       '\t\tif (!revertOk) {\n'
+       '\t\t\tonline = false;\n'
+       '\t\t}\n'
+       '\t\treleaseBulkMedia();\n',
+       '\t\trevertOk = speedRecover();\n'
+       '\t\tif (0) {\n'
+       '\t\t\tonline = false;\n'
+       '\t\t}\n'
+       '\t\treleaseBulkMedia();\n')],
      'bulk-revert-fail'),
     ('smmu-map-fail-ignored',
      [('\tif (gta4l_emmc_platform_map_smmu(&platform) != 0) {\n'
@@ -2429,8 +2429,8 @@ def check_adapter_source():
         'widthhold mode must suppress the legacy PART lines'
     assert '(report->widthhold == 0)' in policy, \
         'widthhold mode must suppress the legacy READ/QUAL lines'
-    assert '#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3328u' in policy_header, \
-        'the SMMUCB census must raise the report buffer to 3,328 bytes'
+    assert '#define GTA4L_EMMC_BLOCK_REPORT_BYTES 3584u' in policy_header, \
+        'the S3 LIVE line must raise the report buffer to 3,584 bytes'
     assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES <=' in policy, \
         'widthhold summary must stay inside the report buffer'
     assert 'GTA4L_EMMC_BLOCK_WIDTHHOLD_REPORT_WORST_BYTES <=' in policy, \
@@ -2481,7 +2481,7 @@ def check_adapter_source():
     assert speed_baseline_at < speed_hs_at < speed_w8_at, \
         'speed sequence must baseline, enter HS and switch width in order'
     speed_start_at = adapter.index(
-        'if (speedMode || bulkMode) {',
+        'if ((speedMode || bulkMode) && !slowMode) {',
         adapter.index('Gta4lEmmcBlock::start('))
     speed_start = adapter[speed_start_at:adapter.index(
         '\n\tif (widthholdMode || widthpubMode) {', speed_start_at)]
@@ -2580,6 +2580,24 @@ def check_adapter_source():
         policy_header, 'the DMA formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES 218u' in \
         policy_header, 'the DMADIAG formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES 367u' in \
+        policy_header, 'the LIVE formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES 272u' in \
+        policy_header, 'the LIVEFAIL formatter bound must stay exact'
+    assert 'GTA4L_EMMC_BLOCK_LIVE_SUCCESS_WORST_BYTES <=' in policy and \
+        'GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES <=' in policy, \
+        'the LIVE success and failure worst cases must fit the buffer'
+    assert 'GTA4L_EMMC_BLOCK_LIVE_SLOW_MAX_MS <=' in policy, \
+        'the force-slow cap must stay within the bulk total budget'
+    assert 'GTA4L_EMMC_BLOCK_LIVE_REPORT_WORST_MS +' in adapter and \
+        'GTA4L_EMMC_BLOCK_LIVE_REPORT_MARGIN_MS <=' in adapter, \
+        'live report worst case must be checked against the watchdog'
+    assert 'GTA4L_EMMC_BLOCK_LIVE_REREAD_MS ==' in adapter, \
+        'live re-read bound must be tied to the bulk total budget'
+    assert 'GTA4L-EMMC P5 LIVE: ' in policy, \
+        'live mode must emit the LIVE line'
+    assert 'GTA4L-EMMC P5 LIVEFAIL: ' in policy, \
+        'live mode must emit the LIVEFAIL line on a terminal failure'
     assert 'GTA4L-EMMC P5 BULKIO: ' in policy, \
         'bulk mode must emit the S2.1 data-phase and register line'
     assert '#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 139u' in \
@@ -3115,8 +3133,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 478, f'expected 478 adapter PASS lines, got {passes}'
-        print('PASS adapter: 478 scenarios against the host IOKit seam')
+        assert passes == 492, f'expected 492 adapter PASS lines, got {passes}'
+        print('PASS adapter: 492 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

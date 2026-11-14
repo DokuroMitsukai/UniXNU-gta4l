@@ -78,6 +78,7 @@ SCENARIOS = [
     'cmd1-crc-retire-short',
     'cmd1-clear-invalidates-window',
     'reinit-clears-windows',
+    'warm-from-held',
     'cmd2-crc-distinct',
     'cmd2-crc-unchanged',
     'cmd2-crc-ocr-like',
@@ -724,6 +725,12 @@ def main() -> int:
              '\thost->pre_cmd2_response_valid = 0;\n',
              '\t/* response-window clear removed by mutation */\n',
              'Gta4lEmmc.c', (), 'reinit-clears-windows'),
+            ('cmd0-skip',
+             '\tresult = gta4l_emmc_send_command(host, GTA4L_EMMC_CMD0, 0,\n'
+             '\t    GTA4L_EMMC_CMD_RESP_NONE, GTA4L_EMMC_CMD_TIMEOUT_US, 0);\n',
+             '\t/* CMD0 removed by mutation: the warm card keeps HS/8-bit. */\n'
+             '\tresult = GTA4L_EMMC_OK;\n',
+             'Gta4lEmmc.c', (), 'warm-from-held'),
             ('clocks-flag-unset',
              '\thost->clocks_enabled = 0;\n',
              '\thost->clocks_enabled = 1;\n',
