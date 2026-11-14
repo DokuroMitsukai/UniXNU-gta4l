@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 491 scenarios with 185 adapter mutations, 3 support mutations and 51 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 492 scenarios with 185 adapter mutations, 3 support mutations and 51 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,7 +7903,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 491 scenarios with 185 adapter
+Host gates: the block adapter test runs 492 scenarios with 185 adapter
 mutations, 3 support mutations and 51 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
@@ -8288,7 +8288,7 @@ static asserts cover the line, success and failure shapes.
 Host results. The core suite passes 221 scenarios and 137 mutation
 controls, including the warm-from-held CMD0 reinit case and a CMD0-skip
 mutation. The block suite passes 47 core scenarios and 35 core
-mutations, 491 adapter scenarios with 185 adapter, 3 support and 51
+mutations, 492 adapter scenarios with 185 adapter, 3 support and 51
 policy mutations. Fourteen new adapter scenarios cover the held
 success, force-slow, re-read mismatch, the selector matrix and the
 live/slow refusal cases (`live-refused-orphan`, `-block`, `-bulk`,
@@ -8297,7 +8297,7 @@ live/slow refusal cases (`live-refused-orphan`, `-block`, `-bulk`,
 accepts an optional LIVE line in the held and force-slow shapes,
 requires exactly one, rejects LIVEFAIL on success and rejects each field
 mutation, leaving the historical BULK/DMA fixtures unchanged. The
-evidence-count summary is reconciled at 491 adapter scenarios with 185
+evidence-count summary is reconciled at 492 adapter scenarios with 185
 adapter mutations. The payload builder, packager and payload-contract
 suites pass with the `emmc-block-3-live` personality and the
 `fs-timer-hold` fixture.
@@ -8408,3 +8408,88 @@ S4 adds `WINDOWS:`. Evidence:
 (`boot-report-s3a-boot1-raw.txt`, `-boot1.txt`, `-boot1-joins.log`,
 `-boot1-check.log`, the boot-2 set, `flash-record-s3a-live.json`,
 `post-boot-integrity-s3a.txt`, `candidate-verification.txt`).
+
+### 5.3.128 Panic-screen report trim and standing capacity gate (2026-11-15)
+
+Host-only follow-up to §5.3.127 and the plan's required pre-S4 item. No
+device access, image or boot. The S3a screen held 41 rows: the report
+body was 38 rows, the panic suffix and four frames took three more and
+`pages`/`free` were clipped. S4 adds `WINDOWS`, so the body had to shrink
+before that rung can use the panic screen.
+
+**Capacity.** `xnu-panic-screen.c` draws with `SCALE 3`; a glyph cell is
+`6*SCALE = 18` px and a line is `14*SCALE = 42` px. The gta4l
+framebuffer is 1200x2000: the owner's raw S3a transcript wraps at 66
+characters (`1200/18 = 66.6`) and the 38-row body plus the suffix and
+four frames filled the visible area. The first text row is `h/8 + 8 =
+258` px and rows can start through `y = 1958`, so `(1958 - 258)/42 + 1 =
+41` rows. The renderer appends ` @file:line` (1 row), up to 24 `frames`
+addresses (`6 + 24*17 = 414` characters, 7 rows) and `pages`/`free` (2
+rows), so the report body gets `41 - 10 = 31` rows. The budget is in
+rows, not bytes, because every line wraps independently at 66 columns.
+
+**The trim.**
+- `BULKIO` is removed. It was diagnostic-only after B10.13; the SHA
+  provider and MMIO counters are recorded in §5.3.123/§5.3.124.
+- `SMMUCB` is now failure/skip-only: it is emitted only when the pre-DMA
+  decision is not `bypass`/`cb-off` or when a post-DMA fault is latched,
+  and keeps `v m cbar sctlr fsr pfsr pgfsr` (the fault pair included).
+- `SMMU` keeps `st` and `dec` only; the pre-DMA register census is in the
+  B10.5/B10.13 evidence.
+- Bulk/live `SPEED` keeps `hs wid verified pub limit seg cap` plus the
+  eight `SPEED_REVERT` fields. S1 keeps the full line, so the speed
+  checker and its roundtrip fixture are unchanged.
+- `BULKFAIL` drops `bytes`, `chunks` and `woffset`, which are already on
+  `BULK`; it keeps `stage status window cancel budget`.
+- `LIVEFAIL` drops `notified` and `budget`; the budget exit remains
+  visible as stage 6.
+- `LIVE` is suppressed once `live_fail_stage` is latched and `SPEEDIO` is
+  suppressed once any failure is latched. `LIVEFAIL`, `BULKFAIL` and
+  `DMADIAG` carry the failure verdict; `SMMUCB` still appears on an SMMU
+  skip/fault, where it replaces those diagnostics.
+
+**Rows after the trim** (widest fixture values, 66-column wrap):
+speed 26, width 26, widthhold 22, widthpub 22, bulk 24, live success 28,
+live skip 30, bulk fail 28, bulk SMMU fail 26, live fail 31, live SMMU
+fail 29. The fixtures use the workload maxima (capacity, region, tick
+budgets and status widths), not every field's type maximum: a lifetime
+request counter cannot reach 2^64 on a 61,071,360-block device, and the
+byte bounds keep the type maxima for the buffer gate. All are within the
+31-row budget. The clean live success leaves the two rows the S4
+`WINDOWS` line may use; the actual trimmed S3a shape is 27 body rows plus
+the five-row observed tail, 32 of 41. The force-slow success shape (no
+DMA/SMMU lines) is smaller.
+
+**Byte bounds.** The bulk `SPEED` line bound is 279 bytes (1,119 with the
+established 838-byte base and terminator), `SMMU` 52, `SMMUCB` 102,
+`BULKFAIL` 113, `DMA` 343 (it carries the longest `translate-live`
+decision) and `LIVEFAIL` 234. The bulk worst case is 2,470 bytes, the
+live success 2,619 and the live failure 2,705, all under the raised
+3,584-byte `GTA4L_EMMC_BLOCK_REPORT_BYTES` and its static asserts.
+
+**Gate.** `adapter_harness.cpp` adds the `screen-capacity` scenario. It
+renders the widest report for every rung, wraps at `SCREEN_COLUMNS`,
+fails if the body exceeds `SCREEN_REPORT_ROWS`, and asserts the two-row
+S4 headroom on the clean live success. `Gta4lEmmcBlock.h` pins the
+geometry constants (`66`, `41`, `10`, `31`, `2`) with static asserts in
+the policy file. `scripts/test-gta4l-emmc-block.py` pins those defines,
+the scenario and the 492-scenario count (493 PASS lines with the
+summary).
+
+**Checker compatibility.** The S3a reports retain the old shape and still
+pass unchanged against `97ca05c6…`; the bulk checker accepts both shapes
+because `parse_speed` is field-set agnostic. Its bulk `SPEED` revert
+check still requires the eight `SPEED_REVERT` fields, the force-slow
+check now covers only the fields the compact line prints and treats a
+missing `dig1`/`dig2` as zero, and `LIVEFAIL_FIELDS` follows the compact
+line. A synthetic exact S3a report with the trimmed lines and the same
+digest also passes, so the next image's report is bound to the same
+checker.
+
+Files: `package/Gta4lEmmcBlock.c`, `package/Gta4lEmmcBlock.h`,
+`scripts/sim-gta4l-emmc-block/adapter_harness.cpp`,
+`scripts/test-gta4l-emmc-block.py`,
+`scripts/check-gta4l-bulk-evidence.py`, `porting.toml`. The adapter
+suite passes 492 scenarios (493 PASS lines including the summary),
+including `screen-capacity`; the bulk checker self-test passes, the
+existing S3a reports pass, and `git diff --check` is clean.

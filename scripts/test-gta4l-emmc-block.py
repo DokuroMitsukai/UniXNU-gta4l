@@ -2516,9 +2516,9 @@ def check_adapter_source():
         policy_header, 'the SPEEDIO formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u' in \
         policy_header, 'the SPEED report bound must match the base block'
-    assert '#define GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES 578u' in \
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES 279u' in \
         policy_header, 'the bulk SPEED formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES 1418u' \
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES 1119u' \
         in policy_header, 'the bulk SPEED report bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT 0xc00001feu' in \
         policy_header, 'the CB FSR fault mask must stay mainline-exact'
@@ -2570,19 +2570,19 @@ def check_adapter_source():
         'bulk mode must capture and report the phase split'
     assert '#define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u' in policy_header, \
         'the BULK formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u' in \
+    assert '#define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 113u' in \
         policy_header, 'the BULKFAIL formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u' in \
-        policy_header, 'the BULKIO formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3289u' in \
+    assert '#define GTA4L_EMMC_BLOCK_SMMUCB_LINE_BYTES 102u' in \
+        policy_header, 'the SMMUCB formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2470u' in \
         policy_header, 'the BULK report bound must match the base block'
-    assert '#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 338u' in \
+    assert '#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 343u' in \
         policy_header, 'the DMA formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES 218u' in \
         policy_header, 'the DMADIAG formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES 367u' in \
         policy_header, 'the LIVE formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES 272u' in \
+    assert '#define GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES 234u' in \
         policy_header, 'the LIVEFAIL formatter bound must stay exact'
     assert 'GTA4L_EMMC_BLOCK_LIVE_SUCCESS_WORST_BYTES <=' in policy and \
         'GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES <=' in policy, \
@@ -2598,10 +2598,22 @@ def check_adapter_source():
         'live mode must emit the LIVE line'
     assert 'GTA4L-EMMC P5 LIVEFAIL: ' in policy, \
         'live mode must emit the LIVEFAIL line on a terminal failure'
-    assert 'GTA4L-EMMC P5 BULKIO: ' in policy, \
-        'bulk mode must emit the S2.1 data-phase and register line'
-    assert '#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 139u' in \
+    assert 'GTA4L-EMMC P5 BULKIO: ' not in policy, \
+        'the diagnostic-only BULKIO line must stay off the panic screen'
+    assert '#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 52u' in \
         policy_header, 'the SMMU formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_SCREEN_COLUMNS 66u' in \
+        policy_header, 'the panic screen must keep 66-column wraps'
+    assert '#define GTA4L_EMMC_BLOCK_SCREEN_ROWS 41u' in \
+        policy_header, 'the panic screen must keep 41 text rows'
+    assert '#define GTA4L_EMMC_BLOCK_SCREEN_PANIC_ROWS 10u' in \
+        policy_header, 'panic metadata must reserve ten rows'
+    assert 'GTA4L_EMMC_BLOCK_SCREEN_HEADROOM_ROWS 2u' in \
+        policy_header, 'the S4 WINDOWS line must keep a two-row headroom'
+    assert 'scenario_screen_capacity' in ADAPTER_HARNESS.read_text() and \
+        '"screen-capacity", scenario_screen_capacity' in \
+        ADAPTER_HARNESS.read_text(), \
+        'the panic-screen capacity gate must run every adapter build'
     assert 'GTA4L-EMMC P5 SMMU: ' in policy, \
         'bulk mode must emit the read-only SMMU state line'
     assert 'gta4l_emmc_block_smmu_match' in policy and \
@@ -3133,8 +3145,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 492, f'expected 492 adapter PASS lines, got {passes}'
-        print('PASS adapter: 492 scenarios against the host IOKit seam')
+        assert passes == 493, f'expected 493 adapter PASS lines, got {passes}'
+        print('PASS adapter: 493 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

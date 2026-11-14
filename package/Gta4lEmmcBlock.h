@@ -452,12 +452,15 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES 746u
 #define GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES 267u
 #define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u
-/* Bulk mode omits the six S1-only SPEED fields (bytes1/ticks1/dig1/
- * bytes2/ticks2/dig2), which are zero in bulk, to keep the panic tail on
- * screen. At their widest the remaining fields make 578 bytes, 168 fewer
- * than the S1 line, so 838 + 578 + newline + NUL = 1,418. */
-#define GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES 578u
-#define GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES 1418u
+/* Bulk and live modes need only the switch outcome and the combined
+ * revert from SPEED: `hs wid verified pub limit seg cap` plus the eight
+ * SPEED_REVERT fields. The S1-only qualification fields (hashes, window
+ * counters, pre-switch host state) are proven by the speed rung and
+ * would push the S4 WINDOWS line off the panic screen. At their widest
+ * the fifteen fields make 279 bytes, so 838 + 279 + newline + NUL =
+ * 1,119. */
+#define GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES 279u
+#define GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES 1119u
 
 /* S2 sustained large-read qualification. The mode reuses the S1 start
  * path and the verified combined revert, then streams the 85,688,320-byte
@@ -550,14 +553,17 @@ extern "C" {
 /* Formatter-exact bounds. The LIVE line is 367 bytes with the `mode` token
  * at four characters, twelve u32 facts at ten digits, `bytes` at twenty,
  * two 32-hex digests, sixteen `=` signs and fifteen separators. The
- * failure-only LIVEFAIL line is 272 bytes with fourteen fields, one i32 at
- * eleven digits, fourteen `=` signs and thirteen separators. The success
- * combination is the 3,070-byte bulk success worst case plus LIVE; the
- * failure combination is the 3,289-byte bulk failure worst case (DMADIAG
- * included) plus LIVEFAIL. Both fit the raised 3,584-byte report buffer. */
+ * failure-only LIVEFAIL line is 234 bytes with twelve fields (the
+ * duplicated `notified` and `budget` facts are gone; the budget exit is
+ * still visible as stage 6), one i32 at eleven digits, twelve `=` signs
+ * and eleven separators. LIVE is emitted only on the success path; a live
+ * failure emits LIVEFAIL alone. The success combination is the bulk
+ * success worst case plus LIVE; the failure combination is the bulk
+ * failure worst case (DMADIAG included) plus LIVEFAIL. Both fit the
+ * raised 3,584-byte report buffer. */
 #define GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES 367u
-#define GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES 272u
-#define GTA4L_EMMC_BLOCK_BULK_SUCCESS_WORST_BYTES 3070u
+#define GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES 234u
+#define GTA4L_EMMC_BLOCK_BULK_SUCCESS_WORST_BYTES 2251u
 #define GTA4L_EMMC_BLOCK_LIVE_SUCCESS_WORST_BYTES \
 	(GTA4L_EMMC_BLOCK_BULK_SUCCESS_WORST_BYTES + \
 	GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES + 1u)
@@ -674,15 +680,17 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE 9u
 #define GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF 10u
 
-/* Formatter-exact bound: the SMMU line is 139 bytes with the stage, the
- * two 8-hex registers, the stream count and index at ten digits, the SMR
- * and S2CR at 8 hex, the context bank at ten digits and the nine-character
- * `translate` decision token. */
-#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 139u
-/* The SMMUCB line is 227 bytes: the census counts at two hex digits,
- * eight 8-hex registers (id1/id2/gfsr/gfsynr0/cbar/sctlr/tcr/fsr), the
- * 16-hex TTBR0, the last-bank triple and the post-DMA fault pair. */
-#define GTA4L_EMMC_BLOCK_SMMUCB_LINE_BYTES 227u
+/* Formatter-exact bound: the verdict-only SMMU line keeps the stage and
+ * the decision token, so it is 52 bytes at the longest `translate-live`
+ * decision and a ten-digit stage. The register census was recorded in
+ * the B10.5/B10.13 evidence and is no longer a per-boot verdict input. */
+#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 52u
+/* The SMMUCB census is diagnostic-only after B10.13. It is emitted only
+ * when the pre-DMA decision is not one of the two clean outcomes or when
+ * a post-DMA fault was observed, and keeps the seven decision registers:
+ * valid/match at two hex digits, CBAR/SCTLR/FSR and the post-DMA FSR
+ * pair at eight. The worst line is 102 bytes. */
+#define GTA4L_EMMC_BLOCK_SMMUCB_LINE_BYTES 102u
 
 /* Bulk-only failure stages. The stream and window reads share the S1
  * transport; the stage names the first bulk failure, not the S1 start
@@ -705,29 +713,28 @@ extern "C" {
 /* Formatter-exact bounds: the BULK line is 249 bytes with its eleven
  * fields at their widest (seven u32 at ten digits, two u64 at twenty, one
  * u32 hex at eight, one 32-hex digest and ten separator spaces); the
- * failure-only BULKFAIL line is 167 bytes with seven u32 at ten digits,
- * one i32 at eleven and seven separators. The BULKIO line is 258 bytes:
- * six u32 counters at ten digits, the two-character `shap` provider token,
- * the 8-bit Host Control and 16-bit Clock Control at two and four hex
- * digits, Present State at eight, five packed sixteen-digit register pairs
- * and fourteen separators. The bulk SPEED worst case is 1,418 bytes;
- * adding the SPEEDIO, BULK, BULKIO, SMMU, DMA and optional BULKFAIL lines
- * keeps the combined report at 2,842 bytes; adding the SMMUCB census line
- * and its separator gives 3,070 bytes. The DMA line adds the stack-path
- * `req`/`blk` counters to the 308-byte transport line, so its bound grows
- * by 30 bytes to 338. The failure-only DMADIAG line is 218 bytes: the
- * prefix, six 8-hex physical/status words, a 3-hex entry count, a 4-hex
- * descriptor-byte count, a 2-hex cache mask, 2/4-hex Host Control readbacks
- * and four 16-hex table words; with its separator the worst case is 3,289
- * bytes. The S3 LIVE line and separator add 368 bytes to the success shape
- * and the LIVEFAIL line and separator add 273 bytes to the failure shape,
- * so both live shapes fit the raised 3,584-byte buffer. */
+ * failure-only BULKFAIL line is 113 bytes with five fields at their
+ * widest (four u32 at ten digits, one i32 at eleven and four separators).
+ * The duplicated `bytes`/`chunks`/`woffset` facts are already on BULK and
+ * are no longer repeated. BULKIO (the MMIO/SHA counters and register
+ * readbacks) is diagnostic-only after B10.13 and is no longer emitted.
+ * The bulk SPEED worst case is 1,119 bytes; adding the SPEEDIO, BULK,
+ * SMMU, SMMUCB, DMA and optional BULKFAIL lines gives 2,470 bytes. The
+ * DMA line adds the stack-path `req`/`blk` counters to the 308-byte
+ * transport line and carries the longest `translate-live` decision, so
+ * its bound is 343 bytes. The failure-only
+ * DMADIAG line is 218 bytes: the prefix, six 8-hex physical/status words,
+ * a 3-hex entry count, a 4-hex descriptor-byte count, a 2-hex cache mask,
+ * 2/4-hex Host Control readbacks and four 16-hex table words; with its
+ * separator the worst case is 2,470 bytes. The S3 LIVE line and separator
+ * add 368 bytes to the success shape (2,619) and the LIVEFAIL line and
+ * separator add 235 bytes to the failure shape (2,705), so both live
+ * shapes fit the raised 3,584-byte buffer. */
 #define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
-#define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
-#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u
-#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 338u
+#define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 113u
+#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 343u
 #define GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES 218u
-#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3289u
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 2470u
 
 /* Start-path failure stages, in execution order. A failure latch keeps the
  * first stage so a later cleanup failure cannot mask it. */
@@ -758,6 +765,25 @@ extern "C" {
 /* An unexpected widthhold reason must stay visible instead of being
  * reported as a data read failure. */
 #define GTA4L_EMMC_BLOCK_SPEED_STAGE_UNKNOWN 23u
+
+/* Panic-screen capacity. xnu-panic-screen.c draws with SCALE 3: a glyph
+ * cell is 6*SCALE = 18 px and a text line is 14*SCALE = 42 px. The gta4l
+ * framebuffer is 1200x2000 (the 66-column wraps in every owner transcript
+ * pin the width), so a line wraps after 1200/18 = 66 characters and the
+ * first text row starts at h/8 + 8 = 258 px. Rows that can start are
+ * 258..1958 in 42-px steps: (1958 - 258)/42 + 1 = 41. The renderer also
+ * appends the panic's ` @file:line` suffix (1 row), up to 24 frame
+ * addresses (6 + 24*17 = 414 characters, 7 rows) and the pages/free pair
+ * (2 rows), so a report body may use 41 - 10 = 31 rows. The gate in
+ * adapter_harness.cpp renders every rung's widest report and fails if the
+ * wrapped rows exceed this budget. The S4 WINDOWS line must additionally
+ * fit the two-row headroom without pushing a verdict row off screen. */
+#define GTA4L_EMMC_BLOCK_SCREEN_COLUMNS 66u
+#define GTA4L_EMMC_BLOCK_SCREEN_ROWS 41u
+#define GTA4L_EMMC_BLOCK_SCREEN_PANIC_ROWS 10u
+#define GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS \
+	(GTA4L_EMMC_BLOCK_SCREEN_ROWS - GTA4L_EMMC_BLOCK_SCREEN_PANIC_ROWS)
+#define GTA4L_EMMC_BLOCK_SCREEN_HEADROOM_ROWS 2u
 
 #define GTA4L_EMMC_BLOCK_REPORT_BYTES 3584u
 #define GTA4L_EMMC_BLOCK_REPORT_LBA 1u

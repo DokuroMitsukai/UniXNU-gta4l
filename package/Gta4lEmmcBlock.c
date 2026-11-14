@@ -101,9 +101,6 @@ _Static_assert(GTA4L_EMMC_BLOCK_BULK_LINE_BYTES <=
 _Static_assert(GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "BULKFAIL line must fit the report buffer");
-_Static_assert(GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES <=
-    GTA4L_EMMC_BLOCK_REPORT_BYTES,
-    "BULKIO line must fit the report buffer");
 _Static_assert(GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "SMMU line must fit the report buffer");
@@ -139,6 +136,24 @@ _Static_assert(GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES <=
 _Static_assert(GTA4L_EMMC_BLOCK_LIVE_SLOW_MAX_MS <=
     GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS,
     "slow force-slow cap must stay within the bulk total budget");
+/* The panic-screen gate is a host test (adapter_harness.cpp) that renders
+ * each rung's widest report; these asserts pin the renderer geometry and
+ * the row budget it relies on. */
+_Static_assert(GTA4L_EMMC_BLOCK_SCREEN_COLUMNS == 66u,
+    "panic screen must wrap at 66 columns");
+_Static_assert(GTA4L_EMMC_BLOCK_SCREEN_ROWS == 41u,
+    "panic screen must have 41 text rows");
+_Static_assert(GTA4L_EMMC_BLOCK_SCREEN_PANIC_ROWS == 10u,
+    "panic metadata must reserve ten rows");
+_Static_assert(GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS == 31u,
+    "report body must fit the remaining panic-screen rows");
+_Static_assert(GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS ==
+    (GTA4L_EMMC_BLOCK_SCREEN_ROWS -
+    GTA4L_EMMC_BLOCK_SCREEN_PANIC_ROWS),
+    "report row budget must follow the screen capacity");
+_Static_assert(GTA4L_EMMC_BLOCK_SCREEN_HEADROOM_ROWS <
+    GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS,
+    "S4 headroom must fit inside the report row budget");
 
 static int
 gta4l_emmc_block_is_space(char value)
@@ -2120,6 +2135,26 @@ gta4l_emmc_block_smmu_decision_name(uint32_t decision)
 	}
 }
 
+/* Diagnostic-only lines yield to the failure verdict on the panic screen:
+ * once a failure is latched the wrapped report already carries the failure
+ * lines (BULKFAIL, DMADIAG, LIVEFAIL or SMMUCB), so SPEEDIO and the
+ * success-shaped LIVE line would push the verdict rows off the bottom. */
+static int
+gta4l_emmc_block_failure_latched(
+    const struct gta4l_emmc_block_report *report)
+{
+	return (report->bulk_fail_stage != 0u) ||
+	    (report->dma_diag != 0u) ||
+	    (report->live_fail_stage != 0u);
+}
+
+static int
+gta4l_emmc_block_smmu_clean(uint32_t decision)
+{
+	return (decision == GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS) ||
+	    (decision == GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF);
+}
+
 uint32_t
 gta4l_emmc_block_report_format(char *buffer, uint32_t size,
     const struct gta4l_emmc_block_report *report)
@@ -3524,7 +3559,60 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		}
 	}
 
-	if (report->speed != 0) {
+	if ((report->speed != 0) && (report->bulk != 0u)) {
+		/* Bulk and live keep only the switch verdict and the combined
+		 * revert; the S1 qualification fields live in the speed mode's
+		 * own report and would wrap the S4 WINDOWS line off screen. */
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 SPEED: ");
+		gta4l_emmc_block_put_key(&writer, "hs");
+		gta4l_emmc_block_put_u64(&writer, report->speed_hs);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "wid");
+		gta4l_emmc_block_put_u64(&writer, report->speed_wid);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "verified");
+		gta4l_emmc_block_put_u64(&writer, report->speed_verified);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "pub");
+		gta4l_emmc_block_put_u64(&writer, report->speed_pub);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "limit");
+		gta4l_emmc_block_put_u64(&writer, report->speed_limit);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "seg");
+		gta4l_emmc_block_put_u64(&writer, report->speed_segments);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "cap");
+		gta4l_emmc_block_put_u64(&writer, report->speed_capacity);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "revert");
+		gta4l_emmc_block_put_u64(&writer, report->speed_revert);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rverified");
+		gta4l_emmc_block_put_u64(&writer, report->speed_rverified);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rstatus");
+		gta4l_emmc_block_put_i32(&writer, report->speed_rstatus);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "hsrevert");
+		gta4l_emmc_block_put_u64(&writer, report->speed_hsrevert);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "hsverified");
+		gta4l_emmc_block_put_u64(&writer, report->speed_hsverified);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rhsb");
+		gta4l_emmc_block_put_u64(&writer, report->speed_rhsb);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rhs");
+		gta4l_emmc_block_put_u64(&writer, report->speed_rhs);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rclk");
+		gta4l_emmc_block_put_u64(&writer, report->speed_rclk);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
+
+	if ((report->speed != 0) && (report->bulk == 0u)) {
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 SPEED: ");
 		gta4l_emmc_block_put_key(&writer, "hs");
@@ -3661,7 +3749,8 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
-	if (report->speed != 0) {
+	if ((report->speed != 0) &&
+	    !gta4l_emmc_block_failure_latched(report)) {
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 SPEEDIO: ");
 		gta4l_emmc_block_put_key(&writer, "req");
@@ -3738,95 +3827,14 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
-	if (report->bulk != 0) {
-		gta4l_emmc_block_put_string(&writer,
-		    "GTA4L-EMMC P5 BULKIO: ");
-		gta4l_emmc_block_put_key(&writer, "brr");
-		gta4l_emmc_block_put_u64(&writer, report->bulkio_brr);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "drain");
-		gta4l_emmc_block_put_u64(&writer, report->bulkio_drain);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "cal");
-		gta4l_emmc_block_put_u64(&writer, report->bulkio_cal);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "polls");
-		gta4l_emmc_block_put_u64(&writer, report->bulkio_polls);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "delays");
-		gta4l_emmc_block_put_u64(&writer, report->bulkio_delays);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "sha");
-		gta4l_emmc_block_put_u64(&writer, report->bulkio_sha);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "shap");
-		gta4l_emmc_block_put_string(&writer,
-		    (report->bulkio_sha_provider != 0u) ? "lk" : "pt");
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "hc");
-		gta4l_emmc_block_put_hex(&writer,
-		    report->bulkio_host_control, 2u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "cc");
-		gta4l_emmc_block_put_hex(&writer,
-		    report->bulkio_clock_control, 4u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "ps");
-		gta4l_emmc_block_put_hex(&writer,
-		    report->bulkio_present, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "cap");
-		gta4l_emmc_block_put_hex64(&writer,
-		    ((uint64_t)report->bulkio_caps1 << 32) |
-		    report->bulkio_caps0, 16u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "dll");
-		gta4l_emmc_block_put_hex64(&writer,
-		    ((uint64_t)report->bulkio_dll_status << 32) |
-		    report->bulkio_dll_config, 16u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "ven");
-		gta4l_emmc_block_put_hex64(&writer,
-		    ((uint64_t)report->bulkio_vendor_spec3 << 32) |
-		    report->bulkio_vendor_spec, 16u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "rcg");
-		gta4l_emmc_block_put_hex64(&writer,
-		    ((uint64_t)report->bulkio_rcg_m << 32) |
-		    report->bulkio_rcg_cfg, 16u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "rcg2");
-		gta4l_emmc_block_put_hex64(&writer,
-		    ((uint64_t)report->bulkio_rcg_d << 32) |
-		    report->bulkio_rcg_n, 16u);
-		gta4l_emmc_block_put_char(&writer, '\n');
-	}
-
 	if (report->smmu != 0) {
+		/* The decision is the verdict; the pre-DMA register census
+		 * lives in the B10.5/B10.13 record, not in every boot's
+		 * screen budget. */
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 SMMU: ");
 		gta4l_emmc_block_put_key(&writer, "st");
 		gta4l_emmc_block_put_u64(&writer, report->smmu_stage);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "scr0");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_scr0, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "id0");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_id0, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "n");
-		gta4l_emmc_block_put_u64(&writer, report->smmu_nsmrg);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "smr");
-		gta4l_emmc_block_put_u64(&writer, report->smmu_index);
-		gta4l_emmc_block_put_char(&writer, '/');
-		gta4l_emmc_block_put_hex(&writer, report->smmu_smr, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "s2cr");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_s2cr, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "cb");
-		gta4l_emmc_block_put_u64(&writer, report->smmu_cb);
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "dec");
 		gta4l_emmc_block_put_string(&writer,
@@ -3835,29 +3843,19 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
-	if (report->smmu_cb_line != 0) {
+	if ((report->smmu_cb_line != 0) &&
+	    (!gta4l_emmc_block_smmu_clean(report->smmu_decision) ||
+	    (report->smmu_pfsr != 0u) || (report->smmu_pgfsr != 0u))) {
+		/* Failure/skip census: the clean cb-off and bypass runs keep
+		 * the decision on the SMMU line alone. A fault or a skip keeps
+		 * the CB state and the post-DMA fault pair on screen. */
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 SMMUCB: ");
-		gta4l_emmc_block_put_key(&writer, "id1");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_id1, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "id2");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_id2, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "gfsr");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_gfsr, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "gfsynr0");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_gfsynr0, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "v");
 		gta4l_emmc_block_put_hex(&writer, report->smmu_valid, 2u);
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "m");
 		gta4l_emmc_block_put_hex(&writer, report->smmu_matches, 2u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "sh");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_share, 2u);
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "cbar");
 		gta4l_emmc_block_put_hex(&writer, report->smmu_cbar, 8u);
@@ -3865,25 +3863,8 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_key(&writer, "sctlr");
 		gta4l_emmc_block_put_hex(&writer, report->smmu_sctlr, 8u);
 		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "tcr");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_tcr, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "ttbr0");
-		gta4l_emmc_block_put_hex64(&writer, report->smmu_ttbr0,
-		    16u);
-		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "fsr");
 		gta4l_emmc_block_put_hex(&writer, report->smmu_fsr, 8u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "last");
-		gta4l_emmc_block_put_hex(&writer, report->smmu_last_index,
-		    2u);
-		gta4l_emmc_block_put_char(&writer, '/');
-		gta4l_emmc_block_put_hex(&writer, report->smmu_last_sctlr,
-		    8u);
-		gta4l_emmc_block_put_char(&writer, '/');
-		gta4l_emmc_block_put_hex(&writer, report->smmu_last_cbar,
-		    8u);
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "pfsr");
 		gta4l_emmc_block_put_hex(&writer, report->smmu_pfsr, 8u);
@@ -4017,23 +3998,14 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_u64(&writer,
 		    report->bulk_fail_stage);
 		gta4l_emmc_block_put_char(&writer, ' ');
+		/* bytes/chunks/woffset are already on the BULK line; the
+		 * failure line keeps only the first-failure verdict. */
 		gta4l_emmc_block_put_key(&writer, "status");
 		gta4l_emmc_block_put_i32(&writer,
 		    report->bulk_fail_status);
 		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "bytes");
-		gta4l_emmc_block_put_u64(&writer, report->bulk_bytes);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "chunks");
-		gta4l_emmc_block_put_u64(&writer,
-		    report->bulk_chunks);
-		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "window");
 		gta4l_emmc_block_put_u64(&writer, report->bulk_wfail);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "woffset");
-		gta4l_emmc_block_put_u64(&writer,
-		    report->bulk_woffset);
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "cancel");
 		gta4l_emmc_block_put_u64(&writer,
@@ -4045,7 +4017,7 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
-	if (report->live != 0) {
+	if ((report->live != 0) && (report->live_fail_stage == 0u)) {
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 LIVE: ");
 		gta4l_emmc_block_put_key(&writer, "mode");
@@ -4104,6 +4076,8 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 	}
 
 	if ((report->live != 0) && (report->live_fail_stage != 0u)) {
+		/* The success-shaped LIVE line is suppressed on failure so the
+		 * failure verdict and the revert proof stay on screen. */
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 LIVEFAIL: ");
 		gta4l_emmc_block_put_key(&writer, "mode");
@@ -4139,9 +4113,6 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_u64(&writer,
 		    report->live_recoveries);
 		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "notified");
-		gta4l_emmc_block_put_u64(&writer, report->live_notified);
-		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "revert");
 		gta4l_emmc_block_put_u64(&writer, report->live_revert);
 		gta4l_emmc_block_put_char(&writer, ' ');
@@ -4150,9 +4121,6 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "rclk");
 		gta4l_emmc_block_put_u64(&writer, report->live_rclk);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "budget");
-		gta4l_emmc_block_put_u64(&writer, report->live_budget);
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 

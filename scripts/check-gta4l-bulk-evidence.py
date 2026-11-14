@@ -97,8 +97,7 @@ LIVE_FIELDS = (
     'revert', 'rverified', 'rclk', 'budget')
 LIVEFAIL_FIELDS = (
     'mode', 'held', 'stage', 'status', 'window', 'offset', 'online',
-    'errors', 'recoveries', 'notified', 'revert', 'rverified', 'rclk',
-    'budget')
+    'errors', 'recoveries', 'revert', 'rverified', 'rclk')
 LIVE_HELD_FIXED = {
     'mode': 'held',
     'held': '1',
@@ -130,16 +129,12 @@ SLOW_BULK_FIXED = {
 }
 SLOW_SPEED_FIXED = {
     'hs': '0',
-    'hsa': '0',
     'verified': '0',
     'wid': '0',
-    'cmd6': '0',
-    'base': '0',
-    'req': '0',
-    'fails': '0',
-    'cancel': '0',
-    'budget': '0',
     'pub': '1',
+    'limit': '64',
+    'seg': '1',
+    'cap': '61071360',
 }
 SLOW_SPEED_FIXED.update(SPEED_NO_REVERT)
 
@@ -379,8 +374,10 @@ def check_slow_speed(fields):
         if fields.get(name) != value:
             errors.append(
                 f'SPEED {name}={fields.get(name)} expected {value}')
+    # Bulk mode does not print dig1/dig2; when an older report carries
+    # them, they still must be zero without a stream.
     for name in ('dig1', 'dig2'):
-        if fields.get(name) != ZERO_DIGEST:
+        if fields.get(name, ZERO_DIGEST) != ZERO_DIGEST:
             errors.append(f'SPEED {name} must be zero without a stream')
     return errors
 
@@ -608,7 +605,7 @@ def self_test():
         slow_speed_mutations = (
             (dict(slow_speed, revert='1'), 'slow revert'),
             (dict(slow_speed, hs='1'), 'slow HS'),
-            (dict(slow_speed, req='8'), 'slow requests'),
+            (dict(slow_speed, wid='8'), 'slow width'),
             (dict(slow_speed, dig1=digest), 'slow digest'),
         )
         for fields, label in slow_speed_mutations:

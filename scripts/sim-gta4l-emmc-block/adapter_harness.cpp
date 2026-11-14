@@ -11175,8 +11175,8 @@ scenario_bulk_success(void)
 	CHECK(gta4l_test.smmu_maps == 1u);
 	CHECK(gta4l_test.smmu_reads >= 8u);
 	CHECK(strstr(gta4l_test.panic,
-	    "GTA4L-EMMC P5 SMMU: st=3 scr0=00000000 id0=00000001 "
-	    "n=1 smr=0/800000c0 s2cr=00010000 cb=0 dec=bypass") != 0);
+	    "GTA4L-EMMC P5 SMMU: st=3 dec=bypass") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 SMMUCB:") == 0);
 	CHECK(g_self->report.speed_pub == 1u);
 	CHECK(g_self->report.speed_partdiag == 0u);
 	CHECK(g_self->report.speedio_req ==
@@ -11198,8 +11198,9 @@ scenario_bulk_success(void)
 	CHECK(strstr(gta4l_test.panic,
 	    "GTA4L-EMMC P5 BULK: region=85688320 chunks=2615 "
 	    "bytes=85688320 ticks=") != 0);
-	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 BULKIO: brr=") != 0);
-	CHECK(strstr(gta4l_test.panic, " hc=20 cc=0005 ") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 BULKIO:") == 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "SPEED: hs=1 wid=8 verified=1 pub=1 limit=64 seg=1") != 0);
 	snprintf(expected, sizeof(expected),
 	    " windows=80 wpass=80 wfail=0 woffset=0 digest=%s",
 	    digestText);
@@ -11405,7 +11406,6 @@ scenario_bulk_budget_boundary(void)
 	CHECK(g_self->report.bulk_ticks ==
 	    ((uint64_t)GTA4L_EMMC_BLOCK_BULK_STREAM_BUDGET_MS - 1u) *
 	    1000u);
-	CHECK(strstr(gta4l_test.panic, "budget=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=1") != 0);
 	return 0;
 }
@@ -11667,7 +11667,8 @@ scenario_bulk_format_max(void)
 	report.smmu_smr = 0xffffffffu;
 	report.smmu_s2cr = 0xffffffffu;
 	report.smmu_cb = 0xffffffffu;
-	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE;
+	report.smmu_decision =
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE;
 	report.smmu_cb_line = 1u;
 	report.smmu_id1 = 0xffffffffu;
 	report.smmu_id2 = 0xffffffffu;
@@ -11688,7 +11689,8 @@ scenario_bulk_format_max(void)
 	report.smmu_pgfsr = 0xffffffffu;
 	report.dma = 1u;
 	report.dma_mode = GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32;
-	report.dma_smmu = GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE;
+	report.dma_smmu =
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE;
 	report.dma_cmp_pass = 0xffffffffu;
 	report.dma_cmp_total = 0xffffffffu;
 	report.dma_canary = 0xffffffffu;
@@ -11728,46 +11730,58 @@ scenario_bulk_format_max(void)
 	CHECK(length < sizeof(buffer));
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 SPEED: ") ==
 	    GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES);
-	CHECK(strstr(buffer, "bytes1=") == 0);
-	CHECK(strstr(buffer, "ticks1=") == 0);
-	CHECK(strstr(buffer, "dig1=") == 0);
-	CHECK(strstr(buffer, "bytes2=") == 0);
-	CHECK(strstr(buffer, "ticks2=") == 0);
-	CHECK(strstr(buffer, "dig2=") == 0);
+	CHECK(strstr(buffer,
+	    "GTA4L-EMMC P5 SPEED: hs=4294967295 wid=4294967295 "
+	    "verified=4294967295 pub=4294967295 limit=4294967295 "
+	    "seg=4294967295 cap=4294967295 revert=4294967295 "
+	    "rverified=4294967295 rstatus=-2147483648") != 0);
+	CHECK(strstr(buffer, " hsrb=") == 0);
+	CHECK(strstr(buffer, " hsa=") == 0);
+	CHECK(strstr(buffer, " rcg=") == 0);
+	CHECK(strstr(buffer, " hispd=") == 0);
+	CHECK(strstr(buffer, " wtry=") == 0);
+	CHECK(strstr(buffer, " wfall=") == 0);
+	CHECK(strstr(buffer, " wroll=") == 0);
+	CHECK(strstr(buffer, " cmd6=") == 0);
+	CHECK(strstr(buffer, " partial=") == 0);
+	CHECK(strstr(buffer, " partdiag=") == 0);
+	CHECK(strstr(buffer, " bytes1=") == 0);
+	CHECK(strstr(buffer, " ticks1=") == 0);
+	CHECK(strstr(buffer, " dig1=") == 0);
+	CHECK(strstr(buffer, " bytes2=") == 0);
+	CHECK(strstr(buffer, " ticks2=") == 0);
+	CHECK(strstr(buffer, " dig2=") == 0);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 BULK: ") ==
 	    GTA4L_EMMC_BLOCK_BULK_LINE_BYTES);
-	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 BULKIO: ") ==
-	    GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 BULKIO: ") == 0);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 SMMU: ") ==
 	    GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES);
+	CHECK(strstr(buffer,
+	    "SMMU: st=4294967295 dec=translate-live") != 0);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 SMMUCB: ") ==
 	    GTA4L_EMMC_BLOCK_SMMUCB_LINE_BYTES);
 	CHECK(strstr(buffer,
-	    "GTA4L-EMMC P5 SMMUCB: id1=ffffffff id2=ffffffff") != 0);
+	    "GTA4L-EMMC P5 SMMUCB: v=ff m=ff cbar=ffffffff "
+	    "sctlr=ffffffff fsr=ffffffff pfsr=ffffffff "
+	    "pgfsr=ffffffff") != 0);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 DMA: ") ==
 	    GTA4L_EMMC_BLOCK_DMA_LINE_BYTES);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 DMADIAG: ") ==
 	    GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES);
-	CHECK(strstr(buffer, "dec=translate") != 0);
-	CHECK(strstr(buffer, "mode=adma2-32 smmu=translate") != 0);
 	CHECK(strstr(buffer,
-	    "smr=4294967295/ffffffff s2cr=ffffffff cb=4294967295") != 0);
-	CHECK(strstr(buffer, " cal=4294967295 ") != 0);
-	CHECK(strstr(buffer, " shap=lk ") != 0);
-	CHECK(strstr(buffer, "cap=ffffffffffffffff") != 0);
-	CHECK(strstr(buffer, "dll=ffffffffffffffff") != 0);
-	CHECK(strstr(buffer, "ven=ffffffffffffffff") != 0);
-	CHECK(strstr(buffer, "rcg=ffffffffffffffff") != 0);
-	CHECK(strstr(buffer, "rcg2=ffffffffffffffff") != 0);
+	    "mode=adma2-32 smmu=translate-live") != 0);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 BULKFAIL: ") ==
 	    GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES);
+	CHECK(strstr(buffer,
+	    "BULKFAIL: stage=4294967295 status=-2147483648 "
+	    "window=4294967295 cancel=4294967295 "
+	    "budget=4294967295\n") != 0);
 	CHECK(GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES ==
 	    (GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES + 838u + 2u));
 	CHECK(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES ==
 	    (GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES +
 	    GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_BULK_LINE_BYTES + 1u +
-	    GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_SMMUCB_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_DMA_LINE_BYTES + 1u +
@@ -11775,6 +11789,7 @@ scenario_bulk_format_max(void)
 	    GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES + 1u));
 	CHECK(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES <=
 	    GTA4L_EMMC_BLOCK_REPORT_BYTES);
+	CHECK(length <= GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES);
 	return 0;
 }
 
@@ -11936,7 +11951,7 @@ scenario_live_reread_mismatch(void)
 	CHECK(strstr(gta4l_test.panic,
 	    "GTA4L-EMMC P5 LIVEFAIL: mode=held held=0") != 0);
 	CHECK(strstr(gta4l_test.panic, "revert=1 rverified=1") != 0);
-	CHECK(strstr(gta4l_test.panic, "LIVE: mode=held held=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 LIVE: ") == 0);
 	return 0;
 }
 
@@ -12169,7 +12184,8 @@ scenario_live_report_max(void)
 	report.smmu_smr = 0xffffffffu;
 	report.smmu_s2cr = 0xffffffffu;
 	report.smmu_cb = 0xffffffffu;
-	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE;
+	report.smmu_decision =
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE;
 	report.smmu_cb_line = 1u;
 	report.smmu_id1 = 0xffffffffu;
 	report.smmu_id2 = 0xffffffffu;
@@ -12190,7 +12206,8 @@ scenario_live_report_max(void)
 	report.smmu_pgfsr = 0xffffffffu;
 	report.dma = 1u;
 	report.dma_mode = GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32;
-	report.dma_smmu = GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE;
+	report.dma_smmu =
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE;
 	report.dma_cmp_pass = 0xffffffffu;
 	report.dma_cmp_total = 0xffffffffu;
 	report.dma_canary = 0xffffffffu;
@@ -12242,7 +12259,7 @@ scenario_live_report_max(void)
 	report.live_rverified = 0xffffffffu;
 	report.live_rclk = 0xffffffffu;
 	report.live_budget = 0xffffffffu;
-	report.live_fail_stage = 0xffffffffu;
+	report.live_fail_stage = 0u;
 	report.live_fail_status = INT32_MIN;
 	report.live_fail_window = 0xffffffffu;
 	report.live_fail_offset = 0xffffffffu;
@@ -12252,14 +12269,25 @@ scenario_live_report_max(void)
 	CHECK(length < sizeof(buffer));
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 LIVE: ") ==
 	    GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES);
-	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 LIVEFAIL: ") ==
-	    GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 LIVEFAIL: ") == 0);
 	CHECK(strstr(buffer, "mode=slow held=4294967295") != 0);
 	CHECK(strstr(buffer,
 	    "revert=4294967295 rverified=4294967295") != 0);
 	CHECK(GTA4L_EMMC_BLOCK_LIVE_SUCCESS_WORST_BYTES ==
 	    (GTA4L_EMMC_BLOCK_BULK_SUCCESS_WORST_BYTES +
 	    GTA4L_EMMC_BLOCK_LIVE_LINE_BYTES + 1u));
+	CHECK(length <= GTA4L_EMMC_BLOCK_LIVE_SUCCESS_WORST_BYTES);
+
+	report.live_fail_stage = 0xffffffffu;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(length < sizeof(buffer));
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 LIVEFAIL: ") ==
+	    GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 LIVE: ") == 0);
+	CHECK(strstr(buffer, "notified=") == 0);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 BULKIO: ") == 0);
 	CHECK(GTA4L_EMMC_BLOCK_LIVE_FAILURE_WORST_BYTES ==
 	    (GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES +
 	    GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES + 1u));
@@ -14451,6 +14479,28 @@ report_line_bytes(const char *buffer, const char *label)
 	return (uint32_t)((end != 0) ? (end - line) : strlen(line));
 }
 
+/* Match xnu-panic-screen.c: 66 characters per row, then a hard wrap. */
+static uint32_t
+report_screen_rows(const char *buffer, uint32_t length)
+{
+	uint32_t rows = 0;
+	uint32_t start = 0;
+	uint32_t index;
+
+	for (index = 0; index <= length; index++) {
+		if ((index == length) || (buffer[index] == '\n')) {
+			uint32_t chars = index - start;
+			if (chars != 0u) {
+				rows += (chars +
+				    GTA4L_EMMC_BLOCK_SCREEN_COLUMNS - 1u) /
+				    GTA4L_EMMC_BLOCK_SCREEN_COLUMNS;
+			}
+			start = index + 1u;
+		}
+	}
+	return rows;
+}
+
 static void
 widthhold_report_realistic(struct gta4l_emmc_block_report *report,
     uint32_t failed)
@@ -14541,6 +14591,201 @@ widthhold_report_realistic(struct gta4l_emmc_block_report *report,
 	    sizeof(report->widthhold_last_digest));
 	memset(report->widthhold_last_predigest, 0x5a,
 	    sizeof(report->widthhold_last_predigest));
+}
+
+/* Widest values the gta4l workload can produce, not each field's type
+ * maximum: the panic-screen gate budgets wrapped rows, and a ten-digit
+ * request counter cannot occur on a 61,071,360-block device. The values
+ * follow the S3a owner report and the fixed workload constants. */
+static void
+screen_common(struct gta4l_emmc_block_report *report)
+{
+	memset(report, 0, sizeof(*report));
+	report->mode = 3u;
+	report->capacity_blocks = 61071360u;
+	report->block_size = 512u;
+	report->bytes = 31268536320ull;
+	report->bus_width = 2u;
+	report->timing = 1u;
+	report->clock_hz = 50000000u;
+	report->online = 1u;
+	report->write_protected = 1u;
+	report->requests = 2705u;
+	report->blocks = 167551u;
+	report->max_request_blocks = 64u;
+	report->requested_blocks = 167551u;
+	report->cmd17_reads = 5u;
+	report->cmd18_chunks = 2700u;
+	report->cmd18_blocks = 167546u;
+	report->stop_attempts = 2700u;
+	report->media_valid = 1u;
+	report->whole = 1u;
+	report->size = 31268536320ull;
+	report->content = "GUID_partition_scheme";
+	report->snapshot_locked = 1u;
+	report->speed_ticks1 = 576000000u;
+	report->speed_ticks2 = 576000000u;
+	report->speed_rstatus = -2147483647;
+	report->speed_limit = 64u;
+	report->speed_segments = 1u;
+	report->speed_capacity = 61071360u;
+	report->speed_hz = 19200000u;
+	report->speedio_req = 61071360u;
+	report->speedio_blk = 61071360u;
+	report->speedio_inh = 576000000u;
+	report->speedio_cmd = 576000000u;
+	report->speedio_dat = 576000000u;
+	report->speedio_stop = 576000000u;
+	report->speedio_core = 576000000u;
+	report->speedio_bus = 576000000u;
+	report->speedio_io = 576000000u;
+	report->speedio_win = 576000000u;
+	report->bulk_region = 85688320u;
+	report->bulk_chunks = 2615u;
+	report->bulk_bytes = 85688320u;
+	report->bulk_ticks = 576000000u;
+	report->bulk_hz = 19200000u;
+	report->bulk_seed = 0x47544134u;
+	report->bulk_windows = 80u;
+	report->bulk_wpass = 80u;
+	memset(report->bulk_digest, 0xff, sizeof(report->bulk_digest));
+	report->smmu = 1u;
+	report->smmu_stage = 5u;
+	report->smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF;
+	report->smmu_cb_line = 1u;
+	report->smmu_valid = 0xffu;
+	report->smmu_matches = 0xffu;
+	report->smmu_cbar = 0xffffffffu;
+	report->smmu_sctlr = 0xffffffffu;
+	report->smmu_fsr = 0xffffffffu;
+	report->dma = 1u;
+	report->dma_mode = GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32;
+	report->dma_smmu = GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF;
+	report->dma_cmp_pass = 4u;
+	report->dma_cmp_total = 4u;
+	report->dma_canary = 1u;
+	report->dma_poison = 1u;
+	report->dma_chunks = 2615u;
+	report->dma_bytes = 85688320u;
+	report->dma_ticks = 576000000u;
+	report->dma_dat = 576000000u;
+	report->dma_desc = 4294967295u;
+	report->dma_requests = 61071360u;
+	report->dma_blocks = 61071360u;
+}
+
+static void
+screen_live(struct gta4l_emmc_block_report *report)
+{
+	report->live = 1u;
+	report->live_mode = GTA4L_EMMC_BLOCK_LIVE_MODE_HELD;
+	report->live_held = 1u;
+	report->live_online = 1u;
+	report->live_bytes = 85688320u;
+	memset(report->live_digest, 0xff, sizeof(report->live_digest));
+	report->live_idle_ms = 5000u;
+	report->live_reread = 1u;
+	memset(report->live_reread_digest, 0xff,
+	    sizeof(report->live_reread_digest));
+}
+
+static void
+screen_speed(struct gta4l_emmc_block_report *report)
+{
+	screen_common(report);
+	report->speed = 1u;
+	report->speed_hs = 1u;
+	report->speed_hsrb = 0u;
+	report->speed_hsa = 1u;
+	report->speed_rcg = 0x20bu;
+	report->speed_hispd = 0u;
+	report->speed_wtry = 8u;
+	report->speed_wid = 8u;
+	report->speed_verified = 1u;
+	report->speed_hb = 0u;
+	report->speed_ha = 0x20u;
+	report->speed_cmd6 = 1u;
+	report->speed_base = 1u;
+	report->speed_bytes1 = 4096u;
+	report->speed_bytes2 = 4096u;
+	memset(report->speed_dig1, 0xff, sizeof(report->speed_dig1));
+	memset(report->speed_dig2, 0xff, sizeof(report->speed_dig2));
+	report->speed_req = 8u;
+	report->speed_pub = 1u;
+	report->speed_revert = 1u;
+	report->speed_rverified = 1u;
+	report->speed_rhb = 0x20u;
+	report->speed_rcmd6 = 2u;
+	report->speed_hsrevert = 1u;
+	report->speed_hsverified = 1u;
+	report->speed_rhsb = 1u;
+	report->speed_rclk = 400000u;
+	report->speedio_req = 8u;
+	report->speedio_blk = 16u;
+}
+
+static void
+screen_bulk(struct gta4l_emmc_block_report *report)
+{
+	screen_common(report);
+	report->speed = 1u;
+	report->bulk = 1u;
+	report->speed_hs = 1u;
+	report->speed_wid = 8u;
+	report->speed_verified = 1u;
+	report->speed_pub = 1u;
+}
+
+static void
+screen_width(struct gta4l_emmc_block_report *report)
+{
+	screen_common(report);
+	report->width = 1u;
+	report->width_cases = 1u;
+	report->width_passed = 1u;
+	report->width_switch = 4u;
+	report->width_verified = 1u;
+	report->width_ha = 2u;
+	report->width_cmd6 = 1u;
+	report->width_revert = 1u;
+	report->width_rverified = 1u;
+	report->width_rhb = 2u;
+	report->width_rcmd6 = 1u;
+	report->width_reads = 4u;
+	report->width_bytes = 4096u;
+	report->width_blocks = 8u;
+	report->width_subrequests = 4u;
+	report->width_max = 2u;
+	report->width_match = 1u;
+	report->width_limit = 64u;
+	report->width_segments = 1u;
+	report->width_capacity = 61071360u;
+	report->width_last_lba = 2255360u;
+	report->width_last_length = 1024u;
+	report->width_last_span = 1024u;
+	report->width_last_actual = 1024u;
+	report->width_last_subrequests = 1u;
+	report->width_last_blocks = 2u;
+	report->width_last_max = 2u;
+	report->width_last_match = 1u;
+	memset(report->width_last_digest, 0xff,
+	    sizeof(report->width_last_digest));
+	memset(report->width_last_predigest, 0xff,
+	    sizeof(report->width_last_predigest));
+}
+
+static uint32_t
+screen_report_rows(const struct gta4l_emmc_block_report *report)
+{
+	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	uint32_t length;
+
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    report);
+	if ((length == 0u) || (length >= sizeof(buffer))) {
+		return 0xffffffffu;
+	}
+	return report_screen_rows(buffer, length);
 }
 
 static void
@@ -14672,6 +14917,151 @@ scenario_widthhold_report(void)
 	    GTA4L_EMMC_BLOCK_WIDTHHOLD_LINE_BYTES);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WIDTHHOLDFAIL: ") ==
 	    GTA4L_EMMC_BLOCK_WIDTHHOLDFAIL_LINE_BYTES);
+	return 0;
+}
+
+/* Render every rung's widest report and apply the panic-screen budget:
+ * the wrapped body plus the suffix, 24 frames and pages/free must fit the
+ * 41 text rows. The two-row S4 headroom is asserted on the clean live
+ * success path, which is the shape the windows rung extends. */
+static int
+scenario_screen_capacity(void)
+{
+	struct gta4l_emmc_block_report report;
+	uint32_t rows;
+
+	CHECK(GTA4L_EMMC_BLOCK_SCREEN_COLUMNS == 66u);
+	CHECK(GTA4L_EMMC_BLOCK_SCREEN_ROWS == 41u);
+	CHECK(GTA4L_EMMC_BLOCK_SCREEN_PANIC_ROWS == 10u);
+	CHECK(GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS ==
+	    (GTA4L_EMMC_BLOCK_SCREEN_ROWS -
+	    GTA4L_EMMC_BLOCK_SCREEN_PANIC_ROWS));
+
+	screen_speed(&report);
+	rows = screen_report_rows(&report);
+	printf("  screen speed: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	screen_width(&report);
+	rows = screen_report_rows(&report);
+	printf("  screen width: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	widthhold_report_realistic(&report, 0u);
+	rows = screen_report_rows(&report);
+	printf("  screen widthhold: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	widthhold_report_realistic(&report, 0u);
+	report.widthpub = 1u;
+	report.widthpub_pub = 1u;
+	rows = screen_report_rows(&report);
+	printf("  screen widthpub: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	screen_bulk(&report);
+	rows = screen_report_rows(&report);
+	printf("  screen bulk: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	screen_bulk(&report);
+	screen_live(&report);
+	rows = screen_report_rows(&report);
+	printf("  screen live: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+	CHECK(rows + GTA4L_EMMC_BLOCK_SCREEN_HEADROOM_ROWS <=
+	    GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	screen_bulk(&report);
+	report.smmu_decision =
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE;
+	report.dma_smmu =
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE;
+	report.dma_skip = 1u;
+	screen_live(&report);
+	rows = screen_report_rows(&report);
+	printf("  screen live skip: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	screen_bulk(&report);
+	report.bulk_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_SHORT;
+	report.bulk_fail_status = -2147483647;
+	report.dma_fails = 1u;
+	report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_SHORT;
+	report.dma_diag = 1u;
+	report.dma_cache = 0xffu;
+	report.dma_ent = 0xffffu;
+	report.dma_db = 0xffffu;
+	report.fail_valid = 1u;
+	report.fail_stage = 0xffffffffu;
+	report.fail_code = INT32_MIN;
+	report.first_fail_block = 61071360u;
+	report.first_fail_error = INT32_MIN;
+	rows = screen_report_rows(&report);
+	printf("  screen bulk fail: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	screen_bulk(&report);
+	report.bulk_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU;
+	report.bulk_fail_status = -2147483647;
+	report.smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF;
+	report.smmu_pfsr = 0x1feu;
+	report.dma_fails = 1u;
+	report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_SMMU;
+	report.fail_valid = 1u;
+	report.fail_stage = 0xffffffffu;
+	report.fail_code = INT32_MIN;
+	report.first_fail_block = 61071360u;
+	report.first_fail_error = INT32_MIN;
+	rows = screen_report_rows(&report);
+	printf("  screen bulk smmu: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	screen_bulk(&report);
+	screen_live(&report);
+	report.bulk_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_SHORT;
+	report.bulk_fail_status = -2147483647;
+	report.dma_fails = 1u;
+	report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_SHORT;
+	report.dma_diag = 1u;
+	report.live_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_SHORT;
+	report.live_fail_status = -2147483647;
+	report.live_fail_window = 61071360u;
+	report.live_fail_offset = 167360u;
+	report.live_held = 0u;
+	report.live_online = 0u;
+	report.live_reread = 0u;
+	report.fail_valid = 1u;
+	report.fail_stage = 0xffffffffu;
+	report.fail_code = INT32_MIN;
+	report.first_fail_block = 61071360u;
+	report.first_fail_error = INT32_MIN;
+	rows = screen_report_rows(&report);
+	printf("  screen live fail: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
+	screen_bulk(&report);
+	screen_live(&report);
+	report.bulk_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU;
+	report.bulk_fail_status = -2147483647;
+	report.smmu_pfsr = 0x1feu;
+	report.dma_fails = 1u;
+	report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_SMMU;
+	report.live_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU;
+	report.live_fail_status = -2147483647;
+	report.live_fail_window = 61071360u;
+	report.live_fail_offset = 167360u;
+	report.live_held = 0u;
+	report.live_online = 0u;
+	report.live_reread = 0u;
+	report.fail_valid = 1u;
+	report.fail_stage = 0xffffffffu;
+	report.fail_code = INT32_MIN;
+	report.first_fail_block = 61071360u;
+	report.first_fail_error = INT32_MIN;
+	rows = screen_report_rows(&report);
+	printf("  screen live smmu: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
 	return 0;
 }
 
@@ -15192,6 +15582,7 @@ static const struct scenario_entry scenarios[] = {
 	{ "slow-refused-value", scenario_slow_refused_value },
 	{ "slow-refused-duplicate", scenario_slow_refused_duplicate },
 	{ "live-report-max", scenario_live_report_max },
+	{ "screen-capacity", scenario_screen_capacity },
 	{ "policy", scenario_policy },
 };
 
