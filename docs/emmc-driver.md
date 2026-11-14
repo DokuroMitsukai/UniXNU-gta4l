@@ -7948,3 +7948,54 @@ that image-bound DMA-through-stack boot passes the content, window,
 counter, budget and verified-revert criteria. See
 `flash-result-b10.13.txt` and `candidate-verification.txt` in the B10.13
 evidence directory.
+
+### 5.3.124 B10.13 owner boot: DMA through the block stack closes S2 (2026-11-14)
+
+One owner-controlled cold boot of the flashed BOOT `a4809df8…` (one-boot
+budget now consumed) returned `rc=0 stop=0 wp=1`. DMA:
+`mode=adma2-32 smmu=cb-off cmp=4/4 canary=1 poison=1 chunks=2615
+bytes=85688320 fails=0 stage=0 ast=00000000 aaddr=00000000
+desc=4294967295 budget=0 skip=0 req=2695 blk=167520`. The request and
+block counts are exactly the predicted stack split (2,615 × 64-block
+stream requests plus 80 × 2-block windows) and increment in
+`readMultiCallback` before `dmaReadLocked`, so the whole measured workload
+ran through `doAsyncReadWrite` / partition IOMedia and the bounce-buffer
+DMA path under the one controller gate. BULK covered the full
+85,688,320-byte region with `windows=80 wpass=80 wfail=0 woffset=0` and
+digest `a4809df8…` matching the image. `dec=cb-off`, `pfsr=00000400
+pgfsr=00000000` is the FORMAT-only value, no DMADIAG line appeared, and
+the 1-bit/400 kHz revert was verified.
+
+At `hz=19200000` the BULK interval is 63,774,666 ticks (3.322 s, 25.8 MB/s
+including SHA), the DMA interval 65,950,151 ticks (3.435 s) and the data
+counter 42,491,963 ticks (2.213 s). The block-stack path adds about
+0.264 s (+8.6%) over the B10.12 direct-DMA stream (3.058 s) without
+growing the data phase. The 4,000 ms stream budget holds with 20.4%
+headroom (B10.12 had 30.8%), so S3 must re-derive the budget from both
+measurements; the 30 s watchdog is unchanged.
+
+`DRV reads=2704 blocks=167549` and `XFER req=167549 c17=5 c18=2699
+c18b=167544` exceed the DMA counters by 9 requests / 29 blocks. Those are
+whole-boot pre-bulk requests; the PIO comparison reads and the 80
+single-block window references call the core read helpers directly and
+bypass `doAsyncReadWrite`, so they cannot appear there. `SPEEDIO req=0
+blk=0` is expected because those counters only cover the PIO CMD18 path.
+The terminal `@Gta4lEmmcBlock.cpp:10982` is the deliberate
+`panic("%s", reportBuffer)` in `finishReport()` (the pasted `Gta41` is
+OCR).
+
+Read-only TWRP re-measure after the boot: p69 full `73278c8f…`, image
+region `a4809df8…`, tail `a28b4ea2…`, last 1 KiB `d737414c…`; RECOVERY
+`14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` unchanged. The
+checker prints `PASS: BULK digest and DMA stack path match
+a4809df8ca05d66c43c27e2c35869649` and its self-test passes. **S2 is
+closed**: content, windows, DMA-through-stack counters, budget and
+verified revert all passed on the image-bound boot. This is one boot, not
+repeatability or lifetime evidence; repeatability, sustained service,
+writes, interrupts, CQE, HS200/HS400, a mount and fast mode remain open.
+Next is the S3 `live` design. Do not boot `a4809df8…`, `fcb1603b…`,
+`ddbe2eb7…`, `0d77d602…` or `a1e26c34…` again. Evidence:
+`out/gta4l/ram-root-emmc-b10.13-stack-dma-evidence/`
+(`flash-result-b10.13.txt`, `boot-report-b10.13-raw.txt`,
+`boot-report-b10.13.txt`, `boot-report-b10.13-joins.log`,
+`boot-report-b10.13-notes.txt`, `protected-after-b10.13.baseline`).
