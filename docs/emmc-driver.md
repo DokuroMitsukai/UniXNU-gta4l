@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 500 scenarios with 185 adapter mutations, 3 support mutations and 51 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 506 scenarios with 186 adapter mutations, 3 support mutations and 51 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,7 +7903,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 500 scenarios with 185 adapter
+Host gates: the block adapter test runs 506 scenarios with 186 adapter
 mutations, 3 support mutations and 51 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
@@ -8288,7 +8288,7 @@ static asserts cover the line, success and failure shapes.
 Host results. The core suite passes 221 scenarios and 137 mutation
 controls, including the warm-from-held CMD0 reinit case and a CMD0-skip
 mutation. The block suite passes 47 core scenarios and 35 core
-mutations, 500 adapter scenarios with 185 adapter, 3 support and 51
+mutations, 506 adapter scenarios with 186 adapter, 3 support and 51
 policy mutations. Fourteen new adapter scenarios cover the held
 success, force-slow, re-read mismatch, the selector matrix and the
 live/slow refusal cases (`live-refused-orphan`, `-block`, `-bulk`,
@@ -8297,7 +8297,7 @@ live/slow refusal cases (`live-refused-orphan`, `-block`, `-bulk`,
 accepts an optional LIVE line in the held and force-slow shapes,
 requires exactly one, rejects LIVEFAIL on success and rejects each field
 mutation, leaving the historical BULK/DMA fixtures unchanged. The
-evidence-count summary is reconciled at 500 adapter scenarios with 185
+evidence-count summary is reconciled at 506 adapter scenarios with 186
 adapter mutations. The payload builder, packager and payload-contract
 suites pass with the `emmc-block-3-live` personality and the
 `fs-timer-hold` fixture.
@@ -8597,7 +8597,7 @@ header-digest flip, empty/control/unterminated name, zero/unaligned
 offset, zero/unaligned/overflowing size, wrong block size, flags 0/2,
 non-zero reserved byte, duplicate name and overlap. `windows-format`
 pins the 550-byte line and the 1,938-byte composition; `screen-capacity`
-adds the 23-row S4 shape. The adapter suite is 500 scenarios (501 PASS
+adds the 23-row S4 shape. The adapter suite is 506 scenarios (507 PASS
 lines) with the existing mutation controls. The token, manifest read and
 terminal report are implemented in §5.3.131; child `IOMedia` publication
 and the APFS volume walk are next. The device write still needs its own
@@ -8633,11 +8633,14 @@ SPEED line and the 23-row S4 screen shape from §5.3.130 are unchanged.
 (OS at 1 MiB, SystemOS at 3 MiB, 2 MiB each), serves it through a
 read-only userdata media and a read hook, and asserts the report's
 `valid=1 count=2 image=8388608`, both entry names/offsets/sizes and the
-four `hd` digests. The synthetic window has no GPT, so the test expects
-`apfs=0`; the GPT/APFS-container path is ready for the real image but is
-not exercised by that fixture. The five token-refusal scenarios and the
-existing 185 adapter/51 policy mutation controls pass; the adapter suite
-is 500 scenarios (501 PASS lines).
+four `hd` digests. The synthetic window has no GPT, so that test expects
+`apfs=0`; `windows-apfs` serves a crafted GPT/NXSB first chunk and
+asserts `apfs=1` and the container UUID. `windows-media-absent`,
+`windows-read-failure`, `windows-manifest-invalid`, `windows-short-read`
+and `windows-budget` cover reasons 15, 16, 2, 16 and 18; the
+`windows-short-read-accept` adapter mutation is rejected. The five
+token-refusal scenarios and the existing 186 adapter/51 policy mutation
+controls pass; the adapter suite is 506 scenarios (507 PASS lines).
 
 **Not done yet.** Each window is not yet published as a read-only child
 `IOMedia`, the APFS volume attach is not walked and the `uuid` field is

@@ -1728,6 +1728,10 @@ ADAPTER_MUTATIONS = [
        '\t\t\treturn GTA4L_EMMC_ERR_ADMA;\n',
        '\t\t\treturn GTA4L_EMMC_ERR_ADMA;\n')],
      'dma-stack-fallback'),
+    ('windows-short-read-accept',
+     [('\treturn (status == kIOReturnSuccess) && (actual == bytes);\n',
+       '\treturn (status == kIOReturnSuccess);\n')],
+     'windows-short-read'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -3161,8 +3165,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 501, f'expected 501 adapter PASS lines, got {passes}'
-        print('PASS adapter: 501 scenarios against the host IOKit seam')
+        assert passes == 507, f'expected 507 adapter PASS lines, got {passes}'
+        print('PASS adapter: 507 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

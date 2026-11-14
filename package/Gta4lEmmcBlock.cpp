@@ -110,6 +110,10 @@ static_assert(GTA4L_EMMC_BLOCK_LIVE_REPORT_WORST_MS +
 static_assert(GTA4L_EMMC_BLOCK_LIVE_REREAD_MS ==
     GTA4L_EMMC_BLOCK_BULK_TOTAL_BUDGET_MS,
     "S3 live re-read must reuse the bulk total budget");
+static_assert(GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS +
+    GTA4L_EMMC_BLOCK_WINDOWS_REPORT_MARGIN_MS <=
+    GTA4L_EMMC_BLOCK_WATCHDOG_MS,
+    "S4 windows read budget must stay under the watchdog");
 
 static_assert(GTA4L_EMMC_BLOCK_WIDTHHOLD_WORST_MS <
     GTA4L_EMMC_BLOCK_WATCHDOG_MS,
@@ -789,6 +793,10 @@ private:
 	bool runWindows(void);
 	bool windowsRead(IOMedia *media, uint64_t offset, uint32_t bytes,
 	    uint8_t *buffer);
+	bool windowsHashEdge(IOMedia *media, uint64_t offset,
+	    uint8_t digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES],
+	    int32_t *reason);
+	uint64_t windowsElapsedMs(void);
 	bool runSmmuGate(void);
 	bool runSmmuPostDma(void);
 	bool dmaAllocate(void);
@@ -1025,7 +1033,8 @@ private:
 	IOMedia *windowsUserdata = nullptr;
 	bool windowsUserdataOpen = false;
 	uint8_t *windowsManifest = nullptr;
-	uint8_t *windowsHeader = nullptr;
+	uint8_t *windowsChunk = nullptr;
+	uint64_t windowsReadStart = 0;
 	uint64_t bulkReadStart = 0;
 	bool bulkActive = false;
 	bool bulkInFlight = false;
@@ -10398,6 +10407,60 @@ Gta4lEmmcBlock::windowsRead(IOMedia *media, uint64_t offset,
 	return (status == kIOReturnSuccess) && (actual == bytes);
 }
 
+uint64_t
+Gta4lEmmcBlock::windowsElapsedMs(void)
+{
+	uint64_t now = gta4l_emmc_platform_counter();
+	uint64_t hz = gta4l_emmc_platform_counter_hz();
+	uint64_t ticks_per_ms;
+
+	if (hz == 0u) {
+		return 0;
+	}
+	ticks_per_ms = hz / 1000u;
+	if (ticks_per_ms == 0u) {
+		ticks_per_ms = 1u;
+	}
+	return (now - windowsReadStart) / ticks_per_ms;
+}
+
+bool
+Gta4lEmmcBlock::windowsHashEdge(IOMedia *media, uint64_t offset,
+    uint8_t digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES],
+    int32_t *reason)
+{
+	struct gta4l_emmc_block_sha256_ctx sha;
+	uint32_t done = 0;
+	uint32_t bytes;
+
+	gta4l_emmc_block_sha256_init(&sha);
+	while (done < GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES) {
+		if (reportCancel) {
+			*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_CANCEL;
+			return false;
+		}
+		if (windowsElapsedMs() >=
+		    GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS) {
+			*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_BUDGET;
+			return false;
+		}
+		bytes = GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES - done;
+		if (bytes > GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES) {
+			bytes = GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES;
+		}
+		if (!windowsRead(media, offset + done, bytes,
+		    windowsChunk)) {
+			*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
+			return false;
+		}
+		gta4l_emmc_block_sha256_update(&sha, windowsChunk, bytes);
+		done += bytes;
+	}
+	gta4l_emmc_block_sha256_final(&sha, digest);
+	*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE;
+	return true;
+}
+
 bool
 Gta4lEmmcBlock::runWindows()
 {
@@ -10407,13 +10470,15 @@ Gta4lEmmcBlock::runWindows()
 	uint32_t index;
 	uint32_t apfs = 0;
 	uint8_t container[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
-	uint8_t digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+	uint8_t digests[GTA4L_EMMC_BLOCK_WINDOWS_MAX][2]
+	    [GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
 	uint64_t offset;
 	uint64_t length;
 	int32_t reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE;
 
 	bzero(&parsed, sizeof(parsed));
 	bzero(container, sizeof(container));
+	bzero(digests, sizeof(digests));
 	IOLockLock(reportLock);
 	report.windows = 1u;
 	report.windows_valid = 0u;
@@ -10472,43 +10537,40 @@ Gta4lEmmcBlock::runWindows()
 		goto done;
 	}
 
-	windowsHeader = (uint8_t *)IOMallocContiguous(
-	    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, PAGE_SIZE, nullptr);
-	if (windowsHeader == nullptr) {
+	windowsReadStart = gta4l_emmc_platform_counter();
+	windowsChunk = (uint8_t *)IOMallocContiguous(
+	    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES, PAGE_SIZE, nullptr);
+	if (windowsChunk == nullptr) {
 		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
 		goto done;
 	}
 	for (index = 0; index < parsed.count; index++) {
 		offset = parsed.window[index].offset;
 		length = parsed.window[index].size;
-		if ((length < GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES) ||
-		    !windowsRead(media, offset,
-		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, windowsHeader)) {
+		if (length < GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES) {
 			reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
 			goto done;
 		}
-		if (index == 0u) {
-			apfs = gta4l_windows_apfs(windowsHeader,
-			    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES,
-			    container);
+		if (!windowsHashEdge(media, offset, digests[index][0],
+		    &reason)) {
+			goto done;
 		}
-		gta4l_emmc_block_sha256(windowsHeader,
-		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, digest);
-		memcpy(report.windows_header_digest[index][0], digest,
-		    sizeof(digest));
-		if (!windowsRead(media,
+		if (!windowsHashEdge(media,
 		    offset + length - GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES,
-		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, windowsHeader)) {
-			reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
+		    digests[index][1], &reason)) {
 			goto done;
 		}
-		gta4l_emmc_block_sha256(windowsHeader,
-		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, digest);
-		memcpy(report.windows_header_digest[index][1], digest,
-		    sizeof(digest));
+	}
+	if (!windowsRead(media, parsed.window[0].offset,
+	    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES, windowsChunk)) {
+		apfs = 0u;
+	} else {
+		apfs = gta4l_windows_apfs(windowsChunk,
+		    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES, container);
 	}
 	IOLockLock(reportLock);
 	report.windows_apfs = apfs;
+	memcpy(report.windows_header_digest, digests, sizeof(digests));
 	memcpy(report.windows_container_uuid, container,
 	    sizeof(report.windows_container_uuid));
 	IOLockUnlock(reportLock);
@@ -10525,10 +10587,10 @@ done:
 		    GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES);
 		windowsManifest = nullptr;
 	}
-	if (windowsHeader != nullptr) {
-		IOFreeContiguous(windowsHeader,
-		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES);
-		windowsHeader = nullptr;
+	if (windowsChunk != nullptr) {
+		IOFreeContiguous(windowsChunk,
+		    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES);
+		windowsChunk = nullptr;
 	}
 	if (windowsUserdataOpen && (windowsUserdata != nullptr)) {
 		windowsUserdata->close(this, 0);

@@ -151,6 +151,12 @@ _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES <=
     (GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS *
     GTA4L_EMMC_BLOCK_SCREEN_COLUMNS),
     "a single WINDOWS line must fit the panic-screen body");
+_Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES ==
+    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES,
+    "windows reads must use the proven bulk chunk size");
+_Static_assert((GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES %
+    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES) == 0u,
+    "windows edge must be a whole number of chunks");
 /* The panic-screen gate is a host test (adapter_harness.cpp) that renders
  * each rung's widest report; these asserts pin the renderer geometry and
  * the row budget it relies on. */
