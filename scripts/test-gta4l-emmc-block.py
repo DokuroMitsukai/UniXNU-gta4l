@@ -2600,6 +2600,16 @@ def check_adapter_source():
         'live mode must emit the LIVEFAIL line on a terminal failure'
     assert 'GTA4L-EMMC P5 BULKIO: ' not in policy, \
         'the diagnostic-only BULKIO line must stay off the panic screen'
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 550u' in \
+        policy_header, 'the WINDOWS formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 1938u' in \
+        policy_header, 'the WINDOWS report bound must stay exact'
+    assert 'gta4l_emmc_block_windows_parse' in policy, \
+        'the SHNGROOT manifest parser must live in the shared policy'
+    assert 'scenario_windows_manifest' in ADAPTER_HARNESS.read_text() and \
+        'scenario_windows_format' in ADAPTER_HARNESS.read_text() and \
+        'screen_windows' in ADAPTER_HARNESS.read_text(), \
+        'the windows manifest, format and screen scenarios must run'
     assert '#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 52u' in \
         policy_header, 'the SMMU formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_SCREEN_COLUMNS 66u' in \
@@ -3145,8 +3155,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 493, f'expected 493 adapter PASS lines, got {passes}'
-        print('PASS adapter: 493 scenarios against the host IOKit seam')
+        assert passes == 495, f'expected 495 adapter PASS lines, got {passes}'
+        print('PASS adapter: 495 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

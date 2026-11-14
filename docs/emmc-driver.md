@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 492 scenarios with 185 adapter mutations, 3 support mutations and 51 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 494 scenarios with 185 adapter mutations, 3 support mutations and 51 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,7 +7903,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 492 scenarios with 185 adapter
+Host gates: the block adapter test runs 494 scenarios with 185 adapter
 mutations, 3 support mutations and 51 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
@@ -8288,7 +8288,7 @@ static asserts cover the line, success and failure shapes.
 Host results. The core suite passes 221 scenarios and 137 mutation
 controls, including the warm-from-held CMD0 reinit case and a CMD0-skip
 mutation. The block suite passes 47 core scenarios and 35 core
-mutations, 492 adapter scenarios with 185 adapter, 3 support and 51
+mutations, 494 adapter scenarios with 185 adapter, 3 support and 51
 policy mutations. Fourteen new adapter scenarios cover the held
 success, force-slow, re-read mismatch, the selector matrix and the
 live/slow refusal cases (`live-refused-orphan`, `-block`, `-bulk`,
@@ -8297,7 +8297,7 @@ live/slow refusal cases (`live-refused-orphan`, `-block`, `-bulk`,
 accepts an optional LIVE line in the held and force-slow shapes,
 requires exactly one, rejects LIVEFAIL on success and rejects each field
 mutation, leaving the historical BULK/DMA fixtures unchanged. The
-evidence-count summary is reconciled at 492 adapter scenarios with 185
+evidence-count summary is reconciled at 494 adapter scenarios with 185
 adapter mutations. The payload builder, packager and payload-contract
 suites pass with the `emmc-block-3-live` personality and the
 `fs-timer-hold` fixture.
@@ -8490,6 +8490,115 @@ Files: `package/Gta4lEmmcBlock.c`, `package/Gta4lEmmcBlock.h`,
 `scripts/sim-gta4l-emmc-block/adapter_harness.cpp`,
 `scripts/test-gta4l-emmc-block.py`,
 `scripts/check-gta4l-bulk-evidence.py`, `porting.toml`. The adapter
-suite passes 492 scenarios (493 PASS lines including the summary),
+suite passes 494 scenarios (495 PASS lines including the summary),
 including `screen-capacity`; the bulk checker self-test passes, the
 existing S3a reports pass, and `git diff --check` is clean.
+
+### 5.3.129 S4 host preparation: userdata image and D7 (2026-11-15)
+
+Host-only. No device write, flash or boot. The S4 `windows` rung needs the
+whole-`userdata` image built from the pinned iPadOS 17.7.11 IPSW and a
+confirmed OS volume UUID before any driver work can compare against it.
+
+**Placement.** Option A (owner, 2026-11-12): the image occupies the whole
+`userdata` partition, LBA 15,203,328–61,071,326, 23,484,415,488 bytes.
+This destroys all Android/TWRP data on `userdata`; RECOVERY, EFS and
+sec_efs are untouched. The image is 9,382,658,048 bytes (8.74 GiB), 39.95
+percent of the partition, 1 MiB aligned by construction and leaves the
+remainder unzeroed.
+
+**Build.** `unixnu build userdata --dry-run` passed against the IPSW pins
+(OS 4,918 MiB, SystemOS 3,150 MiB). The full build then needed Apple's
+pinned `lzfse` (`e634ca58…`) on the Linux host because the DMGs carry
+LZFSE chunks; it was built into a local toolchain prefix and the build was
+rerun with `UNIXNU_TOOLCHAIN` pointing at it and `python3.11`. The first
+attempt stopped at the SystemOS write because the root filesystem was
+full; the partial image and host-test scratch were removed, and the
+retry completed. These are host-only tooling notes and change no device
+artifact.
+
+**Image.** `userdata-root.img` 9,382,658,048 bytes, SHA-256
+`fd43ee7035ce185ce4215ac93fdc006fd784a54b3b7442e21457c226cbe03093`;
+manifest block SHA-256
+`bc908a6cf66491055077798550660f40128bfe6dce2fdc0db56e6af96511208d`.
+The SHNGROOT windows are:
+
+| Window | Offset | Size | SHA-256 |
+| --- | --- | --- | --- |
+| OS | 0x100000 (1,048,576) | 6,077,580,800 | `e5634d04a8ac35f024845f583394e0a35deb26a04cb0c00286a8674e25a9a4f2` |
+| SystemOS | 0x16a600000 (6,079,643,648) | 3,303,014,400 | `b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f` |
+
+The OS window's first/last 1 MiB are
+`268f697a0635a3eb0a486250c2c761df2eb4f287da48f67d63bc2a48779aef38` /
+`1fcad76ced7c6649cc84bc324859a9f9e010c4b4fa709ca9050f66e3e307d93c`;
+these are the values the S4 `WINDOWS:` line will compare on the device.
+
+**D7.** The OS window's GPT has its Apple_APFS partition at 0x4400. The
+APFS container reports block size 4096 and 1,483,776 blocks; the volume
+superblock at physical block 15896 carries
+`apfs_vol_uuid = 04769D26-2CA0-4825-B443-E2E5F88300F2`, exactly the
+board's `root_match_volume_uuid`. The container UUID is
+`50f8a67fafc14a1bbcbb82162674c67f`; the SystemOS window is left for the
+driver's own window-header comparison. The probe log is
+`out/gta4l/ram-root-emmc-s4-userdata-evidence/d7-apfs-uuid-probe.txt`.
+
+**Next.** Implement the S4 driver (R1): parse the SHNGROOT manifest at the
+`userdata` partition start, validate magic/version/count/manifest digest,
+bounds, 1 MiB alignment, no overlap, block size 512 and read-only flags;
+publish each window as a read-only child `IOMedia` (`OS`, `SystemOS`) over
+the userdata partition; and add the `WINDOWS:` report with manifest
+validity, offsets/sizes, first/last 1 MiB digests, the APFS container match
+and the discovered volume UUIDs. The device write (R2) still needs its own
+owner go naming the image SHA-256 and the backup answer.
+
+### 5.3.130 S4 windows policy: SHNGROOT parser and WINDOWS line (2026-11-15)
+
+Host-only policy layer for S4. No device access, flash or boot. The
+adapter still has to read the manifest, publish the child media and walk
+the APFS attach; this section covers the portable validation and the
+report line that those steps feed.
+
+**Manifest parser.** `gta4l_emmc_block_windows_parse` validates the
+4096-byte SHNGROOT header: magic, version 1, count 1..2, `image_bytes`
+inside the userdata partition, the SHA-256 at 4064 over bytes 0..4063,
+and each 128-byte entry's printable NUL-terminated name, 1 MiB-aligned
+offset at or after 1 MiB, non-zero 512-byte-multiple size inside
+`image_bytes`, block size 512, read-only flag 1, zero reserved bytes, no
+duplicate name and no overlap. It also computes the whole-header SHA-256
+for the report. The failure reasons are a stable namespace
+(`LENGTH`..`DUPLICATE`, 1..14). The parser has no IOKit dependency and
+uses the core SHA-256.
+
+The parser was run against the actual image from §5.3.129: it accepts
+the manifest, reports `image=9382658048`, `OS` at 1,048,576
+(6,077,580,800, SHA-256 `e5634d04…`) and `SystemOS` at 6,079,643,648
+(3,303,014,400, `b4908cde…`), and computes manifest
+`bc908a6c…`, matching `userdata-root.json`.
+
+**WINDOWS line.** The S4 report uses the compact SPEED form (the
+`windows` flag joins `bulk` in selecting it) and emits:
+
+`GTA4L-EMMC P5 WINDOWS: valid=… reason=… count=… image=… mdig=… w0=<name>
+off=… size=… hd0=… hd1=… w1=… apfs=… cid=… uuid=…`
+
+`mdig` is the first 16 bytes of the manifest SHA-256; `hd0`/`hd1` are the
+first/last 1 MiB SHA-256 prefixes of each window; `cid`/`uuid` are the
+APFS container and volume UUIDs in 32 lowercase hex. An invalid manifest
+stops after `image=` and carries the reason, so a rejected image cannot
+be mistaken for a published one. The formatter-exact line bound is 550
+bytes; the S4 report worst case is 1,938 bytes (base + compact SPEED +
+SPEEDIO + WINDOWS) and the widest S4 screen shape is 23 rows, inside the
+31-row budget.
+
+**Host tests.** `windows-manifest` accepts the synthetic valid manifest
+(two entries and the one-window case) and rejects every field mutation
+with its reason: length, magic, version, count 0/3, zero/oversize image,
+header-digest flip, empty/control/unterminated name, zero/unaligned
+offset, zero/unaligned/overflowing size, wrong block size, flags 0/2,
+non-zero reserved byte, duplicate name and overlap. `windows-format`
+pins the 550-byte line and the 1,938-byte composition; `screen-capacity`
+adds the 23-row S4 shape. The adapter suite is 494 scenarios (495 PASS
+lines) with the existing mutation controls. The adapter work (token,
+manifest read, child `IOMedia` publication, APFS UUID discovery and the
+terminal report) is the next batch; the device write still needs its own
+go naming the image SHA-256 and the backup answer.

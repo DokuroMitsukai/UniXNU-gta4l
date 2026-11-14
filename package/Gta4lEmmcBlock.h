@@ -571,6 +571,15 @@ extern "C" {
 	(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES + \
 	GTA4L_EMMC_BLOCK_LIVEFAIL_LINE_BYTES + 1u)
 
+/* S4 windows line. It carries the manifest verdict and image size, the
+ * 16-byte header digest prefix, the two 128-byte entries' names, offsets,
+ * sizes and first/last 1 MiB digest prefixes, and the APFS container and
+ * volume UUIDs. At their widest the two entries and the UUIDs make a
+ * 550-byte line; the S4 report adds it to the base, the compact SPEED and
+ * SPEEDIO lines (1,938 bytes at their type maxima). */
+#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 550u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 1938u
+
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
  * and ID0, scans every valid SMR for the SDHC stream 0x00c0 and reads the
@@ -811,6 +820,67 @@ struct gta4l_emmc_block_part {
 	uint64_t base;
 	uint64_t size;
 	const char *content;
+};
+
+/* S4 windows rung: the SHNGROOT manifest at the userdata partition start.
+ * The header is one 4096-byte block: magic at 0, version at 8, count at 12,
+ * image_bytes at 16, then 128-byte entries {name[32] at 0, offset at 32,
+ * size at 40, block_size at 48, flags at 52, sha256[32] at 56, 40 reserved
+ * bytes at 88}; bytes 4064..4095 hold the SHA-256 of bytes 0..4063.
+ * Windows are 1 MiB aligned, contained in image_bytes and never overlap;
+ * the manifest reserves the first 1 MiB. */
+#define GTA4L_EMMC_BLOCK_WINDOWS_ARG "gta4l-emmc-windows"
+#define GTA4L_EMMC_BLOCK_WINDOWS_OFF 0
+#define GTA4L_EMMC_BLOCK_WINDOWS_ON 1
+#define GTA4L_EMMC_BLOCK_WINDOWS_REFUSED (-1)
+#define GTA4L_EMMC_BLOCK_WINDOWS_MAX 2u
+#define GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES 4096u
+#define GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES 128u
+#define GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE 24u
+#define GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES 32u
+#define GTA4L_EMMC_BLOCK_WINDOWS_MAGIC "SHNGROOT"
+#define GTA4L_EMMC_BLOCK_WINDOWS_VERSION 1u
+#define GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE 512u
+#define GTA4L_EMMC_BLOCK_WINDOWS_FLAG_READ_ONLY 1u
+#define GTA4L_EMMC_BLOCK_WINDOWS_ALIGN_BYTES (1u << 20)
+#define GTA4L_EMMC_BLOCK_WINDOWS_DIGEST_BASE 4064u
+#define GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES 32u
+#define GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES 16u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_LENGTH 1u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_MAGIC 2u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_VERSION 3u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_COUNT 4u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_IMAGE 5u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_HEADER_DIGEST 6u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_NAME 7u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_OFFSET 8u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_SIZE 9u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_BLOCK_SIZE 10u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_FLAGS 11u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_RESERVED 12u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_OVERLAP 13u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_DUPLICATE 14u
+
+struct gta4l_emmc_block_window {
+	char name[GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES];
+	uint64_t offset;
+	uint64_t size;
+	uint32_t block_size;
+	uint32_t flags;
+	uint8_t sha256[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+};
+
+struct gta4l_emmc_block_manifest {
+	uint32_t valid;
+	uint32_t reason;
+	uint32_t version;
+	uint32_t count;
+	uint64_t image_bytes;
+	uint8_t header_sha256[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+	uint8_t manifest_sha256[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+	struct gta4l_emmc_block_window
+	    window[GTA4L_EMMC_BLOCK_WINDOWS_MAX];
 };
 
 struct gta4l_emmc_block_report {
@@ -1559,6 +1629,28 @@ struct gta4l_emmc_block_report {
 	int32_t live_fail_status;
 	uint32_t live_fail_window;
 	uint32_t live_fail_offset;
+	/* S4 windows rung. `windows` selects the WINDOWS line and the compact
+	 * SPEED form. `windows_valid` is the manifest parser result and
+	 * `windows_reason` its first failure. `windows_count`,
+	 * `windows_image_bytes` and the entries mirror the SHNGROOT header;
+	 * `windows_manifest_digest` is the whole 4096-byte header SHA-256 and
+	 * `windows_header_digest[w][0/1]` the first/last 1 MiB of each window.
+	 * `windows_apfs` marks a matched Apple_APFS GPT entry; the container
+	 * and volume UUIDs are the 16-byte values discovered from the APFS
+	 * attach. */
+	uint32_t windows;
+	uint32_t windows_valid;
+	uint32_t windows_reason;
+	uint32_t windows_count;
+	uint64_t windows_image_bytes;
+	uint8_t windows_manifest_digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+	struct gta4l_emmc_block_window
+	    windows_entry[GTA4L_EMMC_BLOCK_WINDOWS_MAX];
+	uint8_t windows_header_digest[GTA4L_EMMC_BLOCK_WINDOWS_MAX][2]
+	    [GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+	uint32_t windows_apfs;
+	uint8_t windows_container_uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
+	uint8_t windows_volume_uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
 };
 
 /* Count whole boot-argument tokens with this exact name (name=value). A
@@ -2175,6 +2267,13 @@ uint32_t gta4l_emmc_block_gpt_entries(const uint8_t *sector, uint32_t length);
 /* Whole-media geometry check. Returns zero on a match. */
 int gta4l_emmc_block_media_check(uint64_t base, uint64_t size,
     uint32_t capacity_blocks, int whole, int writable);
+
+/* Parse and validate one SHNGROOT header. Returns 1 for a complete valid
+ * manifest and zero otherwise; `manifest->reason` carries the first
+ * failure. `partition_bytes` bounds image_bytes to the userdata partition. */
+uint32_t gta4l_emmc_block_windows_parse(const uint8_t *header,
+    uint32_t length, uint64_t partition_bytes,
+    struct gta4l_emmc_block_manifest *manifest);
 
 /* Format the bounded P5 report. Returns the number of bytes written without
  * the terminator, or zero when the buffer is too small. */

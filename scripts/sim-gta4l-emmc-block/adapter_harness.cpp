@@ -14502,6 +14502,66 @@ report_screen_rows(const char *buffer, uint32_t length)
 }
 
 static void
+windows_put_u32(uint8_t *value, uint32_t number)
+{
+	value[0] = (uint8_t)number;
+	value[1] = (uint8_t)(number >> 8);
+	value[2] = (uint8_t)(number >> 16);
+	value[3] = (uint8_t)(number >> 24);
+}
+
+static void
+windows_put_u64(uint8_t *value, uint64_t number)
+{
+	windows_put_u32(value, (uint32_t)number);
+	windows_put_u32(value + 4u, (uint32_t)(number >> 32));
+}
+
+static void
+windows_manifest_seal(uint8_t *header)
+{
+	uint8_t digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+
+	gta4l_emmc_block_sha256(header,
+	    GTA4L_EMMC_BLOCK_WINDOWS_DIGEST_BASE, digest);
+	memcpy(header + GTA4L_EMMC_BLOCK_WINDOWS_DIGEST_BASE, digest,
+	    sizeof(digest));
+}
+
+static void
+windows_manifest_build(uint8_t *header, uint32_t count,
+    uint64_t image_bytes, const char *first, const char *second,
+    uint64_t first_offset, uint64_t second_offset)
+{
+	uint32_t index;
+
+	memset(header, 0, GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES);
+	memcpy(header, GTA4L_EMMC_BLOCK_WINDOWS_MAGIC, 8);
+	windows_put_u32(header + 8u, GTA4L_EMMC_BLOCK_WINDOWS_VERSION);
+	windows_put_u32(header + 12u, count);
+	windows_put_u64(header + 16u, image_bytes);
+	for (index = 0; index < count; index++) {
+		uint8_t *entry = header +
+		    GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE +
+		    index * GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES;
+		const char *name = (index == 0u) ? first : second;
+		uint32_t name_bytes = (uint32_t)strlen(name);
+
+		memcpy(entry, name, name_bytes);
+		windows_put_u64(entry + 32u,
+		    (index == 0u) ? first_offset : second_offset);
+		windows_put_u64(entry + 40u,
+		    0x1000ull + (uint64_t)index * 0x1000ull);
+		windows_put_u32(entry + 48u,
+		    GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE);
+		windows_put_u32(entry + 52u,
+		    GTA4L_EMMC_BLOCK_WINDOWS_FLAG_READ_ONLY);
+		memset(entry + 56u, 0x5a + (int)index, 32u);
+	}
+	windows_manifest_seal(header);
+}
+
+static void
 widthhold_report_realistic(struct gta4l_emmc_block_report *report,
     uint32_t failed)
 {
@@ -14774,6 +14834,34 @@ screen_width(struct gta4l_emmc_block_report *report)
 	    sizeof(report->width_last_predigest));
 }
 
+static void
+screen_windows(struct gta4l_emmc_block_report *report)
+{
+	screen_speed(report);
+	report->smmu = 0u;
+	report->dma = 0u;
+	report->bulk = 0u;
+	report->windows = 1u;
+	report->windows_valid = 1u;
+	report->windows_count = 2u;
+	report->windows_image_bytes = 9382658048ull;
+	memset(report->windows_manifest_digest, 0xff,
+	    sizeof(report->windows_manifest_digest));
+	memcpy(report->windows_entry[0].name, "OS", 3u);
+	report->windows_entry[0].offset = 1048576u;
+	report->windows_entry[0].size = 6077580800ull;
+	memcpy(report->windows_entry[1].name, "SystemOS", 9u);
+	report->windows_entry[1].offset = 6079643648ull;
+	report->windows_entry[1].size = 3303014400ull;
+	memset(report->windows_header_digest, 0xff,
+	    sizeof(report->windows_header_digest));
+	report->windows_apfs = 1u;
+	memset(report->windows_container_uuid, 0xff,
+	    sizeof(report->windows_container_uuid));
+	memset(report->windows_volume_uuid, 0xff,
+	    sizeof(report->windows_volume_uuid));
+}
+
 static uint32_t
 screen_report_rows(const struct gta4l_emmc_block_report *report)
 {
@@ -15040,6 +15128,11 @@ scenario_screen_capacity(void)
 	printf("  screen live fail: %u rows\n", rows);
 	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
 
+	screen_windows(&report);
+	rows = screen_report_rows(&report);
+	printf("  screen windows: %u rows\n", rows);
+	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+
 	screen_bulk(&report);
 	screen_live(&report);
 	report.bulk_fail_stage = GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU;
@@ -15062,6 +15155,232 @@ scenario_screen_capacity(void)
 	rows = screen_report_rows(&report);
 	printf("  screen live smmu: %u rows\n", rows);
 	CHECK(rows <= GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS);
+	return 0;
+}
+
+static int
+windows_expect_reason(uint8_t *header, uint32_t length,
+    uint64_t partition_bytes, uint32_t reason)
+{
+	struct gta4l_emmc_block_manifest manifest;
+
+	if (gta4l_emmc_block_windows_parse(header, length, partition_bytes,
+	    &manifest) != 0u) {
+		printf("  expected manifest rejection reason %u\n", reason);
+		return 0;
+	}
+	if (manifest.reason != reason) {
+		printf("  manifest reason %u expected %u\n", manifest.reason,
+		    reason);
+		return 0;
+	}
+	return 1;
+}
+
+static int
+scenario_windows_manifest(void)
+{
+	struct gta4l_emmc_block_manifest manifest;
+	uint8_t header[GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES];
+	uint8_t *entry;
+	const uint64_t image = 4ull << 20;
+	const uint64_t partition = 16ull << 20;
+
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	CHECK(gta4l_emmc_block_windows_parse(header, sizeof(header),
+	    partition, &manifest) == 1u);
+	CHECK(manifest.valid == 1u);
+	CHECK(manifest.reason == GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE);
+	CHECK(manifest.version == 1u && manifest.count == 2u);
+	CHECK(manifest.image_bytes == image);
+	CHECK(strcmp(manifest.window[0].name, "OS") == 0);
+	CHECK(strcmp(manifest.window[1].name, "SystemOS") == 0);
+	CHECK(manifest.window[0].offset == (1u << 20));
+	CHECK(manifest.window[1].offset == (2u << 20));
+	CHECK(manifest.window[1].size == 0x2000u);
+	CHECK(manifest.window[0].block_size == 512u);
+	CHECK(manifest.window[0].flags == 1u);
+
+	CHECK(windows_expect_reason(header, sizeof(header) - 1u, partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_LENGTH) == 1);
+	header[0] = 'X';
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_MAGIC) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(header + 8u, 2u);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_VERSION) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(header + 12u, 0u);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_COUNT) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(header + 12u, 3u);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_COUNT) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(header + 16u, 0u);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_IMAGE) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(header + 16u, partition + 1u);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_IMAGE) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	header[GTA4L_EMMC_BLOCK_WINDOWS_DIGEST_BASE] ^= 1u;
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_HEADER_DIGEST) == 1);
+
+	entry = header + GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE;
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	entry[0] = 0u;
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_NAME) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	entry[0] = 1u;
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_NAME) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	memset(entry, 'A', GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_NAME) == 1);
+
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(entry + 32u, 0u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OFFSET) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(entry + 32u, (1u << 20) + 512u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OFFSET) == 1);
+
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(entry + 40u, 0u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_SIZE) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(entry + 40u, 513u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_SIZE) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(entry + 40u, image);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_SIZE) == 1);
+
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(entry + 48u, 4096u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_BLOCK_SIZE) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(entry + 52u, 0u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_FLAGS) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(entry + 52u, 2u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_FLAGS) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	entry[88] = 1u;
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_RESERVED) == 1);
+
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	memcpy(header + GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE +
+	    GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES, "OS", 3u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_DUPLICATE) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(header + GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE +
+	    GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES + 32u, 1u << 20);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OVERLAP) == 1);
+
+	windows_manifest_build(header, 1u, image, "OS", "", 1u << 20, 0u);
+	CHECK(gta4l_emmc_block_windows_parse(header, sizeof(header),
+	    partition, &manifest) == 1u);
+	CHECK(manifest.count == 1u);
+	return 0;
+}
+
+static int
+scenario_windows_format(void)
+{
+	struct gta4l_emmc_block_report report;
+	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	uint32_t length;
+
+	bzero(&report, sizeof(report));
+	screen_windows(&report);
+	report.windows_valid = 0xffffffffu;
+	report.windows_reason = 0xffffffffu;
+	report.windows_count = 0xffffffffu;
+	report.windows_image_bytes = UINT64_MAX;
+	memset(report.windows_entry[0].name, 'A', 31u);
+	report.windows_entry[0].name[31] = 0;
+	memset(report.windows_entry[1].name, 'B', 31u);
+	report.windows_entry[1].name[31] = 0;
+	report.windows_entry[0].offset = UINT64_MAX;
+	report.windows_entry[0].size = UINT64_MAX;
+	report.windows_entry[1].offset = UINT64_MAX;
+	report.windows_entry[1].size = UINT64_MAX;
+	report.windows_apfs = 0xffffffffu;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(length < sizeof(buffer));
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 WINDOWS: ") ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 WINDOWS: "
+	    "valid=4294967295 reason=4294967295 count=4294967295 "
+	    "image=18446744073709551615") != 0);
+	CHECK(strstr(buffer, " w0=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "
+	    "off=18446744073709551615 size=18446744073709551615") != 0);
+	CHECK(strstr(buffer, "apfs=4294967295 "
+	    "cid=ffffffffffffffffffffffffffffffff "
+	    "uuid=ffffffffffffffffffffffffffffffff") != 0);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 SPEED: hs=1 wid=8 "
+	    "verified=1") != 0);
+	CHECK(strstr(buffer, "hsrb=") == 0);
+	CHECK(GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES ==
+	    (GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES +
+	    GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u +
+	    GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES + 1u));
+	CHECK(length <= GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES);
 	return 0;
 }
 
@@ -15583,6 +15902,8 @@ static const struct scenario_entry scenarios[] = {
 	{ "slow-refused-duplicate", scenario_slow_refused_duplicate },
 	{ "live-report-max", scenario_live_report_max },
 	{ "screen-capacity", scenario_screen_capacity },
+	{ "windows-manifest", scenario_windows_manifest },
+	{ "windows-format", scenario_windows_format },
 	{ "policy", scenario_policy },
 };
 

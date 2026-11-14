@@ -4289,6 +4289,26 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		memcpy(target->widthhold_fail_digest,
 		    report.widthhold_fail_digest,
 		    sizeof(target->widthhold_fail_digest));
+		target->windows = report.windows;
+		target->windows_valid = report.windows_valid;
+		target->windows_reason = report.windows_reason;
+		target->windows_count = report.windows_count;
+		target->windows_image_bytes = report.windows_image_bytes;
+		memcpy(target->windows_manifest_digest,
+		    report.windows_manifest_digest,
+		    sizeof(target->windows_manifest_digest));
+		memcpy(target->windows_entry, report.windows_entry,
+		    sizeof(target->windows_entry));
+		memcpy(target->windows_header_digest,
+		    report.windows_header_digest,
+		    sizeof(target->windows_header_digest));
+		target->windows_apfs = report.windows_apfs;
+		memcpy(target->windows_container_uuid,
+		    report.windows_container_uuid,
+		    sizeof(target->windows_container_uuid));
+		memcpy(target->windows_volume_uuid,
+		    report.windows_volume_uuid,
+		    sizeof(target->windows_volume_uuid));
 		IOLockUnlock(reportLock);
 	}
 	return locked;
