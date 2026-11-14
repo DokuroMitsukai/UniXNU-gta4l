@@ -8306,3 +8306,105 @@ The S3a candidate, the cold and warm-from-held boots, the hardware held
 re-read, the recovery/degraded/offline paths and the stop/terminate
 revert remain `[U]`; nothing here qualifies sustained I/O, a filesystem
 or a boot.
+
+### 5.3.127 S3a live held-terminal owner run: two boots PASS (2026-11-15)
+
+Two owner boots of the flashed BOOT `97ca05c6…` (cold, then a power +
+volume-down warm reset into the same image) both returned `rc=0 stop=0
+mode=3 wid=2 tim=1 clk=50000000`. `wid=2` is the EXT_CSD 8-bit code,
+`tim=1` is HS and 50 MHz is the selected clock, so the header itself
+shows the held state instead of the `wid=0 tim=0 clk=400000` reverted
+state seen on every earlier boot. The two-boot budget is consumed; do not
+boot this image again.
+
+The header fields come from `snapshotReport`: `bus_width` is
+`host.bus_width` (the EXT_CSD code) and the 400 kHz/`timing=0` defaults
+are overwritten in the `speedMode || bulkMode` branch
+(`Gta4lEmmcBlock.cpp:4204`) with `speedClockHz` and `timing=1` when the
+clock is the 50 MHz speed clock. This run keeps `bulkMode` set and takes
+no verified revert, so the header prints the held 8-bit/HS/50 MHz state
+rather than the default 1-bit/400 kHz state.
+
+Both reports are field-identical except for the timing counters:
+`DRV online=1 wp=1 reads=2705 blocks=167551 fails=0 max=64`, `XFER
+req=167551 c17=5 c18=2700 c18b=167546 cfail=0 stops=2700 sfail=0
+last_stop=0`, `MEDIA whole=1 base=0 size=31268536320
+content=GUID_partition_scheme writable=0`, `SPEED hs=1 hsrb=0 hsa=1
+rcg=0000020b hispd=00 wtry=8 wfall=0 wroll=0 wid=8 verified=1 hb=00
+ha=20 cmd6=1 base=1 hz=19200000 req=0 fails=0 cancel=0 budget=0
+partial=0 pub=1 partdiag=0 revert=0 rverified=0 rhb=00 rha=00 rcmd6=0
+rstatus=0 hsrevert=0 hsverified=0 rhsb=0 rhs=0 rclk=0 limit=64 seg=1
+cap=61071360`, `SMMU st=3 scr0=00250406 id0=4c017e32 n=50
+smr=0/800000c0 s2cr=00000000 cb=0 dec=cb-off`, `SMMUCB id1=50000030
+id2=00005111 gfsr=00000000 gfsynr0=00000000 v=05 m=01 sh=02
+cbar=0001f000 sctlr=000000e0 tcr=00000000 ttbr0=0000000000000000
+fsr=00000400 last=2f/01058100/00000000 pfsr=00000400 pgfsr=00000000`
+and `SNAP locked=1`. The terminal `FAIL valid=0` at
+`@Gta4lEmmcBlock.cpp:11279` is the deliberate `finishReport()` panic.
+
+`BULK` covered the full region with `chunks=2615 bytes=85688320
+windows=80 wpass=80 wfail=0 woffset=0` and digest `97ca05c6…` matching
+the image on both boots. `DMA mode=adma2-32 smmu=cb-off cmp=4/4 canary=1
+poison=1 chunks=2615 bytes=85688320 fails=0 stage=0 ast=00000000
+aaddr=00000000 desc=4294967295 budget=0 skip=0 req=2696 blk=167522`:
+2,696 requests and 167,522 blocks are exactly the held shape (2,615
+stream + 80 window + 1 re-read requests; 167,360 + 160 + 2 blocks).
+
+`LIVE` is the S3a success shape on both boots: `mode=held held=1
+degraded=0 online=1 errors=0 recoveries=0 notified=0 bytes=85688320
+digest=97ca05c6… idle_ms=5000 reread=1
+reread_digest=928b0e8a6417900a0bede9759a9aeb6b revert=0 rverified=0
+rclk=0 budget=0`. The re-read digest independently matches
+`window_digest(image, 79)` computed on the host. There is no `LIVEFAIL`,
+no `BULKFAIL` and no `DMADIAG` line, and no revert was taken.
+
+At `hz=19200000` the BULK interval is 64,486,561 ticks (3.359 s) on boot
+1 and 65,827,682 ticks (3.429 s) on boot 2, inside the 4,000 ms stream
+budget with 16.0 and 14.3 percent headroom. The DMA interval is
+162,453,673 ticks (8.461 s) and 163,805,732 ticks (8.532 s); it starts
+before the stream and ends after the re-read, so it includes the 5,000 ms
+idle. Subtracting the idle gives about 3.46 s and 3.53 s, consistent with
+the BULK intervals plus the re-read and the 2.234 s / 2.284 s data
+counters, and is not a slowdown.
+
+The checker prints `PASS: BULK digest, DMA stack path and LIVE held shape
+match 97ca05c6efa1fe5b69f6e02c8597f215` for both normalized reports and
+its self-test passes. The normalizer joins twelve wrapped lines per
+report with zero warnings; five token-boundary wraps per report had the
+terminal-trimmed separator restored (`fails=0 max=64`, `cfail=0
+stops=2700`, `partdiag=0 revert=0`, `wfail=0 woffset=0`, `errors=0
+recoveries=0`) and each restoration is recorded in the joins log as
+`paste-separator` with `reason=terminal-trailing-space-trimmed`.
+
+Boot 2 is the reset-from-held test. The report does not print the
+post-CMD0 1-bit identify, but boot 2 is a completely fresh run:
+different `core/bus/io/ticks/sha` counters, a new CMD6 HS switch
+(`cmd6=1 hsa=1`) and a new 8-bit verify (`wtry=8 verified=1`). The init
+path has no route to that state except CMD0 followed by CMD1/CMD2/CMD3/
+CMD7 at the default 1-bit/400 kHz, so the warm-from-held reinit is
+physically exercised; it is inferred from the sequence, not printed. An
+explicit `init=` field can be added in the S4 report trim if it fits.
+
+Read-only TWRP check after the boots: p69 full `5b09002b…`, image prefix
+`97ca05c6…`, tail `a28b4ea2…`, last 1 KiB `d737414c…`; RECOVERY
+`14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` unchanged; battery
+100 percent. The flash helper recorded the BOOT-only write as pass
+(pre-write p69 `73278c8f…`, post-write full `5b09002b…`, tail and
+last-1KiB unchanged, protected unchanged) after the owner go named
+`97ca05c6…`.
+
+**S3a is measured PASS on two boots**: held HS/8-bit, 5 s idle, a
+deterministic re-read, no revert, full region and windows, and an
+unchanged BOOT/protected state. This is not repeatability, lifetime
+service or recovery-path evidence: the degraded/offline and
+stop/terminate paths remain host-tested only, the force-slow shape has
+no hardware sample, and no mount, write, interrupt, CQE or HS200/HS400
+path is exercised. Per §5.3.125 revision 2 / R3, S3b (lifetime fast mode
+as default) stays deferred until a visible log channel or S5. The panic
+screen was full on both boots (`FAIL:` was the last visible row and
+`pages`/`free` were off screen), so the report trim is required before
+S4 adds `WINDOWS:`. Evidence:
+`out/gta4l/ram-root-emmc-s3a-live-candidate-evidence/`
+(`boot-report-s3a-boot1-raw.txt`, `-boot1.txt`, `-boot1-joins.log`,
+`-boot1-check.log`, the boot-2 set, `flash-record-s3a-live.json`,
+`post-boot-integrity-s3a.txt`, `candidate-verification.txt`).
