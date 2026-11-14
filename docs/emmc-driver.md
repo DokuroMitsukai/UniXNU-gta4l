@@ -7666,3 +7666,71 @@ either. Expected: `dec=cb-off`, `DMA … smmu=cb-off cmp=4/4 … skip=0`,
 TF/SS/MULTI fault still latches stage 13; layout/translate-live/
 cb-type/conflict skips lead to B10.8 (SMMU writes) or a hypervisor
 investigation.
+
+### 5.3.120 B10.11 owner boot: first DMA, ADMA descriptor-fetch failure (2026-11-14)
+
+The B10.11 image `fcb1603b…` was flashed BOOT-only to p69 (one write,
+hash-verified; p69 full `cf5fcc51…`, prefix `fcb1603b…`, tail `a28b4ea2…`;
+RECOVERY/EFS/sec_efs unchanged) and booted once by the owner. The device
+returned to TWRP. The flash record is
+`out/gta4l/ram-root-emmc-b10.11-cb-format-evidence/flash-result-b10.11.txt`;
+the field transcription and its source limitation are in
+`boot-report-b10.11.txt` in the same directory. The raw wrapped paste was
+not retained, so only the quoted fields are recorded and the cause below
+is inferred.
+
+The FSR FORMAT fix worked: `SMMU … dec=cb-off` and `SMMUCB` reported
+`fsr=00000400`, `pfsr=0`, `pgfsr=0`. DMA was issued for the first time
+(`mode=adma2-32 smmu=cb-off`). It failed immediately:
+
+| Field | Value | Reading |
+| --- | --- | --- |
+| `cmp` | `0/4` | The first comparison case (WIDTHHOLD LBA, 64 blocks = 32 KiB, one 8-byte END descriptor) failed. |
+| `stage` | `4` | `DMA_STAGE_READ`; the ADMA read returned an error. |
+| `ast` | `00000001` | ADMA error state `ST_FDS`: the controller faulted fetching a descriptor. The length bit is clear. |
+| `aaddr` | `875c3018` | Offset `0x18` past a page-aligned table. With a one-entry table the controller was at entry 3. |
+| `desc` | `4294967295` | Consistent: `0x18` is outside `entries * 8` = 8 bytes, so no descriptor index maps. |
+| `dat` | `1219` ticks | About 63 µs; the fault was immediate, not a timeout. |
+| `fails` | `1` | One DMA failure, then fail-closed. |
+| `pfsr` / `pgfsr` | `0` / `0` | The SMMU reports no post-DMA fault. |
+| `BULKFAIL stage=12`, `chunks=0` | | The bulk stream never started. |
+| Revert | `revert=1 rverified=1 rclk=400000 hsrevert=1` | Verified 1-bit / 400 kHz revert. Card writes remained disabled. |
+| `FAIL valid=0` | | The P5 FAIL row does not record DMA failures; `DMA`/`BULKFAIL` carry them. |
+
+Decode: the controller walked past the single END descriptor and hit an
+invalid entry. The SMMU did not fault, and the failure came before any
+data phase. The leading hypothesis is that the DMA path performs **no CPU
+cache maintenance**: the descriptor table (`IOMallocAligned`, write-back
+cacheable) and the bounce buffer (`IOMallocContiguous`) are written through
+cached mappings, the controller is not `dma-coherent`, and nothing cleans
+the table to DRAM before the command. A `grep` over `package/` finds no
+`flush_dcache`, `dcache_incoherent_io_*`, `performOperation` or
+`IODMACommand` use. Mainline allocates the ADMA table with
+`dma_alloc_coherent` and maps the data buffer with `dma_map_sg`, so this
+port is missing the equivalent maintenance.
+
+Ranked alternatives: (H2) stale dirty lines in the bounce buffer, the same
+root cause but a later compare symptom; (H3) a wrong 64-bit/V4 DMA mode,
+unlikely because the handoff left `hc2=0008` and `hc=00` and the driver
+programs 32-bit ADMA2, but the command-time readback was not captured;
+(H4) a hidden stage-2 or interconnect block, unlikely because `pfsr=0`
+and an unmapped address would fail on the first descriptor rather than
+past the table. The report did not capture the SDHCI error/normal/present
+values, the table/buffer physical addresses, the entry count, Host
+Control 1/2 or the ADMA address readback, so H1-H4 cannot be separated
+from this boot alone.
+
+Safety note: under H1 the controller may have used garbage descriptors as
+transfer targets and DMA-written card data to arbitrary physical addresses
+for up to about 63 µs. The boot completed and rendered the report. Nothing
+persistent can be affected: card writes are disabled and RAM is lost at
+reset. The next DMA image still needs an owner go naming its hash.
+
+Next: B10.12 adds `IOMemoryDescriptor::performOperation` Store/Flush
+maintenance for the table and the buffer plus canary page, command-time
+Host Control 1/2 and ADMA-address readbacks, the captured error/normal/
+present values and a failure-only `DMADIAG` line with the table/buffer
+physical addresses, entry count and first 32 table bytes. The host suite
+models a non-coherent master and must reject dropped or reordered
+maintenance. See the B10.12 plan section and §5.3.121 after the host
+batch.
