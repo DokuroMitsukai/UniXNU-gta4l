@@ -1464,10 +1464,10 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `158c30b8ecf349977e24871e9ae2746a903099480d44fe6cf04584d66c1bd8aa` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `6fba02439c688115384d65dcdc61efb2a60658dda90f7c3561bcb64bacd21a6f` |
+| Porting record | `porting.toml` | `c908090e5a1a362d6a72ab3b28fdcb81e0578baf5f974961135a193f9af6440f` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `e51213e4465c9a84a504d126d72aae06f5c566b57d02a8f6a7005b3b51f4b9d1` |
+| eMMC driver record | `docs/emmc-driver.md` | `3d7d5728f9400e4116798e7639d9d96d09689dd0d7465144c20ecbecd7ff1a4e` |
 | eMMC core header | `package/Gta4lEmmc.h` | `9361445340606c438854eb03bb2ffa2c26bfe96341f4ca41b1c07cf9f3f924fd` |
 | eMMC core source | `package/Gta4lEmmc.c` | `04ed0ef8f8808c38785b51b0d7429d90b85adba07f52de09ee0b2936b394485c` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
