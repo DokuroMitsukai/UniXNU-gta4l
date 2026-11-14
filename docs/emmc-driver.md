@@ -7799,3 +7799,20 @@ are rejected. Host suite: block 476 scenarios with 180 adapter, 3 support
 and 51 policy mutations; core 220 scenarios with 136 controls; probe 196
 scenarios with 100 controls; the evidence count test passes. Host-only;
 **not flashed**, no device access or boot.
+
+Candidate: kernel `8accaa19…` (51,621,888 bytes) was built against the
+B10.11 audit and the 8accaa19 audit reports the same 190 slots, 181
+bindings, vtable `fffffff005cb44c0`, metaclass `fffffff006add1d0` and
+service `fffffff007b3f5b8`; the bindings assembly `f1ff5bac…` and object
+`3e53b66d…` are byte-identical to B10.11, so the relink is at the
+fixpoint. The requalified archive `4f29fb25…` has members `b4e4b72e…`
+(policy) and `08a0fde4…` (adapter) from the tree sources;
+`qualification.qualified=true` and `candidate_matches_audit=true`.
+Payload `18cf6e78…` (83,886,080 bytes; `emmc-block-3-bulk-dma`,
+`rd=md0`, gate 105/105) and BOOT image `ddbe2eb7…` (85,688,320 bytes;
+gate 18/18, only the ramdisk differs; kernel section `a4b054e0…`,
+firmware `1e8a3132…` and DTB `dc4c719d…` unchanged) are built but
+**not flashed**. The first maintenance-backed DMA boot needs an owner go
+naming `ddbe2eb7…`; card writes remain disabled, and `fcb1603b…`,
+`0d77d602…` and `a1e26c34…` must not be booted again. See
+`candidate-verification.txt` in the B10.12 evidence directory.
