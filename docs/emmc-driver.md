@@ -7737,6 +7737,29 @@ batch.
 
 ### 5.3.121 B10.12 cache maintenance and failure-only DMADIAG (2026-11-14)
 
+API inventory: `IOMemoryDescriptor::performOperation` is the virtual
+option (a) from the plan. In the pinned XNU,
+`iokit/Kernel/IOMemoryDescriptor.cpp:3892` dispatches
+`kIOMemoryIncoherentIOStore` to `dcache_incoherent_io_store64` and
+`kIOMemoryIncoherentIOFlush` to `dcache_incoherent_io_flush64` whenever
+`__ARM_COHERENT_IO__` is not set; the real implementations are in
+`osfmk/arm/caches.c` (`#ifndef __ARM_COHERENT_IO__` at line 56, store at
+198, flush at 145) and call `CleanPoC_DcacheRegion`/`FlushPoC_DcacheRegion`
+with `DSB`, so they clean to the point of coherency and flush by
+clean+invalidate. The gta4l kernel is built with `MACHINE_CONFIGS=BCM2837`
+(`scripts/build-xnu-4k-baseline.sh:139`); `BCM2837.h` does not define
+`__ARM_COHERENT_IO__`, unlike Apple's `apple_arm64_common.h` where the
+same calls are a no-op. The built `caches.o` references
+`CleanPoC_DcacheRegion`/`FlushPoC_DcacheRegion` and the current kernel
+Mach-O resolves `IOMemoryDescriptor::performOperation` (`fffffff007937474`)
+and `dcache_incoherent_io_store64`/`flush64`
+(`fffffff0074123ac`/`fffffff0074121d0`), confirming the real branch;
+the B10.12 relink will move these addresses. `performOperation` returns
+`kIOReturnUnderrun` if a segment cannot be resolved, which the driver
+treats as a maintenance failure. It is a virtual call on an existing
+vtable slot, so no new import is expected; the storage-ABI audit still
+has to confirm the binding set.
+
 The DMA path now performs CPU cache maintenance around every ADMA2
 transfer. `dmaCacheStore(bytes)` stores the 4 KiB descriptor-table page,
 then the bounce buffer plus its trailing canary page (`bytes + PAGE_SIZE`),
