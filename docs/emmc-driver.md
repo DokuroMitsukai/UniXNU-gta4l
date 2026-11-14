@@ -7999,3 +7999,144 @@ Next is the S3 `live` design. Do not boot `a4809df8…`, `fcb1603b…`,
 (`flash-result-b10.13.txt`, `boot-report-b10.13-raw.txt`,
 `boot-report-b10.13.txt`, `boot-report-b10.13-joins.log`,
 `boot-report-b10.13-notes.txt`, `protected-after-b10.13.baseline`).
+
+### 5.3.125 S3 live design: lifetime fast mode (2026-11-14)
+
+Status: host design only. No code, candidate, flash or boot is part of
+this section; it fixes the contract and test plan before the S3 batch.
+
+Goal: after the S2 read set passes at HS/8-bit, keep the bus there,
+idle about 5 s, re-read one deterministic window, publish one bounded
+`LIVE:` report and keep serving reads for the system lifetime. On the
+first transport error, latch it, quiesce, recover to 1-bit/400 kHz and
+PIO with `degraded=1`, and continue. If recovery fails, go offline with
+one client notification. Stop/terminate quiesce and revert. Panic paths
+issue no card commands. Fast mode is not the default until the cold and
+warm-from-held boots pass.
+
+Selector and modes:
+
+- `gta4l-emmc-live=1` requires `gta4l-emmc-block=3 gta4l-emmc-bulk=1
+  gta4l-emmc-dma=1`, exactly one token with value 1, and is mutually
+  exclusive with `speed`, `widthhold` and `widthpub`. It reuses the
+  bulk workload and the DMA sub-mode; it is not a new transport.
+- Proposed `gta4l-emmc-slow=1` force-slow token: accepted with live,
+  skips the HS/width switch and runs the same workload at 1-bit /
+  400 kHz to exercise the PIO service path. It needs its own scenario.
+- Parsing and selection follow the existing pattern
+  (`Gta4lEmmcBlock.cpp:1475-1509`, `:2157-2233`; selector helpers
+  `Gta4lEmmcBlock.c:413`, `:439`).
+
+State machine:
+
+`INIT -> FAST (verified 8-bit/HS) -> WORKLOAD (S2 stream, windows and
+comparisons) -> HOLD (no revert) -> IDLE (~5 s) -> REREAD (one
+deterministic 2-block window) -> LIVE (report once, online, watchdog
+disarmed) -> DEGRADED (first error: latch, quiesce, recover, DMA off,
+PIO) -> OFFLINE (recovery failed, one notification)`. `STOP` or
+`TERMINATE` from any state quiesces, reverts and exits.
+
+Execution model: the report thread already owns the sequence and the
+terminal claim, and `kernel_thread_start` is used only in the start path
+(`:2929-2979`). S3 therefore runs the workload, hold, idle, reread and
+LIVE report on the report thread, then turns that thread into the
+bounded recovery loop. No thread is created in an error path. The
+watchdog thread checks a new `liveReported` flag and exits without
+`claimTerminal()` or panic (`:11703-11744`).
+
+Request and completion contract:
+
+- `doAsyncReadWrite` takes the gate (`:3192`), checks `online`
+  (`:3193`), reads (`:3228`) and completes exactly once (`:3321`; the
+  pre-lock offline case completes at `:3195`).
+- Live mode adds `liveInFlight`. `stop()` waits bounded (10 ms steps)
+  for it to reach zero before requesting the revert.
+- On a core error the failed request keeps its own result. Live mode
+  must not set `online=false` there; it latches the first error, sets
+  `dmaEnabled=false` and `recoveryRequested=true`, then completes.
+  Later requests wait bounded for `recoveryActive` to clear before
+  taking the gate; a timeout completes with a transport error, never a
+  silent PIO retry of the failed request.
+- Recovery is exactly-once: `recoveryRequested` is consumed under the
+  gate, and a second failure during recovery only updates counters.
+
+DMA fault policy: `readMultiCallback` already disables DMA and
+preserves the failed result (`:1216-1223`); the ADMA helper captures
+the fault, issues CMD12, resets DATA and clears DMA mode
+(`Gta4lEmmc.c:4457`, `:4649-4701`). Live mode additionally latches the
+capture fields in the report, keeps `dmaEnabled=false` after recovery,
+and serves PIO only after the verified recovery reopens the core
+(`Gta4lEmmcBlockCore.c:64-71`).
+
+Recovery: reuse `gta4l_emmc_recover_width_and_timing()`
+(`Gta4lEmmc.c:3466-3613`) with the S1 EXT_CSD baseline and the
+9,500 ms combined-revert budget (`Gta4lEmmcBlock.h:401-402`), behind
+the bounded gate acquire (`acquireWidthGate` `:7528-7550`). Verify
+1-bit, 400 kHz, no 4/8-bit HOST_CONTROL bits and DMA off; reopen the
+core and driver online; set `degraded=1` and increment `recoveries`.
+On failure set `online=false`, call `notifyOfflineOnce()` once (extend
+the mode guard at `:11011`) and exit.
+
+Stop and terminate: `stop()` (`:3016-3027`) sets `online=false` and
+`reportCancel=true`. The report thread sees cancel, quiesces, takes the
+gate, reverts, verifies and sets `liveStopped`; `stop()` waits bounded
+for it. `free()` must not free the gate while `liveStopped` is unset; a
+timeout leaves the driver offline and logs.
+
+Panic paths: `finishReport()` claims the terminal and panics
+(`:10953-10983`); live success must not call it. The LIVE report is
+emitted once with `IOLog`, then the driver continues. A terminal live
+failure may use the panic report only after the revert and with no
+further card commands; the watchdog path stays command-free
+(`fillWatchdogReport` `:11690-11700`).
+
+Report: a new `LIVE:` line with fixed fields (`mode`, `held`,
+`degraded`, `online`, `errors`, `recoveries`, `notified`, `bytes`,
+`digest`, `idle_ms`, `reread`, `reread_digest`, `revert`, `rverified`,
+`rclk`, `budget`) and a `LIVEFAIL:` line for the terminal shape. Add
+the fields to `Gta4lEmmcBlock.h:725` and `snapshotReport()` (`:3522+`),
+the line constants and worst case near `Gta4lEmmcBlock.h:660-697`, the
+formatter branch and `_Static_assert`s near `Gta4lEmmcBlock.c:18-26`
+and `:2057`. The LIVE digest keeps the 32-hex-prefix convention; the
+reread digest covers the deterministic window.
+
+Budget: the measured S2 stream is 3.322 s (B10.13) and 3.058 s
+(B10.12), so the current 4,000 ms stream budget leaves 20.4% and 30.8%
+headroom. Live adds a 5,000 ms idle outside the stream budget, one
+2-block reread request and the report. The 4,500 ms read-set total
+budget stays; the live phase must fit the 30,000 ms watchdog with a
+documented arithmetic bound, and the watchdog is disarmed after the
+LIVE report. Do not raise the watchdog or the stream budget without
+new evidence.
+
+CMD0 reinit from held mode: init already issues CMD0, and JEDEC
+GO_IDLE resets the card's volatile BUS_WIDTH/HS_TIMING. The
+warm-from-held boot must identify normally at 1-bit. The core host
+suite gets a scenario where the fake card starts in 8-bit/HS and the
+init sequence resets it (core counts move from 220/136 to 221/137).
+The board does not assume a hardware card reset; that support remains
+unresolved.
+
+Host tests:
+
+- Adapter scenarios: `live-success` (hold, idle hook, reread digest,
+  LIVE line, still online), `live-force-slow`, `live-dma-fault-degrade`
+  (failed result preserved, no PIO retry, recovery, later PIO service),
+  `live-recovery-fail-offline` (one notification, `online=0`),
+  `live-stop-terminate` (quiesce and revert), `live-double-completion`,
+  `live-shared-buffer`, `live-cancel-during` and `live-report-max`
+  (line and worst-case budgets).
+- Adapter mutations: dropped gate, dropped first-error latch, dropped
+  DMA latch, silent PIO retry, dropped idle reread, dropped reread
+  digest, inaccurate counters, double completion, dropped notification
+  and dropped stop revert.
+- Core scenario: warm-from-held CMD0 reinit.
+- Checker: extend `scripts/check-gta4l-bulk-evidence.py` with an
+  optional LIVE line (exactly one, fixed fields, no LIVEFAIL on
+  success, mutations), leaving the historical BULK/DMA fixtures
+  unchanged.
+
+Hardware exit (not authorized by this design): two boots, cold and
+warm-from-held, each with an owner go naming the image SHA-256 and the
+held-mode reset procedure, followed by a TWRP integrity check. Fast
+mode becomes the default only after both pass.
