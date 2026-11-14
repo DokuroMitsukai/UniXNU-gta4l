@@ -450,6 +450,12 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES 746u
 #define GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES 267u
 #define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u
+/* Bulk mode omits the six S1-only SPEED fields (bytes1/ticks1/dig1/
+ * bytes2/ticks2/dig2), which are zero in bulk, to keep the panic tail on
+ * screen. At their widest the remaining fields make 578 bytes, 168 fewer
+ * than the S1 line, so 838 + 578 + newline + NUL = 1,418. */
+#define GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES 578u
+#define GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES 1418u
 
 /* S2 sustained large-read qualification. The mode reuses the S1 start
  * path and the verified combined revert, then streams the 85,688,320-byte
@@ -538,6 +544,12 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_SMMU_CB_TCR 0x0030u
 #define GTA4L_EMMC_BLOCK_SMMU_CB_MAIR0 0x0038u
 #define GTA4L_EMMC_BLOCK_SMMU_CB_FSR 0x0058u
+/* CB FSR fields, pinned to the mainline arm-smmu.h FSR definitions:
+ * FORMAT is descriptor metadata in bits [10:9] and is not a fault. FAULT
+ * is MULTI|SS|UUT|EF|PF|TF|IGN (AFF|ASF|TLBMCF|TLBLKF), 0xc00001fe.
+ * The gta4l hardware leaves FORMAT=2 (0x400) with no fault bit set. */
+#define GTA4L_EMMC_BLOCK_SMMU_FSR_FORMAT 0x00000600u
+#define GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT 0xc00001feu
 #define GTA4L_EMMC_BLOCK_SMMU_CB_FAR 0x0060u
 #define GTA4L_EMMC_BLOCK_SMMU_CB_FSYNR0 0x0068u
 #define GTA4L_EMMC_BLOCK_SMMU_SCTLR_M (1u << 0)
@@ -631,15 +643,15 @@ extern "C" {
  * six u32 counters at ten digits, the two-character `shap` provider token,
  * the 8-bit Host Control and 16-bit Clock Control at two and four hex
  * digits, Present State at eight, five packed sixteen-digit register pairs
- * and fourteen separators. The S1 worst case is 1,586 bytes; adding the
- * SPEEDIO, BULK, BULKIO, SMMU, DMA and optional BULKFAIL lines keeps the
- * combined report at 2,980 bytes; adding the SMMUCB census line and its
- * separator gives 3,208 bytes inside the 3,328-byte buffer. */
+ * and fourteen separators. The bulk SPEED worst case is 1,418 bytes;
+ * adding the SPEEDIO, BULK, BULKIO, SMMU, DMA and optional BULKFAIL lines
+ * keeps the combined report at 2,812 bytes; adding the SMMUCB census line
+ * and its separator gives 3,040 bytes inside the 3,328-byte buffer. */
 #define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
 #define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
 #define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u
 #define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u
-#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3208u
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3040u
 
 /* Start-path failure stages, in execution order. A failure latch keeps the
  * first stage so a later cleanup failure cannot mask it. */

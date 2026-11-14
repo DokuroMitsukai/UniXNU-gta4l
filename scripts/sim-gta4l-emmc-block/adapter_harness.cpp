@@ -9999,6 +9999,64 @@ scenario_speed_alloc(void)
 	return 0;
 }
 
+static void
+speed_report_max(struct gta4l_emmc_block_report *report)
+{
+	report->speed = 1u;
+	report->speed_hs = 0xffffffffu;
+	report->speed_hsrb = 0xffffffffu;
+	report->speed_hsa = 0xffffffffu;
+	report->speed_rcg = 0xffffffffu;
+	report->speed_hispd = 0xffffffffu;
+	report->speed_wtry = 0xffffffffu;
+	report->speed_wfall = 0xffffffffu;
+	report->speed_wroll = 0xffffffffu;
+	report->speed_wid = 0xffffffffu;
+	report->speed_verified = 0xffffffffu;
+	report->speed_hb = 0xffffffffu;
+	report->speed_ha = 0xffffffffu;
+	report->speed_cmd6 = 0xffffffffu;
+	report->speed_base = 0xffffffffu;
+	report->speed_bytes1 = 0xffffffffu;
+	report->speed_ticks1 = UINT64_MAX;
+	report->speed_hz = 0xffffffffu;
+	memset(report->speed_dig1, 0xff, sizeof(report->speed_dig1));
+	report->speed_bytes2 = 0xffffffffu;
+	report->speed_ticks2 = UINT64_MAX;
+	memset(report->speed_dig2, 0xff, sizeof(report->speed_dig2));
+	report->speed_req = 0xffffffffu;
+	report->speed_fails = 0xffffffffu;
+	report->speed_cancel = 0xffffffffu;
+	report->speed_budget = 0xffffffffu;
+	report->speed_partial = 0xffffffffu;
+	report->speed_pub = 0xffffffffu;
+	report->speed_partdiag = 0xffffffffu;
+	report->speed_revert = 0xffffffffu;
+	report->speed_rverified = 0xffffffffu;
+	report->speed_rhb = 0xffffffffu;
+	report->speed_rha = 0xffffffffu;
+	report->speed_rcmd6 = 0xffffffffu;
+	report->speed_rstatus = INT32_MIN;
+	report->speed_hsrevert = 0xffffffffu;
+	report->speed_hsverified = 0xffffffffu;
+	report->speed_rhsb = 0xffffffffu;
+	report->speed_rhs = 0xffffffffu;
+	report->speed_rclk = 0xffffffffu;
+	report->speed_limit = 0xffffffffu;
+	report->speed_segments = 0xffffffffu;
+	report->speed_capacity = 0xffffffffu;
+	report->speedio_req = 0xffffffffu;
+	report->speedio_blk = 0xffffffffu;
+	report->speedio_inh = UINT64_MAX;
+	report->speedio_cmd = UINT64_MAX;
+	report->speedio_dat = UINT64_MAX;
+	report->speedio_stop = UINT64_MAX;
+	report->speedio_core = UINT64_MAX;
+	report->speedio_bus = UINT64_MAX;
+	report->speedio_io = UINT64_MAX;
+	report->speedio_win = UINT64_MAX;
+}
+
 static int
 scenario_speed_format_max(void)
 {
@@ -10009,59 +10067,7 @@ scenario_speed_format_max(void)
 	uint32_t length;
 
 	bzero(&report, sizeof(report));
-	report.speed = 1u;
-	report.speed_hs = 0xffffffffu;
-	report.speed_hsrb = 0xffffffffu;
-	report.speed_hsa = 0xffffffffu;
-	report.speed_rcg = 0xffffffffu;
-	report.speed_hispd = 0xffffffffu;
-	report.speed_wtry = 0xffffffffu;
-	report.speed_wfall = 0xffffffffu;
-	report.speed_wroll = 0xffffffffu;
-	report.speed_wid = 0xffffffffu;
-	report.speed_verified = 0xffffffffu;
-	report.speed_hb = 0xffffffffu;
-	report.speed_ha = 0xffffffffu;
-	report.speed_cmd6 = 0xffffffffu;
-	report.speed_base = 0xffffffffu;
-	report.speed_bytes1 = 0xffffffffu;
-	report.speed_ticks1 = UINT64_MAX;
-	report.speed_hz = 0xffffffffu;
-	memset(report.speed_dig1, 0xff, sizeof(report.speed_dig1));
-	report.speed_bytes2 = 0xffffffffu;
-	report.speed_ticks2 = UINT64_MAX;
-	memset(report.speed_dig2, 0xff, sizeof(report.speed_dig2));
-	report.speed_req = 0xffffffffu;
-	report.speed_fails = 0xffffffffu;
-	report.speed_cancel = 0xffffffffu;
-	report.speed_budget = 0xffffffffu;
-	report.speed_partial = 0xffffffffu;
-	report.speed_pub = 0xffffffffu;
-	report.speed_partdiag = 0xffffffffu;
-	report.speed_revert = 0xffffffffu;
-	report.speed_rverified = 0xffffffffu;
-	report.speed_rhb = 0xffffffffu;
-	report.speed_rha = 0xffffffffu;
-	report.speed_rcmd6 = 0xffffffffu;
-	report.speed_rstatus = INT32_MIN;
-	report.speed_hsrevert = 0xffffffffu;
-	report.speed_hsverified = 0xffffffffu;
-	report.speed_rhsb = 0xffffffffu;
-	report.speed_rhs = 0xffffffffu;
-	report.speed_rclk = 0xffffffffu;
-	report.speed_limit = 0xffffffffu;
-	report.speed_segments = 0xffffffffu;
-	report.speed_capacity = 0xffffffffu;
-	report.speedio_req = 0xffffffffu;
-	report.speedio_blk = 0xffffffffu;
-	report.speedio_inh = UINT64_MAX;
-	report.speedio_cmd = UINT64_MAX;
-	report.speedio_dat = UINT64_MAX;
-	report.speedio_stop = UINT64_MAX;
-	report.speedio_core = UINT64_MAX;
-	report.speedio_bus = UINT64_MAX;
-	report.speedio_io = UINT64_MAX;
-	report.speedio_win = UINT64_MAX;
+	speed_report_max(&report);
 	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
 	    &report);
 	CHECK(length != 0u);
@@ -10192,6 +10198,7 @@ bulk_smmu_fault_fixture(void)
 #define SMMU_TEST_GR1 0x1000u
 #define SMMU_TEST_CB0 0x40000u
 #define SMMU_TEST_LAST 0x5f000u
+#define SMMU_TEST_FSR_FORMAT 0x400u
 #define SMMU_TEST_REG(offset) ((offset) / 4u)
 
 static void
@@ -10227,9 +10234,11 @@ bulk_smmu_translate_live_fixture(void)
 static void
 bulk_smmu_cb_off_fixture(void)
 {
+	/* The hardware leaves FORMAT=2 (0x400) with no fault bit set. */
 	bulk_smmu_cb_fixture(
 	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_S1_TRANS_S2_BYPASS <<
-	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_SHIFT, 0u, 0u);
+	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_SHIFT, 0u,
+	    SMMU_TEST_FSR_FORMAT);
 }
 
 static void
@@ -10243,7 +10252,17 @@ bulk_smmu_cb_fault_fixture(void)
 {
 	bulk_smmu_cb_fixture(
 	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_S1_TRANS_S2_BYPASS <<
-	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_SHIFT, 0u, 1u);
+	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_SHIFT, 0u,
+	    SMMU_TEST_FSR_FORMAT | 0x2u);
+}
+
+static void
+bulk_smmu_cb_fault_ss_fixture(void)
+{
+	bulk_smmu_cb_fixture(
+	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_S1_TRANS_S2_BYPASS <<
+	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_SHIFT, 0u,
+	    SMMU_TEST_FSR_FORMAT | 0x40000000u);
 }
 
 static void
@@ -10278,8 +10297,23 @@ static void
 bulk_smmu_post_fault_fixture(void)
 {
 	bulk_smmu_cb_off_fixture();
-	/* The gate's first FSR read is clean; the post-DMA read faults. */
+	/* The gate's first FSR read is FORMAT-only; the post-DMA read
+	 * adds TF. */
 	gta4l_test.smmu_fault_after = 2u;
+	gta4l_test.smmu_fault_value =
+	    SMMU_TEST_FSR_FORMAT | 0x2u;
+}
+
+static void
+bulk_smmu_post_format_fixture(void)
+{
+	bulk_smmu_cb_fixture(
+	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_S1_TRANS_S2_BYPASS <<
+	    GTA4L_EMMC_BLOCK_SMMU_CBAR_TYPE_SHIFT, 0u, 0u);
+	/* The gate's first FSR read is clean; the post-DMA read carries
+	 * only the FORMAT field. */
+	gta4l_test.smmu_fault_after = 2u;
+	gta4l_test.smmu_fault_value = SMMU_TEST_FSR_FORMAT;
 }
 
 static void
@@ -10401,6 +10435,30 @@ scenario_bulk_smmu_cb_fault(void)
 }
 
 static int
+scenario_bulk_smmu_cb_format(void)
+{
+	return bulk_smmu_case(bulk_smmu_cb_off_fixture,
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF,
+	    "dec=cb-off", 20u);
+}
+
+static int
+scenario_bulk_smmu_cb_fault_tf(void)
+{
+	return bulk_smmu_case(bulk_smmu_cb_fault_fixture,
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT,
+	    "dec=cb-fault", 20u);
+}
+
+static int
+scenario_bulk_smmu_cb_fault_ss(void)
+{
+	return bulk_smmu_case(bulk_smmu_cb_fault_ss_fixture,
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT,
+	    "dec=cb-fault", 20u);
+}
+
+static int
 scenario_bulk_smmu_conflict(void)
 {
 	return bulk_smmu_case(bulk_smmu_conflict_fixture,
@@ -10507,6 +10565,38 @@ scenario_dma_cb_off(void)
 }
 
 static int
+scenario_dma_cb_off_format(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_smmu_post_format_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.dma == 1u);
+	CHECK(g_self->report.dma_smmu ==
+	    GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF);
+	CHECK(g_self->report.dma_skip == 0u);
+	CHECK(g_self->report.dma_cmp_pass == 4u);
+	CHECK(g_self->report.dma_cmp_total == 4u);
+	CHECK(g_self->report.dma_fails == 0u);
+	CHECK(g_self->report.dma_stage == 0u);
+	CHECK(g_self->report.smmu_pfsr ==
+	    SMMU_TEST_FSR_FORMAT);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_NONE);
+	CHECK(g_self->report.dma_chunks ==
+	    GTA4L_EMMC_BLOCK_BULK_CHUNKS);
+	CHECK(strstr(gta4l_test.panic,
+	    "mode=adma2-32 smmu=cb-off cmp=4/4") != 0);
+	CHECK(strstr(gta4l_test.panic, "skip=0") != 0);
+	CHECK(strstr(gta4l_test.panic, "pfsr=00000400") != 0);
+	CHECK(gta4l_test.adma_calls ==
+	    (uint32_t)(4u + GTA4L_EMMC_BLOCK_BULK_CHUNKS +
+	    GTA4L_EMMC_BLOCK_BULK_WINDOWS));
+	return 0;
+}
+
+static int
 scenario_dma_post_fault(void)
 {
 	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
@@ -10524,13 +10614,14 @@ scenario_dma_post_fault(void)
 	CHECK(g_self->report.dma_stage ==
 	    GTA4L_EMMC_BLOCK_DMA_STAGE_SMMU);
 	CHECK(g_self->report.dma_chunks == 0u);
-	CHECK(g_self->report.smmu_pfsr == 1u);
+	CHECK(g_self->report.smmu_pfsr ==
+	    (SMMU_TEST_FSR_FORMAT | 0x2u));
 	CHECK(g_self->report.bulk_fail_stage ==
 	    GTA4L_EMMC_BLOCK_BULK_STAGE_SMMU);
 	CHECK(strstr(gta4l_test.panic,
 	    "GTA4L-EMMC P5 BULKFAIL: stage=13") != 0);
 	CHECK(strstr(gta4l_test.panic, "stage=10") != 0);
-	CHECK(strstr(gta4l_test.panic, "pfsr=00000001") != 0);
+	CHECK(strstr(gta4l_test.panic, "pfsr=00000402") != 0);
 	return 0;
 }
 
@@ -11245,6 +11336,7 @@ scenario_bulk_format_max(void)
 	uint32_t length;
 
 	bzero(&report, sizeof(report));
+	speed_report_max(&report);
 	report.bulk = 1u;
 	report.bulk_region = 0xffffffffu;
 	report.bulk_chunks = 0xffffffffu;
@@ -11331,6 +11423,14 @@ scenario_bulk_format_max(void)
 	    &report);
 	CHECK(length != 0u);
 	CHECK(length < sizeof(buffer));
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 SPEED: ") ==
+	    GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES);
+	CHECK(strstr(buffer, "bytes1=") == 0);
+	CHECK(strstr(buffer, "ticks1=") == 0);
+	CHECK(strstr(buffer, "dig1=") == 0);
+	CHECK(strstr(buffer, "bytes2=") == 0);
+	CHECK(strstr(buffer, "ticks2=") == 0);
+	CHECK(strstr(buffer, "dig2=") == 0);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 BULK: ") ==
 	    GTA4L_EMMC_BLOCK_BULK_LINE_BYTES);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 BULKIO: ") ==
@@ -11356,8 +11456,10 @@ scenario_bulk_format_max(void)
 	CHECK(strstr(buffer, "rcg2=ffffffffffffffff") != 0);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 BULKFAIL: ") ==
 	    GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES);
+	CHECK(GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES ==
+	    (GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES + 838u + 2u));
 	CHECK(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES ==
-	    (GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES +
+	    (GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES +
 	    GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_BULK_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES + 1u +
@@ -12786,9 +12888,23 @@ scenario_policy(void)
 		    &state) ==
 		    GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE);
 		state.sctlr = 0;
-		state.fsr = 1;
+		state.fsr = 0x2u;
 		CHECK(gta4l_emmc_block_smmu_decide_cb(1, 1, 0,
 		    &state) == GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT);
+		state.fsr = SMMU_TEST_FSR_FORMAT;
+		CHECK(gta4l_emmc_block_smmu_decide_cb(1, 1, 0,
+		    &state) == GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF);
+		state.fsr = SMMU_TEST_FSR_FORMAT | 0x2u;
+		CHECK(gta4l_emmc_block_smmu_decide_cb(1, 1, 0,
+		    &state) == GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT);
+		state.fsr = SMMU_TEST_FSR_FORMAT | 0x40000000u;
+		CHECK(gta4l_emmc_block_smmu_decide_cb(1, 1, 0,
+		    &state) == GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT);
+		state.fsr = 0x80000000u;
+		CHECK(gta4l_emmc_block_smmu_decide_cb(1, 1, 0,
+		    &state) == GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT);
+		CHECK((GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT &
+		    GTA4L_EMMC_BLOCK_SMMU_FSR_FORMAT) == 0u);
 		state.fsr = 0;
 		CHECK(gta4l_emmc_block_smmu_decide_cb(1, 1, 1,
 		    &state) == GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT);
@@ -14230,6 +14346,9 @@ static const struct scenario_entry scenarios[] = {
 	{ "bulk-smmu-cb-off", scenario_bulk_smmu_cb_off },
 	{ "bulk-smmu-cb-type", scenario_bulk_smmu_cb_type },
 	{ "bulk-smmu-cb-fault", scenario_bulk_smmu_cb_fault },
+	{ "bulk-smmu-cb-format", scenario_bulk_smmu_cb_format },
+	{ "bulk-smmu-cb-fault-tf", scenario_bulk_smmu_cb_fault_tf },
+	{ "bulk-smmu-cb-fault-ss", scenario_bulk_smmu_cb_fault_ss },
 	{ "bulk-smmu-conflict", scenario_bulk_smmu_conflict },
 	{ "bulk-smmu-layout", scenario_bulk_smmu_layout },
 	{ "bulk-smmu-nomatch", scenario_bulk_smmu_nomatch },
@@ -14237,6 +14356,7 @@ static const struct scenario_entry scenarios[] = {
 	{ "bulk-smmu-map-fail", scenario_bulk_smmu_map_fail },
 	{ "dma-success", scenario_dma_success },
 	{ "dma-cb-off", scenario_dma_cb_off },
+	{ "dma-cb-off-format", scenario_dma_cb_off_format },
 	{ "dma-post-fault", scenario_dma_post_fault },
 	{ "dma-smmu-skip", scenario_dma_smmu_skip },
 	{ "dma-compare-mismatch", scenario_dma_compare_mismatch },

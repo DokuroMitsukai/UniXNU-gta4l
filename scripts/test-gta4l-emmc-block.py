@@ -1662,6 +1662,11 @@ ADAPTER_MUTATIONS = [
      [('\t\t\tif (dmaBuffer[bytes + canary] != 0u) {\n',
        '\t\t\tif (0) {\n')],
      'dma-canary'),
+    ('post-dma-format-mask-dropped',
+     [('\treturn ((fsr & GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT) == 0u) &&\n'
+       '\t    (gfsr == 0u);\n',
+       '\treturn (fsr == 0u) && (gfsr == 0u);\n')],
+     'dma-cb-off-format'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2029,14 +2034,17 @@ POLICY_MUTATIONS = [
        '\t\treturn GTA4L_EMMC_BLOCK_SPEED_REFUSED;\n')],
      'policy'),
     ('speed-formatter-dig1-dropped',
-     [('\t\tgta4l_emmc_block_put_key(&writer, "dig1");\n'
-       '\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig1, 16u);\n'
-       '\t\tgta4l_emmc_block_put_char(&writer, \' \');\n',
-       '\t\tgta4l_emmc_block_put_char(&writer, \' \');\n')],
+     [('\t\t\tgta4l_emmc_block_put_key(&writer, "dig1");\n'
+       '\t\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig1,\n'
+       '\t\t\t    16u);\n'
+       '\t\t\tgta4l_emmc_block_put_char(&writer, \' \');\n',
+       '\t\t\tgta4l_emmc_block_put_char(&writer, \' \');\n')],
      'speed-match-8bit'),
     ('speed-formatter-digest-swapped',
-     [('\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig1, 16u);\n',
-       '\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig2, 16u);\n')],
+     [('\t\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig1,\n'
+       '\t\t\t    16u);\n',
+       '\t\t\tgta4l_emmc_block_put_digest(&writer, report->speed_dig2,\n'
+       '\t\t\t    16u);\n')],
      'speed-digest-mismatch'),
     ('speed-formatter-rcg-decimal',
      [('\t\tgta4l_emmc_block_put_hex(&writer, report->speed_rcg, 8u);\n',
@@ -2122,6 +2130,21 @@ POLICY_MUTATIONS = [
        '\t\treturn GTA4L_EMMC_BLOCK_DMA_REFUSED;\n'
        '\t}\n')],
      'dma-refused-value'),
+    ('decide-cb-format-mask-dropped',
+     [('\tif ((gfsr != 0u) ||\n'
+       '\t    ((state->fsr & GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT) != 0u)) {\n',
+       '\tif ((gfsr != 0u) || (state->fsr != 0u)) {\n')],
+     'bulk-smmu-cb-format'),
+    ('decide-cb-tf-mask-dropped',
+     [('\t    ((state->fsr & GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT) != 0u)) {\n',
+       '\t    ((state->fsr & (GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT & '
+       '~0x2u)) != 0u)) {\n')],
+     'bulk-smmu-cb-fault-tf'),
+    ('decide-cb-format-in-mask',
+     [('\t    ((state->fsr & GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT) != 0u)) {\n',
+       '\t    ((state->fsr & (GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT | '
+       '0x600u)) != 0u)) {\n')],
+     'bulk-smmu-cb-format'),
 ]
 
 
@@ -2424,6 +2447,14 @@ def check_adapter_source():
         policy_header, 'the SPEEDIO formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES 1586u' in \
         policy_header, 'the SPEED report bound must match the base block'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES 578u' in \
+        policy_header, 'the bulk SPEED formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES 1418u' \
+        in policy_header, 'the bulk SPEED report bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT 0xc00001feu' in \
+        policy_header, 'the CB FSR fault mask must stay mainline-exact'
+    assert '#define GTA4L_EMMC_BLOCK_SMMU_FSR_FORMAT 0x00000600u' in \
+        policy_header, 'the CB FSR format field must stay report-only'
     assert adapter.index(
         'bzero(&speedFallback, sizeof(speedFallback));') < \
         adapter.index('GTA4L_EMMC_BLOCK_SPEED_BITS_8, &speedSwitch)'), \
@@ -2474,7 +2505,7 @@ def check_adapter_source():
         policy_header, 'the BULKFAIL formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u' in \
         policy_header, 'the BULKIO formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3208u' in \
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3040u' in \
         policy_header, 'the BULK report bound must match the base block'
     assert '#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u' in \
         policy_header, 'the DMA formatter bound must stay exact'
@@ -2995,8 +3026,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 468, f'expected 468 adapter PASS lines, got {passes}'
-        print('PASS adapter: 468 scenarios against the host IOKit seam')
+        assert passes == 472, f'expected 472 adapter PASS lines, got {passes}'
+        print('PASS adapter: 472 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

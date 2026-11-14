@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 467 scenarios with 175 adapter mutations, 3 support mutations and 46 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 471 scenarios with 176 adapter mutations, 3 support mutations and 49 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7585,6 +7585,61 @@ Host coverage: block 467 scenarios with 175 adapter, 3 support and 46
 policy mutations, including `bulk-smmu-cb-off`, `-cb-type`, `-cb-fault`,
 `-conflict`, `-layout`, the translate-live row, `dma-cb-off` and
 `dma-post-fault` (FSR after the comparison → stage 13). **Not flashed.**
-The next boot that allows DMA is the first DMA rung in effect and needs an
-owner "go" naming `0d77d602…`; card writes remain disabled. BOOT still
-holds the B10.5 image, which must not be booted again.
+The next boot that allows DMA is the first DMA rung in effect and needed an
+owner "go" naming `0d77d602…`; card writes remain disabled. That boot is
+recorded in §5.3.118 and found the CB FSR FORMAT false fault. BOOT now
+holds `0d77d602…`, which must not be booted again; the B10.5 image must
+not be booted either.
+
+### 5.3.118 B10.7 owner boot: CB FSR FORMAT false fault (2026-11-14)
+
+The B10.7 image `0d77d602…` booted from BOOT and reached the DMA gate.
+`SMMU` reported `scr0=00250406`, `id0=4c017e32`, `n=50`, one match
+(`smr=0/800000c0`, `s2cr=00000000`), `cb=0` and `dec=cb-fault`. `SMMUCB`
+reported `id1=50000030` (48 context banks, 64 global pages),
+`id2=00005111`, `gfsr=00000000`, `gfsynr0=00000000`, five valid SMRs, one
+matching stream, two valid translate streams sharing CB0,
+`cbar=0001f000` (TYPE 1 `S1_TRANS_S2_BYPASS`), `sctlr=000000e0` (M=0),
+zero `tcr`/`ttbr0`, `fsr=00000400`, the last bank CB47 and
+`pfsr/pgfsr=0`. No DMA was issued (`cmp=0/0`, `skip=1`); the bulk path
+fell back to PIO and exited on its fixed budget at `BULKFAIL stage=6`.
+The SHA provider reported `shap=lk`; corecrypto hashed 11,665,408 bytes
+in about 98 ms, 9.1× the portable code. The GR1 and context-bank reads
+did not abort, retiring the `gr1-pre`/`cb-pre` risk.
+
+Decode: `fsr=00000400` sets only `FORMAT` (`GENMASK(10,9)`,
+`arm-smmu.h:203`); every fault bit is clear. Mainline treats only
+`fsr & ARM_SMMU_CB_FSR_FAULT` as a fault (`arm-smmu.c:467`), and `FAULT`
+excludes FORMAT (`arm-smmu.h:218-224`). CB0 met every `cb-off` condition,
+so the correct verdict was `cb-off`. Two predicates were over-strict:
+`gta4l_emmc_block_smmu_decide_cb()` tested `state->fsr != 0` and
+`runSmmuPostDma()` tested `fsr == 0`. Fixing only the first would have
+latched `BULKFAIL stage=13` after the DMA comparison, so both change
+together in B10.11. Every host fixture had used `fsr=0`, so the real
+FORMAT value was untested.
+
+### 5.3.119 B10.11 CB FSR FORMAT gate (host-only) (2026-11-14)
+
+`GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT` is `0xc00001fe` (MULTI, SS, UUT, EF,
+PF, TF and the AFF/ASF/TLBMCF/TLBLKF ignore set);
+`GTA4L_EMMC_BLOCK_SMMU_FSR_FORMAT` (`0x600`) names the report-only field,
+and a `_Static_assert` keeps the two masks disjoint. The pre-DMA decision
+fails on `(fsr & FSR_FAULT) != 0` and the post-DMA gate on
+`(fsr & FSR_FAULT) != 0 || gfsr != 0`, while both still report the raw
+`fsr`/`pfsr`/`pgfsr`. `fsr=0x2` (TF), `0x402` (FORMAT|TF), `0x40000400`
+(FORMAT|SS) and `0x80000000` (MULTI) stay faults; FORMAT alone (`0x400`)
+decides `cb-off` and passes the post-DMA read.
+
+Host fixtures now start from the hardware value `0x400`. New rows
+`bulk-smmu-cb-format`, `bulk-smmu-cb-fault-tf`, `bulk-smmu-cb-fault-ss`
+and `dma-cb-off-format` cover the matrix; `dma-post-fault` injects
+`0x402`; mutations `decide-cb-format-mask-dropped`,
+`decide-cb-tf-mask-dropped`, `decide-cb-format-in-mask` and
+`post-dma-format-mask-dropped` are rejected. In bulk mode the `SPEED`
+line now omits the six S1-only `bytes1/ticks1/dig1/bytes2/ticks2/dig2`
+fields, which are zero in bulk, shrinking the line from 746 to 578 bytes
+and the combined worst case from 3,208 to 3,040 bytes inside the
+unchanged 3,328-byte buffer. Host suite: block 471 scenarios with 176
+adapter, 3 support and 49 policy mutations. Host-only; **not flashed**,
+no device access or boot. The B10.11 candidate, storage-ABI audit and
+archive requalification are recorded after the next build.

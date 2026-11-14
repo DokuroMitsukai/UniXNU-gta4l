@@ -474,7 +474,7 @@ gta4l_emmc_platform_smmu_read32(
 		gta4l_test.smmu_fault_count++;
 		if (gta4l_test.smmu_fault_count >=
 		    gta4l_test.smmu_fault_after) {
-			return 1u;
+			return gta4l_test.smmu_fault_value;
 		}
 	}
 	index = offset >> 2;

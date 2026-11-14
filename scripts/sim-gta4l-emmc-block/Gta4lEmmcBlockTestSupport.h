@@ -466,6 +466,7 @@ struct gta4l_test_state {
 	int smmu_map_result;
 	uint32_t smmu_fault_after;
 	uint32_t smmu_fault_count;
+	uint32_t smmu_fault_value;
 	uint32_t smmu_regs[GTA4L_EMMC_PLATFORM_SMMU_WINDOW / 4u];
 	uint32_t adma_calls;
 	int adma_fail_at;

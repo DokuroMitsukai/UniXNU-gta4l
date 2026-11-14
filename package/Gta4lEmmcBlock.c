@@ -83,6 +83,18 @@ _Static_assert(GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES <=
 _Static_assert(GTA4L_EMMC_BLOCK_SPEED_REPORT_WORST_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "SPEED worst case must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "bulk SPEED line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "bulk SPEED worst case must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES ==
+    GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES + 838u + 2u,
+    "bulk SPEED worst case must match the formatter");
+_Static_assert(GTA4L_EMMC_BLOCK_SPEED_BULK_LINE_BYTES <
+    GTA4L_EMMC_BLOCK_SPEED_LINE_BYTES,
+    "bulk SPEED line must omit the S1-only fields");
 _Static_assert(GTA4L_EMMC_BLOCK_BULK_LINE_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "BULK line must fit the report buffer");
@@ -616,7 +628,8 @@ gta4l_emmc_block_smmu_decide_cb(uint32_t matches, uint32_t layout_valid,
 	if ((state->sctlr & GTA4L_EMMC_BLOCK_SMMU_SCTLR_M) != 0u) {
 		return GTA4L_EMMC_BLOCK_SMMU_DECISION_TRANSLATE_LIVE;
 	}
-	if ((gfsr != 0u) || (state->fsr != 0u)) {
+	if ((gfsr != 0u) ||
+	    ((state->fsr & GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT) != 0u)) {
 		return GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_FAULT;
 	}
 	return GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF;
@@ -3485,27 +3498,33 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "base");
 		gta4l_emmc_block_put_u64(&writer, report->speed_base);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "bytes1");
-		gta4l_emmc_block_put_u64(&writer, report->speed_bytes1);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "ticks1");
-		gta4l_emmc_block_put_u64(&writer, report->speed_ticks1);
+		if (report->bulk == 0u) {
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "bytes1");
+			gta4l_emmc_block_put_u64(&writer, report->speed_bytes1);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "ticks1");
+			gta4l_emmc_block_put_u64(&writer, report->speed_ticks1);
+		}
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "hz");
 		gta4l_emmc_block_put_u64(&writer, report->speed_hz);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "dig1");
-		gta4l_emmc_block_put_digest(&writer, report->speed_dig1, 16u);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "bytes2");
-		gta4l_emmc_block_put_u64(&writer, report->speed_bytes2);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "ticks2");
-		gta4l_emmc_block_put_u64(&writer, report->speed_ticks2);
-		gta4l_emmc_block_put_char(&writer, ' ');
-		gta4l_emmc_block_put_key(&writer, "dig2");
-		gta4l_emmc_block_put_digest(&writer, report->speed_dig2, 16u);
+		if (report->bulk == 0u) {
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "dig1");
+			gta4l_emmc_block_put_digest(&writer, report->speed_dig1,
+			    16u);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "bytes2");
+			gta4l_emmc_block_put_u64(&writer, report->speed_bytes2);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "ticks2");
+			gta4l_emmc_block_put_u64(&writer, report->speed_ticks2);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "dig2");
+			gta4l_emmc_block_put_digest(&writer, report->speed_dig2,
+			    16u);
+		}
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "req");
 		gta4l_emmc_block_put_u64(&writer, report->speed_req);

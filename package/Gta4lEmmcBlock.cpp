@@ -9876,7 +9876,10 @@ Gta4lEmmcBlock::runSmmuPostDma()
 	report.smmu_pfsr = fsr;
 	report.smmu_pgfsr = gfsr;
 	IOLockUnlock(reportLock);
-	return (fsr == 0u) && (gfsr == 0u);
+	/* FORMAT [10:9] is descriptor metadata, not a fault; use the
+	 * mainline ARM_SMMU_CB_FSR_FAULT mask. */
+	return ((fsr & GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT) == 0u) &&
+	    (gfsr == 0u);
 }
 
 bool
