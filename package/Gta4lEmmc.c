@@ -4529,6 +4529,9 @@ gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
 	result->error = 0;
 	result->normal = 0;
 	result->present = 0;
+	result->command_host_control = 0;
+	result->command_host_control2 = 0;
+	result->command_adma_address = 0;
 	host->multi_block = 0;
 	host->multi_completed = 0;
 	host->multi_data_result = 0;
@@ -4566,6 +4569,15 @@ gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
 	    GTA4L_EMMC_REG_TRANSFER_MODE,
 	    GTA4L_EMMC_TM_READ | GTA4L_EMMC_TM_BLOCK_COUNT_EN |
 	    GTA4L_EMMC_TM_MULTI | GTA4L_EMMC_TM_DMA_EN);
+	/* Capture the programmed state before the kick. HC1 must select
+	 * ADMA2; HC2 must not carry V4/64-bit; SA0 must read back the
+	 * table address. These reads are side-effect free. */
+	result->command_host_control = gta4l_emmc_read8(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL);
+	result->command_host_control2 = gta4l_emmc_read16(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_HOST_CONTROL2);
+	result->command_adma_address = gta4l_emmc_read32(host,
+	    GTA4L_EMMC_SPACE_SDHCI, GTA4L_EMMC_REG_ADMA_SYS_ADDR);
 	gta4l_emmc_barrier(host);
 	gta4l_emmc_write16(host, GTA4L_EMMC_SPACE_SDHCI,
 	    GTA4L_EMMC_REG_COMMAND, command);

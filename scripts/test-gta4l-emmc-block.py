@@ -1667,6 +1667,45 @@ ADAPTER_MUTATIONS = [
        '\t    (gfsr == 0u);\n',
        '\treturn (fsr == 0u) && (gfsr == 0u);\n')],
      'dma-cb-off-format'),
+    ('cache-table-store-dropped',
+     [('\trc = dmaTableDescriptor->performOperation(\n'
+       '\t    kIOMemoryIncoherentIOStore, 0, PAGE_SIZE);\n'
+       '\tif (rc != kIOReturnSuccess) {\n'
+       '\t\treturn false;\n'
+       '\t}\n'
+       '\treport.dma_cache |= GTA4L_EMMC_BLOCK_DMA_CACHE_TABLE_STORE;\n',
+       '\trc = kIOReturnSuccess;\n')],
+     'dma-cache-success'),
+    ('cache-buffer-store-dropped',
+     [('\trc = dmaBufferDescriptor->performOperation(\n'
+       '\t    kIOMemoryIncoherentIOStore, 0,\n'
+       '\t    (IOByteCount)bytes + PAGE_SIZE);\n'
+       '\tif (rc != kIOReturnSuccess) {\n'
+       '\t\treturn false;\n'
+       '\t}\n'
+       '\treport.dma_cache |= GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_STORE;\n',
+       '\trc = kIOReturnSuccess;\n')],
+     'dma-cache-success'),
+    ('cache-canary-store-dropped',
+     [('\trc = dmaBufferDescriptor->performOperation(\n'
+       '\t    kIOMemoryIncoherentIOStore, 0,\n'
+       '\t    (IOByteCount)bytes + PAGE_SIZE);\n',
+       '\trc = dmaBufferDescriptor->performOperation(\n'
+       '\t    kIOMemoryIncoherentIOStore, 0,\n'
+       '\t    (IOByteCount)bytes);\n')],
+     'dma-cache-success'),
+    ('cache-flush-dropped',
+     [('\trc = dmaBufferDescriptor->performOperation(\n'
+       '\t    kIOMemoryIncoherentIOFlush, 0, '
+       '(IOByteCount)bytes + PAGE_SIZE);\n'
+       '\tif (rc != kIOReturnSuccess) {\n'
+       '\t\treturn false;\n'
+       '\t}\n'
+       '\treport.dma_cache |= '
+       'GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_FLUSH;\n',
+       '\trc = kIOReturnSuccess;\n'
+       '\t(void)rc;\n')],
+     'dma-cache-success'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2145,6 +2184,14 @@ POLICY_MUTATIONS = [
        '\t    ((state->fsr & (GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT | '
        '0x600u)) != 0u)) {\n')],
      'bulk-smmu-cb-format'),
+    ('dmadiag-gate-dropped',
+     [('\tif ((report->dma != 0) && (report->dma_diag != 0)) {\n',
+       '\tif (0) {\n')],
+     'dma-diag-format'),
+    ('dmadiag-gate-always',
+     [('\tif ((report->dma != 0) && (report->dma_diag != 0)) {\n',
+       '\tif (report->dma != 0) {\n')],
+     'dma-diag-format'),
 ]
 
 
@@ -2505,10 +2552,12 @@ def check_adapter_source():
         policy_header, 'the BULKFAIL formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u' in \
         policy_header, 'the BULKIO formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3040u' in \
+    assert '#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3259u' in \
         policy_header, 'the BULK report bound must match the base block'
     assert '#define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u' in \
         policy_header, 'the DMA formatter bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES 218u' in \
+        policy_header, 'the DMADIAG formatter bound must stay exact'
     assert 'GTA4L-EMMC P5 BULKIO: ' in policy, \
         'bulk mode must emit the S2.1 data-phase and register line'
     assert '#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 139u' in \
@@ -3026,8 +3075,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 472, f'expected 472 adapter PASS lines, got {passes}'
-        print('PASS adapter: 472 scenarios against the host IOKit seam')
+        assert passes == 477, f'expected 477 adapter PASS lines, got {passes}'
+        print('PASS adapter: 477 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

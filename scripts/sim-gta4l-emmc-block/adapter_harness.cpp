@@ -10729,6 +10729,208 @@ scenario_dma_canary(void)
 }
 
 static int
+scenario_dma_cache_success(void)
+{
+	uint32_t reads;
+	uint32_t chunkReads;
+	uint32_t windowReads;
+	uint64_t expectedBufferBytes;
+	uint64_t expectedStoreBytes;
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	CHECK(invoke_thread(1) == 1);
+	reads = (uint32_t)(4u + GTA4L_EMMC_BLOCK_BULK_CHUNKS +
+	    GTA4L_EMMC_BLOCK_BULK_WINDOWS);
+	chunkReads = (uint32_t)(3u + GTA4L_EMMC_BLOCK_BULK_CHUNKS);
+	windowReads = (uint32_t)(1u + GTA4L_EMMC_BLOCK_BULK_WINDOWS);
+	expectedBufferBytes = (uint64_t)chunkReads *
+	    (GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES + PAGE_SIZE) +
+	    (uint64_t)windowReads *
+	    (GTA4L_EMMC_BLOCK_BULK_WINDOW_BYTES + PAGE_SIZE);
+	expectedStoreBytes = (uint64_t)reads * PAGE_SIZE +
+	    expectedBufferBytes;
+	CHECK(g_self->report.dma_fails == 0u);
+	CHECK(g_self->report.dma_diag == 0u);
+	CHECK(g_self->report.dma_cache ==
+	    (GTA4L_EMMC_BLOCK_DMA_CACHE_TABLE_STORE |
+	    GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_STORE |
+	    GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_FLUSH));
+	CHECK(gta4l_test.cache_table_store == reads);
+	CHECK(gta4l_test.cache_buffer_store == reads);
+	CHECK(gta4l_test.cache_buffer_flush == reads);
+	CHECK(gta4l_test.cache_store_calls == reads * 2u);
+	CHECK(gta4l_test.cache_flush_calls == reads);
+	CHECK(gta4l_test.cache_store_bytes == expectedStoreBytes);
+	CHECK(gta4l_test.cache_flush_bytes == expectedBufferBytes);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 DMADIAG: ") == 0);
+	return 0;
+}
+
+static int
+scenario_dma_cache_store_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.cache_fail_at = 0;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA);
+	CHECK(g_self->report.dma_stage ==
+	    GTA4L_EMMC_BLOCK_DMA_STAGE_CACHE);
+	CHECK(g_self->report.dma_fails == 1u);
+	CHECK(g_self->report.dma_cmp_pass == 0u);
+	CHECK(g_self->report.dma_diag == 1u);
+	CHECK(g_self->report.dma_cache == 0u);
+	CHECK(g_self->report.dma_tp != 0u);
+	CHECK(g_self->report.dma_bp != 0u);
+	CHECK(g_self->report.dma_ent == 1u);
+	CHECK(g_self->report.dma_db == 8u);
+	CHECK(gta4l_test.adma_calls == 0u);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 DMADIAG: ") != 0);
+	CHECK(strstr(gta4l_test.panic, "ent=001 db=0008") != 0);
+	CHECK(strstr(gta4l_test.panic, "cache=00") != 0);
+	CHECK(gta4l_test.speed_recover_calls == 1u);
+	return 0;
+}
+
+static int
+scenario_dma_cache_flush_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.cache_fail_at = 2;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA);
+	CHECK(g_self->report.dma_stage ==
+	    GTA4L_EMMC_BLOCK_DMA_STAGE_CACHE);
+	CHECK(g_self->report.dma_fails == 1u);
+	CHECK(g_self->report.dma_cmp_pass == 0u);
+	CHECK(g_self->report.dma_diag == 1u);
+	CHECK(g_self->report.dma_cache ==
+	    (GTA4L_EMMC_BLOCK_DMA_CACHE_TABLE_STORE |
+	    GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_STORE));
+	CHECK(gta4l_test.adma_calls == 1u);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 DMADIAG: ") != 0);
+	CHECK(strstr(gta4l_test.panic, "cache=03") != 0);
+	CHECK(gta4l_test.speed_recover_calls == 1u);
+	return 0;
+}
+
+static int
+scenario_dma_diag_report(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-dma=1", bulk_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	gta4l_test.adma_fail_at = 0;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.bulk_fail_stage ==
+	    GTA4L_EMMC_BLOCK_BULK_STAGE_DMA);
+	CHECK(g_self->report.dma_stage ==
+	    GTA4L_EMMC_BLOCK_DMA_STAGE_READ);
+	CHECK(g_self->report.dma_ast == 3u);
+	CHECK(g_self->report.dma_desc == 1u);
+	CHECK(g_self->report.dma_aaddr ==
+	    g_self->report.dma_tp + 8u);
+	CHECK(g_self->report.dma_diag == 1u);
+	CHECK(g_self->report.dma_cache ==
+	    (GTA4L_EMMC_BLOCK_DMA_CACHE_TABLE_STORE |
+	    GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_STORE));
+	CHECK(g_self->report.dma_tp != 0u);
+	CHECK(g_self->report.dma_bp != 0u);
+	CHECK(g_self->report.dma_ent == 1u);
+	CHECK(g_self->report.dma_db == 8u);
+	CHECK(g_self->report.dma_err == 0x0008u);
+	CHECK(g_self->report.dma_nrm == 0x0001u);
+	CHECK(g_self->report.dma_ps == 0x01f00000u);
+	CHECK(g_self->report.dma_hc1 == 0x07u);
+	CHECK(g_self->report.dma_hc2 == 0x0008u);
+	CHECK(g_self->report.dma_sa0 == g_self->report.dma_tp);
+	CHECK((uint32_t)g_self->report.dma_d0 ==
+	    (0x23u | (0x8000u << 16)));
+	CHECK((uint32_t)(g_self->report.dma_d0 >> 32) ==
+	    g_self->report.dma_bp);
+	CHECK(g_self->report.dma_d1 == 0u);
+	CHECK(g_self->report.dma_d2 == 0u);
+	CHECK(g_self->report.dma_d3 == 0u);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 DMADIAG: ") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "ent=001 db=0008 err=00000008 nrm=00000001 ps=01f00000") != 0);
+	CHECK(strstr(gta4l_test.panic, "hc1=07 hc2=0008 sa0=") != 0);
+	CHECK(strstr(gta4l_test.panic, "cache=03 d0=") != 0);
+	CHECK(gta4l_test.speed_recover_calls == 1u);
+	return 0;
+}
+
+static int
+scenario_dma_diag_format(void)
+{
+	struct gta4l_emmc_block_report report;
+	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	uint32_t length;
+
+	bzero(&report, sizeof(report));
+	report.dma = 1u;
+	report.dma_mode = GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32;
+	report.dma_smmu = GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS;
+	report.dma_diag = 1u;
+	report.dma_cache = 0x7u;
+	report.dma_tp = 0x81234000u;
+	report.dma_bp = 0x81238000u;
+	report.dma_ent = 1u;
+	report.dma_db = 8u;
+	report.dma_err = 0x0008u;
+	report.dma_nrm = 0x0001u;
+	report.dma_ps = 0x01f00000u;
+	report.dma_hc1 = 0x07u;
+	report.dma_hc2 = 0x0008u;
+	report.dma_sa0 = 0x81234000u;
+	report.dma_d0 = 0x8123800000800023ull;
+	report.dma_d1 = 0x1122334455667788ull;
+	report.dma_d2 = 0x99aabbccddeeff00ull;
+	report.dma_d3 = 0x0123456789abcdefull;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(length < sizeof(buffer));
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 DMADIAG: ") ==
+	    GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES);
+	CHECK(strstr(buffer,
+	    "DMADIAG: tp=81234000 bp=81238000 ent=001 db=0008") != 0);
+	CHECK(strstr(buffer,
+	    "err=00000008 nrm=00000001 ps=01f00000") != 0);
+	CHECK(strstr(buffer,
+	    "hc1=07 hc2=0008 sa0=81234000 cache=07") != 0);
+	CHECK(strstr(buffer,
+	    "d0=8123800000800023 d1=1122334455667788") != 0);
+	CHECK(strstr(buffer,
+	    "d2=99aabbccddeeff00 d3=0123456789abcdef") != 0);
+
+	report.dma_diag = 0u;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(strstr(buffer, "DMADIAG") == 0);
+
+	report.dma_diag = 1u;
+	report.dma = 0u;
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(strstr(buffer, "DMADIAG") == 0);
+	return 0;
+}
+
+static int
 scenario_dma_poison_untouched(void)
 {
 	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
@@ -11419,6 +11621,22 @@ scenario_bulk_format_max(void)
 	report.dma_desc = 0xffffffffu;
 	report.dma_budget = 0xffffffffu;
 	report.dma_skip = 0xffffffffu;
+	report.dma_diag = 1u;
+	report.dma_cache = 0xffu;
+	report.dma_tp = 0xffffffffu;
+	report.dma_bp = 0xffffffffu;
+	report.dma_ent = 0xffffffffu;
+	report.dma_db = 0xffffffffu;
+	report.dma_err = 0xffffffffu;
+	report.dma_nrm = 0xffffffffu;
+	report.dma_ps = 0xffffffffu;
+	report.dma_hc1 = 0xffu;
+	report.dma_hc2 = 0xffffu;
+	report.dma_sa0 = 0xffffffffu;
+	report.dma_d0 = UINT64_MAX;
+	report.dma_d1 = UINT64_MAX;
+	report.dma_d2 = UINT64_MAX;
+	report.dma_d3 = UINT64_MAX;
 	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
 	    &report);
 	CHECK(length != 0u);
@@ -11443,6 +11661,8 @@ scenario_bulk_format_max(void)
 	    "GTA4L-EMMC P5 SMMUCB: id1=ffffffff id2=ffffffff") != 0);
 	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 DMA: ") ==
 	    GTA4L_EMMC_BLOCK_DMA_LINE_BYTES);
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 DMADIAG: ") ==
+	    GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES);
 	CHECK(strstr(buffer, "dec=translate") != 0);
 	CHECK(strstr(buffer, "mode=adma2-32 smmu=translate") != 0);
 	CHECK(strstr(buffer,
@@ -11466,6 +11686,7 @@ scenario_bulk_format_max(void)
 	    GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_SMMUCB_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_DMA_LINE_BYTES + 1u +
+	    GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES + 1u));
 	CHECK(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES <=
 	    GTA4L_EMMC_BLOCK_REPORT_BYTES);
@@ -14363,6 +14584,11 @@ static const struct scenario_entry scenarios[] = {
 	{ "dma-adma-error", scenario_dma_adma_error },
 	{ "dma-short", scenario_dma_short },
 	{ "dma-canary", scenario_dma_canary },
+	{ "dma-cache-success", scenario_dma_cache_success },
+	{ "dma-cache-store-fail", scenario_dma_cache_store_fail },
+	{ "dma-cache-flush-fail", scenario_dma_cache_flush_fail },
+	{ "dma-diag-report", scenario_dma_diag_report },
+	{ "dma-diag-format", scenario_dma_diag_format },
 	{ "dma-poison-untouched", scenario_dma_poison_untouched },
 	{ "dma-data-timeout", scenario_dma_data_timeout },
 	{ "dma-physical-high", scenario_dma_physical_high },

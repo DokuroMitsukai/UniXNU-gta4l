@@ -584,6 +584,10 @@ extern "C" {
 #define GTA4L_EMMC_BLOCK_DMA_STAGE_WINDOW 8u
 #define GTA4L_EMMC_BLOCK_DMA_STAGE_SHAPE 9u
 #define GTA4L_EMMC_BLOCK_DMA_STAGE_SMMU 10u
+#define GTA4L_EMMC_BLOCK_DMA_STAGE_CACHE 11u
+#define GTA4L_EMMC_BLOCK_DMA_CACHE_TABLE_STORE 0x1u
+#define GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_STORE 0x2u
+#define GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_FLUSH 0x4u
 #define GTA4L_EMMC_BLOCK_ADMA_DESC_VALID 0x0001u
 #define GTA4L_EMMC_BLOCK_ADMA_DESC_END 0x0002u
 #define GTA4L_EMMC_BLOCK_ADMA_DESC_ACT_TRAN 0x0020u
@@ -646,12 +650,17 @@ extern "C" {
  * and fourteen separators. The bulk SPEED worst case is 1,418 bytes;
  * adding the SPEEDIO, BULK, BULKIO, SMMU, DMA and optional BULKFAIL lines
  * keeps the combined report at 2,812 bytes; adding the SMMUCB census line
- * and its separator gives 3,040 bytes inside the 3,328-byte buffer. */
+ * and its separator gives 3,040 bytes inside the 3,328-byte buffer. The
+ * failure-only DMADIAG line is 218 bytes: the prefix, six 8-hex physical/
+ * status words, a 3-hex entry count, a 4-hex descriptor-byte count, a
+ * 2-hex cache mask, 2/4-hex Host Control readbacks and four 16-hex table
+ * words; with its separator the worst case is 3,259 bytes. */
 #define GTA4L_EMMC_BLOCK_BULK_LINE_BYTES 249u
 #define GTA4L_EMMC_BLOCK_BULKFAIL_LINE_BYTES 167u
 #define GTA4L_EMMC_BLOCK_BULKIO_LINE_BYTES 258u
 #define GTA4L_EMMC_BLOCK_DMA_LINE_BYTES 308u
-#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3040u
+#define GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES 218u
+#define GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES 3259u
 
 /* Start-path failure stages, in execution order. A failure latch keeps the
  * first stage so a later cleanup failure cannot mask it. */
@@ -1358,6 +1367,28 @@ struct gta4l_emmc_block_report {
 	uint32_t dma_desc;
 	uint32_t dma_budget;
 	uint32_t dma_skip;
+	/* B10.12 failure-only capture. `diag` gates the DMADIAG line; `cache`
+	 * is bit 0 table store, bit 1 buffer store and bit 2 buffer flush.
+	 * tp/bp are the table/buffer physicals, ent/db the built entry and
+	 * descriptor-byte counts, err/nrm/ps the SDHCI error/normal/present
+	 * values, hc1/hc2/sa0 the command-time Host Control and ADMA address
+	 * readbacks, and d0-d3 the first 32 bytes of the CPU-side table. */
+	uint32_t dma_diag;
+	uint32_t dma_cache;
+	uint32_t dma_tp;
+	uint32_t dma_bp;
+	uint32_t dma_ent;
+	uint32_t dma_db;
+	uint32_t dma_err;
+	uint32_t dma_nrm;
+	uint32_t dma_ps;
+	uint32_t dma_hc1;
+	uint32_t dma_hc2;
+	uint32_t dma_sa0;
+	uint64_t dma_d0;
+	uint64_t dma_d1;
+	uint64_t dma_d2;
+	uint64_t dma_d3;
 	uint32_t read_attempted;
 	uint32_t read_ok;
 	uint64_t read_bytes;

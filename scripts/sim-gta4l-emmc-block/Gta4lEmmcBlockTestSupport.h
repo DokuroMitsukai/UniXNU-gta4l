@@ -73,6 +73,9 @@ typedef void *thread_t;
 #define kIODirectionIn 1
 #define kIODirectionOut 2
 
+#define kIOMemoryIncoherentIOFlush 1
+#define kIOMemoryIncoherentIOStore 2
+
 struct IOStorageAttributes {
 	int unused;
 };
@@ -212,6 +215,8 @@ public:
 	    IOByteCount *length, IOOptionBits options);
 	virtual IOReturn prepare(int direction);
 	virtual IOReturn complete(int direction);
+	virtual IOReturn performOperation(IOOptionBits options,
+	    IOByteCount offset, IOByteCount length);
 protected:
 	void *address_ = nullptr;
 	UInt64 length_ = 0;
@@ -478,6 +483,23 @@ struct gta4l_test_state {
 	int descriptor_physical_high;
 	uint8_t *adma_buffer;
 	uint32_t adma_buffer_bytes;
+	/* Non-coherent master model: the fake controller fetches descriptors
+	 * from a DRAM shadow and writes data into a second shadow. Only a
+	 * Store moves CPU lines into the shadows and only a Flush moves the
+	 * data shadow back, so a dropped or reordered maintenance call is
+	 * visible as a real fault. */
+	int adma_noncoherent;
+	uint32_t cache_calls;
+	uint32_t cache_store_calls;
+	uint32_t cache_flush_calls;
+	uint32_t cache_store_bytes;
+	uint32_t cache_flush_bytes;
+	uint32_t cache_table_store;
+	uint32_t cache_buffer_store;
+	uint32_t cache_buffer_flush;
+	int cache_fail_at;
+	int adma_table_shadow_valid;
+	int adma_buffer_shadow_valid;
 	uint32_t init_calls;
 	uint32_t read_calls;
 	int fail_read_at;

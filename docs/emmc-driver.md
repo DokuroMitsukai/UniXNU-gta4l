@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 471 scenarios with 176 adapter mutations, 3 support mutations and 49 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 476 scenarios with 180 adapter mutations, 3 support mutations and 51 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7734,3 +7734,45 @@ physical addresses, entry count and first 32 table bytes. The host suite
 models a non-coherent master and must reject dropped or reordered
 maintenance. See the B10.12 plan section and §5.3.121 after the host
 batch.
+
+### 5.3.121 B10.12 cache maintenance and failure-only DMADIAG (2026-11-14)
+
+The DMA path now performs CPU cache maintenance around every ADMA2
+transfer. `dmaCacheStore(bytes)` stores the 4 KiB descriptor-table page,
+then the bounce buffer plus its trailing canary page (`bytes + PAGE_SIZE`),
+with `kIOMemoryIncoherentIOStore`; the buffer descriptor was widened to
+`BULK_CHUNK_BYTES + PAGE_SIZE` so both calls cover the whole allocation.
+`dmaCacheFlush(bytes)` invalidates the same buffer range with
+`kIOMemoryIncoherentIOFlush` before the CPU comparison reads what the
+controller wrote. The `dma_cache` report mask records `TABLE_STORE` (1),
+`BUFFER_STORE` (2) and `BUFFER_FLUSH` (4), so a partial or dropped
+maintenance sequence is visible even when the failure stage is `CACHE`.
+
+Every DMA failure now fills the failure-only `DMADIAG` fields through
+`dmaDiagCapture`: `dma_tp`/`dma_bp` (table/buffer physical addresses),
+`dma_ent`/`dma_db` (ADMA entry count and descriptor bytes), and from the
+transport result `dma_err`/`dma_nrm`/`dma_ps` (SDHCI Error, Normal and
+Present state), `dma_hc1`/`dma_hc2` (Host Control 1/2 at command time),
+`dma_sa0` (ADMA System Address readback) and the first four 64-bit table
+words `dma_d0`–`dma_d3`. `gta4l_emmc_read_multi_adma` captures HC1, HC2
+and SA0 after programming the transfer mode and before the command kick;
+the reads are side-effect free. The `GTA4L-EMMC P5 DMADIAG:` line is
+gated on `(dma != 0) && (dma_diag != 0)` and is 218 bytes; with its
+separator the worst-case combined report is 3,259 of 3,328 bytes.
+
+The host fake controller is now non-coherent by default: it fetches
+descriptors from a DRAM shadow and writes data into a buffer shadow, and
+only a Store moves CPU lines out while only a Flush moves data back. A
+dropped or mis-sized maintenance call therefore fails like hardware
+instead of silently passing. New rows `dma-cache-success`,
+`dma-cache-store-fail`, `dma-cache-flush-fail`, `dma-diag-report` and
+`dma-diag-format` check the byte accounting (Store covers table page plus
+buffer and canary; Flush covers only buffer and canary), the two
+maintenance failure stages, the captured register/table values and the
+line format and gate. Mutations `cache-table-store-dropped`,
+`cache-buffer-store-dropped`, `cache-canary-store-dropped`,
+`cache-flush-dropped`, `dmadiag-gate-dropped` and `dmadiag-gate-always`
+are rejected. Host suite: block 476 scenarios with 180 adapter, 3 support
+and 51 policy mutations; core 220 scenarios with 136 controls; probe 196
+scenarios with 100 controls; the evidence count test passes. Host-only;
+**not flashed**, no device access or boot.

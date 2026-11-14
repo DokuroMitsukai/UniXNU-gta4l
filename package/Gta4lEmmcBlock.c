@@ -110,6 +110,9 @@ _Static_assert(GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES <=
 _Static_assert(GTA4L_EMMC_BLOCK_DMA_LINE_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "DMA line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_DMADIAG_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "DMADIAG line must fit the report buffer");
 _Static_assert(GTA4L_EMMC_BLOCK_BULK_REPORT_WORST_BYTES <=
     GTA4L_EMMC_BLOCK_REPORT_BYTES,
     "BULK worst case must fit the report buffer");
@@ -3880,6 +3883,56 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "skip");
 		gta4l_emmc_block_put_u64(&writer, report->dma_skip);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
+
+	if ((report->dma != 0) && (report->dma_diag != 0)) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 DMADIAG: ");
+		gta4l_emmc_block_put_key(&writer, "tp");
+		gta4l_emmc_block_put_hex(&writer, report->dma_tp, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "bp");
+		gta4l_emmc_block_put_hex(&writer, report->dma_bp, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "ent");
+		gta4l_emmc_block_put_hex(&writer, report->dma_ent, 3u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "db");
+		gta4l_emmc_block_put_hex(&writer, report->dma_db, 4u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "err");
+		gta4l_emmc_block_put_hex(&writer, report->dma_err, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "nrm");
+		gta4l_emmc_block_put_hex(&writer, report->dma_nrm, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "ps");
+		gta4l_emmc_block_put_hex(&writer, report->dma_ps, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "hc1");
+		gta4l_emmc_block_put_hex(&writer, report->dma_hc1, 2u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "hc2");
+		gta4l_emmc_block_put_hex(&writer, report->dma_hc2, 4u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "sa0");
+		gta4l_emmc_block_put_hex(&writer, report->dma_sa0, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "cache");
+		gta4l_emmc_block_put_hex(&writer, report->dma_cache, 2u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "d0");
+		gta4l_emmc_block_put_hex64(&writer, report->dma_d0, 16u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "d1");
+		gta4l_emmc_block_put_hex64(&writer, report->dma_d1, 16u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "d2");
+		gta4l_emmc_block_put_hex64(&writer, report->dma_d2, 16u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "d3");
+		gta4l_emmc_block_put_hex64(&writer, report->dma_d3, 16u);
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 

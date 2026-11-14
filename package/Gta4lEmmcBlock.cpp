@@ -783,6 +783,9 @@ private:
 	bool runSmmuPostDma(void);
 	bool dmaAllocate(void);
 	void dmaRelease(void);
+	bool dmaCacheStore(uint32_t bytes);
+	bool dmaCacheFlush(uint32_t bytes);
+	void dmaDiagCapture(const struct gta4l_emmc_adma_result *result);
 	bool dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes);
 	bool dmaCompare(void);
 	void releaseBulkMedia(void);
@@ -1021,6 +1024,7 @@ private:
 	IOMemoryDescriptor *dmaBufferDescriptor = nullptr;
 	uint32_t dmaTablePhysical = 0;
 	uint32_t dmaBufferPhysical = 0;
+	uint32_t dmaEntries = 0;
 	uint32_t dmaCmpPass = 0;
 	uint32_t dmaCmpTotal = 0;
 	uint32_t dmaChunks = 0;
@@ -9437,8 +9441,10 @@ Gta4lEmmcBlock::dmaAllocate()
 	}
 	dmaTableDescriptor = IOMemoryDescriptor::withAddress(dmaTable,
 	    PAGE_SIZE, kIODirectionOut);
+	/* Cover the canary page too: the cache Store/Flush must include the
+	 * whole allocation, not only the transferred bytes. */
 	dmaBufferDescriptor = IOMemoryDescriptor::withAddress(dmaBuffer,
-	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES, kIODirectionIn);
+	    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES + PAGE_SIZE, kIODirectionIn);
 	if ((dmaTableDescriptor == nullptr) ||
 	    (dmaBufferDescriptor == nullptr)) {
 		dmaRelease();
@@ -9455,7 +9461,7 @@ Gta4lEmmcBlock::dmaAllocate()
 	physical = dmaBufferDescriptor->getPhysicalSegment(0, &segment,
 	    kIOMemoryMapperNone);
 	if ((physical == 0) ||
-	    (segment < GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES) ||
+	    (segment < GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES + PAGE_SIZE) ||
 	    ((uint64_t)physical + GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES +
 	    PAGE_SIZE > 0x100000000ULL)) {
 		dmaRelease();
@@ -9493,6 +9499,86 @@ Gta4lEmmcBlock::dmaRelease()
 }
 
 bool
+Gta4lEmmcBlock::dmaCacheStore(uint32_t bytes)
+{
+	IOReturn rc;
+
+	if ((dmaTableDescriptor == nullptr) ||
+	    (dmaBufferDescriptor == nullptr) || (bytes == 0u) ||
+	    (bytes > GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
+		return false;
+	}
+	/* Clean the descriptor table so the controller fetches the built
+	 * entries, then clean the data buffer and its canary page. Store
+	 * pushes CPU lines to DRAM; the controller is not dma-coherent. */
+	rc = dmaTableDescriptor->performOperation(
+	    kIOMemoryIncoherentIOStore, 0, PAGE_SIZE);
+	if (rc != kIOReturnSuccess) {
+		return false;
+	}
+	report.dma_cache |= GTA4L_EMMC_BLOCK_DMA_CACHE_TABLE_STORE;
+	rc = dmaBufferDescriptor->performOperation(
+	    kIOMemoryIncoherentIOStore, 0,
+	    (IOByteCount)bytes + PAGE_SIZE);
+	if (rc != kIOReturnSuccess) {
+		return false;
+	}
+	report.dma_cache |= GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_STORE;
+	return true;
+}
+
+bool
+Gta4lEmmcBlock::dmaCacheFlush(uint32_t bytes)
+{
+	IOReturn rc;
+
+	if ((dmaBufferDescriptor == nullptr) || (bytes == 0u) ||
+	    (bytes > GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
+		return false;
+	}
+	/* Flush invalidates the CPU's clean lines for the data and canary
+	 * pages so the comparison reads what the controller wrote. The
+	 * table is not flushed: the failure report must keep the CPU-side
+	 * image even if the Store was dropped. */
+	rc = dmaBufferDescriptor->performOperation(
+	    kIOMemoryIncoherentIOFlush, 0, (IOByteCount)bytes + PAGE_SIZE);
+	if (rc != kIOReturnSuccess) {
+		return false;
+	}
+	report.dma_cache |= GTA4L_EMMC_BLOCK_DMA_CACHE_BUFFER_FLUSH;
+	return true;
+}
+
+void
+Gta4lEmmcBlock::dmaDiagCapture(
+    const struct gta4l_emmc_adma_result *result)
+{
+	uint64_t words[4];
+
+	report.dma_diag = 1u;
+	report.dma_tp = dmaTablePhysical;
+	report.dma_bp = dmaBufferPhysical;
+	report.dma_ent = dmaEntries;
+	report.dma_db = dmaEntries * 8u;
+	if (result != nullptr) {
+		report.dma_err = result->error;
+		report.dma_nrm = result->normal;
+		report.dma_ps = result->present;
+		report.dma_hc1 = result->command_host_control;
+		report.dma_hc2 = result->command_host_control2;
+		report.dma_sa0 = result->command_adma_address;
+	}
+	memset(words, 0, sizeof(words));
+	if (dmaTable != nullptr) {
+		memcpy(words, dmaTable, sizeof(words));
+	}
+	report.dma_d0 = words[0];
+	report.dma_d1 = words[1];
+	report.dma_d2 = words[2];
+	report.dma_d3 = words[3];
+}
+
+bool
 Gta4lEmmcBlock::dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes)
 {
 	struct gta4l_emmc_adma_result result;
@@ -9507,6 +9593,8 @@ Gta4lEmmcBlock::dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes)
 	    (bytes == 0u) || (bytes > GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES)) {
 		return false;
 	}
+	report.dma_diag = 0u;
+	report.dma_cache = 0u;
 	entries = gta4l_emmc_block_adma_build(dmaTable,
 	    GTA4L_EMMC_BLOCK_DMA_TABLE_BYTES, dmaBufferPhysical, bytes,
 	    GTA4L_EMMC_BLOCK_DMA_MAX_ENTRY_BYTES);
@@ -9514,6 +9602,7 @@ Gta4lEmmcBlock::dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes)
 		report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_TABLE;
 		return false;
 	}
+	dmaEntries = entries;
 #ifdef GTA4L_EMMC_BLOCK_HOST_TEST
 	gta4l_test_adma_set_buffer(dmaBuffer, bytes);
 #endif
@@ -9526,10 +9615,28 @@ Gta4lEmmcBlock::dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes)
 		report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_TABLE;
 		return false;
 	}
+	if (!dmaCacheStore(bytes)) {
+		dmaFails++;
+		report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_CACHE;
+		dmaDiagCapture(nullptr);
+		(void)dmaTableDescriptor->complete(kIODirectionOut);
+		(void)dmaBufferDescriptor->complete(kIODirectionIn);
+		return false;
+	}
 	start = gta4l_emmc_platform_counter();
 	rc = gta4l_emmc_read_multi_adma(&host, lba, blocks,
 	    dmaTablePhysical, entries * 8u, &result);
 	elapsed = gta4l_emmc_platform_counter() - start;
+	if ((rc == GTA4L_EMMC_OK) &&
+	    (result.completed_blocks == blocks) && !dmaCacheFlush(bytes)) {
+		dmaFails++;
+		report.dma_stage = GTA4L_EMMC_BLOCK_DMA_STAGE_CACHE;
+		dmaDiagCapture(&result);
+		(void)dmaTableDescriptor->complete(kIODirectionOut);
+		(void)dmaBufferDescriptor->complete(kIODirectionIn);
+		dmaDat += elapsed;
+		return false;
+	}
 	(void)dmaTableDescriptor->complete(kIODirectionOut);
 	(void)dmaBufferDescriptor->complete(kIODirectionIn);
 	dmaDat += elapsed;
@@ -9542,6 +9649,7 @@ Gta4lEmmcBlock::dmaRead(uint32_t lba, uint32_t blocks, uint32_t bytes)
 		report.dma_ast = result.adma_error;
 		report.dma_aaddr = result.adma_address;
 		report.dma_desc = result.fail_desc;
+		dmaDiagCapture(&result);
 		return false;
 	}
 	return true;

@@ -5,6 +5,9 @@
 #include "Gta4lEmmcBlockTestSupport.h"
 
 gta4l_test_state gta4l_test;
+static uint8_t gta4l_test_table_shadow[GTA4L_EMMC_BLOCK_DMA_TABLE_BYTES];
+static uint8_t gta4l_test_buffer_shadow[
+    GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES + PAGE_SIZE];
 gta4l_test_media_read_fn gta4l_test_media_read_hook;
 gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;
 gta4l_test_breakup_sample_fn gta4l_test_breakup_hook;
@@ -38,6 +41,13 @@ gta4l_test_reset(void)
 	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT;
 	gta4l_test.adma_fail_at = -1;
 	gta4l_test.adma_corrupt_at = -1;
+	gta4l_test.adma_noncoherent = 1;
+	gta4l_test.cache_fail_at = -1;
+	gta4l_test.adma_table_shadow_valid = 0;
+	gta4l_test.adma_buffer_shadow_valid = 0;
+	memset(gta4l_test_table_shadow, 0x5A, sizeof(gta4l_test_table_shadow));
+	memset(gta4l_test_buffer_shadow, 0x5A,
+	    sizeof(gta4l_test_buffer_shadow));
 	gta4l_test.reporter_start_result = 0;
 	gta4l_test.watchdog_start_result = 0;
 	gta4l_test.thread_start_fail_at = -1;
@@ -789,6 +799,40 @@ gta4l_test_adma_set_buffer(void *buffer, uint32_t bytes)
 	gta4l_test.adma_buffer_bytes = bytes;
 }
 
+static int
+gta4l_test_adma_walk(uint32_t desc_bytes, uint8_t *buffer, uint32_t bytes)
+{
+	uint32_t off = 0;
+	uint32_t total = 0;
+
+	while (off + 8u <= desc_bytes) {
+		const uint8_t *entry = gta4l_test_table_shadow + off;
+		uint32_t attr = (uint32_t)entry[0] | ((uint32_t)entry[1] << 8);
+		uint32_t length = (uint32_t)entry[2] |
+		    ((uint32_t)entry[3] << 8);
+		uint32_t address = (uint32_t)entry[4] |
+		    ((uint32_t)entry[5] << 8) |
+		    ((uint32_t)entry[6] << 16) |
+		    ((uint32_t)entry[7] << 24);
+
+		if ((attr & GTA4L_EMMC_BLOCK_ADMA_DESC_VALID) == 0u) {
+			return 0;
+		}
+		if ((length == 0u) || (total + length > bytes)) {
+			return 0;
+		}
+		if (address != (uint32_t)(uintptr_t)(buffer + total)) {
+			return 0;
+		}
+		total += length;
+		if ((attr & GTA4L_EMMC_BLOCK_ADMA_DESC_END) != 0u) {
+			break;
+		}
+		off += 8u;
+	}
+	return (total == bytes) ? 1 : 0;
+}
+
 int
 gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
     uint32_t count, uint32_t desc_address, uint32_t desc_bytes,
@@ -797,10 +841,9 @@ gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
 	uint32_t index;
 	uint32_t completed;
 	uint8_t *buffer = gta4l_test.adma_buffer;
+	uint8_t *target = buffer;
 	uint32_t bytes = count * GTA4L_EMMC_BLOCK_BYTES;
 
-	(void)desc_address;
-	(void)desc_bytes;
 	if ((host == 0) || (result == 0) || (buffer == 0) ||
 	    (gta4l_test.adma_buffer_bytes < bytes)) {
 		return GTA4L_EMMC_ERR_ARG;
@@ -817,9 +860,35 @@ gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
 		result->adma_error = 3u;
 		result->adma_address = desc_address + 8u;
 		result->fail_desc = 1u;
+		result->error = 0x0008u;
+		result->normal = 0x0001u;
+		result->present = 0x01f00000u;
+		result->command_host_control = 0x07u;
+		result->command_host_control2 = 0x0008u;
+		result->command_adma_address = desc_address;
 		result->stop_attempted = 1;
 		gta4l_test.adma_calls++;
 		return result->transport_result;
+	}
+	if (gta4l_test.adma_noncoherent != 0) {
+		if ((gta4l_test.adma_table_shadow_valid == 0) ||
+		    (gta4l_test.adma_buffer_shadow_valid == 0) ||
+		    !gta4l_test_adma_walk(desc_bytes, buffer, bytes)) {
+			result->transport_result = GTA4L_EMMC_ERR_ADMA;
+			result->adma_error = 1u;
+			result->adma_address = desc_address + 0x18u;
+			result->fail_desc = 0xffffffffu;
+			result->error = 0x0008u;
+			result->normal = 0x0001u;
+			result->present = 0x01f00000u;
+			result->command_host_control = 0x07u;
+			result->command_host_control2 = 0x0008u;
+			result->command_adma_address = desc_address;
+			result->stop_attempted = 1;
+			gta4l_test.adma_calls++;
+			return result->transport_result;
+		}
+		target = gta4l_test_buffer_shadow;
 	}
 	for (index = 0; index < count; index++) {
 		if ((gta4l_test.adma_partial_blocks > 0) &&
@@ -828,14 +897,14 @@ gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host, uint64_t start_lba,
 			break;
 		}
 		gta4l_test_fill_sector(start_lba + index,
-		    buffer + (index * GTA4L_EMMC_BLOCK_BYTES));
+		    target + (index * GTA4L_EMMC_BLOCK_BYTES));
 		if ((gta4l_test.adma_corrupt_at >= 0) &&
 		    ((uint32_t)gta4l_test.adma_corrupt_at == index)) {
-			buffer[index * GTA4L_EMMC_BLOCK_BYTES] ^= 0x5Au;
+			target[index * GTA4L_EMMC_BLOCK_BYTES] ^= 0x5Au;
 		}
 	}
 	if (gta4l_test.adma_canary_byte != 0) {
-		buffer[bytes] = 0x11u;
+		target[bytes] = 0x11u;
 	}
 	if (gta4l_test.adma_status_override != 0) {
 		result->transport_result =
@@ -1265,6 +1334,62 @@ IOReturn
 IOMemoryDescriptor::complete(int direction)
 {
 	(void)direction;
+	return kIOReturnSuccess;
+}
+
+IOReturn
+IOMemoryDescriptor::performOperation(IOOptionBits options, IOByteCount offset,
+    IOByteCount length)
+{
+	uint32_t call;
+
+	if ((offset > length_) || (length > length_ - offset)) {
+		return kIOReturnBadArgument;
+	}
+	call = gta4l_test.cache_calls++;
+	if ((gta4l_test.cache_fail_at >= 0) &&
+	    ((uint32_t)gta4l_test.cache_fail_at == call)) {
+		return kIOReturnIOError;
+	}
+	if (address_ == nullptr) {
+		return kIOReturnBadArgument;
+	}
+	if (options == kIOMemoryIncoherentIOStore) {
+		gta4l_test.cache_store_calls++;
+		gta4l_test.cache_store_bytes += (uint32_t)length;
+		if (direction_ == kIODirectionOut) {
+			if (length > sizeof(gta4l_test_table_shadow)) {
+				return kIOReturnBadArgument;
+			}
+			memcpy(gta4l_test_table_shadow,
+			    static_cast<uint8_t *>(address_) + offset,
+			    (size_t)length);
+			gta4l_test.adma_table_shadow_valid = 1;
+			gta4l_test.cache_table_store++;
+		} else {
+			if (length > sizeof(gta4l_test_buffer_shadow)) {
+				return kIOReturnBadArgument;
+			}
+			memcpy(gta4l_test_buffer_shadow,
+			    static_cast<uint8_t *>(address_) + offset,
+			    (size_t)length);
+			gta4l_test.adma_buffer_shadow_valid = 1;
+			gta4l_test.cache_buffer_store++;
+		}
+	} else if (options == kIOMemoryIncoherentIOFlush) {
+		gta4l_test.cache_flush_calls++;
+		gta4l_test.cache_flush_bytes += (uint32_t)length;
+		if (direction_ == kIODirectionIn) {
+			if (length > sizeof(gta4l_test_buffer_shadow)) {
+				return kIOReturnBadArgument;
+			}
+			memcpy(static_cast<uint8_t *>(address_) + offset,
+			    gta4l_test_buffer_shadow, (size_t)length);
+			gta4l_test.cache_buffer_flush++;
+		}
+	} else {
+		return kIOReturnUnsupported;
+	}
 	return kIOReturnSuccess;
 }
 

@@ -802,6 +802,12 @@ struct gta4l_emmc_adma_result {
 	uint32_t error;
 	uint32_t normal;
 	uint32_t present;
+	/* Command-time readbacks for the B10.12 DMADIAG line. The Host
+	 * Control values show the programmed DMA select and any V4/64-bit
+	 * state; the ADMA address shows whether the table address stuck. */
+	uint32_t command_host_control;
+	uint32_t command_host_control2;
+	uint32_t command_adma_address;
 };
 
 int gta4l_emmc_read_multi_adma(struct gta4l_emmc_host *host,
