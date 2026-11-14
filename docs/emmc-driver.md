@@ -7935,11 +7935,16 @@ fixpoint. The requalified archive `8b47a19f…` has members `b74b5627…`
 Payload `7f8aa668…` (83,886,080 bytes; `emmc-block-3-bulk-dma`,
 `rd=md0`, gate 105/105) and BOOT image `a4809df8…` (85,688,320 bytes;
 gate 18/18, only the ramdisk differs; kernel section `a4b054e0…`,
-firmware `1e8a3132…` and DTB `dc4c719d…` unchanged) are built but
-**not flashed**. The first block-stack DMA boot needs an owner go naming
-`a4809df8…`; card writes remain disabled, and `fcb1603b…`,
-`ddbe2eb7…`, `0d77d602…` and `a1e26c34…` must not be booted again. S2
-acceptance remains open until that image-bound DMA-through-stack boot
-passes the content, window, counter, budget and verified-revert
-criteria. See `candidate-verification.txt` in the B10.13 evidence
-directory.
+firmware `1e8a3132…` and DTB `dc4c719d…` unchanged) are built, and BOOT
+`a4809df8…` was flashed once to p69 on 2026-11-14 after the owner go.
+Preflight showed p69 full `3be5ca33…`, tail `a28b4ea2…` and the protected
+partitions unchanged; fresh xz backups were verified, and the
+baseline-gated single write produced p69 full `73278c8f…`, image region
+`a4809df8…`, tail `a28b4ea2…` and unchanged protected partitions. One
+owner-controlled cold boot is pending; no host-issued reboot. Card
+writes remain disabled, and `fcb1603b…`, `ddbe2eb7…`, `0d77d602…` and
+`a1e26c34…` must not be booted again. S2 acceptance remains open until
+that image-bound DMA-through-stack boot passes the content, window,
+counter, budget and verified-revert criteria. See
+`flash-result-b10.13.txt` and `candidate-verification.txt` in the B10.13
+evidence directory.
