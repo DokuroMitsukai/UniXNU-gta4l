@@ -2481,7 +2481,7 @@ def check_adapter_source():
     assert speed_baseline_at < speed_hs_at < speed_w8_at, \
         'speed sequence must baseline, enter HS and switch width in order'
     speed_start_at = adapter.index(
-        'if ((speedMode || bulkMode) && !slowMode) {',
+        'if ((speedMode || bulkMode || windowsMode) && !slowMode) {',
         adapter.index('Gta4lEmmcBlock::start('))
     speed_start = adapter[speed_start_at:adapter.index(
         '\n\tif (widthholdMode || widthpubMode) {', speed_start_at)]
@@ -2606,6 +2606,12 @@ def check_adapter_source():
         policy_header, 'the WINDOWS report bound must stay exact'
     assert 'gta4l_emmc_block_windows_parse' in policy, \
         'the SHNGROOT manifest parser must live in the shared policy'
+    assert 'gta4l_emmc_block_windows_select' in policy, \
+        'the windows token selector must live in the shared policy'
+    assert 'scenario_windows_read' in ADAPTER_HARNESS.read_text() and \
+        'scenario_windows_refused_conflict' in \
+        ADAPTER_HARNESS.read_text(), \
+        'the windows read and refusal scenarios must run'
     assert 'scenario_windows_manifest' in ADAPTER_HARNESS.read_text() and \
         'scenario_windows_format' in ADAPTER_HARNESS.read_text() and \
         'screen_windows' in ADAPTER_HARNESS.read_text(), \
@@ -3155,8 +3161,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 495, f'expected 495 adapter PASS lines, got {passes}'
-        print('PASS adapter: 495 scenarios against the host IOKit seam')
+        assert passes == 501, f'expected 501 adapter PASS lines, got {passes}'
+        print('PASS adapter: 501 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

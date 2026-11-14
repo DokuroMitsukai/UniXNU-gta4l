@@ -15384,6 +15384,150 @@ scenario_windows_format(void)
 	return 0;
 }
 
+static IOMedia *g_windows_userdata;
+static uint8_t g_windows_manifest[GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES];
+
+static IOReturn
+windows_read_hook(IOMedia *media, UInt64 byteStart,
+    IOMemoryDescriptor *buffer, UInt64 *actual)
+{
+	uint32_t length = (uint32_t)buffer->getLength();
+	uint8_t *data = (uint8_t *)buffer->address();
+	uint32_t offset;
+
+	if (media == g_windows_userdata) {
+		if ((byteStart == 0u) &&
+		    (length == sizeof(g_windows_manifest))) {
+			memcpy(data, g_windows_manifest, length);
+		} else {
+			memset(data, 0x5a, length);
+		}
+		if (actual != 0) {
+			*actual = length;
+		}
+		return kIOReturnSuccess;
+	}
+	for (offset = 0; offset + GTA4L_EMMC_BLOCK_BYTES <= length;
+	    offset += GTA4L_EMMC_BLOCK_BYTES) {
+		gta4l_test_fill_sector((byteStart + offset) /
+		    GTA4L_EMMC_BLOCK_BYTES, data + offset);
+	}
+	if (actual != 0) {
+		*actual = length;
+	}
+	return kIOReturnSuccess;
+}
+
+static void
+windows_media_setup(void)
+{
+	windows_manifest_build(g_windows_manifest, 2u, 8ull << 20, "OS",
+	    "SystemOS", 1u << 20, 3u << 20);
+	windows_put_u64(g_windows_manifest +
+	    GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE + 40u, 2ull << 20);
+	windows_put_u64(g_windows_manifest +
+	    GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE +
+	    GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES + 40u, 2ull << 20);
+	windows_manifest_seal(g_windows_manifest);
+	g_windows_userdata = add_media(false,
+	    GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_USERDATA_SIZE_BYTES, false,
+	    "Microsoft Basic Data", true);
+	gta4l_test_media_read_hook = windows_read_hook;
+}
+
+static int
+scenario_windows_read(void)
+{
+	static uint8_t pattern[GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES];
+	uint8_t digest[32];
+	char digestText[33];
+	char expected[512];
+	uint32_t index;
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	CHECK(g_self->windowsMode);
+	widthhold_setup(true, true);
+	windows_media_setup();
+	for (index = 0; index < sizeof(pattern); index++) {
+		pattern[index] = 0x5a;
+	}
+	gta4l_emmc_block_sha256(pattern, sizeof(pattern), digest);
+	partread_digest_hex(digest, digestText);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows == 1u);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_reason == 0u);
+	CHECK(g_self->report.windows_count == 2u);
+	CHECK(g_self->report.windows_image_bytes == (8ull << 20));
+	CHECK(g_self->report.windows_apfs == 0u);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WINDOWS: valid=1 reason=0 count=2 "
+	    "image=8388608 mdig=") != 0);
+	snprintf(expected, sizeof(expected),
+	    " w0=OS off=1048576 size=2097152 hd0=%s hd1=%s "
+	    "w1=SystemOS off=3145728 size=2097152 hd0=%s hd1=%s",
+	    digestText, digestText, digestText, digestText);
+	CHECK(strstr(gta4l_test.panic, expected) != 0);
+	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 SPEED: hs=1") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_refused_orphan(void)
+{
+	begin("gta4l-emmc-windows=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-windows requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_refused_block(void)
+{
+	begin("gta4l-emmc-block=1 gta4l-emmc-windows=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-windows requires gta4l-emmc-block=3") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_refused_value(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-windows=0");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-windows value must be 1") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_refused_duplicate(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-windows=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "duplicate gta4l-emmc-windows token") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_refused_conflict(void)
+{
+	begin("gta4l-emmc-block=3 gta4l-emmc-bulk=1 "
+	    "gta4l-emmc-windows=1");
+	CHECK(!g_started);
+	CHECK(strstr(gta4l_test.log,
+	    "gta4l-emmc-windows conflicts with another diagnostic "
+	    "selector") != 0);
+	return 0;
+}
+
 static int
 run(const char *name, int (*scenario)(void))
 {
@@ -15904,6 +16048,12 @@ static const struct scenario_entry scenarios[] = {
 	{ "screen-capacity", scenario_screen_capacity },
 	{ "windows-manifest", scenario_windows_manifest },
 	{ "windows-format", scenario_windows_format },
+	{ "windows-read", scenario_windows_read },
+	{ "windows-refused-orphan", scenario_windows_refused_orphan },
+	{ "windows-refused-block", scenario_windows_refused_block },
+	{ "windows-refused-value", scenario_windows_refused_value },
+	{ "windows-refused-duplicate", scenario_windows_refused_duplicate },
+	{ "windows-refused-conflict", scenario_windows_refused_conflict },
 	{ "policy", scenario_policy },
 };
 

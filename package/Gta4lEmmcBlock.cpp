@@ -786,6 +786,9 @@ private:
 	void speedFatal(uint32_t stage, int32_t status);
 	void runSpeed(void);
 	bool runBulk(void);
+	bool runWindows(void);
+	bool windowsRead(IOMedia *media, uint64_t offset, uint32_t bytes,
+	    uint8_t *buffer);
 	bool runSmmuGate(void);
 	bool runSmmuPostDma(void);
 	bool dmaAllocate(void);
@@ -940,6 +943,7 @@ private:
 	bool dmaMode = false;
 	bool liveMode = false;
 	bool slowMode = false;
+	bool windowsMode = false;
 	uint32_t liveErrors = 0;
 	uint32_t liveRecoveries = 0;
 	uint32_t liveNotified = 0;
@@ -1018,6 +1022,10 @@ private:
 	uint64_t widthholdReadStart = 0;
 	Gta4lEmmcBulkClient *bulkClient = nullptr;
 	uint8_t *bulkReference = nullptr;
+	IOMedia *windowsUserdata = nullptr;
+	bool windowsUserdataOpen = false;
+	uint8_t *windowsManifest = nullptr;
+	uint8_t *windowsHeader = nullptr;
 	uint64_t bulkReadStart = 0;
 	bool bulkActive = false;
 	bool bulkInFlight = false;
@@ -1441,6 +1449,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t dmaTokens;
 	uint32_t liveTokens;
 	uint32_t slowTokens;
+	uint32_t windowsTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
@@ -1457,6 +1466,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int dmaValue = 0;
 	int liveValue = 0;
 	int slowValue = 0;
+	int windowsValue = 0;
 	int parsed;
 	int partobsParsed;
 	int partcmpParsed;
@@ -1473,6 +1483,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int dmaParsed;
 	int liveParsed;
 	int slowParsed;
+	int windowsParsed;
 	int mode;
 	int partobs;
 	int partcmp;
@@ -1489,6 +1500,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int dma;
 	int live;
 	int slow;
+	int windows;
 	int baselineResult;
 
 	arguments = PE_boot_args();
@@ -1526,6 +1538,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_LIVE_ARG);
 	slowTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_SLOW_ARG);
+	windowsTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_WINDOWS_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -1611,6 +1625,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	if ((slowParsed == 0) && (slowTokens != 0)) {
 		slowValue = -1;
 	}
+	windowsParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_WINDOWS_ARG,
+	    &windowsValue, sizeof(windowsValue));
+	if ((windowsParsed == 0) && (windowsTokens != 0)) {
+		windowsValue = -1;
+	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
 	if (mode == GTA4L_EMMC_BLOCK_SELECT_INERT) {
@@ -1623,6 +1642,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 			IOLog("GTA4L-EMMC P5 REFUSED: "
 			    "gta4l-emmc-partcmp requires "
 			    "gta4l-emmc-block=1 or 3\n");
+		}
+		if (windowsTokens != 0) {
+			IOLog("GTA4L-EMMC P5 REFUSED: "
+			    "gta4l-emmc-windows requires "
+			    "gta4l-emmc-block=3\n");
 		}
 		if (partreadTokens != 0) {
 			IOLog("GTA4L-EMMC P5 REFUSED: "
@@ -2375,6 +2399,35 @@ Gta4lEmmcBlock::start(IOService *provider)
 		}
 		slowMode = (slow == GTA4L_EMMC_BLOCK_SLOW_ON);
 	}
+	windows = gta4l_emmc_block_windows_select(
+	    windowsTokens != 0, windowsValue, windowsTokens > 1u,
+	    1, value,
+	    (partobsTokens != 0u) || (partcmpTokens != 0u) ||
+	    (partreadTokens != 0u) || (deblockTokens != 0u) ||
+	    (breakupTokens != 0u) || (sweepTokens != 0u) ||
+	    (consumeTokens != 0u) || (widthTokens != 0u) ||
+	    (widthholdTokens != 0u) || (widthpubTokens != 0u) ||
+	    (speedTokens != 0u) || (bulkTokens != 0u) ||
+	    (dmaTokens != 0u) || (liveTokens != 0u) ||
+	    (slowTokens != 0u) || (conflictTokens != 0u));
+	if (windows == GTA4L_EMMC_BLOCK_WINDOWS_REFUSED) {
+		if (windowsTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-windows token\n");
+		} else if (value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-windows "
+			    "requires gta4l-emmc-block=3\n");
+		} else if (windowsValue !=
+		    (int)GTA4L_EMMC_BLOCK_WINDOWS_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-windows "
+			    "value must be 1\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-windows "
+			    "conflicts with another diagnostic selector\n");
+		}
+		return false;
+	}
+	windowsMode = (windows == GTA4L_EMMC_BLOCK_WINDOWS_ON);
 	if (widthMode) {
 		/* The reference and observed copies never alias: the reference
 		 * is filled only by the pre-switch 1-bit read, the observed
@@ -2538,7 +2591,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 
-	if ((speedMode || bulkMode) && !slowMode) {
+	if ((speedMode || bulkMode || windowsMode) && !slowMode) {
 		int speedRc;
 #ifdef GTA4L_EMMC_BLOCK_HOST_TEST
 		if (gta4l_test_speed_hook != nullptr) {
@@ -2898,7 +2951,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	}
 	IOLockUnlock(gate);
 	if (baselineResult != 0) {
-		if ((speedMode || bulkMode) && !slowMode) {
+		if ((speedMode || bulkMode || windowsMode) && !slowMode) {
 			/* The inherited LBA-1 baseline runs at the final
 			 * S1 mode. A failure is BASE: fail closed after the
 			 * combined revert under its own budget. */
@@ -2946,7 +2999,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 
-	if (speedMode || bulkMode) {
+	if (speedMode || bulkMode || windowsMode) {
 		/* The LBA-1 baseline is the last operation under the start
 		 * budget. Clear it before any publication work. */
 		gta4l_emmc_deadline_clear(&host);
@@ -2969,7 +3022,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 			panicWithReport();
 			return false;
 		}
-		if (speedMode || bulkMode) {
+		if (speedMode || bulkMode || windowsMode) {
 			speedLatchFailure(
 			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
 			(void)speedRecover();
@@ -3000,7 +3053,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 			panicWithReport();
 			return false;
 		}
-		if (speedMode || bulkMode) {
+		if (speedMode || bulkMode || windowsMode) {
 			speedLatchFailure(
 			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
 			(void)speedRecover();
@@ -3031,7 +3084,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 			panicWithReport();
 			return false;
 		}
-		if (speedMode || bulkMode) {
+		if (speedMode || bulkMode || windowsMode) {
 			speedLatchFailure(
 			    GTA4L_EMMC_BLOCK_SPEED_STAGE_ADVERT, 0);
 			(void)speedRecover();
@@ -3056,7 +3109,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 
 	retain();
 	reportCancel = false;
-	if (speedMode || bulkMode) {
+	if (speedMode || bulkMode || windowsMode) {
 		/* Same ordering as widthhold: the watchdog starts before the
 		 * reporter so a thread-start failure still leaves the
 		 * terminal report path able to take the combined revert. */
@@ -3467,7 +3520,7 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	completion->action(completion->target, completion->parameter, status,
 	    completed);
 	if (wentOffline) {
-		if (widthpubMode || speedMode || bulkMode) {
+		if (widthpubMode || speedMode || bulkMode || windowsMode) {
 			/* The report thread owns the terminal decommission.
 			 * Share its one-shot latch so a failed case read does
 			 * not notify clients twice. */
@@ -4200,7 +4253,7 @@ Gta4lEmmcBlock::snapshotReport(struct gta4l_emmc_block_report *target,
 		target->bulkio_rcg_m = report.bulkio_rcg_m;
 		target->bulkio_rcg_n = report.bulkio_rcg_n;
 		target->bulkio_rcg_d = report.bulkio_rcg_d;
-		if (speedMode || bulkMode) {
+		if (speedMode || bulkMode || windowsMode) {
 			target->clock_hz = speedClockHz;
 			target->timing = (speedClockHz ==
 			    GTA4L_EMMC_BLOCK_SPEED_CLOCK_HZ) ? 1u : 0u;
@@ -10249,6 +10302,246 @@ Gta4lEmmcBlock::runSmmuPostDma()
 	    (gfsr == 0u);
 }
 
+static uint32_t
+gta4l_windows_get_u32(const uint8_t *value)
+{
+	return (uint32_t)value[0] |
+	    ((uint32_t)value[1] << 8) |
+	    ((uint32_t)value[2] << 16) |
+	    ((uint32_t)value[3] << 24);
+}
+
+static uint64_t
+gta4l_windows_get_u64(const uint8_t *value)
+{
+	return (uint64_t)gta4l_windows_get_u32(value) |
+	    ((uint64_t)gta4l_windows_get_u32(value + 4u) << 32);
+}
+
+/* One Apple_APFS partition type GUID, mixed-endian as stored in the GPT. */
+static const uint8_t gta4l_windows_apfs_type[16] = {
+	0xef, 0x57, 0x34, 0x7c, 0x00, 0x00, 0xaa, 0x11,
+	0xaa, 0x11, 0x00, 0x30, 0x65, 0x43, 0xec, 0xac
+};
+
+/* Match the window's GPT to the first Apple_APFS partition and read the
+ * APFS container UUID from its superblock. The first 1 MiB buffer always
+ * covers the GPT and the container start for the board's images. */
+static uint32_t
+gta4l_windows_apfs(const uint8_t *header, uint32_t length,
+    uint8_t uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES])
+{
+	uint64_t entry_lba;
+	uint64_t first;
+	uint64_t offset;
+	uint32_t count;
+	uint32_t entry_size;
+	uint32_t index;
+	const uint8_t *entries;
+	const uint8_t *container;
+
+	if ((header == 0) || (uuid == 0) || (length < 1024u) ||
+	    (memcmp(header + 512u, "EFI PART", 8u) != 0)) {
+		return 0u;
+	}
+	entry_lba = gta4l_windows_get_u64(header + 512u + 72u);
+	count = gta4l_windows_get_u32(header + 512u + 80u);
+	entry_size = gta4l_windows_get_u32(header + 512u + 84u);
+	if ((entry_size < 128u) || (entry_size > 4096u) || (count == 0u) ||
+	    (count > 128u) || (entry_lba > (length / 512u))) {
+		return 0u;
+	}
+	if ((entry_lba * 512u) + (uint64_t)count * entry_size > length) {
+		return 0u;
+	}
+	entries = header + entry_lba * 512u;
+	for (index = 0; index < count; index++) {
+		const uint8_t *entry = entries + index * entry_size;
+
+		if (memcmp(entry, gta4l_windows_apfs_type, 16u) != 0) {
+			continue;
+		}
+		first = gta4l_windows_get_u64(entry + 32u);
+		offset = first * 512u;
+		if ((offset + 0x58u) > length) {
+			return 0u;
+		}
+		container = header + offset;
+		if (memcmp(container + 32u, "NXSB", 4u) != 0) {
+			return 0u;
+		}
+		memcpy(uuid, container + 0x48u,
+		    GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES);
+		return 1u;
+	}
+	return 0u;
+}
+
+bool
+Gta4lEmmcBlock::windowsRead(IOMedia *media, uint64_t offset,
+    uint32_t bytes, uint8_t *buffer)
+{
+	IOMemoryDescriptor *descriptor;
+	UInt64 actual = 0;
+	IOReturn status;
+
+	if ((media == nullptr) || (buffer == nullptr) || (bytes == 0u)) {
+		return false;
+	}
+	descriptor = IOMemoryDescriptor::withAddress(buffer, bytes,
+	    kIODirectionIn);
+	if (descriptor == nullptr) {
+		return false;
+	}
+	status = media->read(this, offset, descriptor, nullptr, &actual);
+	descriptor->release();
+	return (status == kIOReturnSuccess) && (actual == bytes);
+}
+
+bool
+Gta4lEmmcBlock::runWindows()
+{
+	struct gta4l_emmc_block_manifest parsed;
+	IOMedia *media;
+	uint32_t count = 0;
+	uint32_t index;
+	uint32_t apfs = 0;
+	uint8_t container[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
+	uint8_t digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+	uint64_t offset;
+	uint64_t length;
+	int32_t reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE;
+
+	bzero(&parsed, sizeof(parsed));
+	bzero(container, sizeof(container));
+	IOLockLock(reportLock);
+	report.windows = 1u;
+	report.windows_valid = 0u;
+	report.windows_reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE;
+	report.windows_count = 0u;
+	report.windows_image_bytes = 0u;
+	bzero(report.windows_manifest_digest,
+	    sizeof(report.windows_manifest_digest));
+	bzero(report.windows_entry, sizeof(report.windows_entry));
+	bzero(report.windows_header_digest,
+	    sizeof(report.windows_header_digest));
+	report.windows_apfs = 0u;
+	bzero(report.windows_container_uuid,
+	    sizeof(report.windows_container_uuid));
+	bzero(report.windows_volume_uuid,
+	    sizeof(report.windows_volume_uuid));
+	IOLockUnlock(reportLock);
+
+	media = findPartitionMedia(GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_USERDATA_SIZE_BYTES, &count);
+	windowsUserdata = media;
+	if ((media == nullptr) || (count != 1u)) {
+		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+		goto done;
+	}
+	if (!media->open(this, 0, kIOStorageAccessReader)) {
+		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+		goto done;
+	}
+	windowsUserdataOpen = true;
+	windowsManifest = (uint8_t *)IOMallocAligned(
+	    GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES, PAGE_SIZE);
+	if (windowsManifest == nullptr) {
+		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
+		goto done;
+	}
+	if (!windowsRead(media, 0, GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES,
+	    windowsManifest)) {
+		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
+		goto done;
+	}
+	(void)gta4l_emmc_block_windows_parse(windowsManifest,
+	    GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES,
+	    GTA4L_EMMC_BLOCK_USERDATA_SIZE_BYTES, &parsed);
+	IOLockLock(reportLock);
+	report.windows_valid = parsed.valid;
+	report.windows_reason = parsed.reason;
+	report.windows_count = parsed.count;
+	report.windows_image_bytes = parsed.image_bytes;
+	memcpy(report.windows_manifest_digest, parsed.manifest_sha256,
+	    sizeof(report.windows_manifest_digest));
+	memcpy(report.windows_entry, parsed.window,
+	    sizeof(report.windows_entry));
+	IOLockUnlock(reportLock);
+	if (parsed.valid == 0u) {
+		goto done;
+	}
+
+	windowsHeader = (uint8_t *)IOMallocContiguous(
+	    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, PAGE_SIZE, nullptr);
+	if (windowsHeader == nullptr) {
+		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
+		goto done;
+	}
+	for (index = 0; index < parsed.count; index++) {
+		offset = parsed.window[index].offset;
+		length = parsed.window[index].size;
+		if ((length < GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES) ||
+		    !windowsRead(media, offset,
+		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, windowsHeader)) {
+			reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
+			goto done;
+		}
+		if (index == 0u) {
+			apfs = gta4l_windows_apfs(windowsHeader,
+			    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES,
+			    container);
+		}
+		gta4l_emmc_block_sha256(windowsHeader,
+		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, digest);
+		memcpy(report.windows_header_digest[index][0], digest,
+		    sizeof(digest));
+		if (!windowsRead(media,
+		    offset + length - GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES,
+		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, windowsHeader)) {
+			reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
+			goto done;
+		}
+		gta4l_emmc_block_sha256(windowsHeader,
+		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES, digest);
+		memcpy(report.windows_header_digest[index][1], digest,
+		    sizeof(digest));
+	}
+	IOLockLock(reportLock);
+	report.windows_apfs = apfs;
+	memcpy(report.windows_container_uuid, container,
+	    sizeof(report.windows_container_uuid));
+	IOLockUnlock(reportLock);
+
+done:
+	if (reason != GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE) {
+		IOLockLock(reportLock);
+		report.windows_valid = 0u;
+		report.windows_reason = (uint32_t)reason;
+		IOLockUnlock(reportLock);
+	}
+	if (windowsManifest != nullptr) {
+		IOFreeAligned(windowsManifest,
+		    GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES);
+		windowsManifest = nullptr;
+	}
+	if (windowsHeader != nullptr) {
+		IOFreeContiguous(windowsHeader,
+		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES);
+		windowsHeader = nullptr;
+	}
+	if (windowsUserdataOpen && (windowsUserdata != nullptr)) {
+		windowsUserdata->close(this, 0);
+		windowsUserdataOpen = false;
+	}
+	if (windowsUserdata != nullptr) {
+		windowsUserdata->release();
+		windowsUserdata = nullptr;
+	}
+	panicWithReport();
+	return false;
+}
+
 bool
 Gta4lEmmcBlock::runBulk()
 {
@@ -11685,7 +11978,7 @@ Gta4lEmmcBlock::runReport()
 	report.widthhold_fail_max = widthholdFailMax;
 	memcpy(report.widthhold_fail_digest, widthholdFailDigest,
 	    sizeof(report.widthhold_fail_digest));
-	report.speed = (speedMode || bulkMode) ? 1u : 0u;
+	report.speed = (speedMode || bulkMode || windowsMode) ? 1u : 0u;
 	report.bulk = bulkMode ? 1u : 0u;
 	report.smmu = 0u;
 	report.smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_NONE;
@@ -11730,7 +12023,7 @@ Gta4lEmmcBlock::runReport()
 	report.bulk_ticks = 0u;
 	report.bulk_hz = gta4l_emmc_platform_counter_hz();
 	bzero(report.bulk_digest, sizeof(report.bulk_digest));
-	if (speedMode || bulkMode) {
+	if (speedMode || bulkMode || windowsMode) {
 		const struct gta4l_emmc_bus_result *winning =
 		    (speedFallback.requested != 0u) ? &speedFallback :
 		    &speedSwitch;
@@ -11764,6 +12057,10 @@ Gta4lEmmcBlock::runReport()
 	}
 	if (bulkMode) {
 		runBulk();
+		return;
+	}
+	if (windowsMode) {
+		runWindows();
 		return;
 	}
 	if (speedMode) {

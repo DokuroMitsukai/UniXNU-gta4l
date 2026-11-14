@@ -861,6 +861,21 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_RESERVED 12u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_OVERLAP 13u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_DUPLICATE 14u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA 15u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ 16u
+#define GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES (1u << 20)
+
+/* S4 userdata placement from board.toml [userdata]: LBA 15,203,328 to
+ * 61,071,326, 23,484,415,488 bytes. The driver finds the partition media
+ * by this exact base/size. */
+#define GTA4L_EMMC_BLOCK_USERDATA_BASE_LBA 15203328u
+#define GTA4L_EMMC_BLOCK_USERDATA_BLOCKS 45867999u
+#define GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES \
+	((uint64_t)GTA4L_EMMC_BLOCK_USERDATA_BASE_LBA * \
+	GTA4L_EMMC_BLOCK_BYTES)
+#define GTA4L_EMMC_BLOCK_USERDATA_SIZE_BYTES \
+	((uint64_t)GTA4L_EMMC_BLOCK_USERDATA_BLOCKS * \
+	GTA4L_EMMC_BLOCK_BYTES)
 
 struct gta4l_emmc_block_window {
 	char name[GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES];
@@ -1800,6 +1815,12 @@ int gta4l_emmc_block_live_select(int token_present, int token_value,
     int slow_duplicate, int block_selected, int block_value,
     int bulk_selected, int bulk_value, int dma_selected, int dma_value,
     int speed_selected, int widthhold_selected, int widthpub_selected);
+
+/* Select the S4 windows rung. Valid only with exactly one block=3 token,
+ * value 1, and no other mode token. */
+int gta4l_emmc_block_windows_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int other_selected);
 
 /* Select the live-only force-slow sub-mode. Accepted only when live is
  * exactly ON and the value is 1. */

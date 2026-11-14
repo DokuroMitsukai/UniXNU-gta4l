@@ -586,6 +586,28 @@ gta4l_emmc_block_slow_select(int token_present, int token_value,
 	return GTA4L_EMMC_BLOCK_SLOW_ON;
 }
 
+/* S4 windows rung: exactly one block=3 token, the windows value 1, and no
+ * other mode token. The rung reads the SHNGROOT manifest from the userdata
+ * partition and publishes its windows read-only. */
+int
+gta4l_emmc_block_windows_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int other_selected)
+{
+	if (token_present == 0) {
+		return GTA4L_EMMC_BLOCK_WINDOWS_OFF;
+	}
+	if ((duplicate_tokens != 0) || (block_selected == 0) ||
+	    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||
+	    (other_selected != 0)) {
+		return GTA4L_EMMC_BLOCK_WINDOWS_REFUSED;
+	}
+	if (token_value != (int)GTA4L_EMMC_BLOCK_WINDOWS_ON) {
+		return GTA4L_EMMC_BLOCK_WINDOWS_REFUSED;
+	}
+	return GTA4L_EMMC_BLOCK_WINDOWS_ON;
+}
+
 uint32_t
 gta4l_emmc_block_adma_build(uint8_t *table, uint32_t table_bytes,
     uint32_t address, uint32_t length, uint32_t max_entry_bytes)
