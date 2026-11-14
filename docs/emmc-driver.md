@@ -7618,7 +7618,7 @@ latched `BULKFAIL stage=13` after the DMA comparison, so both change
 together in B10.11. Every host fixture had used `fsr=0`, so the real
 FORMAT value was untested.
 
-### 5.3.119 B10.11 CB FSR FORMAT gate (host-only) (2026-11-14)
+### 5.3.119 B10.11 CB FSR FORMAT gate and candidate (2026-11-14)
 
 `GTA4L_EMMC_BLOCK_SMMU_FSR_FAULT` is `0xc00001fe` (MULTI, SS, UUT, EF,
 PF, TF and the AFF/ASF/TLBMCF/TLBLKF ignore set);
@@ -7641,5 +7641,28 @@ fields, which are zero in bulk, shrinking the line from 746 to 578 bytes
 and the combined worst case from 3,208 to 3,040 bytes inside the
 unchanged 3,328-byte buffer. Host suite: block 471 scenarios with 176
 adapter, 3 support and 49 policy mutations. Host-only; **not flashed**,
-no device access or boot. The B10.11 candidate, storage-ABI audit and
-archive requalification are recorded after the next build.
+no device access or boot.
+
+Candidate: the first kernel `cace0f26…` (51,621,888 bytes) was built
+with the B10.7 audit; the audit of it reported the same 190 slots, 181
+bindings, vtable `fffffff005cb44c0`, metaclass `fffffff006add1d0` and
+service `fffffff007b3f5b8`, with only the pure-virtual target moved
+(not embedded in the bindings assembly). The relink produced
+`9f72210f…` (51,621,888 bytes), whose audit
+(`out/gta4l/storage-abi-9f72210f`, 190 slots, 181 bindings, native 4K,
+0 unresolved imports) is identical to the interim audit. The
+requalified archive `6075549b…` has members `e8b3ecc7…` (policy) and
+`3d1a1e1f…` (adapter) matching the kernel-build report;
+`qualification.qualified=true` and `candidate_matches_audit=true`.
+Payload `91ff0a18…` (83,886,080 bytes; `emmc-block-3-bulk-dma`,
+`rd=md0`, gate 105/105) and BOOT image `fcb1603b…` (85,688,320 bytes;
+gate 18/18, only the ramdisk differs; kernel section `a4b054e0…`,
+firmware `1e8a3132…` and DTB `dc4c719d…` unchanged) are built but
+**not flashed**. The first DMA boot needs an owner go naming
+`fcb1603b…`; card writes remain disabled. BOOT holds `0d77d602…`,
+which must not be booted again, and the B10.5 image must not be booted
+either. Expected: `dec=cb-off`, `DMA … smmu=cb-off cmp=4/4 … skip=0`,
+`pfsr` with no fault bit (`00000400` is fine) and `shap=lk`. A real
+TF/SS/MULTI fault still latches stage 13; layout/translate-live/
+cb-type/conflict skips lead to B10.8 (SMMU writes) or a hypervisor
+investigation.
