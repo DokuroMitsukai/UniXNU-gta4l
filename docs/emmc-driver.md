@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 517 scenarios with 196 adapter mutations, 3 support mutations and 52 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 517 scenarios with 197 adapter mutations, 3 support mutations and 52 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,7 +7903,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 517 scenarios with 196 adapter
+Host gates: the block adapter test runs 517 scenarios with 197 adapter
 mutations, 3 support mutations and 52 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
@@ -8703,7 +8703,7 @@ write path's before/after comparison; the current rung is read-only.
 
 **Test.** `windows-manifest` now also rejects a sealed version-2
 header (reason 3) and an unaligned `image_bytes` (reason 5). The
-adapter suite is 517 scenarios (518 PASS lines) with 196 adapter,
+adapter suite is 517 scenarios (518 PASS lines) with 197 adapter,
 3 support and 52 policy mutation controls.
 
 **Milestone mapping.** The storage area of `porting.toml` now maps the
@@ -8844,7 +8844,7 @@ report worst case from 1,938 to 1,986 bytes, inside the 3,584-byte
 buffer and the 23-row screen shape.
 
 **Host tests.** The adapter suite is 517 scenarios (518 PASS lines)
-with 196 adapter, 3 support and 52 policy mutation controls.
+with 197 adapter, 3 support and 52 policy mutation controls.
 `windows-publish` asserts the SystemOS-then-OS order, `pub=2 phase=5
 perr=0`, both media verdicts, the OS UUID from the APFS volume, and a
 window read translated to the userdata-relative absolute block plus a
@@ -8933,7 +8933,7 @@ accept the `emmc-block-3-windows` personality, which maps to
 `gta4l-emmc-block=3 gta4l-emmc-windows=1` and requires the
 `fs-timer-hold` fixture. The payload builder test maps the personality
 and checks the fixture; the package self-test still passes. The block
-adapter suite is 517 scenarios (518 PASS lines) with 196 adapter,
+adapter suite is 517 scenarios (518 PASS lines) with 197 adapter,
 3 support and 52 policy mutation controls.
 
 **Not done yet.** The S4 candidate archive/payload/BOOT build and its
@@ -9080,3 +9080,77 @@ cache and the payload/ADT contract pass. BOOT
 `apfs=1`, container `50f8a67f…`, volume `04769d26…`.
 
 Evidence: `out/gta4l/ram-root-emmc-s4b-windows-candidate-evidence/`.
+
+### 5.3.142 S4b device run: manifest valid, read budget 18 (2026-11-15)
+
+Device evidence. The userdata image
+`fd43ee7035ce185ce4215ac93fdc006fd784a54b3b7442e21457c226cbe03093`
+(9,382,658,048 bytes) was written after the pre-write pass. The readback
+of the first 9,382,658,048 bytes and of the first 4 KiB matched the
+image (`fd43ee70…`, `bc908a6c…`); RECOVERY `14e11370…`, EFS `51fa824c…`
+and sec_efs `3a265d58…` were unchanged and p69 still began with
+`d815506c…`.
+
+Pre-write boot of BOOT `d815506c…` (owner transcription) reported:
+
+```
+DRV: online=1 wp=1 reads=11 blocks=37 fails=0 max=8
+MEDIA: whole=1 base=0 size=31268536320 content=GUID_partition_scheme writable=0
+WINDOWS: valid=0 reason=2 count=0 image=0 pmc=1 pwait=200
+```
+
+The publication wait worked: `pwait=200`, `reads=11` and the whole media
+were present, so the one-shot lookup race (§5.3.139) is closed.
+
+Verdict boot of the same BOOT after the write reported:
+
+```
+DRV: online=1 wp=1 reads=84 blocks=4773 fails=0 max=64
+XFER: req=4773 c17=5 c18=79 c18b=4768 cfail=0 stops=79 sfail=0 last_stop=0
+WINDOWS: valid=0 reason=18 count=2 image=9382658048 pmc=1 pwait=200
+```
+
+The manifest parsed (`count=2`, `image=9382658048`), then the 1,000 ms
+window read budget expired while hashing the 1 MiB edges. The block count
+shows exactly where: 4,773 − 37 = 4,736 blocks = 74 chunks of 32 KiB.
+That covers both OS edges (64 chunks) and 10 chunks of the SystemOS first
+edge; the full job is 129 chunks (four edges plus the APFS chunk). At the
+measured PIO rate (74 chunks in about 1 s, 2.4 MB/s) the job needs about
+1.75 s, so `GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS` was too small. No
+I/O error: `fails=0`, `cfail=0`, `sfail=0`. The windows were therefore
+never published and the APFS check did not run.
+
+After the boot, a byte comparison against the source image found 21,321
+differing bytes between offsets 2,097,153 and 4,218,880. That range lies
+in the free space between the OS window's GPT and its APFS partition; the
+SHNGROOT header, both 1 MiB edges the rung reads, the first 32 KiB APFS
+chunk and the SystemOS window were unchanged. The block driver refuses
+every write (`kIODirectionOut` returns `kIOReturnNotWritable`), so XNU
+did not make the change; it is attributed to the TWRP recovery side
+between the write verification and the verdict boot and is recorded as an
+observation, not as driver evidence. The next verdict boot re-checks the
+manifest digests the rung reads.
+
+### 5.3.143 S4c: 4000 ms read budget and rms/rch (2026-11-15)
+
+Host-only. `GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS` is now 4,000 ms,
+about 2.3× the 1.75 s job at the measured PIO rate. The watchdog bound is
+8,000 (whole media) + 2,000 (partition) + 4,000 (read) + 2×2,000 (window
+media) + 2,000 (margin) = 20,000 ms, inside 30,000.
+
+The `WINDOWS` line carries `rms` (window-phase elapsed milliseconds) and
+`rch` (32 KiB chunks read). On a budget failure they show how far the
+hashing got; the S4b boot would have printed `rms=1000 rch=74`. The line
+bound grows from 630 to 660 bytes and the report worst case from 2,018 to
+2,048.
+
+**Tests.** The host read hook now charges 13 ms per 32 KiB chunk (the
+measured 2.4 MB/s), so `windows-read` and `windows-publish` exercise the
+real cost: 129 chunks, about 1.68 s. The new mutation
+`windows-read-budget-1000` restores the old budget and is rejected by
+`windows-read`. `windows-format` pins the exact 660-byte line with the
+four new fields at their type maxima, `screen-capacity` covers the
+realistic 1,677 ms/129-chunk line, and `check-gta4l-windows-evidence.py`
+requires pre-write `rms=0 rch=0` and post-write `rms` at or below 4,000 ms
+and `rch` in 1..257. The adapter suite is 517 scenarios (518 PASS lines)
+with 197 adapter, 3 support and 52 policy mutation controls.

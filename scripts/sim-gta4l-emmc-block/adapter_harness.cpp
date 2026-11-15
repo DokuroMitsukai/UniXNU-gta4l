@@ -14866,6 +14866,8 @@ screen_windows(struct gta4l_emmc_block_report *report)
 	report->windows_partition_wait_ms =
 	    GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS +
 	    GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS;
+	report->windows_read_ms = 1677u;
+	report->windows_read_chunks = 129u;
 	memset(report->windows_manifest_digest, 0xff,
 	    sizeof(report->windows_manifest_digest));
 	memcpy(report->windows_entry[0].name, "OS", 3u);
@@ -15380,6 +15382,8 @@ scenario_windows_format(void)
 	report.windows_image_bytes = UINT64_MAX;
 	report.windows_match_count = 0xffffffffu;
 	report.windows_partition_wait_ms = 0xffffffffu;
+	report.windows_read_ms = 0xffffffffu;
+	report.windows_read_chunks = 0xffffffffu;
 	report.windows_phase = 0xffffffffu;
 	report.windows_published = 0xffffffffu;
 	report.windows_publish_error = 0xffffffffu;
@@ -15576,6 +15580,10 @@ windows_read_hook(IOMedia *media, UInt64 byteStart,
 		if (actual != 0) {
 			*actual = length;
 		}
+		/* Model the measured PIO rate: about 2.4 MB/s, or 13 ms per
+		 * 32 KiB chunk. The S4b budget was too small by this cost. */
+		gta4l_test.now_ms += (uint32_t)
+		    (((length + 32767u) / 32768u) * 13u);
 		if (g_windows_slow_read) {
 			gta4l_test.now_ms +=
 			    GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS + 1u;

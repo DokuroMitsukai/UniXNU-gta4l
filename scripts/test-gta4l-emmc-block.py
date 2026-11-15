@@ -1804,6 +1804,11 @@ ADAPTER_MUTATIONS = [
      [('\t\treason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_OPEN;\n',
        '\t\treason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;\n')],
      'windows-open-fail'),
+    ('windows-read-budget-1000',
+     [('\t\tif (windowsElapsedMs() >=\n'
+       '\t\t    GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS) {\n',
+       '\t\tif (windowsElapsedMs() >= 1000u) {\n')],
+     'windows-read'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2686,9 +2691,9 @@ def check_adapter_source():
     assert 'windows_match_count' in policy_header and \
         'windows_partition_wait_ms' in policy_header, \
         'the WINDOWS line must carry pmc/pwait'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 630u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 660u' in \
         policy_header, 'the WINDOWS formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2018u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2048u' in \
         policy_header, 'the WINDOWS report bound must stay exact'
     assert 'gta4l_emmc_block_windows_parse' in policy, \
         'the SHNGROOT manifest parser must live in the shared policy'

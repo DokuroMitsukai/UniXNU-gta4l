@@ -1064,6 +1064,7 @@ private:
 	uint8_t *windowsManifest = nullptr;
 	uint8_t *windowsChunk = nullptr;
 	uint64_t windowsReadStart = 0;
+	uint32_t windowsReadChunks = 0;
 	bool windowRole = false;
 	Gta4lEmmcBlock *windowOwner = nullptr;
 	uint64_t windowBaseBlock = 0;
@@ -10742,6 +10743,7 @@ Gta4lEmmcBlock::windowsHashEdge(IOMedia *media, uint64_t offset,
 			*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_READ;
 			return false;
 		}
+		windowsReadChunks++;
 		gta4l_emmc_block_sha256_update(&sha, windowsChunk, bytes);
 		done += bytes;
 	}
@@ -10897,6 +10899,8 @@ Gta4lEmmcBlock::runWindows()
 	report.windows_image_bytes = 0u;
 	report.windows_match_count = 0u;
 	report.windows_partition_wait_ms = 0u;
+	report.windows_read_ms = 0u;
+	report.windows_read_chunks = 0u;
 	bzero(report.windows_manifest_digest,
 	    sizeof(report.windows_manifest_digest));
 	bzero(report.windows_entry, sizeof(report.windows_entry));
@@ -10965,6 +10969,7 @@ Gta4lEmmcBlock::runWindows()
 	}
 
 	windowsReadStart = gta4l_emmc_platform_counter();
+	windowsReadChunks = 0u;
 	windowsChunk = (uint8_t *)IOMallocContiguous(
 	    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES, PAGE_SIZE, nullptr);
 	if (windowsChunk == nullptr) {
@@ -10992,6 +10997,7 @@ Gta4lEmmcBlock::runWindows()
 	    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES, windowsChunk)) {
 		apfs = 0u;
 	} else {
+		windowsReadChunks++;
 		apfs = gta4l_windows_apfs(windowsChunk,
 		    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES, container);
 	}
@@ -11087,6 +11093,13 @@ publish_done:
 	IOLockUnlock(reportLock);
 
 done:
+	if (windowsReadStart != 0u) {
+		IOLockLock(reportLock);
+		report.windows_read_ms =
+		    (uint32_t)windowsElapsedMs();
+		report.windows_read_chunks = windowsReadChunks;
+		IOLockUnlock(reportLock);
+	}
 	if (reason != GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE) {
 		IOLockLock(reportLock);
 		report.windows_valid = 0u;

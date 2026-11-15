@@ -576,11 +576,11 @@ extern "C" {
  * sizes and first/last 1 MiB digest prefixes, and the APFS container and
  * volume UUIDs. It also carries the userdata partition match count and
  * the discovery wait (pmc/pwait) on every verdict. At their widest the two
- * entries and the UUIDs make a 598-byte line; pmc and pwait add 32 bytes,
- * and the S4 report adds it to the base, the compact SPEED and SPEEDIO
- * lines (2,018 bytes at their type maxima). */
-#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 630u
-#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2018u
+ * entries and the UUIDs make a 598-byte line; pmc, pwait, rms and rch add
+ * at most 64 bytes, and the S4 report adds it to the base, the compact
+ * SPEED and SPEEDIO lines (2,048 bytes at their type maxima). */
+#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 660u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2048u
 
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
@@ -869,7 +869,11 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES (1u << 20)
 #define GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES \
 	GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES
-#define GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS 1000u
+/* The window edges are 4 MiB (four 1 MiB edges per two-window image plus
+ * the APFS chunk), read in 32 KiB chunks by the PIO path measured at about
+ * 2.4 MB/s: 129 chunks need about 1.75 s. 4000 ms keeps a 2.3x margin and
+ * the whole rung at 20000 ms under the 30 s watchdog. */
+#define GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS 4000u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_MARGIN_MS 2000u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_CANCEL 17u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_BUDGET 18u
@@ -1698,6 +1702,10 @@ struct gta4l_emmc_block_report {
 	 * duplicated (pmc>1) and how long the rung waited (pwait). */
 	uint32_t windows_match_count;
 	uint32_t windows_partition_wait_ms;
+	/* Window-phase read elapsed time and 32 KiB chunk count. On a
+	 * reason=18 they show how far the hashing got before the budget. */
+	uint32_t windows_read_ms;
+	uint32_t windows_read_chunks;
 	uint8_t windows_manifest_digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
 	struct gta4l_emmc_block_window
 	    windows_entry[GTA4L_EMMC_BLOCK_WINDOWS_MAX];

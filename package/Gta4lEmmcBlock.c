@@ -4549,6 +4549,14 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_key(&writer, "pwait");
 		gta4l_emmc_block_put_u64(&writer,
 		    report->windows_partition_wait_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rms");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->windows_read_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "rch");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->windows_read_chunks);
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
