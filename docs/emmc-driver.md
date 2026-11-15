@@ -8900,3 +8900,17 @@ self-test runs every mode's self-test and passes.
 pre-write boot, the userdata write and the verdict boot remain. The APFS
 kext is still not confirmed in the prelink roots, and the S5 verified
 path is unchanged.
+
+### 5.3.136 S4 APFS prelink check (2026-11-15)
+
+Host-only. The S4 media wait needs the APFS kext in the prelinked
+kernel. The built `kernel.macho` (candidate `164dabd5…`, the kernel the
+S3a/S4 payload embeds) contains `com.apple.filesystems.apfs`:
+`_PrelinkBundlePath` `/System/Library/Extensions/apfs.kext`, the
+`AppleAPFSContainerScheme` personality matching `Content Hint`
+`7C3457EF-0000-11AA-AA11-00306543ECAC`, and `kernel.json` lists the
+kext in `components`. The selection comes from the OS-profile prelink,
+not `components.toml`.
+
+This closes the plan's APFS prelink question for S4. The device attach
+is still unobserved, and the S5 verified path is unchanged.
