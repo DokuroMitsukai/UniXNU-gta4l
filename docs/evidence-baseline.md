@@ -1464,10 +1464,10 @@ bytes of the previously booted image `[S]`.
 | Repository README | `README.md` | `158c30b8ecf349977e24871e9ae2746a903099480d44fe6cf04584d66c1bd8aa` |
 | eMMC reference | `docs/emmc-reference.md` | `d2c0167febb8d1afec6cba2afa9a842712c7f937c0c34514acd8077750054b3d` |
 | NativeEmmc audit | `docs/native-emmc-reference-audit.md` | `c123577953c3c8625e2119967a112826448dd0a95c861023a9593bca0dc1a215` |
-| Porting record | `porting.toml` | `b41f4fecd42dd9d8a22dc50327efcb0986cf9fca718f47ab2f133d21ba44a9dc` |
+| Porting record | `porting.toml` | `5fb890717db57f562583a427f2ebed52176bda246279e8f7057dd8d86e965e9b` |
 | Porting-approach reassessment | `docs/porting-approach-reassessment-2026-10-31.md` | `ad77a51fbe36ab78333ba7c62e3f606ebbcede1549bfebc0bc5a08f777e8fa71` |
 | Arch Linux gta4l evidence | `docs/archlinux-gta4l-evidence.md` | `9704e402411a31cbffe6dd1c1318c678e9275f96506728e18fe6c761116b13a7` |
-| eMMC driver record | `docs/emmc-driver.md` | `56f205be42192e18e7f3f8c51ee4981b39c002735308519413c0d45ae39bb084` |
+| eMMC driver record | `docs/emmc-driver.md` | `1be4cc2df615fccc59c5257acde697f4abd381f77cb66cf485207b9bb85c9328` |
 | eMMC core header | `package/Gta4lEmmc.h` | `9361445340606c438854eb03bb2ffa2c26bfe96341f4ca41b1c07cf9f3f924fd` |
 | eMMC core source | `package/Gta4lEmmc.c` | `04ed0ef8f8808c38785b51b0d7429d90b85adba07f52de09ee0b2936b394485c` |
 | eMMC XNU probe | `package/Gta4lEmmcProbe.c` | `51d3ad6520cd09a1b90b7c3ab998dc16e424407663989227af0c5c22b750d17e` |
@@ -1479,7 +1479,7 @@ bytes of the previously booted image `[S]`.
 | Diagnostic payload/boot-image inventory | `docs/diagnostic-payload-input-inventory.md` | `c7c9b4b99a21121b966a5c9a02f918c54fc00a11bc40480c684a3a501c0d0d44` |
 | Diagnostic payload build recipe | `docs/payload-build-recipe.md` | `4c7ddf9f62fd8921481ec0a2304fc0ce845a9ba46f7c3d2a6648e7c650002ab5` |
 | ADT seed normalizer | `scripts/normalize-gta4l-adt-seed.py` | `cf80caafdd3b56fa590fed208e17e2eb8f5c27be1451dbaf1c57b0bbb7f76cf5` |
-| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `20c854ca7f07bad4ddd71b0c13da80b456d72e0a8c6bf1e2f9a16cc447ae2266` |
+| Diagnostic payload builder test | `scripts/test-gta4l-diagnostic-payload.py` | `636f7549726b48c6de59fce4945bdf8cfc8fbf21a0106095151607a214ebb03b` |
 
 The table has 45 rows: the sixteenth batch added the eMMC core, probe,
 simulator, test, builder and documentation rows, plus the Arch Linux evidence
@@ -2126,6 +2126,13 @@ batch refreshed the `README.md`, `docs/emmc-driver.md`,
 `scripts/test-gta4l-diagnostic-payload.py` rows without adding a hash-table
 row; the N10.17 design, N10.19 candidate record, widthhold verifier and the
 payload/packager scripts are outside the table or not listed.
+The S4 windows batch and the S4d verdict boot refreshed the `porting.toml`,
+`docs/emmc-driver.md` and `scripts/test-gta4l-diagnostic-payload.py` rows
+without adding a hash-table row; the windows evidence checker, the block
+adapter harness, the S4 candidate documents and the private evidence
+directories are outside the table or not listed. The batch records the
+read-only WINDOWS publication stage and the S4a-S4d host-only candidates; no
+new device write is authorized.
 The §6 self-check expected 35 until an earlier correction, then
 36, then 37, and now expects 45.
 
