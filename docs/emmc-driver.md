@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 506 scenarios with 186 adapter mutations, 3 support mutations and 51 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 511 scenarios with 192 adapter mutations, 3 support mutations and 52 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,8 +7903,8 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 506 scenarios with 186 adapter
-mutations, 3 support mutations and 51 policy mutations. The new
+Host gates: the block adapter test runs 511 scenarios with 192 adapter
+mutations, 3 support mutations and 52 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
 `BULKFAIL stage=12` (`BULK_STAGE_DMA`), `dma_stage=READ`, one request and
@@ -8703,8 +8703,8 @@ write path's before/after comparison; the current rung is read-only.
 
 **Test.** `windows-manifest` now also rejects a sealed version-2
 header (reason 3) and an unaligned `image_bytes` (reason 5). The
-adapter suite stays at 506 scenarios (507 PASS lines) with 186 adapter,
-3 support and 51 policy mutation controls.
+adapter suite is 511 scenarios (512 PASS lines) with 192 adapter,
+3 support and 52 policy mutation controls.
 
 **Milestone mapping.** The storage area of `porting.toml` now maps the
 ladder onto the guide's storage milestones: hardware inventory (S0/board
@@ -8790,3 +8790,76 @@ every block.** Four sources establish this:
 **Recorded in `porting.toml`.** The storage area carries this decision
 and the S5 inputs: policy header/signature location, v2 object size,
 owner key handling and the kernel symbol/config requirements.
+
+### 5.3.134 S4 window publication and media wait (2026-11-15)
+
+Host-only. No device access, flash or boot. The S4 rung now starts one
+read-only block service per SHNGROOT window and waits for the APFS
+volume under each window before the terminal report.
+
+**Window role, not a second class.** `build-gta4l-emmc-block.py` audits
+exactly the `Gta4lEmmcBlock` vtable (190 slots), so the window objects
+are extra instances of the same class in a window role.
+`configureWindow` records the owner, label, absolute base block and
+capacity; `startWindow` bypasses the boot-token parser, controller
+init and report thread, calls `IOBlockStorageDevice::start`, sets
+`online` and registers the service. `doAsyncReadWrite` range-checks the
+window, then delegates to the owner's public read path with the
+translated absolute block, so the window shares the one controller gate
+and the proven 2-block CMD18 chunk path. Reads past the window end and
+writes are refused.
+
+**Lifecycle.** `gta4l_emmc_block_windows_plan` builds the order
+SystemOS first, any other windows next, OS last; a manifest without
+both names is refused. All windows are prepared and attached before any
+start; starts follow the plan and each start is followed by a bounded
+media wait. On failure, never-started windows are detached and
+released, while already-started windows stay alive because their
+clients may still hold I/O. This follows ShengUfs
+`RootPublication.h` (`ufsBuildRootPlan` and
+`ufsPublishRootWindows`), implemented synchronously in the report
+thread. The 2,000 ms wait is this port's bound: the ShengUfs 30.1 s
+wait would overrun the 30,000 ms watchdog, while the plan's
+2,000 ms-per-window start is statically bounded.
+
+**Media wait.** `waitWindowMedia` polls 100 ms at a time for at most
+2,000 ms per window. A candidate must carry a 36-character `UUID` and
+its provider chain must (a) reach the window object and (b) pass
+through a media whose `Content` is the Apple_APFS type GUID
+`7c3457ef-0000-11aa-aa11-00306543ecac`. The container requirement is
+this port's extension of the ancestry rule: it excludes the GPT
+partition media, whose `UUID` is the partition GUID, and selects the
+APFS volume IOMedia, whose parent chain passes through the container. The OS window's UUID is copied
+into the report. The waits, the 1,000 ms edge-read budget and the
+2,000 ms report margin are statically below the 30,000 ms watchdog.
+
+**Report.** `WINDOWS` gains `pub=` (started windows), `phase=`
+(plan/prepare/start/media/complete) and `perr=` (plan/prepare/start/
+media failure) between `image=` and `mdig=`; `windows_media[2]` records
+each window's media verdict internally. A valid manifest whose
+publication fails keeps `valid=1 reason=0` and reports the separate
+`perr`, so manifest validity and publication are never conflated. The
+formatter-exact line bound rises from 550 to 598 bytes and the S4
+report worst case from 1,938 to 1,986 bytes, inside the 3,584-byte
+buffer and the 23-row screen shape.
+
+**Host tests.** The adapter suite is 511 scenarios (512 PASS lines)
+with 192 adapter, 3 support and 52 policy mutation controls.
+`windows-publish` asserts the SystemOS-then-OS order, `pub=2 phase=5
+perr=0`, both media verdicts, the OS UUID from the APFS volume, and a
+window read translated to the userdata-relative absolute block plus a
+refused read past the end. `windows-publish-media-fail` (no volume),
+`windows-publish-foreign` (same UUID under the wrong ancestor),
+`windows-publish-start-fail` (OS start refused after SystemOS is
+published) and `windows-publish-plan` (OS-only manifest) cover the
+failure phases and the discard rule. The seven new mutations reject an
+order swap, a dropped ancestor check, discarding a started window,
+accepting a read past the end, dropping the UUID capture, ignoring a
+start failure and skipping the media wait; the one-window plan is
+refused by `windows-publish-plan`.
+
+**Not done yet.** The `windows` evidence checker and the S4 candidate
+follow. The APFS kext is not yet confirmed in the prelink roots, and
+the S5 verified path (owner policy, v2 `OS.vroot` table, kernel
+symbols) remains. The device write still needs its own go naming the
+image SHA-256 and the backup answer.

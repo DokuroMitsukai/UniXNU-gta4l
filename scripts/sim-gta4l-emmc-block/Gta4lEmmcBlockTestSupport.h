@@ -57,6 +57,8 @@ typedef void *thread_t;
 #define kIOReturnUnsupported ((IOReturn)0xe00002c7u)
 #define kIOReturnTimeout ((IOReturn)0xe00002d6u)
 
+#define OSTypeAlloc(type) (new type)
+
 #define kIOMaximumBlockCountReadKey "IOMaximumBlockCountRead"
 #define kIOMaximumByteCountReadKey "IOMaximumByteCountRead"
 #define kIOMaximumSegmentCountReadKey "IOMaximumSegmentCountRead"
@@ -104,6 +106,7 @@ typedef uint32_t IOStorageGetProvisionStatusOptions;
 
 class OSObject;
 OSObject *gta4l_test_meta_cast(OSObject *object, const char *name);
+extern uint32_t gta4l_test_detach_count;
 
 class OSObject {
 public:
@@ -235,6 +238,17 @@ public:
 	virtual void free() {}
 	virtual IOService *getProvider() const { return provider_; }
 	virtual void registerService();
+	virtual bool attach(IOService *provider)
+	{
+		provider_ = provider;
+		return true;
+	}
+	virtual void detach(IOService *provider)
+	{
+		(void)provider;
+		provider_ = 0;
+		gta4l_test_detach_count++;
+	}
 	virtual void messageClients(UInt32 type, void *argument);
 	virtual bool setProperty(const char *key, const char *value);
 	virtual bool setProperty(const char *key, bool value);
@@ -533,6 +547,7 @@ struct gta4l_test_state {
 	uint32_t descriptor_release_calls;
 	uint32_t consumer_release_calls;
 	uint32_t registered;
+	uint32_t detach_count;
 	uint32_t sleeps;
 	uint32_t now_ms;
 	uint32_t property_calls;
@@ -690,6 +705,23 @@ extern gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 #define GTA4L_TEST_WIDTH_PHASE_BEFORE_TERMINAL 2u
 typedef void (*gta4l_test_width_sample_fn)(uint32_t phase);
 extern gta4l_test_width_sample_fn gta4l_test_width_hook;
+
+/* S4 publication seam. Fires before each window-media poll so the host can
+ * attach a synthetic APFS volume to the window provider chain. */
+typedef void (*gta4l_test_windows_media_fn)(IOService *window,
+    const char *label);
+extern gta4l_test_windows_media_fn gta4l_test_windows_media_hook;
+
+/* S4 window-read seam. Fires after the window range check and before the
+ * owner read, with the translated absolute block. */
+typedef void (*gta4l_test_windows_read_fn)(IOService *window,
+    uint64_t absoluteBlock, uint64_t nblks);
+extern gta4l_test_windows_read_fn gta4l_test_windows_read_hook;
+
+/* S4 window-start seam. Returns nonzero to allow the service start. */
+typedef int (*gta4l_test_windows_start_fn)(IOService *window,
+    const char *label);
+extern gta4l_test_windows_start_fn gta4l_test_windows_start_hook;
 
 /* Widthhold recovery seam. The before-revert phase fires while the card is
  * still at 4-bit; the after-revert phase fires once the verified 1-bit

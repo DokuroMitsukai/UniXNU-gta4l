@@ -1732,6 +1732,43 @@ ADAPTER_MUTATIONS = [
      [('\treturn (status == kIOReturnSuccess) && (actual == bytes);\n',
        '\treturn (status == kIOReturnSuccess);\n')],
      'windows-short-read'),
+    ('windows-ancestor-accept',
+     [('\t\t\tif (provider == window) {\n'
+       '\t\t\t\tfound = apfsParent;\n'
+       '\t\t\t\tbreak;\n'
+       '\t\t\t}\n',
+       '\t\t\tif (provider != nullptr) {\n'
+       '\t\t\t\tfound = true; (void)apfsParent;\n'
+       '\t\t\t\tbreak;\n'
+       '\t\t\t}\n')],
+     'windows-publish-foreign'),
+    ('windows-discard-started',
+     [('\t\tif (started[slot]) {\n\t\t\tcontinue;\n\t\t}\n',
+       '\t\t(void)started[slot];\n')],
+     'windows-publish-start-fail'),
+    ('windows-past-end-accept',
+     [('\t\tif ((blockNumber >= (UInt64)capacityBlocks) ||\n'
+       '\t\t    (nblks > (UInt64)capacityBlocks - blockNumber)) {\n'
+       '\t\t\treturn kIOReturnBadArgument;\n'
+       '\t\t}\n',
+       '\t\tif (blockNumber > (UInt64)capacityBlocks) {\n'
+       '\t\t\treturn kIOReturnBadArgument;\n'
+       '\t\t}\n')],
+     'windows-publish'),
+    ('windows-uuid-drop',
+     [('\t\tmemcpy(report.windows_volume_uuid, volumeUuid,\n'
+       '\t\t    sizeof(report.windows_volume_uuid));\n',
+       '\t\tbzero(report.windows_volume_uuid,\n'
+       '\t\t    sizeof(report.windows_volume_uuid));\n')],
+     'windows-publish'),
+    ('windows-start-ignored',
+     [('\t\tif (!pending[slot]->start(this)) {\n',
+       '\t\tif (0 && !pending[slot]->start(this)) {\n')],
+     'windows-publish-start-fail'),
+    ('windows-media-wait-skip',
+     [('\t\tif (!waitWindowMedia(pending[slot], volumeUuid,\n',
+       '\t\tif (0 && !waitWindowMedia(pending[slot], volumeUuid,\n')],
+     'windows-publish-media-fail'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2218,6 +2255,9 @@ POLICY_MUTATIONS = [
      [('\tif ((report->dma != 0) && (report->dma_diag != 0)) {\n',
        '\tif (report->dma != 0) {\n')],
      'dma-diag-format'),
+    ('windows-plan-order',
+     [('\torder[0] = system;\n', '\torder[0] = os;\n')],
+     'windows-publish'),
 ]
 
 
@@ -2604,9 +2644,9 @@ def check_adapter_source():
         'live mode must emit the LIVEFAIL line on a terminal failure'
     assert 'GTA4L-EMMC P5 BULKIO: ' not in policy, \
         'the diagnostic-only BULKIO line must stay off the panic screen'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 550u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 598u' in \
         policy_header, 'the WINDOWS formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 1938u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 1986u' in \
         policy_header, 'the WINDOWS report bound must stay exact'
     assert 'gta4l_emmc_block_windows_parse' in policy, \
         'the SHNGROOT manifest parser must live in the shared policy'
@@ -2786,8 +2826,8 @@ def check_adapter_source():
         'scheme lookup must enumerate attached service-plane children'
     assert 'object->metaCast("IOGUIDPartitionScheme")' in adapter, \
         'scheme lookup must keep the partition-scheme class guard'
-    assert adapter.count('getMatchingServices(matching)') == 5, \
-        'only whole-media, partition-media and pinned-range walks may use matching'
+    assert adapter.count('getMatchingServices(matching)') == 6, \
+        'only whole-media, partition-media, pinned-range and APFS-volume walks may use matching'
     assert '#define GTA4L_EMMC_BLOCK_PARTREAD_MAX_BLOCKS 64u' in \
         policy_header, 'pinned-range reads must stay inside the request limit'
     assert 'GTA4L_EMMC_BLOCK_PARTREAD_REASON_HASH 7u' in policy_header, \
@@ -3165,8 +3205,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 507, f'expected 507 adapter PASS lines, got {passes}'
-        print('PASS adapter: 507 scenarios against the host IOKit seam')
+        assert passes == 512, f'expected 512 adapter PASS lines, got {passes}'
+        print('PASS adapter: 512 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

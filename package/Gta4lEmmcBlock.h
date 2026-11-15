@@ -577,8 +577,8 @@ extern "C" {
  * volume UUIDs. At their widest the two entries and the UUIDs make a
  * 550-byte line; the S4 report adds it to the base, the compact SPEED and
  * SPEEDIO lines (1,938 bytes at their type maxima). */
-#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 550u
-#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 1938u
+#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 598u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 1986u
 
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
@@ -871,6 +871,22 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_MARGIN_MS 2000u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_CANCEL 17u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_BUDGET 18u
+/* S4 publication. The manifest can be valid while a window cannot be
+ * started or its APFS volume does not appear; `windows_publish_error`
+ * carries that separate verdict. */
+#define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_NONE 0u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_PLAN 1u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_PREPARE 2u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_START 3u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA 4u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_NONE 0u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_PLAN 1u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_PREPARE 2u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_START 3u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_MEDIA 4u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_COMPLETE 5u
+#define GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_WAIT_MS 2000u
+#define GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_POLL_MS 100u
 
 /* S4 userdata placement from board.toml [userdata]: LBA 15,203,328 to
  * 61,071,326, 23,484,415,488 bytes. The driver finds the partition media
@@ -1673,6 +1689,10 @@ struct gta4l_emmc_block_report {
 	uint32_t windows_apfs;
 	uint8_t windows_container_uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
 	uint8_t windows_volume_uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
+	uint32_t windows_phase;
+	uint32_t windows_published;
+	uint32_t windows_publish_error;
+	uint32_t windows_media[GTA4L_EMMC_BLOCK_WINDOWS_MAX];
 };
 
 /* Count whole boot-argument tokens with this exact name (name=value). A
@@ -2302,6 +2322,13 @@ int gta4l_emmc_block_media_check(uint64_t base, uint64_t size,
 uint32_t gta4l_emmc_block_windows_parse(const uint8_t *header,
     uint32_t length, uint64_t partition_bytes,
     struct gta4l_emmc_block_manifest *manifest);
+
+/* Order the publication plan for a valid manifest: SystemOS first, any
+ * other windows next, OS last. Returns 1 and fills `order`/`count`, or
+ * zero when OS and SystemOS are not both present. */
+uint32_t gta4l_emmc_block_windows_plan(
+    const struct gta4l_emmc_block_manifest *manifest,
+    uint32_t order[GTA4L_EMMC_BLOCK_WINDOWS_MAX], uint32_t *count);
 
 /* Format the bounded P5 report. Returns the number of bytes written without
  * the terminator, or zero when the buffer is too small. */

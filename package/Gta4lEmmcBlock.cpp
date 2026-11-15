@@ -114,6 +114,17 @@ static_assert(GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS +
     GTA4L_EMMC_BLOCK_WINDOWS_REPORT_MARGIN_MS <=
     GTA4L_EMMC_BLOCK_WATCHDOG_MS,
     "S4 windows read budget must stay under the watchdog");
+static_assert(GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_POLL_MS != 0u,
+    "S4 window media poll must be nonzero");
+static_assert((GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_WAIT_MS %
+    GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_POLL_MS) == 0u,
+    "S4 window media wait must be a whole number of polls");
+static_assert(GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_WAIT_MS *
+    GTA4L_EMMC_BLOCK_WINDOWS_MAX +
+    GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS +
+    GTA4L_EMMC_BLOCK_WINDOWS_REPORT_MARGIN_MS <=
+    GTA4L_EMMC_BLOCK_WATCHDOG_MS,
+    "S4 publication waits and reads must stay under the watchdog");
 
 static_assert(GTA4L_EMMC_BLOCK_WIDTHHOLD_WORST_MS <
     GTA4L_EMMC_BLOCK_WATCHDOG_MS,
@@ -791,6 +802,12 @@ private:
 	void runSpeed(void);
 	bool runBulk(void);
 	bool runWindows(void);
+	bool configureWindow(Gta4lEmmcBlock *owner, const char *name,
+	    uint64_t absolute, uint64_t bytes);
+	bool startWindow(IOService *provider);
+	bool waitWindowMedia(Gta4lEmmcBlock *window,
+	    uint8_t uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES],
+	    uint32_t waitMs);
 	bool windowsRead(IOMedia *media, uint64_t offset, uint32_t bytes,
 	    uint8_t *buffer);
 	bool windowsHashEdge(IOMedia *media, uint64_t offset,
@@ -1035,6 +1052,10 @@ private:
 	uint8_t *windowsManifest = nullptr;
 	uint8_t *windowsChunk = nullptr;
 	uint64_t windowsReadStart = 0;
+	bool windowRole = false;
+	Gta4lEmmcBlock *windowOwner = nullptr;
+	uint64_t windowBaseBlock = 0;
+	char windowLabel[GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES] = {};
 	uint64_t bulkReadStart = 0;
 	bool bulkActive = false;
 	bool bulkInFlight = false;
@@ -1512,6 +1533,9 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int windows;
 	int baselineResult;
 
+	if (windowRole) {
+		return startWindow(provider);
+	}
 	arguments = PE_boot_args();
 	blockTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_BOOT_ARG);
@@ -3220,9 +3244,230 @@ Gta4lEmmcBlock::start(IOService *provider)
 	return true;
 }
 
+static int
+gta4l_emmc_block_uuid_digit(char value)
+{
+	if ((value >= '0') && (value <= '9')) {
+		return value - '0';
+	}
+	if ((value >= 'a') && (value <= 'f')) {
+		return value - 'a' + 10;
+	}
+	if ((value >= 'A') && (value <= 'F')) {
+		return value - 'A' + 10;
+	}
+	return -1;
+}
+
+static bool
+gta4l_emmc_block_uuid_text(const char *text, uint8_t uuid[16])
+{
+	uint32_t index = 0;
+	uint32_t out = 0;
+
+	if (text == nullptr) {
+		return false;
+	}
+	while (text[index] != 0) {
+		int high;
+		int low;
+
+		if ((index == 8u) || (index == 13u) ||
+		    (index == 18u) || (index == 23u)) {
+			if (text[index] != '-') {
+				return false;
+			}
+			index++;
+			continue;
+		}
+		if (out >= 32u) {
+			return false;
+		}
+		high = gta4l_emmc_block_uuid_digit(text[index]);
+		low = gta4l_emmc_block_uuid_digit(text[index + 1u]);
+		if ((high < 0) || (low < 0)) {
+			return false;
+		}
+		uuid[out / 2u] = (uint8_t)((high << 4) | low);
+		out += 2u;
+		index += 2u;
+	}
+	return (out == 32u) && (index == 36u);
+}
+
+static bool
+gta4l_emmc_block_windows_apfs_type(const char *content)
+{
+	static const char type[] = "7c3457ef-0000-11aa-aa11-00306543ecac";
+	uint32_t index;
+
+	if (content == nullptr) {
+		return false;
+	}
+	for (index = 0; index < 36u; index++) {
+		char value = content[index];
+
+		if ((value >= 'A') && (value <= 'F')) {
+			value = (char)(value - 'A' + 'a');
+		}
+		if (value != type[index]) {
+			return false;
+		}
+	}
+	return content[36] == 0;
+}
+
+static bool
+gta4l_emmc_block_windows_volume(IOService *window, uint8_t uuid[16])
+{
+	OSDictionary *matching;
+	OSIterator *iterator;
+	bool found = false;
+
+	if (window == nullptr) {
+		return false;
+	}
+	matching = IOService::serviceMatching("IOMedia");
+	if (matching == nullptr) {
+		return false;
+	}
+	iterator = IOService::getMatchingServices(matching);
+	matching->release();
+	if (iterator == nullptr) {
+		return false;
+	}
+	while (OSObject *object = iterator->getNextObject()) {
+		IOService *media = OSDynamicCast(IOService, object);
+		OSString *identity;
+		IOService *provider;
+		uint8_t parsed[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
+		uint32_t depth = 0;
+		bool apfsParent = false;
+
+		if (media == nullptr) {
+			continue;
+		}
+		identity = OSDynamicCast(OSString,
+		    media->getProperty("UUID"));
+		if ((identity == nullptr) || (identity->getLength() != 36u) ||
+		    !gta4l_emmc_block_uuid_text(
+		    identity->getCStringNoCopy(), parsed)) {
+			continue;
+		}
+		for (provider = media->getProvider();
+		    provider != nullptr; provider = provider->getProvider()) {
+			OSString *content;
+
+			if (depth++ >= 256u) {
+				break;
+			}
+			if (provider == window) {
+				found = apfsParent;
+				break;
+			}
+			content = OSDynamicCast(OSString,
+			    provider->getProperty(kIOMediaContentKey));
+			if ((content != nullptr) &&
+			    gta4l_emmc_block_windows_apfs_type(
+			    content->getCStringNoCopy())) {
+				apfsParent = true;
+			}
+		}
+		if (found) {
+			memcpy(uuid, parsed, sizeof(parsed));
+			break;
+		}
+	}
+	iterator->release();
+	return found;
+}
+
+bool
+Gta4lEmmcBlock::configureWindow(Gta4lEmmcBlock *owner, const char *name,
+    uint64_t absolute, uint64_t bytes)
+{
+	uint32_t index = 0;
+
+	if ((owner == nullptr) || (name == nullptr) || (name[0] == 0) ||
+	    (bytes == 0u) ||
+	    ((absolute % GTA4L_EMMC_BLOCK_BYTES) != 0u) ||
+	    ((bytes % GTA4L_EMMC_BLOCK_BYTES) != 0u) ||
+	    ((bytes / GTA4L_EMMC_BLOCK_BYTES) > 0xffffffffu)) {
+		return false;
+	}
+	while ((index < (GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES - 1u)) &&
+	    (name[index] != 0)) {
+		windowLabel[index] = name[index];
+		index++;
+	}
+	if (name[index] != 0) {
+		return false;
+	}
+	windowLabel[index] = 0;
+	windowOwner = owner;
+	windowBaseBlock = absolute / GTA4L_EMMC_BLOCK_BYTES;
+	capacityBlocks = (uint32_t)(bytes / GTA4L_EMMC_BLOCK_BYTES);
+	windowRole = true;
+	return true;
+}
+
+bool
+Gta4lEmmcBlock::startWindow(IOService *provider)
+{
+	if (!windowRole || (windowOwner == nullptr) ||
+	    (capacityBlocks == 0u) || (provider == nullptr)) {
+		return false;
+	}
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+	if (gta4l_test_windows_start_hook != nullptr) {
+		if (gta4l_test_windows_start_hook(this, windowLabel) == 0) {
+			return false;
+		}
+	}
+#endif
+	if (!IOBlockStorageDevice::start(provider)) {
+		return false;
+	}
+	online = true;
+	registerService();
+	return true;
+}
+
+bool
+Gta4lEmmcBlock::waitWindowMedia(Gta4lEmmcBlock *window,
+    uint8_t uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES], uint32_t waitMs)
+{
+	uint32_t waited = 0;
+
+	if ((window == nullptr) || (uuid == nullptr)) {
+		return false;
+	}
+	while (true) {
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+		if (gta4l_test_windows_media_hook != nullptr) {
+			gta4l_test_windows_media_hook(window,
+			    window->windowLabel);
+		}
+#endif
+		if (gta4l_emmc_block_windows_volume(window, uuid)) {
+			return true;
+		}
+		if (waited >= waitMs) {
+			return false;
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_POLL_MS);
+		waited += GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_POLL_MS;
+	}
+}
+
 void
 Gta4lEmmcBlock::stop(IOService *provider)
 {
+	if (windowRole) {
+		online = false;
+		IOBlockStorageDevice::stop(provider);
+		return;
+	}
 	if (gate != nullptr) {
 		IOLockLock(gate);
 		online = false;
@@ -3237,6 +3482,8 @@ Gta4lEmmcBlock::stop(IOService *provider)
 void
 Gta4lEmmcBlock::free()
 {
+	windowOwner = nullptr;
+	windowRole = false;
 	if (partreadBuffer != nullptr) {
 		IOFreeAligned(partreadBuffer,
 		    GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES);
@@ -3355,6 +3602,29 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	}
 	if (nblks == 0) {
 		return kIOReturnBadArgument;
+	}
+	if (windowRole) {
+		if (windowOwner == nullptr) {
+			return kIOReturnNotReady;
+		}
+		if (!online) {
+			completion->action(completion->target,
+			    completion->parameter, kIOReturnNoMedia, 0);
+			return kIOReturnSuccess;
+		}
+		if ((blockNumber >= (UInt64)capacityBlocks) ||
+		    (nblks > (UInt64)capacityBlocks - blockNumber)) {
+			return kIOReturnBadArgument;
+		}
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+		if (gta4l_test_windows_read_hook != nullptr) {
+			gta4l_test_windows_read_hook(this,
+			    windowBaseBlock + blockNumber, nblks);
+		}
+#endif
+		return windowOwner->doAsyncReadWrite(buffer,
+		    windowBaseBlock + blockNumber, nblks, attributes,
+		    completion);
 	}
 	breakupObserve(buffer, blockNumber, nblks);
 	sweepObserve(buffer, blockNumber, nblks);
@@ -10475,7 +10745,19 @@ Gta4lEmmcBlock::runWindows()
 	uint64_t offset;
 	uint64_t length;
 	int32_t reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE;
+	Gta4lEmmcBlock *pending[GTA4L_EMMC_BLOCK_WINDOWS_MAX] = {};
+	bool attached[GTA4L_EMMC_BLOCK_WINDOWS_MAX] = {};
+	bool started[GTA4L_EMMC_BLOCK_WINDOWS_MAX] = {};
+	uint32_t mediaFound[GTA4L_EMMC_BLOCK_WINDOWS_MAX] = {};
+	uint32_t order[GTA4L_EMMC_BLOCK_WINDOWS_MAX] = {};
+	uint32_t planCount = 0;
+	uint32_t published = 0;
+	uint32_t phase = GTA4L_EMMC_BLOCK_WINDOWS_PHASE_NONE;
+	uint32_t publishError = GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_NONE;
+	uint8_t volumeUuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
+	bool volumeUuidValid = false;
 
+	bzero(volumeUuid, sizeof(volumeUuid));
 	bzero(&parsed, sizeof(parsed));
 	bzero(container, sizeof(container));
 	bzero(digests, sizeof(digests));
@@ -10495,6 +10777,11 @@ Gta4lEmmcBlock::runWindows()
 	    sizeof(report.windows_container_uuid));
 	bzero(report.windows_volume_uuid,
 	    sizeof(report.windows_volume_uuid));
+	report.windows_phase = GTA4L_EMMC_BLOCK_WINDOWS_PHASE_NONE;
+	report.windows_published = 0u;
+	report.windows_publish_error =
+	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_NONE;
+	bzero(report.windows_media, sizeof(report.windows_media));
 	IOLockUnlock(reportLock);
 
 	media = findPartitionMedia(GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES,
@@ -10573,6 +10860,90 @@ Gta4lEmmcBlock::runWindows()
 	memcpy(report.windows_header_digest, digests, sizeof(digests));
 	memcpy(report.windows_container_uuid, container,
 	    sizeof(report.windows_container_uuid));
+	IOLockUnlock(reportLock);
+
+	phase = GTA4L_EMMC_BLOCK_WINDOWS_PHASE_PLAN;
+	if (gta4l_emmc_block_windows_plan(&parsed, order,
+	    &planCount) == 0u) {
+		publishError = GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_PLAN;
+		goto publish_done;
+	}
+	phase = GTA4L_EMMC_BLOCK_WINDOWS_PHASE_PREPARE;
+	for (index = 0; index < planCount; index++) {
+		uint32_t slot = order[index];
+
+		pending[slot] = OSTypeAlloc(Gta4lEmmcBlock);
+		if ((pending[slot] == nullptr) ||
+		    !pending[slot]->init() ||
+		    !pending[slot]->configureWindow(this,
+		    parsed.window[slot].name,
+		    GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES +
+		    parsed.window[slot].offset,
+		    parsed.window[slot].size) ||
+		    !pending[slot]->attach(this)) {
+			publishError =
+			    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_PREPARE;
+			goto publish_fail;
+		}
+		attached[slot] = true;
+	}
+	phase = GTA4L_EMMC_BLOCK_WINDOWS_PHASE_START;
+	for (index = 0; index < planCount; index++) {
+		uint32_t slot = order[index];
+
+		if (!pending[slot]->start(this)) {
+			publishError =
+			    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_START;
+			goto publish_fail;
+		}
+		started[slot] = true;
+		published++;
+		phase = GTA4L_EMMC_BLOCK_WINDOWS_PHASE_MEDIA;
+		if (!waitWindowMedia(pending[slot], volumeUuid,
+		    GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_WAIT_MS)) {
+			publishError =
+			    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA;
+			goto publish_fail;
+		}
+		mediaFound[slot] = 1u;
+		if (strcmp(parsed.window[slot].name, "OS") == 0) {
+			volumeUuidValid = true;
+		}
+		phase = (index + 1u < planCount) ?
+		    GTA4L_EMMC_BLOCK_WINDOWS_PHASE_START :
+		    GTA4L_EMMC_BLOCK_WINDOWS_PHASE_COMPLETE;
+	}
+	goto publish_done;
+
+publish_fail:
+publish_done:
+	for (index = planCount; index > 0u; index--) {
+		uint32_t slot = order[index - 1u];
+
+		if (started[slot]) {
+			continue;
+		}
+		if (pending[slot] != nullptr) {
+			if (attached[slot]) {
+				pending[slot]->detach(this);
+			}
+			pending[slot]->release();
+			pending[slot] = nullptr;
+		}
+	}
+	IOLockLock(reportLock);
+	report.windows_phase = phase;
+	report.windows_published = published;
+	report.windows_publish_error = publishError;
+	memcpy(report.windows_media, mediaFound,
+	    sizeof(report.windows_media));
+	if (volumeUuidValid) {
+		memcpy(report.windows_volume_uuid, volumeUuid,
+		    sizeof(report.windows_volume_uuid));
+	} else {
+		bzero(report.windows_volume_uuid,
+		    sizeof(report.windows_volume_uuid));
+	}
 	IOLockUnlock(reportLock);
 
 done:

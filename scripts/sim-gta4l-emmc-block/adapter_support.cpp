@@ -14,6 +14,10 @@ gta4l_test_breakup_sample_fn gta4l_test_breakup_hook;
 gta4l_test_multi_sample_fn gta4l_test_multi_hook;
 gta4l_test_partition_sample_fn gta4l_test_partition_sample_hook;
 gta4l_test_width_sample_fn gta4l_test_width_hook;
+gta4l_test_windows_media_fn gta4l_test_windows_media_hook;
+gta4l_test_windows_read_fn gta4l_test_windows_read_hook;
+gta4l_test_windows_start_fn gta4l_test_windows_start_hook;
+uint32_t gta4l_test_detach_count;
 gta4l_test_widthhold_sample_fn gta4l_test_widthhold_hook;
 gta4l_test_speed_sample_fn gta4l_test_speed_hook;
 gta4l_test_live_idle_fn gta4l_test_live_idle_hook;
@@ -1682,6 +1686,12 @@ IOMedia::getProperty(const char *key) const
 {
 	if (key == 0) {
 		return 0;
+	}
+	if (strcmp(key, kIOGUIDPartitionSchemeUUIDKey) == 0) {
+		if (uuid_value_ == 0) {
+			return 0;
+		}
+		return IOService::getProperty(key);
 	}
 	if (strcmp(key, kIOMediaWholeKey) == 0) {
 		if ((property_faults & GTA4L_TEST_PROP_WHOLE_MISSING) != 0) {

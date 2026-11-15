@@ -2403,6 +2403,62 @@ gta4l_emmc_block_windows_parse(const uint8_t *header, uint32_t length,
 	return 1u;
 }
 
+static uint32_t
+gta4l_emmc_block_windows_is(const char *name, const char *want)
+{
+	uint32_t index = 0;
+
+	while (want[index] != 0) {
+		if (name[index] != want[index]) {
+			return 0u;
+		}
+		index++;
+	}
+	return (name[index] == 0) ? 1u : 0u;
+}
+
+uint32_t
+gta4l_emmc_block_windows_plan(
+    const struct gta4l_emmc_block_manifest *manifest,
+    uint32_t order[GTA4L_EMMC_BLOCK_WINDOWS_MAX], uint32_t *count)
+{
+	uint32_t index;
+	uint32_t position = 1u;
+	uint32_t system = GTA4L_EMMC_BLOCK_WINDOWS_MAX;
+	uint32_t os = GTA4L_EMMC_BLOCK_WINDOWS_MAX;
+
+	if ((manifest == 0) || (order == 0) || (count == 0) ||
+	    (manifest->valid == 0u) ||
+	    (manifest->count < 2u) ||
+	    (manifest->count > GTA4L_EMMC_BLOCK_WINDOWS_MAX)) {
+		return 0u;
+	}
+	for (index = 0; index < manifest->count; index++) {
+		if (gta4l_emmc_block_windows_is(
+		    manifest->window[index].name, "SystemOS") != 0u) {
+			system = index;
+		}
+		if (gta4l_emmc_block_windows_is(
+		    manifest->window[index].name, "OS") != 0u) {
+			os = index;
+		}
+	}
+	if ((system == GTA4L_EMMC_BLOCK_WINDOWS_MAX) ||
+	    (os == GTA4L_EMMC_BLOCK_WINDOWS_MAX) ||
+	    (system == os)) {
+		return 0u;
+	}
+	order[0] = system;
+	for (index = 0; index < manifest->count; index++) {
+		if ((index != system) && (index != os)) {
+			order[position++] = index;
+		}
+	}
+	order[position] = os;
+	*count = manifest->count;
+	return 1u;
+}
+
 /* Diagnostic-only lines yield to the failure verdict on the panic screen:
  * once a failure is latched the wrapped report already carries the failure
  * lines (BULKFAIL, DMADIAG, LIVEFAIL or SMMUCB), so SPEEDIO and the
@@ -4412,6 +4468,18 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_u64(&writer,
 		    report->windows_image_bytes);
 		if (report->windows_valid != 0u) {
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "pub");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->windows_published);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "phase");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->windows_phase);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "perr");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->windows_publish_error);
 			gta4l_emmc_block_put_char(&writer, ' ');
 			gta4l_emmc_block_put_key(&writer, "mdig");
 			gta4l_emmc_block_put_digest(&writer,
