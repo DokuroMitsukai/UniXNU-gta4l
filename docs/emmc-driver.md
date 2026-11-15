@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 511 scenarios with 192 adapter mutations, 3 support mutations and 52 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 511 scenarios with 193 adapter mutations, 3 support mutations and 52 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,7 +7903,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 511 scenarios with 192 adapter
+Host gates: the block adapter test runs 511 scenarios with 193 adapter
 mutations, 3 support mutations and 52 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
@@ -8703,7 +8703,7 @@ write path's before/after comparison; the current rung is read-only.
 
 **Test.** `windows-manifest` now also rejects a sealed version-2
 header (reason 3) and an unaligned `image_bytes` (reason 5). The
-adapter suite is 511 scenarios (512 PASS lines) with 192 adapter,
+adapter suite is 511 scenarios (512 PASS lines) with 193 adapter,
 3 support and 52 policy mutation controls.
 
 **Milestone mapping.** The storage area of `porting.toml` now maps the
@@ -8844,7 +8844,7 @@ report worst case from 1,938 to 1,986 bytes, inside the 3,584-byte
 buffer and the 23-row screen shape.
 
 **Host tests.** The adapter suite is 511 scenarios (512 PASS lines)
-with 192 adapter, 3 support and 52 policy mutation controls.
+with 193 adapter, 3 support and 52 policy mutation controls.
 `windows-publish` asserts the SystemOS-then-OS order, `pub=2 phase=5
 perr=0`, both media verdicts, the OS UUID from the APFS volume, and a
 window read translated to the userdata-relative absolute block plus a
@@ -8852,11 +8852,13 @@ refused read past the end. `windows-publish-media-fail` (no volume),
 `windows-publish-foreign` (same UUID under the wrong ancestor),
 `windows-publish-start-fail` (OS start refused after SystemOS is
 published) and `windows-publish-plan` (OS-only manifest) cover the
-failure phases and the discard rule. The seven new mutations reject an
+failure phases and the discard rule. The eight new mutations reject an
 order swap, a dropped ancestor check, discarding a started window,
 accepting a read past the end, dropping the UUID capture, ignoring a
-start failure and skipping the media wait; the one-window plan is
-refused by `windows-publish-plan`.
+start failure, skipping the media wait and dropping the window block
+limit; the one-window plan is refused by `windows-publish-plan`. The
+window service advertises the owner's 64-block, 32 KiB and one-segment
+read limits, which `windows-publish` asserts on both windows.
 
 **Not done yet.** The `windows` evidence checker and the S4 candidate
 follow. The APFS kext is not yet confirmed in the prelink roots, and
@@ -8914,3 +8916,64 @@ not `components.toml`.
 
 This closes the plan's APFS prelink question for S4. The device attach
 is still unobserved, and the S5 verified path is unchanged.
+
+### 5.3.137 S4 window read limits and payload personality (2026-11-15)
+
+Host-only. A window now advertises the same transfer limits as the
+owner: `IOMaximumBlockCountRead` 64, `IOMaximumByteCountRead` 32 KiB
+and `IOMaximumSegmentCountRead` 1. Without them the storage stack could
+send a request larger than the owner's 64-block service limit, which the
+owner refuses with `kIOReturnMessageTooLarge` before APFS could attach.
+`windows-publish` asserts all three properties on both window services;
+the new `windows-block-limit-dropped` mutation removes the block limit
+and is rejected.
+
+The diagnostic payload builder, payload checker and package script now
+accept the `emmc-block-3-windows` personality, which maps to
+`gta4l-emmc-block=3 gta4l-emmc-windows=1` and requires the
+`fs-timer-hold` fixture. The payload builder test maps the personality
+and checks the fixture; the package self-test still passes. The block
+adapter suite is 511 scenarios (512 PASS lines) with 193 adapter,
+3 support and 52 policy mutation controls.
+
+**Not done yet.** The S4 candidate archive/payload/BOOT build and its
+gates remain; the device steps need the owner go.
+
+### 5.3.138 S4 windows candidate build (2026-11-15)
+
+Host-only. The S4 candidate was built and gated; no device access, flash
+or boot.
+
+**Kernel.** `c9534d87d76dfa811be1c23ce29d64194f0225295def760696b7a9b52eced67b`
+(51,658,752 bytes), built with the new block archive and the APFS
+prelink root. The new driver methods are present (`runWindows`,
+`configureWindow`, `startWindow`, `waitWindowMedia`). The audited
+storage-ABI addresses are unchanged from the `164dabd5…` audit
+(vtable `fffffff005cb44c0`, metaclass `fffffff006add1d0`, init
+`fffffff00496ee30`), so the archive bindings remain valid; the live
+QEMU audit was not re-run because those addresses are byte-identical.
+
+**Archive and payload.** Archive
+`b6b064a14d946324fd0dd12182e3773194667f48a32f0f46b0650edfdfe3ee70`;
+payload `df0b7aaba016611229059b498deca9004d41d79b0caca7cd22baf8ca479c64bf`
+(83,886,080 bytes) with `rd=md0 gta4l-emmc-block=3
+gta4l-emmc-windows=1`, the fs-timer-hold data ramdisk, the owner trust
+cache and the payload/ADT contract pass.
+
+**BOOT image.** `2c9c050d398f3a85e0a159efac4a720385421ea7988ad047818110c1bfea5102`
+(85,688,320 bytes), boot-image gate 18/18. The v5 baseline file is not
+present in this checkout; the S3a image `97ca05c6…` supplied the
+byte-identical non-ramdisk sections as the donor
+(`only_ramdisk_differs=true`). The boot kernel section remains
+`a4b054e0…`, firmware `1e8a3132…`, DTB `dc4c719d…`.
+
+**Host gates.** Block suite `exit=0` (511 scenarios, 193 adapter,
+3 support and 52 policy mutation controls); payload builder and package
+tests pass. Expected pre-write line `valid=0 reason=2 count=0 image=0`;
+expected post-write line `valid=1 reason=0 count=2 image=9382658048
+pub=2 phase=5 perr=0` with OS/SystemOS digests, `apfs=1`, container
+`50f8a67f…` and volume `04769d26…`.
+
+**Not done yet.** The read-only pre-write boot, the userdata write
+(`fd43ee70…`) and the verdict boot each need the owner go naming the
+image SHA-256.

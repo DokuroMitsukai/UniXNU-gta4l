@@ -526,6 +526,11 @@ def test_emmc_block_3_bulk(base):
     check_observation_personality(base, 'emmc-block-3-bulk', 3, 'bulk')
 
 
+def test_emmc_block_3_windows(base):
+    check_observation_personality(base, 'emmc-block-3-windows', 3,
+                                  'windows')
+
+
 def test_emmc_block_3_live(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     record = base / 'argv.json'
@@ -1592,7 +1597,7 @@ def main():
              test_emmc_block_3_consume, test_emmc_block_3_width4,
              test_emmc_block_3_widthhold, test_emmc_block_3_widthpub,
              test_emmc_block_3_speed, test_emmc_block_3_bulk,
-             test_emmc_block_3_live,
+             test_emmc_block_3_windows, test_emmc_block_3_live,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,

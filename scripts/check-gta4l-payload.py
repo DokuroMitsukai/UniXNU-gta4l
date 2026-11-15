@@ -67,6 +67,7 @@ SPEED_PREFIX = 'gta4l-emmc-speed='
 BULK_PREFIX = 'gta4l-emmc-bulk='
 DMA_PREFIX = 'gta4l-emmc-dma='
 LIVE_PREFIX = 'gta4l-emmc-live='
+WINDOWS_PREFIX = 'gta4l-emmc-windows='
 SLOW_PREFIX = 'gta4l-emmc-slow='
 BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
 # The partobs, partcmp, partread, deblock, breakup, sweep, consume, width,
@@ -119,6 +120,9 @@ BULK_DIAGNOSTICS = {
 }
 LIVE_DIAGNOSTICS = {
     'emmc-block-3-live': 'emmc-block-3',
+}
+WINDOWS_DIAGNOSTICS = {
+    'emmc-block-3-windows': 'emmc-block-3',
 }
 
 
@@ -258,6 +262,8 @@ def diagnostic_contract(args, expected='any'):
                   if item.startswith(DMA_PREFIX)]
     live_tokens = [item for item in tokens
                    if item.startswith(LIVE_PREFIX)]
+    windows_tokens = [item for item in tokens
+                      if item.startswith(WINDOWS_PREFIX)]
     slow_tokens = [item for item in tokens
                    if item.startswith(SLOW_PREFIX)]
     checks = {'exactly_one_diagnostic_argument': len(found) == 1}
@@ -454,6 +460,18 @@ def diagnostic_contract(args, expected='any'):
             not dma_tokens or block_tokens == [BLOCK_PREFIX + '3'])
         checks['dma_requires_bulk'] = (
             not dma_tokens or bulk_tokens == [BULK_PREFIX + '1'])
+        checks['at_most_one_windows_token'] = len(windows_tokens) <= 1
+        checks['windows_value_one'] = all(
+            item == WINDOWS_PREFIX + '1' for item in windows_tokens)
+        checks['windows_requires_block_three'] = (
+            not windows_tokens or block_tokens == [BLOCK_PREFIX + '3'])
+        checks['windows_no_other_modifier'] = (
+            not windows_tokens or not (
+                partobs_tokens or partcmp_tokens or partread_tokens or
+                deblock_tokens or breakup_tokens or sweep_tokens or
+                consume_tokens or width_tokens or widthhold_tokens or
+                widthpub_tokens or speed_tokens or bulk_tokens or
+                dma_tokens or live_tokens or slow_tokens))
         checks['at_most_one_live_token'] = len(live_tokens) <= 1
         checks['live_value_one'] = all(
             item == LIVE_PREFIX + '1' for item in live_tokens)
@@ -656,6 +674,18 @@ def diagnostic_contract(args, expected='any'):
                 not consume_tokens and not width_tokens and
                 not widthhold_tokens and not widthpub_tokens and
                 not speed_tokens)
+        elif expected in WINDOWS_DIAGNOSTICS:
+            base = WINDOWS_DIAGNOSTICS[expected]
+            checks[f'{expected}_diagnostic_selected'] = (
+                found == [DIAGNOSTIC_NAMES[base]] and
+                windows_tokens == [WINDOWS_PREFIX + '1'] and
+                not partobs_tokens and not partcmp_tokens and
+                not partread_tokens and not deblock_tokens and
+                not breakup_tokens and not sweep_tokens and
+                not consume_tokens and not width_tokens and
+                not widthhold_tokens and not widthpub_tokens and
+                not speed_tokens and not bulk_tokens and
+                not dma_tokens and not live_tokens and not slow_tokens)
         else:
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[expected]] and
@@ -672,6 +702,8 @@ def diagnostic_contract(args, expected='any'):
                                            *LIVE_DIAGNOSTICS):
             checks[f'{expected}_diagnostic_selected'] = False
         if live_tokens and expected not in LIVE_DIAGNOSTICS:
+            checks[f'{expected}_diagnostic_selected'] = False
+        if windows_tokens and expected not in WINDOWS_DIAGNOSTICS:
             checks[f'{expected}_diagnostic_selected'] = False
         if slow_tokens:
             checks[f'{expected}_diagnostic_selected'] = False
@@ -747,7 +779,8 @@ def main():
                                  *WIDTHPUB_DIAGNOSTICS,
                                  *SPEED_DIAGNOSTICS,
                                  *BULK_DIAGNOSTICS,
-                                 *LIVE_DIAGNOSTICS),
+                                 *LIVE_DIAGNOSTICS,
+                                 *WINDOWS_DIAGNOSTICS),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

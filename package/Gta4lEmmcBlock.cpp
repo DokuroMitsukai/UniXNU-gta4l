@@ -3425,6 +3425,13 @@ Gta4lEmmcBlock::startWindow(IOService *provider)
 		}
 	}
 #endif
+	if (!setProperty(kIOMaximumBlockCountReadKey,
+	    (unsigned long long)GTA4L_EMMC_BLOCK_MAX_BLOCKS, 32) ||
+	    !setProperty(kIOMaximumByteCountReadKey,
+	    (unsigned long long)GTA4L_EMMC_BLOCK_MAX_BYTES, 32) ||
+	    !setProperty(kIOMaximumSegmentCountReadKey, 1ull, 32)) {
+		return false;
+	}
 	if (!IOBlockStorageDevice::start(provider)) {
 		return false;
 	}
@@ -10874,7 +10881,7 @@ Gta4lEmmcBlock::runWindows()
 
 		pending[slot] = OSTypeAlloc(Gta4lEmmcBlock);
 		if ((pending[slot] == nullptr) ||
-		    !pending[slot]->init() ||
+		    !pending[slot]->init(nullptr) ||
 		    !pending[slot]->configureWindow(this,
 		    parsed.window[slot].name,
 		    GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES +

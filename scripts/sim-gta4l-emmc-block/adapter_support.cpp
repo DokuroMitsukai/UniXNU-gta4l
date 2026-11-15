@@ -1438,8 +1438,9 @@ IOFreeContiguous(void *address, size_t size)
 }
 
 bool
-IOService::init()
+IOService::init(OSDictionary *properties)
 {
+	(void)properties;
 	return gta4l_test.consume_client_init_fail == 0;
 }
 

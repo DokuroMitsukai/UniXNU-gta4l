@@ -232,7 +232,7 @@ public:
 	inline static const int test_tag = 0;
 	IOService() : property_count_(0), provider_(0), registered_(false),
 	    uuid_value_(0), child_count_(0) {}
-	const void *typeTag() const override { return &test_tag; }	virtual bool init();
+	const void *typeTag() const override { return &test_tag; }	virtual bool init(OSDictionary *properties = nullptr);
 	virtual bool start(IOService *provider) { provider_ = provider; return true; }
 	virtual void stop(IOService *provider) { (void)provider; }
 	virtual void free() {}

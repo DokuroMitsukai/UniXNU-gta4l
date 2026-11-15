@@ -1769,6 +1769,12 @@ ADAPTER_MUTATIONS = [
      [('\t\tif (!waitWindowMedia(pending[slot], volumeUuid,\n',
        '\t\tif (0 && !waitWindowMedia(pending[slot], volumeUuid,\n')],
      'windows-publish-media-fail'),
+    ('windows-block-limit-dropped',
+     [('\tif (!setProperty(kIOMaximumBlockCountReadKey,\n'
+       '\t    (unsigned long long)GTA4L_EMMC_BLOCK_MAX_BLOCKS, 32) ||\n'
+       '\t    !setProperty(kIOMaximumByteCountReadKey,\n',
+       '\tif (!setProperty(kIOMaximumByteCountReadKey,\n')],
+     'windows-publish'),
 ]
 
 SUPPORT_MUTATIONS = [

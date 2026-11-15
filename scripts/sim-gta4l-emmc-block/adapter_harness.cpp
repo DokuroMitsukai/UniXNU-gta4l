@@ -15845,7 +15845,30 @@ scenario_windows_publish(void)
 	CHECK(strstr(gta4l_test.panic,
 	    " uuid=04769d262ca04825b443e2e5f88300f2") != 0);
 
+	CHECK(g_windows_device[0] != 0);
 	CHECK(g_windows_device[1] != 0);
+	for (uint32_t slot = 0; slot < 2; slot++) {
+		OSNumber *blocks = OSDynamicCast(OSNumber,
+		    g_windows_device[slot]->getProperty(
+		    kIOMaximumBlockCountReadKey));
+		uint64_t blockValue = (blocks != 0) ?
+		    blocks->unsigned64BitValue() : 0ull;
+		OSNumber *bytes = OSDynamicCast(OSNumber,
+		    g_windows_device[slot]->getProperty(
+		    kIOMaximumByteCountReadKey));
+		uint64_t byteValue = (bytes != 0) ?
+		    bytes->unsigned64BitValue() : 0ull;
+		OSNumber *segments = OSDynamicCast(OSNumber,
+		    g_windows_device[slot]->getProperty(
+		    kIOMaximumSegmentCountReadKey));
+		uint64_t segmentValue = (segments != 0) ?
+		    segments->unsigned64BitValue() : 0ull;
+
+		CHECK(blocks != 0 && bytes != 0 && segments != 0);
+		CHECK(blockValue == GTA4L_EMMC_BLOCK_MAX_BLOCKS);
+		CHECK(byteValue == GTA4L_EMMC_BLOCK_MAX_BYTES);
+		CHECK(segmentValue == 1u);
+	}
 	status = issue_device_read(g_windows_device[1], 0, 1, 512);
 	CHECK(status == kIOReturnSuccess);
 	CHECK(g_completion.calls == 1);
