@@ -15210,6 +15210,7 @@ scenario_windows_manifest(void)
 	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
 	    1u << 20, 2u << 20);
 	windows_put_u32(header + 8u, 2u);
+	windows_manifest_seal(header);
 	CHECK(windows_expect_reason(header, sizeof(header), partition,
 	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_VERSION) == 1);
 	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
@@ -15225,6 +15226,12 @@ scenario_windows_manifest(void)
 	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
 	    1u << 20, 2u << 20);
 	windows_put_u64(header + 16u, 0u);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_IMAGE) == 1);
+	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u64(header + 16u, image + 512u);
+	windows_manifest_seal(header);
 	CHECK(windows_expect_reason(header, sizeof(header), partition,
 	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_IMAGE) == 1);
 	windows_manifest_build(header, 2u, image, "OS", "SystemOS",

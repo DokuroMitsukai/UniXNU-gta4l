@@ -8559,8 +8559,9 @@ the APFS attach; this section covers the portable validation and the
 report line that those steps feed.
 
 **Manifest parser.** `gta4l_emmc_block_windows_parse` validates the
-4096-byte SHNGROOT header: magic, version 1, count 1..2, `image_bytes`
-inside the userdata partition, the SHA-256 at 4064 over bytes 0..4063,
+4096-byte SHNGROOT header: magic, version 1, count 1..2, a
+4096-multiple `image_bytes` inside the userdata partition, the SHA-256
+at 4064 over bytes 0..4063,
 and each 128-byte entry's printable NUL-terminated name, 1 MiB-aligned
 offset at or after 1 MiB, non-zero 512-byte-multiple size inside
 `image_bytes`, block size 512, read-only flag 1, zero reserved bytes, no
@@ -8647,3 +8648,145 @@ controls pass; the adapter suite is 506 scenarios (507 PASS lines).
 still zero; the `windows` evidence checker and the S4 candidate follow
 that. The device write still needs its own go naming the image SHA-256
 and the backup answer.
+
+### 5.3.132 S4 parser alignment with ShengUfs RootLayout (2026-11-15)
+
+Host-only. No device access, flash or boot. The portable SHNGROOT parser
+was compared with the official ShengUfs reference
+(`fd420df0` `RootLayout.h`, `RootPublication.h`, `RootWindowRead.h`) and
+two bounds rules were aligned. The adopter remains this port's parser;
+no ShengUfs code is copied.
+
+**Userdata identity.** ShengUfs reads the LUN 0 GPT, validates the
+header and entry-array CRCs and finds the entry named `userdata`. This
+port matches the exact board base/size on a non-whole `IOMedia` whose
+ancestry contains the block driver. A range is unique in a valid GPT,
+and the PARTMAP rung already compares the whole published range set
+with the primary GPT (match/missing/extra/duplicate), so the GPT name
+adds no discrimination to the read-only rung. If a different media
+were matched, the manifest magic or digest fails closed with reason 2
+or 6 before any window is published. Partition names, type GUIDs and
+unique GUIDs remain unread by design, as recorded in the N9.1 design.
+
+**Version 2 refused.** ShengUfs accepts version 1 (windows only, up to
+four) and version 2 (up to eight entries: windows plus data objects with
+block size 4096 and flags 3). This rung publishes windows only, so the
+parser refuses any version other than 1 with reason 3, and the test now
+seals the version-2 header before asserting the refusal, proving the
+verdict comes from the version field and not a digest mismatch. Version-2
+data objects are never published as block devices.
+
+**Bounds.** `image_bytes` must now be a 4096 multiple, matching
+ShengUfs's status-4 rule, in addition to being at least 1 MiB and inside
+the partition. With 1 MiB-aligned window offsets, the exact overlap test
+is then equivalent to ShengUfs's overlap test padded to 4096 bytes:
+both window starts are 4096-aligned and `image_bytes` is a 4096
+multiple, so a 4 KiB read of one window's tail cannot share a sector
+with the next window's head. Counts stay 1..2 (the board builds OS and
+SystemOS); ShengUfs allows 1..4. The real image from §5.3.129 re-checked
+against the aligned rules: version 1, two windows, `image_bytes`
+9,382,658,048 (a 4096 multiple), valid header digest and manifest
+SHA-256 `bc908a6c…` unchanged.
+
+**Reason mapping.** This parser keeps a more specific namespace than
+ShengUfs's `manifestStatus` 0..7: status 1 (magic) is reason 2; 2
+(version/count) is 3/4; 3 (hash) is 6; 4 (bounds) is 5/8/9; 5 (names)
+is 7/14; 6 (overlap) is 13; 7 (attributes) is 10/11/12. `NONE` is 0.
+The media, read, cancel and budget reasons 15..18 have no ShengUfs
+counterpart because ShengUfs owns its IOKit waits in the adapter.
+
+**Deliberately not adopted.** Version-2 data objects, the persistent
+GPT CRC/LBA facts (`gptHeaderCrc`, `gptEntriesCrc`, `gptEntriesLba`,
+`gptEntryCount`) and the ext4 magic diagnostics (`magic0/magic1`,
+`ext4Magic`, `ext4Blocks`). The GPT facts become useful for the S7
+write path's before/after comparison; the current rung is read-only.
+
+**Test.** `windows-manifest` now also rejects a sealed version-2
+header (reason 3) and an unaligned `image_bytes` (reason 5). The
+adapter suite stays at 506 scenarios (507 PASS lines) with 186 adapter,
+3 support and 51 policy mutation controls.
+
+**Milestone mapping.** The storage area of `porting.toml` now maps the
+ladder onto the guide's storage milestones: hardware inventory (S0/board
+inventory rows), host access (S1 SPEED), DMA and commands (B10
+ADMA2/SMMU), block reads (S2 BULK, S3 LIVE, S4 WINDOWS), root (S5),
+persistence (S7 write path and the post-S5 log region) and performance
+(S8 against the mainline Linux sdhci-msm driver).
+
+### 5.3.133 S5 VerifiedRoot decision: per-block verification required (2026-11-15)
+
+Host-only research. No device access, flash or boot. This answers the
+S4→S5 plan's open question before the window class is designed.
+
+**Question.** Does the iPadOS 17.7.11 root mount from the eMMC OS window
+need authenticated block reads, or does the original APFS volume mount
+and start launchd on its own?
+
+**Answer: yes, the root path must authenticate the volume and verify
+every block.** Four sources establish this:
+
+- `scripts/check-original-apfs-root-checkpoints.py` (UniXNU): the
+  original OS volume mounts from read-only virtual media, then the
+  genuine post-mount root authentication panics with
+  `rootvp not authenticated after mounting` when the root is the
+  unsealed restore volume. The sealed SystemCryptex root refusal is
+  preserved separately. A raw, unauthenticated root is refused before
+  userspace.
+- `scripts/check-original-launchd-main-checkpoints.py` (UniXNU): the
+  unchanged original launchd reaches `LC_MAIN` at EL0 only with
+  `owner_root_binding_audit.boot_root_accepted == 1`,
+  `_native_owner_root_apple_autherr == 80`, the original AMFI and crypto
+  tables still genuine and zero virtual-media integrity failures. The
+  owner root path authenticates the media; it does not disable AMFI.
+- ShengUfs `fd420df0` `NativeUfs.cpp`: with `NATIVE_VERIFIED_BLOCK`,
+  each window selects the one owner policy whose signed `image_bytes`
+  equals the window size, opens the header and signature, and serves a
+  read only after `vr_verify_block` accepts every 4096-byte block. A
+  window without a matching policy is never published. `authenticatesVolume`
+  compares the signed volume UUID and feeds `native_ufs_block_authenticates`.
+- `kits/VerifiedRoot`: 160-byte header, 384-byte RSA-3072 signature,
+  4096-byte block hashes and a trusted key supplied out of band.
+
+**Consequences for this port.**
+
+- The OS window is exactly 6,077,580,800 bytes = 1,483,784 full
+  4096-byte blocks plus a final 1,536-byte block, 1,483,785 policy
+  blocks. Its hash table is 1,483,785 × 32 = 47,481,120 bytes
+  (45.28 MiB). The header and signature are 544 bytes and the key anchor
+  is 395 bytes, but the table cannot join the payload: the diagnostic
+  payload is 83,886,080 bytes and the boot image 85,688,320 bytes
+  against a 100,663,296-byte BOOT partition.
+- ShengUfs stores the table as a version-2 data object (`OS.vroot`,
+  block size 4096, flags 3) and embeds only the header and signature in
+  the boot image. This port's SHNGROOT image is version 1 and has no
+  data objects, so S5 must re-cut the userdata image as version 2 and
+  repeat the R2 userdata write under a fresh owner go. The v2 object
+  needs a 4096-aligned offset and a 4 KiB-padded extent inside
+  `image_bytes`; the object size itself may be any byte count (the
+  47,481,120-byte table is not a 4096 multiple). The existing OS and
+  SystemOS windows are unchanged.
+- The kernel owner-root patches (`offline-owner-root-*`) call
+  `native_verified_block_root_authorized`,
+  `native_verified_block_volume_device` and
+  `native_verified_block_manifest_sha384`. Those symbols live in
+  NativeVirtioBlock today. The eMMC window path must export equivalents
+  (and the weak `native_ufs_block_authenticates` hook) and the kernel
+  must be built with `XNU_OWNER_ROOT_AUDIT`/`XNU_OWNER_ROOT_TRUST`;
+  both default to 0, the audit currently requires
+  `XNU_VERIFIED_ROOT_PROBE=1`, and the trust requires
+  `XNU_NATIVE_VIRTIO_BLOCK=1`.
+- The window class carries the verify hook from the start, even though
+  S4 runs it report-only. The S4 image (`fd43ee70…`, version 1) stays
+  the S4 write; its window publication is read-only evidence and does
+  not claim root authentication. S5 adds the policy, the v2
+  `OS.vroot` object, the owner key anchor and the kernel symbols, then
+  repeats the userdata write. The alternative, cutting v2 before S4,
+  would delay the first hardware window verdict until the shared
+  `unixnu build userdata` builder gains object support.
+- The private owner key stays outside the tree; only the public anchor
+  is embedded. The policy must be signed for volume UUID
+  `04769D26-2CA0-4825-B443-E2E5F88300F2` and a positive generation.
+
+**Recorded in `porting.toml`.** The storage area carries this decision
+and the S5 inputs: policy header/signature location, v2 object size,
+owner key handling and the kernel symbol/config requirements.

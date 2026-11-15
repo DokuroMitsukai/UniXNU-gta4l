@@ -2266,6 +2266,13 @@ gta4l_emmc_block_windows_parse(const uint8_t *header, uint32_t length,
 		}
 	}
 	manifest->version = gta4l_emmc_block_get_u32(header + 8u);
+	/*
+	 * ShengUfs RootLayout.h accepts version 1 (windows only, up to four)
+	 * and version 2 (up to eight entries: windows plus data objects with
+	 * block size 4096 and flags 3). This rung publishes windows only, so
+	 * a version-2 manifest is refused explicitly instead of treating a
+	 * data object as a publishable window.
+	 */
 	if (manifest->version != GTA4L_EMMC_BLOCK_WINDOWS_VERSION) {
 		return gta4l_emmc_block_windows_fail(manifest,
 		    GTA4L_EMMC_BLOCK_WINDOWS_REASON_VERSION);
@@ -2278,6 +2285,8 @@ gta4l_emmc_block_windows_parse(const uint8_t *header, uint32_t length,
 	manifest->count = count;
 	image_bytes = gta4l_emmc_block_get_u64(header + 16u);
 	if ((image_bytes < GTA4L_EMMC_BLOCK_WINDOWS_ALIGN_BYTES) ||
+	    ((image_bytes %
+	    GTA4L_EMMC_BLOCK_WINDOWS_IMAGE_ALIGN_BYTES) != 0u) ||
 	    (image_bytes > partition_bytes)) {
 		return gta4l_emmc_block_windows_fail(manifest,
 		    GTA4L_EMMC_BLOCK_WINDOWS_REASON_IMAGE);
