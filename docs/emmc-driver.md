@@ -9235,3 +9235,31 @@ content hint. The next candidate's `wdiag`/`wpoll`/`wtime` will show
 whether the window media was never published, the APFS probe was
 rejected, or attach/replay exceeded 2,000 ms. No timeout change is made
 before that evidence.
+
+### 5.3.146 S4d windows diagnostics candidate build (2026-11-15)
+
+Host-only; not flashed or booted. **Kernel**
+`9b97c7d6424ac4ec74d3a316eae245ea8b53f1ea1ac943518c40449edcbf702d`
+(51,658,752 bytes), built from the restored audited `164dabd5` pre-link
+input; archive `6a7ab5b3678654f7642e6bfa106bdf0e385a35e7e2908c117dccf98887093c55`
+with `qualified=true` and `candidate_matches_audit=true`. The audited
+storage-ABI addresses are unchanged (vtable `fffffff005cb44c0`,
+metaclass `fffffff006add1d0`, init `fffffff00496ee30`).
+**Payload** `9e66cc7413fe7da1921544c3c5d4dc80b046603f5dbd5669c38d1721922a7bbb`
+(83,886,080 bytes; `rd=md0 gta4l-emmc-block=3 gta4l-emmc-windows=1`,
+fs-timer-hold, owner trust; contract pass). **BOOT**
+`8ffe68b9c67c894d30a94d52d0dc99df4a9e87f94b7b9c7f9134b6ecbc1ba410`
+(85,688,320 bytes; 18/18 gates; only the ramdisk differs from the S3a
+donor). Userdata is the verified `fd43ee70…` image; the 8 MiB repair is
+clean after a power cycle and the full comparison has 0 differing bytes.
+This is a verdict-only image: no pre-write boot and no userdata rewrite.
+
+Expected success: `pub=2 phase=5 perr=0 wfail=4294967295 wdiag=15`,
+`rms≈1677 rch=129`, `uuid=04769d26…`. If SystemOS still fails, the
+expected shape is `pub=1 phase=4 perr=4 wfail=1 wdiag=<stage>
+wpoll=21 wtime=2000 rms≈1677 rch=129`; `wdiag` 0/1/5/3/7 separates no
+window media, no UUID, no APFS ancestor and container-only from an
+accepted volume. No timeout was changed.
+
+Evidence: `out/gta4l/ram-root-emmc-s4d-windows-candidate-evidence/`;
+archived on the PC drive as `s4d-windows-candidate.tar.xz`.
