@@ -145,8 +145,9 @@ _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES <=
 _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES ==
     (GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES +
     GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u +
-    GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES + 1u),
-    "WINDOWS worst case must match the formatter");
+    GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES + 1u +
+    GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES + 1u),
+    "WINDOWS and VERIFY worst case must match the formatter");
 _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES <=
     (GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS *
     GTA4L_EMMC_BLOCK_SCREEN_COLUMNS),
@@ -4670,6 +4671,42 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_key(&writer, "rch");
 		gta4l_emmc_block_put_u64(&writer,
 		    report->windows_read_chunks);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
+
+	if (report->verify != 0u) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 VERIFY: ");
+		gta4l_emmc_block_put_key(&writer, "valid");
+		gta4l_emmc_block_put_u64(&writer, report->verify_valid);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reason");
+		gta4l_emmc_block_put_u64(&writer, report->verify_reason);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "os");
+		gta4l_emmc_block_put_u64(&writer, report->verify_os);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "sysos");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->verify_systemos);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "blocks");
+		gta4l_emmc_block_put_u64(&writer, report->verify_blocks);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "ms");
+		gta4l_emmc_block_put_u64(&writer, report->verify_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "fail");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->verify_fail_block);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "osha");
+		gta4l_emmc_block_put_digest(&writer,
+		    report->verify_os_sha384, 16u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "ssha");
+		gta4l_emmc_block_put_digest(&writer,
+		    report->verify_systemos_sha384, 16u);
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 

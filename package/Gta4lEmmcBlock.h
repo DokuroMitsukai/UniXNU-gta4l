@@ -580,7 +580,7 @@ extern "C" {
  * report adds it to the base, the compact SPEED and SPEEDIO lines (2,155
  * bytes at their type maxima). */
 #define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 767u
-#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2155u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2376u
 
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0

@@ -2705,8 +2705,8 @@ def check_adapter_source():
         'the WINDOWS line must carry pmc/pwait'
     assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 767u' in \
         policy_header, 'the WINDOWS formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2155u' in \
-        policy_header, 'the WINDOWS report bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2376u' in \
+        policy_header, 'the WINDOWS and VERIFY report bound must stay exact'
     assert 'GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID \\\n' \
         '\t"04769D26-2CA0-4825-B443-E2E5F88300F2"' in policy_header and \
         'GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID \\\n' \

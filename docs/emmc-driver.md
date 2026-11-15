@@ -9551,6 +9551,13 @@ adds the kit include and the generated policy include, defines
 and records the kit and policy-header hashes in the archive report. Both
 sources compile with the kernel flags on this host.
 
-Next: the `gta4l-emmc-verify=1` rung loads the two objects, calls
-`vr_open`, verifies the sampled window blocks, prints the VERIFY line and
-exports the three `native_verified_block_*` functions.
+The `gta4l-emmc-verify=1` rung (requires `gta4l-emmc-windows=1`) loads
+both `.vroot` tables from userdata, checks each against the manifest
+entry, builds the signed envelope from the embedded header/signature and
+calls `vr_open` with the XNU corecrypto adapter. It verifies the first
+and last 1 MiB of each window block by block (including the OS partial
+final block) and prints a bounded `VERIFY` line with the open verdicts,
+block count, elapsed time, first failing block and both envelope
+SHA-384 prefixes. The block suite passes (exit=0, 297 PASS lines); the
+kernel compile record accepts the driver and the kit. Remaining S5c work:
+the three `native_verified_block_*` exports and their host tests.

@@ -34,6 +34,17 @@
 #include <stdint.h>
 #include <string.h>
 
+#if defined(GTA4L_EMMC_BLOCK_VERIFY) && GTA4L_EMMC_BLOCK_VERIFY && \
+    !defined(GTA4L_EMMC_BLOCK_HOST_TEST)
+#include <libkern/crypto/sha2.h>
+#include "verified_root.h"
+#include "Gta4lEmmcBlockPolicies.h"
+extern "C" const struct vr_crypto vr_xnu_crypto;
+#define GTA4L_EMMC_BLOCK_VERIFY_BUILT 1
+#else
+#define GTA4L_EMMC_BLOCK_VERIFY_BUILT 0
+#endif
+
 #include "Gta4lEmmc.h"
 #include "Gta4lEmmcPlatform.h"
 #include "Gta4lEmmcBlock.h"
@@ -814,6 +825,14 @@ private:
 	void runSpeed(void);
 	bool runBulk(void);
 	bool runWindows(void);
+	bool runVerify(IOMedia *media,
+	    const struct gta4l_emmc_block_manifest *manifest);
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+	bool verifyRange(const struct vr_view *view, IOMedia *media,
+	    const struct gta4l_emmc_block_window *window,
+	    uint64_t start, uint64_t end, uint32_t *blocks,
+	    uint32_t *failBlock);
+#endif
 	bool configureWindow(Gta4lEmmcBlock *owner, const char *name,
 	    uint64_t absolute, uint64_t bytes);
 	bool startWindow(IOService *provider);
@@ -982,6 +1001,7 @@ private:
 	bool liveMode = false;
 	bool slowMode = false;
 	bool windowsMode = false;
+	bool verifyMode = false;
 	uint32_t liveErrors = 0;
 	uint32_t liveRecoveries = 0;
 	uint32_t liveNotified = 0;
@@ -1495,6 +1515,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t liveTokens;
 	uint32_t slowTokens;
 	uint32_t windowsTokens;
+	uint32_t verifyTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
@@ -1529,6 +1550,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int liveParsed;
 	int slowParsed;
 	int windowsParsed;
+	int verifyValue = 0;
+	int verifyParsed;
 	int mode;
 	int partobs;
 	int partcmp;
@@ -1588,6 +1611,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_SLOW_ARG);
 	windowsTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_WINDOWS_ARG);
+	verifyTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_VERIFY_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -1677,6 +1702,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    &windowsValue, sizeof(windowsValue));
 	if ((windowsParsed == 0) && (windowsTokens != 0)) {
 		windowsValue = -1;
+	}
+	verifyParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_VERIFY_ARG,
+	    &verifyValue, sizeof(verifyValue));
+	if ((verifyParsed == 0) && (verifyTokens != 0)) {
+		verifyValue = -1;
 	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
@@ -2476,6 +2506,25 @@ Gta4lEmmcBlock::start(IOService *provider)
 		return false;
 	}
 	windowsMode = (windows == GTA4L_EMMC_BLOCK_WINDOWS_ON);
+	verifyMode = false;
+	if (verifyTokens != 0) {
+		if (!windowsMode) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-verify "
+			    "requires gta4l-emmc-windows=1\n");
+			return false;
+		}
+		if (verifyTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-verify token\n");
+			return false;
+		}
+		if (verifyValue != 1) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-verify "
+			    "value must be 1\n");
+			return false;
+		}
+		verifyMode = true;
+	}
 	if (widthMode) {
 		/* The reference and observed copies never alias: the reference
 		 * is filled only by the pre-switch 1-bit read, the observed
@@ -11105,6 +11154,9 @@ Gta4lEmmcBlock::runWindows()
 	if (parsed.valid == 0u) {
 		goto done;
 	}
+	if (verifyMode) {
+		(void)runVerify(media, &parsed);
+	}
 
 	windowsReadStart = gta4l_emmc_platform_counter();
 	windowsReadStarted = true;
@@ -11332,6 +11384,331 @@ done:
 	}
 	panicWithReport();
 	return false;
+}
+
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+struct gta4l_verified_window_state {
+	const char *uuid_text;
+	const uint8_t *header;
+	const uint8_t *signature;
+	uint8_t *envelope;
+	uint32_t table_bytes;
+	uint32_t blocks;
+	uint64_t image_bytes;
+	struct vr_view view;
+	uint32_t ready;
+};
+
+static struct gta4l_verified_window_state gta4l_verified_window[2];
+#endif
+
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+bool
+Gta4lEmmcBlock::verifyRange(const struct vr_view *view, IOMedia *media,
+    const struct gta4l_emmc_block_window *window, uint64_t start,
+    uint64_t end, uint32_t *blocks, uint32_t *failBlock)
+{
+	uint8_t *chunk;
+	uint64_t aligned;
+	uint64_t position;
+
+	if ((view == nullptr) || (media == nullptr) || (window == nullptr) ||
+	    (blocks == nullptr) || (failBlock == nullptr) || (end <= start) ||
+	    (end > window->size)) {
+		return false;
+	}
+	aligned = start &
+	    ~((uint64_t)(GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES - 1u));
+	chunk = (uint8_t *)IOMallocContiguous(
+	    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES, PAGE_SIZE, nullptr);
+	if (chunk == nullptr) {
+		return false;
+	}
+	for (position = aligned; position < end; ) {
+		uint64_t remaining = end - position;
+		uint32_t bytes = (uint32_t)((remaining >
+		    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES) ?
+		    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES : remaining);
+		uint32_t offset = 0;
+
+		if (bytes > GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES) {
+			bytes &= ~(GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES - 1u);
+		}
+		if (!windowsRead(media, window->offset + position, bytes,
+		    chunk)) {
+			IOFreeContiguous(chunk,
+			    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES);
+			return false;
+		}
+		while (offset < bytes) {
+			uint64_t blockOffset = position + offset;
+			uint64_t block = blockOffset /
+			    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES;
+			uint64_t left = view->image_bytes -
+			    block * GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES;
+			uint32_t expected = (left <
+			    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES) ?
+			    (uint32_t)left :
+			    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES;
+
+			if ((expected > (bytes - offset)) ||
+			    (vr_verify_block(view, block, chunk + offset,
+			    expected, &vr_xnu_crypto) != VR_OK)) {
+				*failBlock = (uint32_t)block;
+				IOFreeContiguous(chunk,
+				    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES);
+				return false;
+			}
+			(*blocks)++;
+			offset += expected;
+		}
+		position += bytes;
+	}
+	IOFreeContiguous(chunk, GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES);
+	return true;
+}
+
+#endif
+
+bool
+Gta4lEmmcBlock::runVerify(IOMedia *media,
+    const struct gta4l_emmc_block_manifest *manifest)
+{
+	uint32_t reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_NONE;
+	uint32_t verified = 0;
+	uint32_t failBlock = 0xffffffffu;
+	uint32_t openedOs = 0;
+	uint32_t openedSystemos = 0;
+	uint8_t osSha[16] = {0};
+	uint8_t systemosSha[16] = {0};
+	uint32_t verifyMs = 0;
+	bool ok = true;
+
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+	uint32_t index;
+	uint64_t verifyStart = gta4l_emmc_platform_counter();
+	uint64_t verifyHz = gta4l_emmc_platform_counter_hz();
+	static const char *labels[2] = { "OS", "SystemOS" };
+	static const uint64_t imageBytes[2] = {
+		6077580800ull, 3303014400ull
+	};
+	static const uint32_t tableBytes[2] = {
+		GTA4L_EMMC_BLOCK_VERIFY_OS_TABLE_BYTES,
+		GTA4L_EMMC_BLOCK_VERIFY_SYSTEMOS_TABLE_BYTES
+	};
+	uint8_t *chunk = nullptr;
+
+	if ((manifest == nullptr) || (media == nullptr) ||
+	    (manifest->version != GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO) ||
+	    (manifest->object_count != 2u) || (manifest->count != 2u)) {
+		reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_MANIFEST;
+		ok = false;
+	}
+	chunk = (uint8_t *)IOMallocContiguous(
+	    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES, PAGE_SIZE, nullptr);
+	if (chunk == nullptr) {
+		reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_MEMORY;
+		ok = false;
+	}
+	for (index = 0; ok && (index < 2u); index++) {
+		const struct gta4l_emmc_block_window *object = nullptr;
+		const uint8_t *header = (index == 0u) ?
+		    gta4l_os_policy_header : gta4l_systemos_policy_header;
+		const uint8_t *signature = (index == 0u) ?
+		    gta4l_os_policy_signature :
+		    gta4l_systemos_policy_signature;
+		const char *uuidText = (index == 0u) ?
+		    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID :
+		    GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID;
+		uint8_t expectedUuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
+		uint8_t digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
+		uint64_t offset;
+		uint32_t total = GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
+		    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
+		    tableBytes[index];
+		uint8_t *envelope;
+		struct vr_view view;
+		int status;
+		uint32_t other;
+
+		for (other = 0; other < manifest->object_count; other++) {
+			if (strcmp(manifest->object[other].name,
+			    (index == 0u) ? "OS.vroot" :
+			    "SystemOS.vroot") == 0) {
+				object = &manifest->object[other];
+				break;
+			}
+		}
+		if ((object == nullptr) ||
+		    (object->size != tableBytes[index]) ||
+		    (object->block_size !=
+		    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE)) {
+			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_OBJECT;
+			ok = false;
+			break;
+		}
+		envelope = (uint8_t *)IOMalloc(total);
+		if (envelope == nullptr) {
+			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_MEMORY;
+			ok = false;
+			break;
+		}
+		memcpy(envelope, header,
+		    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES);
+		memcpy(envelope + GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES,
+		    signature, GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES);
+		for (offset = 0; offset < object->size; ) {
+			uint64_t left = object->size - offset;
+			uint32_t bytes = (uint32_t)((left >
+			    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES) ?
+			    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES : left);
+
+			if (!windowsRead(media, object->offset + offset,
+			    bytes, chunk)) {
+				reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_READ;
+				ok = false;
+				break;
+			}
+			memcpy(envelope +
+			    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
+			    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES + offset,
+			    chunk, bytes);
+			offset += bytes;
+		}
+		if (!ok) {
+			IOFree(envelope, total);
+			break;
+		}
+		gta4l_emmc_block_sha256(envelope +
+		    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
+		    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES,
+		    object->size, digest);
+		if (memcmp(digest, object->sha256,
+		    sizeof(digest)) != 0) {
+			IOFree(envelope, total);
+			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_OBJECT;
+			ok = false;
+			break;
+		}
+		if (!gta4l_emmc_block_uuid_text(uuidText,
+		    expectedUuid)) {
+			IOFree(envelope, total);
+			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_OBJECT;
+			ok = false;
+			break;
+		}
+		status = vr_open(envelope, total,
+		    gta4l_owner_anchor,
+		    GTA4L_EMMC_BLOCK_VERIFY_GENERATION, &vr_xnu_crypto,
+		    &view);
+		if ((status != VR_OK) ||
+		    (view.image_bytes != imageBytes[index]) ||
+		    (memcmp(view.volume_uuid, expectedUuid,
+		    sizeof(expectedUuid)) != 0)) {
+			IOFree(envelope, total);
+			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_OPEN;
+			ok = false;
+			break;
+		}
+		if (gta4l_verified_window[index].envelope != nullptr) {
+			IOFree(gta4l_verified_window[index].envelope,
+			    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
+			    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
+			    gta4l_verified_window[index].table_bytes);
+		}
+		gta4l_verified_window[index].uuid_text = uuidText;
+		gta4l_verified_window[index].header = header;
+		gta4l_verified_window[index].signature = signature;
+		gta4l_verified_window[index].envelope = envelope;
+		gta4l_verified_window[index].table_bytes =
+		    tableBytes[index];
+		gta4l_verified_window[index].blocks = view.block_count;
+		gta4l_verified_window[index].image_bytes =
+		    view.image_bytes;
+		gta4l_verified_window[index].view = view;
+		gta4l_verified_window[index].ready = 1u;
+		{
+			SHA384_CTX context;
+			uint8_t full[48];
+
+			SHA384_Init(&context);
+			SHA384_Update(&context, envelope, total);
+			SHA384_Final(full, &context);
+			memcpy((index == 0u) ? osSha : systemosSha,
+			    full, 16);
+		}
+		if (index == 0u) {
+			openedOs = 1u;
+		} else {
+			openedSystemos = 1u;
+		}
+	}
+	if (chunk != nullptr) {
+		IOFreeContiguous(chunk,
+		    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES);
+	}
+	for (index = 0; ok && (index < 2u); index++) {
+		uint32_t other;
+
+		for (other = 0; other < manifest->count; other++) {
+			if (strcmp(manifest->window[other].name,
+			    labels[index]) == 0) {
+				break;
+			}
+		}
+		if (other >= manifest->count) {
+			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_MANIFEST;
+			ok = false;
+			break;
+		}
+		if (!verifyRange(&gta4l_verified_window[index].view,
+		    media, &manifest->window[other], 0u,
+		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES,
+		    &verified, &failBlock) ||
+		    !verifyRange(&gta4l_verified_window[index].view,
+		    media, &manifest->window[other],
+		    manifest->window[other].size -
+		    GTA4L_EMMC_BLOCK_WINDOWS_HEADER_BYTES,
+		    manifest->window[other].size, &verified,
+		    &failBlock)) {
+			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_BLOCK;
+			ok = false;
+		}
+	}
+	{
+		uint64_t ticks = gta4l_emmc_platform_counter() -
+		    verifyStart;
+		uint64_t ticksPerMs = verifyHz / 1000u;
+
+		if (ticksPerMs == 0u) {
+			ticksPerMs = 1u;
+		}
+		verifyMs = (uint32_t)(ticks / ticksPerMs);
+	}
+	if (ok && (verifyMs > GTA4L_EMMC_BLOCK_VERIFY_BUDGET_MS)) {
+		reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_BUDGET;
+		ok = false;
+	}
+#else
+	(void)media;
+	(void)manifest;
+	reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_MANIFEST;
+	ok = false;
+#endif
+	IOLockLock(reportLock);
+	report.verify = 1u;
+	report.verify_valid = ok ? 1u : 0u;
+	report.verify_reason = reason;
+	report.verify_os = openedOs;
+	report.verify_systemos = openedSystemos;
+	report.verify_blocks = verified;
+	report.verify_ms = verifyMs;
+	report.verify_fail_block = failBlock;
+	memcpy(report.verify_os_sha384, osSha, sizeof(osSha));
+	memcpy(report.verify_systemos_sha384, systemosSha,
+	    sizeof(systemosSha));
+	IOLockUnlock(reportLock);
+	return ok;
 }
 
 bool
