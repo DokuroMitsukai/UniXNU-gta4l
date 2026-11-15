@@ -836,14 +836,20 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_ON 1
 #define GTA4L_EMMC_BLOCK_WINDOWS_REFUSED (-1)
 #define GTA4L_EMMC_BLOCK_WINDOWS_MAX 2u
+#define GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_MAX 4u
+#define GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_MAX \
+	(GTA4L_EMMC_BLOCK_WINDOWS_MAX + GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_MAX)
 #define GTA4L_EMMC_BLOCK_WINDOWS_MANIFEST_BYTES 4096u
 #define GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES 128u
 #define GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE 24u
 #define GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES 32u
 #define GTA4L_EMMC_BLOCK_WINDOWS_MAGIC "SHNGROOT"
 #define GTA4L_EMMC_BLOCK_WINDOWS_VERSION 1u
+#define GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO 2u
 #define GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE 512u
 #define GTA4L_EMMC_BLOCK_WINDOWS_FLAG_READ_ONLY 1u
+#define GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE 4096u
+#define GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_FLAGS 3u
 #define GTA4L_EMMC_BLOCK_WINDOWS_ALIGN_BYTES (1u << 20)
 #define GTA4L_EMMC_BLOCK_WINDOWS_IMAGE_ALIGN_BYTES 4096u
 #define GTA4L_EMMC_BLOCK_WINDOWS_DIGEST_BASE 4064u
@@ -929,6 +935,34 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS 2000u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS 50u
 
+/* S5c verified-root rung. `gta4l-emmc-verify=1` requires the windows rung
+ * and a version-2 manifest with the two table objects. The embedded policy
+ * header and signature come from the generated
+ * Gta4lEmmcBlockPolicies.h; the tables stay in userdata because they do not
+ * fit the kernel or BOOT. `verify` selects the VERIFY line. */
+#define GTA4L_EMMC_BLOCK_VERIFY_ARG "gta4l-emmc-verify"
+#define GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES 160u
+#define GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES 384u
+#define GTA4L_EMMC_BLOCK_VERIFY_KEY_BYTES 395u
+#define GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES 4096u
+#define GTA4L_EMMC_BLOCK_VERIFY_GENERATION 1u
+#define GTA4L_EMMC_BLOCK_VERIFY_OS_BLOCKS 1483785u
+#define GTA4L_EMMC_BLOCK_VERIFY_SYSTEMOS_BLOCKS 806400u
+#define GTA4L_EMMC_BLOCK_VERIFY_OS_TABLE_BYTES \
+	(GTA4L_EMMC_BLOCK_VERIFY_OS_BLOCKS * 32u)
+#define GTA4L_EMMC_BLOCK_VERIFY_SYSTEMOS_TABLE_BYTES \
+	(GTA4L_EMMC_BLOCK_VERIFY_SYSTEMOS_BLOCKS * 32u)
+#define GTA4L_EMMC_BLOCK_VERIFY_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_VERIFY_REASON_MANIFEST 1u
+#define GTA4L_EMMC_BLOCK_VERIFY_REASON_OBJECT 2u
+#define GTA4L_EMMC_BLOCK_VERIFY_REASON_READ 3u
+#define GTA4L_EMMC_BLOCK_VERIFY_REASON_OPEN 4u
+#define GTA4L_EMMC_BLOCK_VERIFY_REASON_BLOCK 5u
+#define GTA4L_EMMC_BLOCK_VERIFY_REASON_BUDGET 6u
+#define GTA4L_EMMC_BLOCK_VERIFY_REASON_MEMORY 7u
+#define GTA4L_EMMC_BLOCK_VERIFY_BUDGET_MS 12000u
+#define GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES 220u
+
 /* S4 userdata placement from board.toml [userdata]: LBA 15,203,328 to
  * 61,071,326, 23,484,415,488 bytes. The driver finds the partition media
  * by this exact base/size. */
@@ -955,11 +989,14 @@ struct gta4l_emmc_block_manifest {
 	uint32_t reason;
 	uint32_t version;
 	uint32_t count;
+	uint32_t object_count;
 	uint64_t image_bytes;
 	uint8_t header_sha256[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
 	uint8_t manifest_sha256[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
 	struct gta4l_emmc_block_window
 	    window[GTA4L_EMMC_BLOCK_WINDOWS_MAX];
+	struct gta4l_emmc_block_window
+	    object[GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_MAX];
 };
 
 struct gta4l_emmc_block_report {
@@ -1745,6 +1782,23 @@ struct gta4l_emmc_block_report {
 	uint32_t windows_phase;
 	uint32_t windows_published;
 	uint32_t windows_publish_error;
+	/* S5c verify rung. `verify` selects the VERIFY line; `verify_valid`
+	 * is the policy/edge verdict (1 both policies opened and every sampled
+	 * block verified). `verify_os`/`verify_systemos` report each policy
+	 * open, `verify_blocks` the verified 4096-byte block count,
+	 * `verify_ms` the elapsed time, `verify_fail_block` the first failing
+	 * block index and the two digest prefixes the enrolled envelope
+	 * SHA-384 prefixes. */
+	uint32_t verify;
+	uint32_t verify_valid;
+	uint32_t verify_reason;
+	uint32_t verify_os;
+	uint32_t verify_systemos;
+	uint32_t verify_blocks;
+	uint32_t verify_ms;
+	uint32_t verify_fail_block;
+	uint8_t verify_os_sha384[16];
+	uint8_t verify_systemos_sha384[16];
 	/* First failing window (manifest slot; 0xffffffff on success), the
 	 * OR of its media-stage bits, and the failing wait's poll count and
 	 * elapsed milliseconds. */

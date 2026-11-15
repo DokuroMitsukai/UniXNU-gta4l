@@ -9530,3 +9530,27 @@ self-test covers object attributes, overlap and the v1 refusal.
 Next: S5c adds the version-2 parser, the verified read path, the exported
 contract and a report-mode `gta4l-emmc-verify=1` rung. This is host-only;
 no device access, flash or write.
+
+### 5.4.3 S5c driver parser and archive integration (2026-11-16, host-only)
+
+The block driver's SHNGROOT parser now accepts version 2 while keeping
+version 1 strict (two windows). Windows stay 512-byte/flag-1 block
+devices; data objects are 4096-byte/flag-3 blobs, never published. Names
+share one namespace, every entry must stay inside `image_bytes`, and the
+overlap check uses 4 KiB-padded extents. A version-1 manifest with an
+extra entry is refused as a count error; a version-2 entry with unknown
+attributes fails as a block-size or flags error. The block suite covers
+version-2 acceptance, object attributes, overlap, duplicate names and the
+unchanged window scenarios (exit=0, 297 PASS lines, 47 core scenarios).
+
+`scripts/build-gta4l-emmc-block.py` now compiles the kit sources
+(`kits/VerifiedRoot/src/verified_root.c` and
+`kits/VerifiedRoot/adapters/xnu_crypto.c`) with the kernel compile record,
+adds the kit include and the generated policy include, defines
+`GTA4L_EMMC_BLOCK_VERIFY=1` when `Gta4lEmmcBlockPolicies.h` is present,
+and records the kit and policy-header hashes in the archive report. Both
+sources compile with the kernel flags on this host.
+
+Next: the `gta4l-emmc-verify=1` rung loads the two objects, calls
+`vr_open`, verifies the sampled window blocks, prints the VERIFY line and
+exports the three `native_verified_block_*` functions.

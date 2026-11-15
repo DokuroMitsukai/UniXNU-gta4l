@@ -14546,6 +14546,23 @@ windows_manifest_seal(uint8_t *header)
 }
 
 static void
+windows_manifest_object(uint8_t *header, uint32_t index, const char *name,
+    uint64_t offset, uint64_t size)
+{
+	uint8_t *entry = header + GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE +
+	    index * GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES;
+
+	memcpy(entry, name, strlen(name));
+	windows_put_u64(entry + 32u, offset);
+	windows_put_u64(entry + 40u, size);
+	windows_put_u32(entry + 48u,
+	    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE);
+	windows_put_u32(entry + 52u,
+	    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_FLAGS);
+	memset(entry + 56u, 0xa5, 32u);
+}
+
+static void
 windows_manifest_build(uint8_t *header, uint32_t count,
     uint64_t image_bytes, const char *first, const char *second,
     uint64_t first_offset, uint64_t second_offset)
@@ -15238,10 +15255,57 @@ scenario_windows_manifest(void)
 	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_MAGIC) == 1);
 	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
 	    1u << 20, 2u << 20);
-	windows_put_u32(header + 8u, 2u);
+	windows_put_u32(header + 8u, 3u);
 	windows_manifest_seal(header);
 	CHECK(windows_expect_reason(header, sizeof(header), partition,
 	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_VERSION) == 1);
+	/* Version 2 adds data objects (4096-byte blocks, flags 3). */
+	windows_manifest_build(header, 2u, 8u << 20, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(header + 8u, GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO);
+	windows_put_u32(header + 12u, 4u);
+	windows_manifest_object(header, 2u, "OS.vroot", 3u << 20, 4096u);
+	windows_manifest_object(header, 3u, "SystemOS.vroot", 4u << 20, 8192u);
+	windows_manifest_seal(header);
+	CHECK(gta4l_emmc_block_windows_parse(header, sizeof(header),
+	    partition, &manifest) == 1u);
+	CHECK(manifest.version == 2u && manifest.count == 2u &&
+	    manifest.object_count == 2u);
+	CHECK(strcmp(manifest.object[0].name, "OS.vroot") == 0);
+	CHECK(strcmp(manifest.object[1].name, "SystemOS.vroot") == 0);
+	CHECK(manifest.object[0].offset == (3u << 20) &&
+	    manifest.object[0].size == 4096u);
+	CHECK(manifest.object[0].block_size == 4096u &&
+	    manifest.object[0].flags == 3u);
+	CHECK(manifest.object[1].offset == (4u << 20) &&
+	    manifest.object[1].size == 8192u);
+	/* A version-1 parser rejects the extra entry as a count first. */
+	windows_manifest_build(header, 2u, 8u << 20, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(header + 12u, 3u);
+	windows_manifest_object(header, 2u, "OS.vroot", 3u << 20, 4096u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_COUNT) == 1);
+	/* Objects must not overlap each other. */
+	windows_manifest_build(header, 2u, 8u << 20, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(header + 8u, GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO);
+	windows_put_u32(header + 12u, 4u);
+	windows_manifest_object(header, 2u, "OS.vroot", 3u << 20, 4096u);
+	windows_manifest_object(header, 3u, "SystemOS.vroot", 3u << 20, 4096u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OVERLAP) == 1);
+	/* Window and object names share one namespace. */
+	windows_manifest_build(header, 2u, 8u << 20, "OS", "SystemOS",
+	    1u << 20, 2u << 20);
+	windows_put_u32(header + 8u, GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO);
+	windows_put_u32(header + 12u, 3u);
+	windows_manifest_object(header, 2u, "OS", 3u << 20, 4096u);
+	windows_manifest_seal(header);
+	CHECK(windows_expect_reason(header, sizeof(header), partition,
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_DUPLICATE) == 1);
 	windows_manifest_build(header, 2u, image, "OS", "SystemOS",
 	    1u << 20, 2u << 20);
 	windows_put_u32(header + 12u, 0u);

@@ -51,6 +51,9 @@ if not (DEVICE / 'Gta4lEmmcBlock.cpp').is_file():
 
 ARCHIVE = OUT / 'libGta4lEmmcBlock.a'
 STORAGE_INCLUDE = ROOT / 'build/storage-abi/include'
+VERIFIED_ROOT = PRELINK_KIT.parent / 'VerifiedRoot'
+POLICY_DIR = DEVICE_ROOT / 'out/gta4l/s5-policies'
+POLICY_HEADER = POLICY_DIR / 'Gta4lEmmcBlockPolicies.h'
 QUALIFICATION = Path(os.environ.get(
     'GTA4L_STORAGE_ABI_DIR',
     str(DEVICE_ROOT / 'out/gta4l/storage-abi')))
@@ -90,6 +93,20 @@ SOURCES = [
         'header': DEVICE / 'Gta4lEmmcBlock.h',
         'object': OUT / 'Gta4lEmmcBlockCpp.o',
         'record': ADAPTER_RECORD,
+    },
+    {
+        'source': VERIFIED_ROOT / 'src' / 'verified_root.c',
+        'header': VERIFIED_ROOT / 'include' / 'verified_root.h',
+        'object': OUT / 'verified_root.o',
+        'record': POLICY_RECORD,
+        'kit': VERIFIED_ROOT / 'include',
+    },
+    {
+        'source': VERIFIED_ROOT / 'adapters' / 'xnu_crypto.c',
+        'header': VERIFIED_ROOT / 'include' / 'verified_root.h',
+        'object': OUT / 'verified_root_crypto.o',
+        'record': POLICY_RECORD,
+        'kit': VERIFIED_ROOT / 'include',
     },
 ]
 
@@ -500,6 +517,11 @@ for item in SOURCES:
     arguments += ['-I', str(DEVICE)]
     if item['source'].suffix == '.cpp':
         arguments += ['-I', str(STORAGE_INCLUDE)]
+    if 'kit' in item:
+        arguments += ['-I', str(item['kit'])]
+    arguments += ['-I', str(POLICY_DIR)]
+    if POLICY_HEADER.is_file():
+        arguments += ['-DGTA4L_EMMC_BLOCK_VERIFY=1']
     subprocess.run(arguments, cwd=record['directory'], check=True)
     source_records.append({
         'source': item['source'].name,
@@ -526,6 +548,14 @@ for other in (CORE_ARCHIVE, PROBE_ARCHIVE):
 qualification = qualification_state()
 personality = personality_state()
 report = {
+    'verified_root': {
+        'enabled': POLICY_HEADER.is_file(),
+        'policy_header': str(POLICY_HEADER),
+        'policy_header_sha256': (sha256(POLICY_HEADER)
+                                 if POLICY_HEADER.is_file() else None),
+        'kit_sources': [sha256(VERIFIED_ROOT / 'src' / 'verified_root.c'),
+                        sha256(VERIFIED_ROOT / 'adapters' / 'xnu_crypto.c')],
+    },
     'sources': source_records,
     'bindings': bindings,
     'archive': {

@@ -2236,6 +2236,17 @@ gta4l_emmc_block_windows_name(const uint8_t *entry, char *name)
 	return 1u;
 }
 
+static uint32_t
+gta4l_emmc_block_windows_same_name(const char *a, const char *b)
+{
+	uint32_t index = 0;
+
+	while ((a[index] != 0) && (a[index] == b[index])) {
+		index++;
+	}
+	return ((a[index] == 0) && (b[index] == 0)) ? 1u : 0u;
+}
+
 uint32_t
 gta4l_emmc_block_windows_parse(const uint8_t *header, uint32_t length,
     uint64_t partition_bytes, struct gta4l_emmc_block_manifest *manifest)
@@ -2251,7 +2262,6 @@ gta4l_emmc_block_windows_parse(const uint8_t *header, uint32_t length,
 	uint64_t image_bytes;
 	uint64_t offset;
 	uint64_t size;
-	uint64_t end;
 	uint8_t *raw = (uint8_t *)manifest;
 
 	if (manifest == 0) {
@@ -2272,23 +2282,19 @@ gta4l_emmc_block_windows_parse(const uint8_t *header, uint32_t length,
 		}
 	}
 	manifest->version = gta4l_emmc_block_get_u32(header + 8u);
-	/*
-	 * ShengUfs RootLayout.h accepts version 1 (windows only, up to four)
-	 * and version 2 (up to eight entries: windows plus data objects with
-	 * block size 4096 and flags 3). This rung publishes windows only, so
-	 * a version-2 manifest is refused explicitly instead of treating a
-	 * data object as a publishable window.
-	 */
-	if (manifest->version != GTA4L_EMMC_BLOCK_WINDOWS_VERSION) {
+	if ((manifest->version != GTA4L_EMMC_BLOCK_WINDOWS_VERSION) &&
+	    (manifest->version != GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO)) {
 		return gta4l_emmc_block_windows_fail(manifest,
 		    GTA4L_EMMC_BLOCK_WINDOWS_REASON_VERSION);
 	}
 	count = gta4l_emmc_block_get_u32(header + 12u);
-	if ((count == 0u) || (count > GTA4L_EMMC_BLOCK_WINDOWS_MAX)) {
+	if ((count == 0u) ||
+	    (count > GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_MAX) ||
+	    ((manifest->version == GTA4L_EMMC_BLOCK_WINDOWS_VERSION) &&
+	    (count > GTA4L_EMMC_BLOCK_WINDOWS_MAX))) {
 		return gta4l_emmc_block_windows_fail(manifest,
 		    GTA4L_EMMC_BLOCK_WINDOWS_REASON_COUNT);
 	}
-	manifest->count = count;
 	image_bytes = gta4l_emmc_block_get_u64(header + 16u);
 	if ((image_bytes < GTA4L_EMMC_BLOCK_WINDOWS_ALIGN_BYTES) ||
 	    ((image_bytes %
@@ -2326,42 +2332,106 @@ gta4l_emmc_block_windows_parse(const uint8_t *header, uint32_t length,
 		const uint8_t *entry = header +
 		    GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BASE +
 		    index * GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES;
-		struct gta4l_emmc_block_window *window =
-		    &manifest->window[index];
+		struct gta4l_emmc_block_window *target;
+		uint64_t padded;
+		uint32_t block_size;
+		uint32_t flags;
+		char name[GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES];
 
-		if (gta4l_emmc_block_windows_name(entry,
-		    window->name) == 0u) {
+		if (gta4l_emmc_block_windows_name(entry, name) == 0u) {
 			return gta4l_emmc_block_windows_fail(manifest,
 			    GTA4L_EMMC_BLOCK_WINDOWS_REASON_NAME);
 		}
 		offset = gta4l_emmc_block_get_u64(entry + 32u);
 		size = gta4l_emmc_block_get_u64(entry + 40u);
-		window->offset = offset;
-		window->size = size;
-		window->block_size = gta4l_emmc_block_get_u32(entry + 48u);
-		window->flags = gta4l_emmc_block_get_u32(entry + 52u);
-		if ((offset < GTA4L_EMMC_BLOCK_WINDOWS_ALIGN_BYTES) ||
-		    ((offset % GTA4L_EMMC_BLOCK_WINDOWS_ALIGN_BYTES) != 0u)) {
-			return gta4l_emmc_block_windows_fail(manifest,
-			    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OFFSET);
-		}
-		if ((size == 0u) ||
-		    ((size % GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE) != 0u) ||
-		    (offset > image_bytes) ||
-		    (size > (image_bytes - offset))) {
-			return gta4l_emmc_block_windows_fail(manifest,
-			    GTA4L_EMMC_BLOCK_WINDOWS_REASON_SIZE);
-		}
-		if (window->block_size !=
-		    GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE) {
+		block_size = gta4l_emmc_block_get_u32(entry + 48u);
+		flags = gta4l_emmc_block_get_u32(entry + 52u);
+		if (((block_size ==
+		    GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE) &&
+		    (flags == GTA4L_EMMC_BLOCK_WINDOWS_FLAG_READ_ONLY)) ||
+		    ((manifest->version ==
+		    GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO) &&
+		    (block_size ==
+		    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE) &&
+		    (flags == GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_FLAGS))) {
+			/* Classified below. */
+		} else if ((block_size !=
+		    GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE) &&
+		    ((block_size !=
+		    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE) ||
+		    (manifest->version !=
+		    GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO))) {
 			return gta4l_emmc_block_windows_fail(manifest,
 			    GTA4L_EMMC_BLOCK_WINDOWS_REASON_BLOCK_SIZE);
-		}
-		if (window->flags !=
-		    GTA4L_EMMC_BLOCK_WINDOWS_FLAG_READ_ONLY) {
+		} else {
 			return gta4l_emmc_block_windows_fail(manifest,
 			    GTA4L_EMMC_BLOCK_WINDOWS_REASON_FLAGS);
 		}
+		if (block_size ==
+		    GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE) {
+			if (manifest->count >=
+			    GTA4L_EMMC_BLOCK_WINDOWS_MAX) {
+				return gta4l_emmc_block_windows_fail(
+				    manifest,
+				    GTA4L_EMMC_BLOCK_WINDOWS_REASON_COUNT);
+			}
+			if ((offset <
+			    GTA4L_EMMC_BLOCK_WINDOWS_ALIGN_BYTES) ||
+			    ((offset %
+			    GTA4L_EMMC_BLOCK_WINDOWS_ALIGN_BYTES) != 0u)) {
+				return gta4l_emmc_block_windows_fail(
+				    manifest,
+				    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OFFSET);
+			}
+			if ((size == 0u) ||
+			    ((size %
+			    GTA4L_EMMC_BLOCK_WINDOWS_BLOCK_SIZE) != 0u) ||
+			    (offset > image_bytes) ||
+			    (size > (image_bytes - offset))) {
+				return gta4l_emmc_block_windows_fail(
+				    manifest,
+				    GTA4L_EMMC_BLOCK_WINDOWS_REASON_SIZE);
+			}
+			target = &manifest->window[manifest->count];
+			manifest->count++;
+		} else {
+			if (manifest->object_count >=
+			    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_MAX) {
+				return gta4l_emmc_block_windows_fail(
+				    manifest,
+				    GTA4L_EMMC_BLOCK_WINDOWS_REASON_COUNT);
+			}
+			if ((offset <
+			    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE) ||
+			    ((offset %
+			    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE) !=
+			    0u)) {
+				return gta4l_emmc_block_windows_fail(
+				    manifest,
+				    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OFFSET);
+			}
+			padded = (size +
+			    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE - 1u) &
+			    ~((uint64_t)
+			    (GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE - 1u));
+			if ((size == 0u) || (offset > image_bytes) ||
+			    (size > (image_bytes - offset)) ||
+			    (padded > (image_bytes - offset))) {
+				return gta4l_emmc_block_windows_fail(
+				    manifest,
+				    GTA4L_EMMC_BLOCK_WINDOWS_REASON_SIZE);
+			}
+			target = &manifest->object[manifest->object_count];
+			manifest->object_count++;
+		}
+		for (other = 0; other <
+		    GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES; other++) {
+			target->name[other] = name[other];
+		}
+		target->offset = offset;
+		target->size = size;
+		target->block_size = block_size;
+		target->flags = flags;
 		for (other = 88u; other <
 		    GTA4L_EMMC_BLOCK_WINDOWS_ENTRY_BYTES; other++) {
 			if (entry[other] != 0u) {
@@ -2372,38 +2442,55 @@ gta4l_emmc_block_windows_parse(const uint8_t *header, uint32_t length,
 		}
 		for (other = 0; other <
 		    GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES; other++) {
-			window->sha256[other] = entry[56u + other];
+			target->sha256[other] = entry[56u + other];
 		}
-		end = offset + size;
-		for (other = 0; other < index; other++) {
-			const struct gta4l_emmc_block_window *previous =
-			    &manifest->window[other];
-			uint64_t previous_end =
-			    previous->offset + previous->size;
+		padded = (size +
+		    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE - 1u) &
+		    ~((uint64_t)
+		    (GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE - 1u));
+		for (other = 0;
+		    other < (manifest->count + manifest->object_count);
+		    other++) {
+			const struct gta4l_emmc_block_window *previous;
+			uint64_t previous_end;
+			uint64_t previous_padded;
 
-			if (previous->name[0] == window->name[0]) {
-				uint32_t name_index = 0;
-
-				while ((previous->name[name_index] != 0) &&
-				    (previous->name[name_index] ==
-				    window->name[name_index])) {
-					name_index++;
-				}
-				if ((previous->name[name_index] == 0) &&
-				    (window->name[name_index] == 0)) {
-					return gta4l_emmc_block_windows_fail(
-					    manifest,
-					    GTA4L_EMMC_BLOCK_WINDOWS_REASON_DUPLICATE);
-				}
+			if (other < manifest->count) {
+				previous = &manifest->window[other];
+			} else if (other < (manifest->count +
+			    manifest->object_count)) {
+				previous = &manifest->object[
+				    other - manifest->count];
+			} else {
+				continue;
 			}
+			if (previous == target) {
+				continue;
+			}
+			if (gta4l_emmc_block_windows_same_name(
+			    previous->name, target->name) != 0u) {
+				return gta4l_emmc_block_windows_fail(
+				    manifest,
+				    GTA4L_EMMC_BLOCK_WINDOWS_REASON_DUPLICATE);
+			}
+			previous_padded = (previous->size +
+			    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE - 1u) &
+			    ~((uint64_t)
+			    (GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE - 1u));
+			previous_end = previous->offset + previous_padded;
 			if ((offset < previous_end) &&
-			    (previous->offset < end)) {
+			    (previous->offset < (offset + padded))) {
 				return gta4l_emmc_block_windows_fail(
 				    manifest,
 				    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OVERLAP);
 			}
 		}
 	}
+	if (manifest->count == 0u) {
+		return gta4l_emmc_block_windows_fail(manifest,
+		    GTA4L_EMMC_BLOCK_WINDOWS_REASON_COUNT);
+	}
+	manifest->valid = 1u;
 	manifest->valid = 1u;
 	manifest->reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE;
 	return 1u;
