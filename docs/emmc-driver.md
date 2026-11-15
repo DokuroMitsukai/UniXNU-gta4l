@@ -9394,3 +9394,54 @@ and 52 policy mutation controls; the APFS probe test and both checker
 self-tests pass.
 
 Evidence: `out/gta4l/ram-root-emmc-s4e-windows-candidate-evidence/`.
+
+### 5.3.149 S4e device verdict: both windows publish (2026-11-15)
+
+One owner verdict boot of BOOT
+`b7c898097aa21d48d39bdbe514df90df3ae65f5f509bcedce2a77ba2452300e3`
+(code commit `ef77411`); the one-boot allowance is consumed. The report
+returned `rc=0 stop=0 mode=3` over the 31,268,536,320-byte userdata
+partition and ended in the expected controlled panic at
+`Gta4lEmmcBlock.cpp:12384` after `SNAP locked=1`. `DRV` and `XFER` show
+285 reads / 9,375 blocks with no failed reads, no failed stops and no
+command or data errors; `SPEED` verifies the HS/8-bit selection. The
+`WINDOWS` line reports:
+
+```
+valid=1 reason=0 count=2 image=9382658048 pub=2 phase=5 perr=0
+wfail=4294967295 wdiag=15 wpoll=3 wtime=200 mdig=bc908a6c...
+w0=OS off=1048576 size=6077580800 hd0=268f697a... hd1=1fcad76c...
+w1=SystemOS off=6079643648 size=3303014400 hd0=ffe3bea7...
+hd1=30e14955... apfs=1 cid=50f8a67f... uuid=04769d26...
+suuid=8846fe78... pmc=1 pwait=150 rms=1813 rch=129
+```
+
+Both canonical UUIDs matched independently (the OS APFS volume and the
+raw SystemOS whole-disk container), the global uniqueness rule found no
+duplicate, and the OS container probe still reports `50f8a67f…`.
+`check-gta4l-windows-evidence.py --image <userdata-root.img> --report
+<normalized>` prints PASS: the manifest prefix and all four 1 MiB edges
+match the verified image.
+
+Read-only TWRP re-measure after the boot: p69 is unchanged
+(`47fce99e…`, image region `b7c89809…`, prefix `c2cd3e04…`, tail
+`a28b4ea2…`, last 1 KiB `d737414c…`, after-image region zero); the
+userdata manifest `bc908a6c…` and all four window edges are unchanged;
+RECOVERY `14e11370…`, EFS `51fa824c…` and sec_efs `3a265d58…` are
+unchanged. Battery 96 %, userdata not mounted. The S4d `wdiag=3` failure
+is closed: the raw SystemOS window publishes exactly as the canonical
+UUID predicate expects.
+
+This completes the S4 publication stage on hardware: both windows are
+published read-only with canonical identities. It is one verdict boot,
+not repeatability, mount, authenticated-root or write evidence; S5
+verified root remains open. **Do not boot `b7c89809…` again.**
+
+Transcription: the raw paste was wrapped at 66 columns; the normalizer
+joined seven records with zero warnings. One SPEED-line wrap
+(`hsverified=0` / `rhsb=0`) lost a terminal separator and appears as
+`hsverified=0rhsb=0`; those are two separate fields and the line does not
+enter the S4 gate. The `WINDOWS` line joined without ambiguity and the
+checker re-derives every digest from the image.
+
+Evidence: `out/gta4l/ram-root-emmc-s4e-windows-candidate-evidence/`.
