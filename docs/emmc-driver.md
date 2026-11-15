@@ -9044,3 +9044,39 @@ mutation controls. `check-gta4l-windows-evidence.py` requires
 `pmc=1` and a numeric `pwait` within 10,000 ms in both pre- and
 post-write modes and rejects `pmc=0`, `pmc=2`, a missing `pwait` and an
 over-budget wait.
+
+### 5.3.141 S4b windows candidate build (2026-11-15)
+
+Host-only. The S4b candidate was built and gated; no device access, flash
+or boot.
+
+**Kernel.** `e4613efe086507fe0eec74f889c08f9cad2dcb8420d3b0a94e61a90232bc759b`
+(51,658,752 bytes), built with the S4b driver archive and the APFS
+prelink root. The new method `waitUserdataMedia` is linked at
+`fffffff007a46cb4`. The audited storage-ABI addresses are unchanged from
+the `164dabd5…` audit (vtable `fffffff005cb44c0`, metaclass
+`fffffff006add1d0`, init `fffffff00496ee30`), so the archive bindings
+remain valid. The pre-link `kernel.macho` had to be restored to the
+audited `164dabd5…` candidate before the archive step: the builder
+requires the audited kernel file, which the previous prelink had
+overwritten with `c9534d87…`. The archive report records candidate
+`164dabd5…`, `qualified=true` and `candidate_matches_audit=true`.
+
+**Archive, payload and BOOT.** Archive
+`c451712c6d50b65595aae21e0553cc9d5b51b54f77636048283adbff979c18d0`;
+payload `58d291c9024beb99e506c66c01f3e93ad41b970917c6312c5100c36c3670adfa`
+(83,886,080 bytes) with `rd=md0 gta4l-emmc-block=3
+gta4l-emmc-windows=1`, the fs-timer-hold data ramdisk, the owner trust
+cache and the payload/ADT contract pass. BOOT
+`d815506ca0bb8350fd4979d4c63ed9a1a764ef54cf7d2aac6b3c03715bd6cd3c`
+(85,688,320 bytes), boot-image gate 18/18, against the S3a donor
+`97ca05c6…` (`only_ramdisk_differs=true`); the boot kernel section stays
+`a4b054e0…`, firmware `1e8a3132…`, DTB `dc4c719d…`.
+
+**Expected device verdicts (same image, two boots).** Pre-write:
+`valid=0 reason=2 count=0 image=0 pmc=1 pwait=<n>`, `DRV reads>0`,
+`MEDIA whole=1 content=GUID_partition_scheme`. Post-write:
+`valid=1 reason=0 count=2 image=9382658048 pub=2 phase=5 perr=0`,
+`apfs=1`, container `50f8a67f…`, volume `04769d26…`.
+
+Evidence: `out/gta4l/ram-root-emmc-s4b-windows-candidate-evidence/`.
