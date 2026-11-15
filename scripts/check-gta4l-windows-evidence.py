@@ -31,8 +31,11 @@ HEX32 = re.compile(r'^[0-9a-f]{32}$')
 UUID_TEXT = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 VOLUME_UUID = '04769D26-2CA0-4825-B443-E2E5F88300F2'
+# Whole-media wait plus userdata wait from the driver's discovery budget.
+DISCOVERY_BUDGET_MS = 8000 + 2000
 VALID_FIELDS = (
-    'valid', 'reason', 'count', 'image', 'pub', 'phase', 'perr', 'mdig')
+    'valid', 'reason', 'count', 'image', 'pub', 'phase', 'perr', 'mdig',
+    'pmc', 'pwait')
 WINDOW_FIELDS = ('off', 'size', 'hd0', 'hd1')
 
 
@@ -111,10 +114,26 @@ def check_pre_write(line):
         if fields.get(key) != value:
             errors.append(f'pre-write {key}={fields.get(key)!r}, '
                           f'expected {value!r}')
-    if set(fields) != set(expected):
+    wanted = set(expected) | {'pmc', 'pwait'}
+    if set(fields) != wanted:
         errors.append(f'pre-write fields {sorted(fields)!r}, '
-                      f'expected {sorted(expected)!r}')
+                      f'expected {sorted(wanted)!r}')
+    if fields.get('pmc') != '1':
+        errors.append(f"pre-write pmc={fields.get('pmc')!r}, "
+                      f"expected '1' (userdata found once)")
+    add_wait_check(fields, errors, 'pre-write')
     return errors
+
+
+def add_wait_check(fields, errors, kind):
+    """Require a numeric pwait inside the driver's discovery budget."""
+    value = fields.get('pwait')
+    if value is None or not value.isdigit():
+        errors.append(f'{kind} pwait={value!r}, expected milliseconds')
+        return
+    if int(value) > DISCOVERY_BUDGET_MS:
+        errors.append(f'{kind} pwait={value}, above the '
+                      f'{DISCOVERY_BUDGET_MS} ms discovery budget')
 
 
 def check(line, expected):
@@ -144,6 +163,9 @@ def check(line, expected):
     for key, value in fixed.items():
         if fields.get(key) != value:
             errors.append(f'{key}={fields.get(key)!r}, expected {value!r}')
+    if fields.get('pmc') != '1':
+        errors.append(f"pmc={fields.get('pmc')!r}, expected '1'")
+    add_wait_check(fields, errors, 'post-write')
     if len(windows) != expected['count']:
         errors.append(f'{len(windows)} window blocks, '
                       f'expected {expected["count"]}')
@@ -254,6 +276,7 @@ def build_line(expected, volume):
             f'size={window["size"]} hd0={window["hd0"]} '
             f'hd1={window["hd1"]}')
     parts.append(f'apfs=1 cid={expected["container"]} uuid={volume}')
+    parts.append('pmc=1 pwait=0')
     return ' '.join(parts)
 
 
@@ -297,12 +320,16 @@ def self_test():
     for text, label in mutations:
         assert check(text, dict(expected, volume=volume)), \
             f'{label} was accepted'
-    pre = f'{LABEL}valid=0 reason=2 count=0 image=0'
+    pre = f'{LABEL}valid=0 reason=2 count=0 image=0 pmc=1 pwait=0'
     assert not check_pre_write(pre), check_pre_write(pre)
     for text, label in (
             (pre.replace('reason=2', 'reason=1'), 'pre reason'),
             (pre.replace('valid=0', 'valid=1'), 'pre valid'),
-            (pre + ' pub=0', 'pre extra')):
+            (pre + ' pub=0', 'pre extra'),
+            (pre.replace('pmc=1', 'pmc=0'), 'pre missing media'),
+            (pre.replace('pmc=1', 'pmc=2'), 'pre duplicate'),
+            (pre.replace(' pwait=0', ''), 'pre no wait'),
+            (pre.replace('pwait=0', 'pwait=99999'), 'pre wait budget')):
         assert check_pre_write(text), f'{label} was accepted'
     with tempfile.TemporaryDirectory(prefix='gta4l-windows-check-') as raw:
         image = Path(raw) / 'userdata.img'

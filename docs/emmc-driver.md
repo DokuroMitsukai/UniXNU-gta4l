@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 511 scenarios with 193 adapter mutations, 3 support mutations and 52 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 517 scenarios with 196 adapter mutations, 3 support mutations and 52 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,7 +7903,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 511 scenarios with 193 adapter
+Host gates: the block adapter test runs 517 scenarios with 196 adapter
 mutations, 3 support mutations and 52 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
@@ -8703,7 +8703,7 @@ write path's before/after comparison; the current rung is read-only.
 
 **Test.** `windows-manifest` now also rejects a sealed version-2
 header (reason 3) and an unaligned `image_bytes` (reason 5). The
-adapter suite is 511 scenarios (512 PASS lines) with 193 adapter,
+adapter suite is 517 scenarios (518 PASS lines) with 196 adapter,
 3 support and 52 policy mutation controls.
 
 **Milestone mapping.** The storage area of `porting.toml` now maps the
@@ -8843,8 +8843,8 @@ formatter-exact line bound rises from 550 to 598 bytes and the S4
 report worst case from 1,938 to 1,986 bytes, inside the 3,584-byte
 buffer and the 23-row screen shape.
 
-**Host tests.** The adapter suite is 511 scenarios (512 PASS lines)
-with 193 adapter, 3 support and 52 policy mutation controls.
+**Host tests.** The adapter suite is 517 scenarios (518 PASS lines)
+with 196 adapter, 3 support and 52 policy mutation controls.
 `windows-publish` asserts the SystemOS-then-OS order, `pub=2 phase=5
 perr=0`, both media verdicts, the OS UUID from the APFS volume, and a
 window read translated to the userdata-relative absolute block plus a
@@ -8933,7 +8933,7 @@ accept the `emmc-block-3-windows` personality, which maps to
 `gta4l-emmc-block=3 gta4l-emmc-windows=1` and requires the
 `fs-timer-hold` fixture. The payload builder test maps the personality
 and checks the fixture; the package self-test still passes. The block
-adapter suite is 511 scenarios (512 PASS lines) with 193 adapter,
+adapter suite is 517 scenarios (518 PASS lines) with 196 adapter,
 3 support and 52 policy mutation controls.
 
 **Not done yet.** The S4 candidate archive/payload/BOOT build and its
@@ -8977,3 +8977,70 @@ pub=2 phase=5 perr=0` with OS/SystemOS digests, `apfs=1`, container
 **Not done yet.** The read-only pre-write boot, the userdata write
 (`fd43ee70…`) and the verdict boot each need the owner go naming the
 image SHA-256.
+
+### 5.3.139 S4 pre-write boot: reason 15 diagnosis (2026-11-15)
+
+Device evidence, one pre-write boot of BOOT `2c9c050d…` (owner
+transcription):
+
+```
+GTA4L-EMMC P5 REPORT: rc=0 stop=0 mode=3 blocks=61071360 bs=512 bytes=31268536320 wid=2 tim=1 clk=50000000
+GTA4L-EMMC P5 DRV: online=1 wp=1 reads=0 blocks=0 fails=0 max=0
+GTA4L-EMMC P5 XFER: req=0 c17=0 c18=0 c18b=0 cfail=0 stops=0 sfail=0 last_stop=0
+GTA4L-EMMC P5 MEDIA: whole=0 base=0 size=0 content=other writable=0
+GTA4L-EMMC P5 SPEED: hs=1 wid=8 verified=1 pub=0 limit=64 seg=1 cap=61071360 revert=0 rverified=0 rstatus=0 hsrevert=0 hsverified=0 rhsb=0 rhs=0 rclk=0
+GTA4L-EMMC P5 SPEEDIO: req=0 blk=0 inh=0 cmd=0 dat=0 stop=0 core=0 bus=0 io=0 win=0 hz=0
+GTA4L-EMMC P5 WINDOWS: valid=0 reason=15 count=0 image=0
+```
+
+The rung expected `reason=2` (valid media, no SHNGROOT magic). It
+reported `reason=15` (no userdata media) and `DRV reads=0`; userdata was
+never opened or read. The controller path was healthy (HS, 8-bit
+verified).
+
+**Cause.** `runWindows` called `findPartitionMedia` once, immediately
+after `start`. The `IOBlockStorageDriver` publishes the whole media and
+the GUID partition scheme publishes the partitions asynchronously; the
+bulk rung waits for both in `widthholdDiscoverMedia` (8,000 ms whole
+media, 2,000 ms partition, 50 ms polls), but the windows rung had no
+wait. The host fixture creates the media tree before the rung runs, so
+the one-shot lookup never raced in the suite. The S3a reports corroborate
+the race: `reads=2705`, `MEDIA whole=1 content=GUID_partition_scheme`,
+`SPEED pub=1`; S4 showed `reads=0` and an empty media tree.
+
+### 5.3.140 S4b: bounded userdata discovery and pmc/pwait (2026-11-15)
+
+Host-only. `runWindows` now calls `waitUserdataMedia`, which reuses the
+bulk rung's discovery budget: wait for exactly one whole
+`GUID_partition_scheme` media (8,000 ms), fill the `MEDIA` line, then
+wait for exactly one userdata partition (2,000 ms), polling every 50 ms
+and honouring `reportCancel`. The worst case stays under the 30 s
+watchdog:
+
+```
+8000 + 2000 + 2*2000 (window media) + 1000 (read) + 2000 (margin) = 17000 ms
+```
+
+A duplicate userdata match or a whole-media inconsistency stays
+`reason=15`; a refused `IOMedia::open` now reports `reason=19` instead of
+sharing 15. The `WINDOWS` line carries two new always-printed fields:
+`pmc` (last userdata match count) and `pwait` (discovery milliseconds).
+The pre-write line becomes
+`valid=0 reason=2 count=0 image=0 pmc=1 pwait=<n>`; a `pmc=0` means the
+partition never appeared and `pmc=2` a duplicate. The line bound grows
+from 598 to 630 bytes and the report worst case from 1,986 to 2,018.
+
+**Tests.** New scenarios: `windows-whole-absent` (no media at all,
+`pmc=0 pwait=8000`), `windows-late-media` (five hidden lookups,
+`pmc=1 pwait=250`), `windows-late-partition` (three hidden userdata
+lookups, `pmc=1 pwait=150`), `windows-partition-timeout`
+(`pmc=0 pwait=2000`), `windows-partition-duplicate` (`pmc=2`) and
+`windows-open-fail` (`reason=19`). `windows-manifest-invalid` asserts the
+exact pre-write verdict `pmc=1 pwait=0`. New mutation controls
+`windows-whole-wait-skip`, `windows-duplicate-accept` and
+`windows-open-reason-media` are rejected. The adapter suite is 517
+scenarios (518 PASS lines) with 196 adapter, 3 support and 52 policy
+mutation controls. `check-gta4l-windows-evidence.py` requires
+`pmc=1` and a numeric `pwait` within 10,000 ms in both pre- and
+post-write modes and rejects `pmc=0`, `pmc=2`, a missing `pwait` and an
+over-budget wait.

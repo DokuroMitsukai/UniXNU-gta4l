@@ -4538,6 +4538,17 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 			gta4l_emmc_block_put_digest(&writer,
 			    report->windows_volume_uuid, 16u);
 		}
+		/* Discovery provenance, printed on every verdict so a
+		 * reason=15 separates a missing partition (pmc=0) from a
+		 * duplicate (pmc>1) and shows how long the rung waited. */
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "pmc");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->windows_match_count);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "pwait");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->windows_partition_wait_ms);
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 

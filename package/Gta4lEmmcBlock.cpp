@@ -119,7 +119,17 @@ static_assert(GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_POLL_MS != 0u,
 static_assert((GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_WAIT_MS %
     GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_POLL_MS) == 0u,
     "S4 window media wait must be a whole number of polls");
-static_assert(GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_WAIT_MS *
+static_assert(GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS != 0u,
+    "S4 userdata discovery poll must be nonzero");
+static_assert((GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS %
+    GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS) == 0u,
+    "S4 whole media wait must be a whole number of polls");
+static_assert((GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS %
+    GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS) == 0u,
+    "S4 userdata wait must be a whole number of polls");
+static_assert(GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS +
+    GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS +
+    GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_WAIT_MS *
     GTA4L_EMMC_BLOCK_WINDOWS_MAX +
     GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS +
     GTA4L_EMMC_BLOCK_WINDOWS_REPORT_MARGIN_MS <=
@@ -731,6 +741,8 @@ private:
 	    uint32_t *propErrors, uint32_t *nested);
 	IOMedia *findPartitionMedia(uint64_t base, uint64_t size,
 	    uint32_t *count);
+	IOMedia *waitUserdataMedia(uint32_t *count, uint32_t *waitedMs,
+	    int32_t *reason);
 	void runPartitionRead(void);
 	void releasePartreadMedia(void);
 	void partreadReportFailure(uint32_t reason);
@@ -10738,6 +10750,114 @@ Gta4lEmmcBlock::windowsHashEdge(IOMedia *media, uint64_t offset,
 	return true;
 }
 
+IOMedia *
+Gta4lEmmcBlock::waitUserdataMedia(uint32_t *count, uint32_t *waitedMs,
+    int32_t *reason)
+{
+	IOMedia *whole = nullptr;
+	IOMedia *found;
+	OSBoolean *writableProperty;
+	OSString *contentProperty;
+	uint32_t wholeCount = 0;
+	uint32_t waited = 0;
+	uint32_t partWaited = 0;
+	uint32_t writable;
+	uint64_t wholeSize;
+
+	*count = 0;
+	*waitedMs = 0;
+	*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE;
+	wholeSize = (uint64_t)capacityBlocks * GTA4L_EMMC_BLOCK_BYTES;
+	while (waited < GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS) {
+		if (reportCancel) {
+			*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_CANCEL;
+			return nullptr;
+		}
+		wholeCount = 0;
+		whole = findExactWholeMedia(&wholeCount);
+		if (wholeCount > 1u) {
+			if (whole != nullptr) {
+				whole->release();
+			}
+			*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+			return nullptr;
+		}
+		if ((whole != nullptr) && (wholeCount == 1u)) {
+			break;
+		}
+		if (whole != nullptr) {
+			whole->release();
+			whole = nullptr;
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS);
+		waited += GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS;
+	}
+	if (whole == nullptr) {
+		*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+		*waitedMs = waited;
+		return nullptr;
+	}
+	writableProperty = OSDynamicCast(OSBoolean,
+	    whole->getProperty(kIOMediaWritableKey));
+	if (writableProperty == nullptr) {
+		whole->release();
+		*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+		*waitedMs = waited;
+		return nullptr;
+	}
+	writable = writableProperty->getValue() ? 1u : 0u;
+	contentProperty = OSDynamicCast(OSString,
+	    whole->getProperty(kIOMediaContentKey));
+	copyContent(mediaContent, (contentProperty != nullptr) ?
+	    contentProperty->getCStringNoCopy() : nullptr);
+	IOLockLock(reportLock);
+	report.media_valid = 1;
+	report.whole = 1;
+	report.base = 0;
+	report.size = wholeSize;
+	report.writable = writable;
+	report.content = mediaContent;
+	IOLockUnlock(reportLock);
+	whole->release();
+	if (gta4l_emmc_block_media_check(0, wholeSize, capacityBlocks, 1,
+	    (int)writable) != 0) {
+		*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+		*waitedMs = waited;
+		return nullptr;
+	}
+	while (partWaited < GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS) {
+		if (reportCancel) {
+			*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_CANCEL;
+			break;
+		}
+		*count = 0;
+		found = findPartitionMedia(
+		    GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES,
+		    GTA4L_EMMC_BLOCK_USERDATA_SIZE_BYTES, count);
+		if (*count > 1u) {
+			if (found != nullptr) {
+				found->release();
+			}
+			*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+			break;
+		}
+		if ((found != nullptr) && (*count == 1u)) {
+			*waitedMs = waited + partWaited;
+			return found;
+		}
+		if (found != nullptr) {
+			found->release();
+		}
+		IOSleep(GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS);
+		partWaited += GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS;
+	}
+	*waitedMs = waited + partWaited;
+	if (*reason == GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE) {
+		*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+	}
+	return nullptr;
+}
+
 bool
 Gta4lEmmcBlock::runWindows()
 {
@@ -10759,6 +10879,7 @@ Gta4lEmmcBlock::runWindows()
 	uint32_t order[GTA4L_EMMC_BLOCK_WINDOWS_MAX] = {};
 	uint32_t planCount = 0;
 	uint32_t published = 0;
+	uint32_t partWaited = 0;
 	uint32_t phase = GTA4L_EMMC_BLOCK_WINDOWS_PHASE_NONE;
 	uint32_t publishError = GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_NONE;
 	uint8_t volumeUuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
@@ -10774,6 +10895,8 @@ Gta4lEmmcBlock::runWindows()
 	report.windows_reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE;
 	report.windows_count = 0u;
 	report.windows_image_bytes = 0u;
+	report.windows_match_count = 0u;
+	report.windows_partition_wait_ms = 0u;
 	bzero(report.windows_manifest_digest,
 	    sizeof(report.windows_manifest_digest));
 	bzero(report.windows_entry, sizeof(report.windows_entry));
@@ -10791,15 +10914,25 @@ Gta4lEmmcBlock::runWindows()
 	bzero(report.windows_media, sizeof(report.windows_media));
 	IOLockUnlock(reportLock);
 
-	media = findPartitionMedia(GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES,
-	    GTA4L_EMMC_BLOCK_USERDATA_SIZE_BYTES, &count);
+	/* The block storage driver publishes the whole media and the GUID
+	 * scheme publishes the partitions asynchronously after start. The
+	 * S4 pre-write boot (2026-11-15) looked them up once here and
+	 * reported reason=15 with reads=0, before the scheme had probed the
+	 * GPT. Wait with the bulk rung's bounded discovery budget. */
+	media = waitUserdataMedia(&count, &partWaited, &reason);
 	windowsUserdata = media;
+	IOLockLock(reportLock);
+	report.windows_match_count = count;
+	report.windows_partition_wait_ms = partWaited;
+	IOLockUnlock(reportLock);
 	if ((media == nullptr) || (count != 1u)) {
-		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+		if (reason == GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE) {
+			reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+		}
 		goto done;
 	}
 	if (!media->open(this, 0, kIOStorageAccessReader)) {
-		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;
+		reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_OPEN;
 		goto done;
 	}
 	windowsUserdataOpen = true;

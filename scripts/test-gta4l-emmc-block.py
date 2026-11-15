@@ -1775,6 +1775,35 @@ ADAPTER_MUTATIONS = [
        '\t    !setProperty(kIOMaximumByteCountReadKey,\n',
        '\tif (!setProperty(kIOMaximumByteCountReadKey,\n')],
      'windows-publish'),
+    ('windows-whole-wait-skip',
+     [('\twhile (waited < GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS) {\n',
+       '\twhile (0 && (waited < '
+       'GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS)) {\n')],
+     'windows-late-media'),
+    ('windows-duplicate-accept',
+     [('\t\tif (*count > 1u) {\n'
+       '\t\t\tif (found != nullptr) {\n'
+       '\t\t\t\tfound->release();\n'
+       '\t\t\t}\n'
+       '\t\t\t*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;\n'
+       '\t\t\tbreak;\n'
+       '\t\t}\n'
+       '\t\tif ((found != nullptr) && (*count == 1u)) {\n',
+       '\t\tif (0) {\n'
+       '\t\t\tif (found != nullptr) {\n'
+       '\t\t\t\tfound->release();\n'
+       '\t\t\t}\n'
+       '\t\t\t*reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;\n'
+       '\t\t\tbreak;\n'
+       '\t\t}\n'
+       '\t\tif ((found != nullptr) && (*count >= 1u)) {\n'),
+      ('\tif ((media == nullptr) || (count != 1u)) {\n',
+       '\tif (media == nullptr) {\n')],
+     'windows-partition-duplicate'),
+    ('windows-open-reason-media',
+     [('\t\treason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_OPEN;\n',
+       '\t\treason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA;\n')],
+     'windows-open-fail'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2650,9 +2679,16 @@ def check_adapter_source():
         'live mode must emit the LIVEFAIL line on a terminal failure'
     assert 'GTA4L-EMMC P5 BULKIO: ' not in policy, \
         'the diagnostic-only BULKIO line must stay off the panic screen'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 598u' in \
+    assert 'waitUserdataMedia' in adapter and \
+        'GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS' in adapter and \
+        'GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS' in adapter, \
+        'the windows rung must wait for userdata publication'
+    assert 'windows_match_count' in policy_header and \
+        'windows_partition_wait_ms' in policy_header, \
+        'the WINDOWS line must carry pmc/pwait'
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 630u' in \
         policy_header, 'the WINDOWS formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 1986u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2018u' in \
         policy_header, 'the WINDOWS report bound must stay exact'
     assert 'gta4l_emmc_block_windows_parse' in policy, \
         'the SHNGROOT manifest parser must live in the shared policy'
@@ -3211,8 +3247,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 512, f'expected 512 adapter PASS lines, got {passes}'
-        print('PASS adapter: 512 scenarios against the host IOKit seam')
+        assert passes == 518, f'expected 518 adapter PASS lines, got {passes}'
+        print('PASS adapter: 518 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

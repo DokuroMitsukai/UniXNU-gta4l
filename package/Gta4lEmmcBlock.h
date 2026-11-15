@@ -574,11 +574,13 @@ extern "C" {
 /* S4 windows line. It carries the manifest verdict and image size, the
  * 16-byte header digest prefix, the two 128-byte entries' names, offsets,
  * sizes and first/last 1 MiB digest prefixes, and the APFS container and
- * volume UUIDs. At their widest the two entries and the UUIDs make a
- * 550-byte line; the S4 report adds it to the base, the compact SPEED and
- * SPEEDIO lines (1,938 bytes at their type maxima). */
-#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 598u
-#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 1986u
+ * volume UUIDs. It also carries the userdata partition match count and
+ * the discovery wait (pmc/pwait) on every verdict. At their widest the two
+ * entries and the UUIDs make a 598-byte line; pmc and pwait add 32 bytes,
+ * and the S4 report adds it to the base, the compact SPEED and SPEEDIO
+ * lines (2,018 bytes at their type maxima). */
+#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 630u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2018u
 
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
@@ -871,6 +873,7 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_MARGIN_MS 2000u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_CANCEL 17u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_BUDGET 18u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_OPEN 19u
 /* S4 publication. The manifest can be valid while a window cannot be
  * started or its APFS volume does not appear; `windows_publish_error`
  * carries that separate verdict. */
@@ -887,6 +890,14 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_COMPLETE 5u
 #define GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_WAIT_MS 2000u
 #define GTA4L_EMMC_BLOCK_WINDOWS_MEDIA_POLL_MS 100u
+/* Userdata discovery. The block storage driver publishes the whole media
+ * and the GUID scheme publishes the partitions asynchronously after this
+ * driver's start. The S4b rung therefore waits with the same bounded
+ * budget as the bulk rung's discovery: 8,000 ms for the whole media and
+ * a further 2,000 ms for the userdata partition, in 50 ms polls. */
+#define GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS 8000u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS 2000u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS 50u
 
 /* S4 userdata placement from board.toml [userdata]: LBA 15,203,328 to
  * 61,071,326, 23,484,415,488 bytes. The driver finds the partition media
@@ -1681,6 +1692,12 @@ struct gta4l_emmc_block_report {
 	uint32_t windows_reason;
 	uint32_t windows_count;
 	uint64_t windows_image_bytes;
+	/* Last userdata partition match count and the discovery wait that
+	 * produced it. Both are reported on success and on failure, so a
+	 * reason=15 carries whether the partition was absent (pmc=0) or
+	 * duplicated (pmc>1) and how long the rung waited (pwait). */
+	uint32_t windows_match_count;
+	uint32_t windows_partition_wait_ms;
 	uint8_t windows_manifest_digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
 	struct gta4l_emmc_block_window
 	    windows_entry[GTA4L_EMMC_BLOCK_WINDOWS_MAX];

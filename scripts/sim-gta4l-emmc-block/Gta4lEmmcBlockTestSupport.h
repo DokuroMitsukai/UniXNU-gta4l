@@ -569,6 +569,13 @@ struct gta4l_test_state {
 	int lock_depth_max;
 	int part_publish_active;
 	int part_publish_count;
+	/* Stop gating after this many lookups so later window publication
+	 * is not held back by a discovery-only profile. Zero never stops. */
+	int part_publish_stop;
+	/* Hide every IOMedia from serviceMatching("IOMedia") for this many
+	 * lookups, modelling the asynchronous whole-media publication the
+	 * S4 pre-write boot raced. Zero disables the gate. */
+	int media_hide_calls;
 	uint32_t part_publish_counts[GTA4L_TEST_MAX_MEDIA];
 	uint32_t part_publish_calls;
 	int part_publish_error_at;

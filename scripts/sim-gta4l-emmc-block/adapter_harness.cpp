@@ -14862,6 +14862,10 @@ screen_windows(struct gta4l_emmc_block_report *report)
 	report->windows_valid = 1u;
 	report->windows_count = 2u;
 	report->windows_image_bytes = 9382658048ull;
+	report->windows_match_count = 1u;
+	report->windows_partition_wait_ms =
+	    GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS +
+	    GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS;
 	memset(report->windows_manifest_digest, 0xff,
 	    sizeof(report->windows_manifest_digest));
 	memcpy(report->windows_entry[0].name, "OS", 3u);
@@ -15374,6 +15378,8 @@ scenario_windows_format(void)
 	report.windows_reason = 0xffffffffu;
 	report.windows_count = 0xffffffffu;
 	report.windows_image_bytes = UINT64_MAX;
+	report.windows_match_count = 0xffffffffu;
+	report.windows_partition_wait_ms = 0xffffffffu;
 	report.windows_phase = 0xffffffffu;
 	report.windows_published = 0xffffffffu;
 	report.windows_publish_error = 0xffffffffu;
@@ -15729,8 +15735,170 @@ scenario_windows_media_absent(void)
 	CHECK(g_self->report.windows_valid == 0u);
 	CHECK(g_self->report.windows_reason ==
 	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA);
+	CHECK(g_self->report.windows_match_count == 0u);
+	CHECK(g_self->report.windows_partition_wait_ms ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS);
 	CHECK(strstr(gta4l_test.panic,
 	    "GTA4L-EMMC P5 WINDOWS: valid=0 reason=15") != 0);
+	CHECK(strstr(gta4l_test.panic, " pmc=0 pwait=2000") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_whole_absent(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	windows_hook_reset();
+	/* No media at all: the whole-media wait must stop at its own
+	 * budget and report the same absence verdict. */
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 0u);
+	CHECK(g_self->report.windows_reason ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA);
+	CHECK(g_self->report.windows_match_count == 0u);
+	CHECK(g_self->report.windows_partition_wait_ms ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_WHOLE_WAIT_MS);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WINDOWS: valid=0 reason=15") != 0);
+	CHECK(strstr(gta4l_test.panic, " pmc=0 pwait=8000") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_late_media(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	/* The production whole media appears only after the block storage
+	 * driver's attach has run; the S4 pre-write boot looked once and
+	 * found nothing. Hide everything for five lookups. */
+	gta4l_test.media_hide_calls = 5;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(gta4l_test.media_hide_calls == 0);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_reason == 0u);
+	CHECK(g_self->report.windows_match_count == 1u);
+	CHECK(g_self->report.windows_partition_wait_ms ==
+	    5u * GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WINDOWS: valid=1 reason=0 count=2") != 0);
+	CHECK(strstr(gta4l_test.panic, " pmc=1 pwait=250") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_late_partition(void)
+{
+	/* The profile value is the number of non-whole media to expose;
+	 * the bulk fixture's boot partition precedes userdata, so the
+	 * fourth lookup must publish both. */
+	static const uint32_t profile[] = { 0u, 0u, 0u, 0u, 2u };
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	/* The whole media is already visible; the GUID scheme publishes
+	 * the userdata partition only on the fourth lookup. */
+	publish_profile(profile,
+	    (uint32_t)(sizeof(profile) / sizeof(profile[0])));
+	gta4l_test.part_publish_active = 1;
+	/* Discovery is done by lookup five; stop gating so the window
+	 * publications that follow see the whole media tree. */
+	gta4l_test.part_publish_stop = 5;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_reason == 0u);
+	CHECK(g_self->report.windows_match_count == 1u);
+	/* One whole-media lookup plus three hidden userdata lookups. */
+	CHECK(g_self->report.windows_partition_wait_ms ==
+	    3u * GTA4L_EMMC_BLOCK_WINDOWS_PART_STEP_MS);
+	CHECK(strstr(gta4l_test.panic, " pmc=1 pwait=150") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_partition_timeout(void)
+{
+	static const uint32_t profile[] = { 0u };
+
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	/* The partition never appears; the rung must stop at the bounded
+	 * userdata budget with the partition count still zero. */
+	publish_profile(profile,
+	    (uint32_t)(sizeof(profile) / sizeof(profile[0])));
+	gta4l_test.part_publish_active = 1;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 0u);
+	CHECK(g_self->report.windows_reason ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA);
+	CHECK(g_self->report.windows_match_count == 0u);
+	CHECK(g_self->report.windows_partition_wait_ms ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WINDOWS: valid=0 reason=15") != 0);
+	CHECK(strstr(gta4l_test.panic, " pmc=0 pwait=2000") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_partition_duplicate(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	/* A second partition with the exact base/size must be refused, not
+	 * resolved to whichever media the iterator returned first. */
+	add_media(false, GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES,
+	    GTA4L_EMMC_BLOCK_USERDATA_SIZE_BYTES, false,
+	    "Microsoft Basic Data", true);
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 0u);
+	CHECK(g_self->report.windows_reason ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_MEDIA);
+	CHECK(g_self->report.windows_match_count == 2u);
+	CHECK(g_self->report.windows_partition_wait_ms == 0u);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WINDOWS: valid=0 reason=15") != 0);
+	CHECK(strstr(gta4l_test.panic, " pmc=2 pwait=0") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_open_fail(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	g_windows_userdata->open_refuse = true;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 0u);
+	CHECK(g_self->report.windows_reason ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_OPEN);
+	CHECK(g_self->report.windows_match_count == 1u);
+	CHECK(g_self->report.windows_partition_wait_ms == 0u);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WINDOWS: valid=0 reason=19") != 0);
+	CHECK(strstr(gta4l_test.panic, " pmc=1 pwait=0") != 0);
 	return 0;
 }
 
@@ -15767,8 +15935,13 @@ scenario_windows_manifest_invalid(void)
 	CHECK(g_self->report.windows_valid == 0u);
 	CHECK(g_self->report.windows_reason ==
 	    GTA4L_EMMC_BLOCK_WINDOWS_REASON_MAGIC);
+	/* The exact pre-write device verdict: the partition is present and
+	 * opened, and only the SHNGROOT magic is missing. */
+	CHECK(g_self->report.windows_match_count == 1u);
+	CHECK(g_self->report.windows_partition_wait_ms == 0u);
 	CHECK(strstr(gta4l_test.panic,
-	    "GTA4L-EMMC P5 WINDOWS: valid=0 reason=2") != 0);
+	    "GTA4L-EMMC P5 WINDOWS: valid=0 reason=2 count=0 image=0 "
+	    "pmc=1 pwait=0") != 0);
 	return 0;
 }
 
@@ -16557,6 +16730,12 @@ static const struct scenario_entry scenarios[] = {
 	{ "windows-read", scenario_windows_read },
 	{ "windows-apfs", scenario_windows_apfs },
 	{ "windows-media-absent", scenario_windows_media_absent },
+	{ "windows-whole-absent", scenario_windows_whole_absent },
+	{ "windows-late-media", scenario_windows_late_media },
+	{ "windows-late-partition", scenario_windows_late_partition },
+	{ "windows-partition-timeout", scenario_windows_partition_timeout },
+	{ "windows-partition-duplicate", scenario_windows_partition_duplicate },
+	{ "windows-open-fail", scenario_windows_open_fail },
 	{ "windows-read-failure", scenario_windows_read_failure },
 	{ "windows-manifest-invalid", scenario_windows_manifest_invalid },
 	{ "windows-short-read", scenario_windows_short_read },

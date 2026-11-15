@@ -1589,8 +1589,15 @@ IOService::getMatchingServices(OSDictionary *matching)
 	if ((className != 0) && (strcmp(className, "IOMedia") != 0)) {
 		return new OSIterator(items, 0);
 	}
+	if (gta4l_test.media_hide_calls > 0) {
+		gta4l_test.media_hide_calls--;
+		return new OSIterator(items, 0);
+	}
 	if ((gta4l_test.part_publish_active != 0) &&
-	    (gta4l_test.part_publish_count > 0)) {
+	    (gta4l_test.part_publish_count > 0) &&
+	    !((gta4l_test.part_publish_stop > 0) &&
+	    (gta4l_test.part_publish_calls >=
+	    (uint32_t)gta4l_test.part_publish_stop))) {
 		call = gta4l_test.part_publish_calls++;
 		if ((gta4l_test.part_publish_error_at >= 0) &&
 		    (call == (uint32_t)gta4l_test.part_publish_error_at)) {
