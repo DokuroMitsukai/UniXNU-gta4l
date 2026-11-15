@@ -573,14 +573,14 @@ extern "C" {
 
 /* S4 windows line. It carries the manifest verdict and image size, the
  * 16-byte header digest prefix, the two 128-byte entries' names, offsets,
- * sizes and first/last 1 MiB digest prefixes, and the APFS container and
- * volume UUIDs. It also carries the userdata partition match count and
- * the discovery wait (pmc/pwait) on every verdict. At their widest the two
- * entries and the UUIDs make a 598-byte line; pmc, pwait, rms and rch add
- * at most 64 bytes, and the S4 report adds it to the base, the compact
- * SPEED and SPEEDIO lines (2,116 bytes at their type maxima). */
-#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 728u
-#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2116u
+ * sizes and first/last 1 MiB digest prefixes, and the APFS container,
+ * OS volume and SystemOS volume UUIDs. It also carries the userdata
+ * partition match count and the discovery wait (pmc/pwait) on every
+ * verdict. The formatter maximum is 767 bytes at the type maxima; the S4
+ * report adds it to the base, the compact SPEED and SPEEDIO lines (2,155
+ * bytes at their type maxima). */
+#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 767u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2155u
 
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
@@ -849,6 +849,19 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_DIGEST_BASE 4064u
 #define GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES 32u
 #define GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES 16u
+#define GTA4L_EMMC_BLOCK_WINDOWS_UUID_TEXT_BYTES 37u
+/* Canonical APFS volume UUIDs for the two S4 windows, uppercase hyphenated
+ * exactly as published in the IOMedia `UUID` property. Their provenance is
+ * the UniXNU userdata profile and the S5 SystemOS mount patch; these are
+ * S4-only identity diagnostics, not signed policy. */
+#define GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID \
+	"04769D26-2CA0-4825-B443-E2E5F88300F2"
+#define GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID \
+	"8846FE78-2910-4297-AF97-D59BB6F8FC16"
+/* Bound for the provider-chain walk from a volume IOMedia to its window
+ * driver. The observed chain is volume, container, scheme, whole media and
+ * driver; a longer or incomplete chain fails closed. */
+#define GTA4L_EMMC_BLOCK_WINDOWS_ANCESTRY_DEPTH 16u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE 0u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_LENGTH 1u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_MAGIC 2u
@@ -889,13 +902,16 @@ struct gta4l_emmc_block_part {
 
 /* Window-media publication stage bits for `wdiag`. The wait ORs the
  * stages seen on every poll so a timeout separates "no IOMedia above the
- * window" (0) from "media appeared but no UUID" (1), "UUID media but no
- * APFS ancestor" (3), "APFS container/media but no accepted volume" (7)
- * and "accepted volume" (15). */
+ * window" (0) from "media appeared but no expected UUID" (1), "expected
+ * UUID media but no APFS ancestor" (3, diagnostic only), "APFS
+ * container/media but no expected volume" (7), "expected UUID seen under
+ * the window but a same-UUID object also exists elsewhere" (3|16) and
+ * "accepted volume" (15). */
 #define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_MEDIA 0x1u
 #define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_UUID 0x2u
 #define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_APFS 0x4u
 #define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_ACCEPT 0x8u
+#define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_DUPLICATE 0x10u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_NONE 0u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_PLAN 1u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_PREPARE 2u
@@ -1698,9 +1714,10 @@ struct gta4l_emmc_block_report {
 	 * `windows_image_bytes` and the entries mirror the SHNGROOT header;
 	 * `windows_manifest_digest` is the whole 4096-byte header SHA-256 and
 	 * `windows_header_digest[w][0/1]` the first/last 1 MiB of each window.
-	 * `windows_apfs` marks a matched Apple_APFS GPT entry; the container
-	 * and volume UUIDs are the 16-byte values discovered from the APFS
-	 * attach. */
+	 * `windows_apfs` marks a matched Apple_APFS GPT entry in the OS window;
+	 * the container UUID comes from that entry's NXSB. `windows_volume_uuid`
+	 * is the OS volume and `windows_system_volume_uuid` the SystemOS volume,
+	 * both discovered from the canonical IOMedia `UUID` match. */
 	uint32_t windows;
 	uint32_t windows_valid;
 	uint32_t windows_reason;
@@ -1724,6 +1741,7 @@ struct gta4l_emmc_block_report {
 	uint32_t windows_apfs;
 	uint8_t windows_container_uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
 	uint8_t windows_volume_uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
+	uint8_t windows_system_volume_uuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
 	uint32_t windows_phase;
 	uint32_t windows_published;
 	uint32_t windows_publish_error;

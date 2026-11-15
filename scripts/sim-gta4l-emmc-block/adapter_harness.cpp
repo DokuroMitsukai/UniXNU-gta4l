@@ -14887,6 +14887,8 @@ screen_windows(struct gta4l_emmc_block_report *report)
 	    sizeof(report->windows_container_uuid));
 	memset(report->windows_volume_uuid, 0xff,
 	    sizeof(report->windows_volume_uuid));
+	memset(report->windows_system_volume_uuid, 0xff,
+	    sizeof(report->windows_system_volume_uuid));
 }
 
 static uint32_t
@@ -15420,7 +15422,8 @@ scenario_windows_format(void)
 	    "off=18446744073709551615 size=18446744073709551615") != 0);
 	CHECK(strstr(buffer, "apfs=4294967295 "
 	    "cid=ffffffffffffffffffffffffffffffff "
-	    "uuid=ffffffffffffffffffffffffffffffff") != 0);
+	    "uuid=ffffffffffffffffffffffffffffffff "
+	    "suuid=ffffffffffffffffffffffffffffffff") != 0);
 	CHECK(strstr(buffer, "GTA4L-EMMC P5 SPEED: hs=1 wid=8 "
 	    "verified=1") != 0);
 	CHECK(strstr(buffer, "hsrb=") == 0);
@@ -15445,7 +15448,7 @@ static bool g_windows_slow_read;
 static Gta4lEmmcBlock *g_windows_device[2];
 static IOMedia *g_windows_volume[2];
 static char g_windows_uuid_text[2][37] = {
-	"11111111-2222-3333-4444-555555555555",
+	"8846FE78-2910-4297-AF97-D59BB6F8FC16",
 	"04769D26-2CA0-4825-B443-E2E5F88300F2"
 };
 static const char g_windows_container_uuid_text[] =
@@ -15457,6 +15460,7 @@ static bool g_windows_media_foreign;
 static bool g_windows_media_nouuid;
 static bool g_windows_media_noapfs;
 static bool g_windows_media_container;
+static bool g_windows_media_duplicate;
 static uint32_t g_windows_media_delay_polls;
 static bool g_windows_fail_start_os;
 
@@ -15492,6 +15496,7 @@ windows_hook_reset(void)
 	g_windows_media_nouuid = false;
 	g_windows_media_noapfs = false;
 	g_windows_media_container = false;
+	g_windows_media_duplicate = false;
 	g_windows_media_delay_polls = 0u;
 	g_windows_fail_start_os = false;
 	g_windows_read_block = 0;
@@ -15569,6 +15574,15 @@ windows_publish_media_hook(IOService *service, const char *label)
 	gta4l_test_add_media(volume);
 	g_windows_volume[slot] = volume;
 	windows_record_publish(slot);
+	if (g_windows_media_duplicate) {
+		IOMedia *duplicate = new IOMedia();
+
+		gta4l_test_media_configure(duplicate, false, 0, 4096, false,
+		    "AppleAPFSVolume");
+		duplicate->uuid_value_ = g_windows_uuid_text[slot];
+		duplicate->provider_ = static_cast<IOService *>(g_self);
+		gta4l_test_add_media(duplicate);
+	}
 }
 
 static void
@@ -16048,6 +16062,10 @@ scenario_windows_publish(void)
 		0x04, 0x76, 0x9d, 0x26, 0x2c, 0xa0, 0x48, 0x25,
 		0xb4, 0x43, 0xe2, 0xe5, 0xf8, 0x83, 0x00, 0xf2
 	};
+	static const uint8_t systemUuid[16] = {
+		0x88, 0x46, 0xfe, 0x78, 0x29, 0x10, 0x42, 0x97,
+		0xaf, 0x97, 0xd5, 0x9b, 0xb6, 0xf8, 0xfc, 0x16
+	};
 	IOReturn status;
 
 	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
@@ -16068,6 +16086,8 @@ scenario_windows_publish(void)
 	CHECK(g_self->report.windows_media[1] == 1u);
 	CHECK(memcmp(g_self->report.windows_volume_uuid, osUuid,
 	    sizeof(osUuid)) == 0);
+	CHECK(memcmp(g_self->report.windows_system_volume_uuid, systemUuid,
+	    sizeof(systemUuid)) == 0);
 	CHECK(g_windows_publish_count == 2);
 	CHECK(g_windows_publish_order[0] == 0);
 	CHECK(g_windows_publish_order[1] == 1);
@@ -16082,6 +16102,8 @@ scenario_windows_publish(void)
 	    " wfail=4294967295 wdiag=15 wpoll=1 wtime=0 ") != 0);
 	CHECK(strstr(gta4l_test.panic,
 	    " uuid=04769d262ca04825b443e2e5f88300f2") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    " suuid=8846fe7829104297af97d59bb6f8fc16") != 0);
 
 	CHECK(g_windows_device[0] != 0);
 	CHECK(g_windows_device[1] != 0);
@@ -16193,13 +16215,16 @@ scenario_windows_publish_media_noapfs(void)
 	g_windows_media_noapfs = true;
 	CHECK(invoke_thread(1) == 1);
 	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_phase ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PHASE_COMPLETE);
+	CHECK(g_self->report.windows_published == 2u);
 	CHECK(g_self->report.windows_publish_error ==
-	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA);
-	CHECK(g_self->report.windows_fail_slot == 1u);
-	CHECK(g_self->report.windows_fail_diag == 3u);
-	CHECK(g_self->report.windows_media_polls == 21u);
+	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_NONE);
+	CHECK(g_self->report.windows_fail_slot == 0xffffffffu);
+	CHECK(g_self->report.windows_fail_diag == 11u);
+	CHECK(g_self->report.windows_media_polls == 1u);
 	CHECK(strstr(gta4l_test.panic,
-	    " wfail=1 wdiag=3 wpoll=21 wtime=2000 ") != 0);
+	    " wfail=4294967295 wdiag=11 wpoll=1 wtime=0 ") != 0);
 	return 0;
 }
 
@@ -16218,10 +16243,49 @@ scenario_windows_publish_media_container(void)
 	CHECK(g_self->report.windows_publish_error ==
 	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA);
 	CHECK(g_self->report.windows_fail_slot == 1u);
-	CHECK(g_self->report.windows_fail_diag == 7u);
+	CHECK(g_self->report.windows_fail_diag == 5u);
 	CHECK(g_self->report.windows_media_polls == 21u);
 	CHECK(strstr(gta4l_test.panic,
-	    " wfail=1 wdiag=7 wpoll=21 wtime=2000 ") != 0);
+	    " wfail=1 wdiag=5 wpoll=21 wtime=2000 ") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_publish_media_duplicate(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	g_windows_media_duplicate = true;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_phase ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PHASE_MEDIA);
+	CHECK(g_self->report.windows_published == 1u);
+	CHECK(g_self->report.windows_publish_error ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA);
+	CHECK(g_self->report.windows_fail_slot == 1u);
+	CHECK(g_self->report.windows_fail_diag == 23u);
+	CHECK(g_self->report.windows_media_polls == 21u);
+	CHECK(g_self->report.windows_media_wait_ms == 2000u);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=1 wdiag=23 wpoll=21 wtime=2000 ") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_expected_uuid(void)
+{
+	CHECK(strcmp(gta4l_windows_expected_uuid("OS"),
+	    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID) == 0);
+	CHECK(strcmp(gta4l_windows_expected_uuid("SystemOS"),
+	    GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID) == 0);
+	CHECK(gta4l_windows_expected_uuid("OSX") == 0);
+	CHECK(gta4l_windows_expected_uuid("") == 0);
+	CHECK(gta4l_windows_expected_uuid(0) == 0);
 	return 0;
 }
 
@@ -16929,6 +16993,8 @@ static const struct scenario_entry scenarios[] = {
 	{ "windows-publish-media-nouuid", scenario_windows_publish_media_nouuid },
 	{ "windows-publish-media-noapfs", scenario_windows_publish_media_noapfs },
 	{ "windows-publish-media-container", scenario_windows_publish_media_container },
+	{ "windows-publish-media-duplicate", scenario_windows_publish_media_duplicate },
+	{ "windows-expected-uuid", scenario_windows_expected_uuid },
 	{ "windows-publish-media-late", scenario_windows_publish_media_late },
 	{ "windows-publish-foreign", scenario_windows_publish_foreign },
 	{ "windows-publish-start-fail", scenario_windows_publish_start_fail },

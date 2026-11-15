@@ -4,11 +4,12 @@
 
 The S4 rung prints the manifest verdict, image size and window list, the
 first/last 1 MiB digest prefixes of each window, the APFS container UUID
-and the APFS volume UUID. This host-only checker recomputes the manifest
-digest and every window digest from the flashed image, parses the first
-window's GPT and APFS container UUID, and requires the publication
-verdict (pub=2 phase=5 perr=0). A pre-write report must instead show
-valid=0 reason=2 with no window fields. It never reads a device.
+and both window volume UUIDs (OS `uuid`, SystemOS `suuid`). This host-only
+checker recomputes the manifest digest and every window digest from the
+flashed image, parses the first window's GPT and APFS container UUID, and
+requires the publication verdict (pub=2 phase=5 perr=0). A pre-write
+report must instead show valid=0 reason=2 with no window fields. It never
+reads a device.
 """
 import argparse
 import hashlib
@@ -31,6 +32,7 @@ HEX32 = re.compile(r'^[0-9a-f]{32}$')
 UUID_TEXT = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 VOLUME_UUID = '04769D26-2CA0-4825-B443-E2E5F88300F2'
+SYSTEM_VOLUME_UUID = '8846FE78-2910-4297-AF97-D59BB6F8FC16'
 # Whole-media wait plus userdata wait from the driver's discovery budget.
 DISCOVERY_BUDGET_MS = 8000 + 2000
 VALID_FIELDS = (
@@ -63,7 +65,7 @@ def parse_line(line):
 
     `windows` is a list of dicts in w0..wN order, each with name/off/
     size/hd0/hd1. Fields before the first wN are the manifest fields;
-    apfs/cid/uuid follow the last window.
+    apfs/cid/uuid/suuid follow the last window.
     """
     if not line.startswith(LABEL):
         raise ValueError('missing WINDOWS label')
@@ -76,7 +78,7 @@ def parse_line(line):
         if '=' not in token:
             raise ValueError(f'malformed token {token!r}')
         key, value = token.split('=', 1)
-        if key in ('apfs', 'cid', 'uuid') or key in VALID_FIELDS:
+        if key in ('apfs', 'cid', 'uuid', 'suuid') or key in VALID_FIELDS:
             if key in fields:
                 raise ValueError(f'duplicate field {key}')
             fields[key] = value
@@ -159,16 +161,24 @@ def add_read_stats(fields, errors):
                       f'{MAX_READ_CHUNKS}')
 
 
+ACCEPT_DIAG = 0x1 | 0x2 | 0x8
+KNOWN_DIAG = ACCEPT_DIAG | 0x4
+
+
 def add_publication_diag(fields, errors):
-    """Require the bounded window-media publication diagnostics."""
+    """Require success-stage media, UUID and accept bits; APFS is optional."""
     fail = fields.get('wfail')
     if fail != '4294967295':
         errors.append(f'post-write wfail={fail!r}, expected 4294967295 '
                       f'(no failing window)')
     diag = fields.get('wdiag')
-    if diag != '15':
-        errors.append(f'post-write wdiag={diag!r}, expected 15 '
-                      f'(media+UUID+APFS+accept)')
+    if diag is None or not diag.isdigit():
+        errors.append(f'post-write wdiag={diag!r}, expected a bit mask')
+    elif (int(diag) & ACCEPT_DIAG) != ACCEPT_DIAG:
+        errors.append(f'post-write wdiag={diag}, expected the media, UUID '
+                      f'and accept bits (0x{ACCEPT_DIAG:x})')
+    elif (int(diag) & ~KNOWN_DIAG) != 0:
+        errors.append(f'post-write wdiag={diag}, unexpected diagnostic bits')
     polls = fields.get('wpoll')
     if polls is None or not polls.isdigit():
         errors.append(f'post-write wpoll={polls!r}, expected a count')
@@ -189,7 +199,7 @@ def check(line, expected):
         fields, windows = parse_line(line)
     except ValueError as error:
         return [str(error)]
-    required = set(VALID_FIELDS) | {'apfs', 'cid', 'uuid'}
+    required = set(VALID_FIELDS) | {'apfs', 'cid', 'uuid', 'suuid'}
     if set(fields) != required:
         errors.append(f'fields {sorted(fields)!r} do not match '
                       f'{sorted(required)!r}')
@@ -205,6 +215,7 @@ def check(line, expected):
         'apfs': '1',
         'cid': expected['container'],
         'uuid': expected['volume'],
+        'suuid': expected['system_volume'],
     }
     for key, value in fixed.items():
         if fields.get(key) != value:
@@ -314,7 +325,7 @@ def expected_from_image(path):
     }
 
 
-def build_line(expected, volume):
+def build_line(expected, volume, system_volume):
     parts = [f'{LABEL}valid=1 reason=0 count={expected["count"]} '
              f'image={expected["image_bytes"]} pub=2 phase=5 perr=0 '
              f'wfail=4294967295 wdiag=15 wpoll=1 wtime=0 '
@@ -324,7 +335,8 @@ def build_line(expected, volume):
             f'w{index}={window["name"]} off={window["off"]} '
             f'size={window["size"]} hd0={window["hd0"]} '
             f'hd1={window["hd1"]}')
-    parts.append(f'apfs=1 cid={expected["container"]} uuid={volume}')
+    parts.append(f'apfs=1 cid={expected["container"]} uuid={volume} '
+                 f'suuid={system_volume}')
     parts.append('pmc=1 pwait=0 rms=1677 rch=129')
     return ' '.join(parts)
 
@@ -343,8 +355,10 @@ def self_test():
         ],
     }
     volume = uuid_bytes(VOLUME_UUID).hex()
-    line = build_line(expected, volume)
-    errors = check(line, dict(expected, volume=volume))
+    system_volume = uuid_bytes(SYSTEM_VOLUME_UUID).hex()
+    line = build_line(expected, volume, system_volume)
+    errors = check(line, dict(expected, volume=volume,
+                              system_volume=system_volume))
     assert not errors, errors
     mutations = (
         (line.replace('valid=1', 'valid=0'), 'valid'),
@@ -363,18 +377,31 @@ def self_test():
         (line.replace('apfs=1', 'apfs=0'), 'apfs'),
         (line.replace('cid=' + 'c' * 32, 'cid=' + '0' * 32), 'cid'),
         (line.replace('uuid=' + volume, 'uuid=' + '0' * 32), 'uuid'),
+        (line.replace('suuid=' + system_volume, 'suuid=' + '0' * 32),
+         'suuid'),
         (line.replace('rms=1677', 'rms=9999'), 'rms budget'),
         (line.replace('rch=129', 'rch=0'), 'rch zero'),
         (line.replace('wfail=4294967295', 'wfail=1'), 'wfail'),
-        (line.replace('wdiag=15', 'wdiag=0'), 'wdiag'),
+        (line.replace('wdiag=15', 'wdiag=0'), 'wdiag zero'),
+        (line.replace('wdiag=15', 'wdiag=3'), 'wdiag no accept'),
+        (line.replace('wdiag=15', 'wdiag=7'), 'wdiag no accept apfs'),
+        (line.replace('wdiag=15', 'wdiag=27'), 'wdiag duplicate'),
+        (line.replace('wdiag=15', 'wdiag=23'), 'wdiag duplicate no accept'),
+        (line.replace('wdiag=15', 'wdiag=31'), 'wdiag all bits'),
         (line.replace('wpoll=1', 'wpoll=0'), 'wpoll'),
         (line.replace('wtime=0', 'wtime=2001'), 'wtime'),
         (line + ' extra=1', 'extra field'),
         (line.replace('w1=SystemOS', 'w1=SystemOS extra=x'), 'gap'),
     )
     for text, label in mutations:
-        assert check(text, dict(expected, volume=volume)), \
+        assert check(text, dict(expected, volume=volume,
+                                system_volume=system_volume)), \
             f'{label} was accepted'
+    raw_accept = line.replace('wdiag=15', 'wdiag=11')
+    assert not check(raw_accept, dict(expected, volume=volume,
+                                      system_volume=system_volume)), \
+        'media+UUID+accept diagnostics without the optional APFS bit ' \
+        'were rejected'
     pre = (f'{LABEL}valid=0 reason=2 count=0 image=0 pmc=1 pwait=0 '
            f'rms=0 rch=0')
     assert not check_pre_write(pre), check_pre_write(pre)
@@ -429,9 +456,11 @@ def self_test():
         assert parsed['count'] == 2
         assert parsed['container'] == bytes(range(16)).hex()
         assert parsed['windows'][0]['name'] == 'OS'
-        synthetic = build_line(parsed, volume)
-        assert not check(synthetic, dict(parsed, volume=volume)), \
-            check(synthetic, dict(parsed, volume=volume))
+        synthetic = build_line(parsed, volume, system_volume)
+        assert not check(synthetic, dict(parsed, volume=volume,
+                                        system_volume=system_volume)), \
+            check(synthetic, dict(parsed, volume=volume,
+                                  system_volume=system_volume))
     print('PASS: windows evidence checker self-test')
 
 
@@ -466,6 +495,7 @@ def main():
             print(f'FAIL: {error}')
             return 1
         expected['volume'] = uuid_bytes(VOLUME_UUID).hex()
+        expected['system_volume'] = uuid_bytes(SYSTEM_VOLUME_UUID).hex()
         errors = check(line, expected)
     for error in errors:
         print(f'FAIL: {error}')

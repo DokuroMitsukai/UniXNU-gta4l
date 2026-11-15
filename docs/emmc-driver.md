@@ -38,13 +38,16 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 521 scenarios with 199 adapter mutations, 3 support mutations and 52 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 523 scenarios with 201 adapter mutations, 3 support mutations and 52 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
 | `scripts/test-gta4l-board-userdata.py` | Compares `board.toml [userdata]` with the captured GPT and runs mutation controls |
 | `scripts/copy-gta4l-reference-sources.py` | Copies the pinned reference sources into gitignored `out/` with a SHA-256 manifest |
 | `scripts/test-gta4l-emmc-evidence.py` | Runs the normalizer and dispatcher self-tests, then re-runs the historical width4, widthhold and widthpub verdicts when their private evidence is present |
+| `scripts/check-gta4l-windows-evidence.py` | Verifies one S4 `WINDOWS` line against the image, including both window volume UUIDs |
+| `scripts/probe-gta4l-apfs-userdata.py` | Read-only SHNGROOT/GPT/APFS identity probe: checkpoint selection, omap walk, per-window volume UUIDs, checksum and bounds checks, rejects unsupported forms |
+| `scripts/test-gta4l-apfs-probe.py` | Synthetic APFS probe controls plus the real-image re-derivation of both window volume UUIDs |
 | `docs/emmc-rung-record-template.md` | Record template for one rung |
 | `patches/xnu/gta4l-emmc-probe.patch` | Adds the opt-in preflight/run hooks to `bsd_init` |
 | `configs/gta4l_defconfig` | Force-loads the SDHCI snapshot and both eMMC archives into the kernel |
@@ -7903,7 +7906,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 521 scenarios with 199 adapter mutations, 3 support mutations and 52 policy mutations. The new
+Host gates: the block adapter test runs 523 scenarios with 201 adapter mutations, 3 support mutations and 52 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
 `BULKFAIL stage=12` (`BULK_STAGE_DMA`), `dma_stage=READ`, one request and
@@ -9263,3 +9266,131 @@ accepted volume. No timeout was changed.
 
 Evidence: `out/gta4l/ram-root-emmc-s4d-windows-candidate-evidence/`;
 archived on the PC drive as `s4d-windows-candidate.tar.xz`.
+
+**Correction (S4e, 2026-11-15).** The block-1026/block-4543 reasoning above
+is withdrawn: `nx_fs_oid` values are virtual object IDs resolved through the
+container object map, not physical block addresses, and the block-4543 APSB
+copy's freshness cannot be inferred from its UUID. The committed
+`scripts/probe-gta4l-apfs-userdata.py` now selects the checkpoint, walks the
+omap and resolves both volumes: SystemOS OID 1026 at xid 14 maps to physical
+block 782661 with UUID `8846FE78-2910-4297-AF97-D59BB6F8FC16`, sealed, role 0,
+name `DawnUpdate21H461.J120J121J207J208SystemCryptex`; OS OID 1026 at xid 418
+maps to physical block 15896 with UUID
+`04769D26-2CA0-4825-B443-E2E5F88300F2`, role 1, not sealed. The original
+observation is kept as history; the omap result supersedes it.
+
+### 5.3.147 S4e canonical window-UUID matching (2026-11-15)
+
+Host-only; not flashed or booted.
+
+The S4d verdict stopped at `pub=1 phase=4 perr=4 wfail=1 wdiag=3
+wpoll=21 wtime=2000`: SystemOS started and media with a parseable UUID
+appeared below the window, but the predicate never accepted it. The
+predicate required an APFS-content (`7C3457EF…`) ancestor. That exists on
+the OS GPT path, but the raw SystemOS whole-disk container is published by
+`AppleAPFSContainerSchemeWholeDisk`, which has no Content Mask, so a
+correct SystemOS volume can only ever show `wdiag=3`. The requirement was
+inconsistent with the reference interfaces (ShengUfs publication and the S5
+`native_verified_block_volume_device` consumer), neither of which requires
+an APFS ancestor.
+
+The publication predicate is now:
+
+- the window label maps to one canonical uppercase UUID
+  (`GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID`,
+  `GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID`), and an unknown label fails
+  closed;
+- an IOMedia is a candidate only when its `UUID` property is exactly that
+  string (`strcmp`, not case-insensitive or byte-only parsing) and its
+  provider chain reaches THIS window within
+  `GTA4L_EMMC_BLOCK_WINDOWS_ANCESTRY_DEPTH` (16) hops;
+- exactly one global candidate must exist. A second same-UUID object
+  anywhere, including outside the window, fails closed and sets the new
+  `wdiag` duplicate bit `0x10`, matching the S5 consumer's uniqueness rule;
+- APFS Content is diagnostic only. The scan does not stop at the first
+  success, so a later duplicate is still detected.
+
+`runWindows` captures the matched UUID per label (`OS` → `uuid`,
+`SystemOS` → `suuid`); the report struct adds
+`windows_system_volume_uuid`, and the `WINDOWS` line prints both 16-byte
+digests. The formatter bound is now 767 bytes and the report worst case
+2,155 bytes. The OS GPT/APFS-container probe now locates the manifest `OS`
+entry by name instead of assuming slot 0. The success-path `wdiag` is the
+OR of the actual per-window waits rather than a hard-coded `15`; a normal
+success still reports `15` because the OS window contributes the APFS bit,
+a both-windows-raw success would report `11`, and a duplicate fails with
+`23`.
+
+**Host tests.** The committed APFS probe re-derives both identities from
+`userdata-root.img` (OS `04769D26…` at paddr 15896/xid 418, SystemOS
+`8846FE78…` at paddr 782661/xid 14) and rejects stale, mismatched,
+encrypted, Fusion and non-4096-byte forms. The adapter suite is 523
+scenarios (524 PASS lines) with 201 adapter, 3 support and 52 policy
+mutation controls. `windows-publish-media-noapfs` now asserts acceptance
+without an APFS ancestor (`wdiag=11`), `windows-publish-media-container`
+asserts the container-only `wdiag=5`, `windows-publish-media-duplicate`
+asserts the global-duplicate `wdiag=23`, and `windows-expected-uuid` pins
+the label map and its fail-closed cases. Mutations
+`windows-window-accept`, `windows-global-duplicate-accept` and
+`windows-suuid-drop` are rejected by their scenarios. The evidence checker
+requires both exact UUID values, rejects a zeroed `suuid`, and accepts a
+success `wdiag` carrying the media/UUID/accept bits with or without the
+optional APFS bit (`11` or `15`); the duplicate bit and unknown bits fail.
+
+**Wait policy.** The existing 2000 ms per-window allowance is retained
+rather than the proposed 6000 ms. The S4d `wdiag=3` already proves that a
+UUID-bearing descendant appeared below the SystemOS window inside 2000 ms;
+the predicate, not the wait, rejected it, and `rms` was already split from
+the wait. Extending both waits to 6000 ms would add 8 s to the nominal
+watchdog sum with no measured late-attachment evidence. First-seen timings
+and a failure-only media census are not added: the bounded `wdiag` bits now
+separate media absence, UUID absence, APFS absence and a duplicate, and a
+failure carries the first failing slot, poll count and elapsed time. This
+is an explicit revision of the proposed allowance under the plan's
+measurement clause; the 2000 ms budget and its `wpoll`/`wtime` bounds stay
+exact.
+
+Expected S4e verdict on the verified image: `pub=2 phase=5 perr=0
+wfail=4294967295 wdiag=15`, `uuid=04769d262ca04825b443e2e5f88300f2`,
+`suuid=8846fe7829104297af97d59bb6f8fc16`, `rms≈1677 rch=129`. A remaining
+SystemOS failure should now report the stage and, for a duplicate, `23`;
+`wdiag=3` no longer means "APFS ancestor missing" but "expected UUID never
+matched below the window". No timeout, image or userdata write changed.
+This is a host-only candidate preparation; flashing or booting needs a
+fresh owner go naming the BOOT SHA-256.
+
+### 5.3.148 S4e canonical window-UUID candidate build (2026-11-15)
+
+Host-only; not flashed or booted. **Kernel**
+`da0371538c0ab4acdba26b2321eb8e19303c5fcc481dbb92914ea96a69ec35e0`
+(51,658,752 bytes), built from the restored audited `164dabd5…` pre-link
+input; archive
+`741ff2411cfb44a72010385d7e5eafd82c1b890fd93a972b4a76551cb57c8e5a`
+with `qualified=true` and `candidate_matches_audit=true`. The audited
+storage-ABI addresses are unchanged (vtable `fffffff005cb44c0`,
+metaclass `fffffff006add1d0`, init `fffffff00496ee30`);
+`waitUserdataMedia` is at `fffffff007a47bd0`. **Payload**
+`090d9f7fcac0f7df9495362b46c6e337edeccce9fbc35c816dc206842ee3831c`
+(83,886,080 bytes; `rd=md0 gta4l-emmc-block=3 gta4l-emmc-windows=1`,
+fs-timer-hold, owner trust; contract pass 133/133). **BOOT**
+`b7c898097aa21d48d39bdbe514df90df3ae65f5f509bcedce2a77ba2452300e3`
+(85,688,320 bytes; 18/18 gates; baseline donor `97ca05c6…`; only the
+ramdisk differs; kernel section `a4b054e0`, firmware `1e8a3132` and DTB
+`dc4c719d` unchanged).
+
+Userdata is the verified `fd43ee70…` image. This is a verdict-only image:
+no pre-write boot and no userdata rewrite. The do-not-boot list adds the
+S4d BOOT `8ffe68b9…`. Expected success: `pub=2 phase=5 perr=0
+wfail=4294967295 wdiag=15`, `uuid=04769d26…`,
+`suuid=8846fe78…`, `rms≈1677 rch=129`. If SystemOS still fails, the
+failure carries `pub=1 phase=4 perr=4 wfail=1 wdiag=<stage> wpoll=21
+wtime=2000`; `wdiag` 0 (no window media), 1/5 (media without a
+canonical UUID), 3 (a UUID appeared but never exactly matched this
+window), 7 (APFS container/media with no accepted volume), 11 (accepted
+without the APFS diagnostic bit) and 15 (accepted) separate the
+remaining hypotheses, while bit `0x10` marks a global duplicate. Host
+suite exit=0: 523 scenarios (524 PASS lines) with 201 adapter, 3 support
+and 52 policy mutation controls; the APFS probe test and both checker
+self-tests pass.
+
+Evidence: `out/gta4l/ram-root-emmc-s4e-windows-candidate-evidence/`.

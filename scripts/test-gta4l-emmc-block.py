@@ -1732,36 +1732,14 @@ ADAPTER_MUTATIONS = [
      [('\treturn (status == kIOReturnSuccess) && (actual == bytes);\n',
        '\treturn (status == kIOReturnSuccess);\n')],
      'windows-short-read'),
-    ('windows-ancestor-accept',
-     [('\t\t\tif (provider == window) {\n'
-       '\t\t\t\tmediaSeen = true;\n'
-       '\t\t\t\tif (uuidValid) {\n'
-       '\t\t\t\t\tuuidSeen = true;\n'
-       '\t\t\t\t}\n'
-       '\t\t\t\tif (apfsParent || ownApfs) {\n'
-       '\t\t\t\t\tapfsSeen = true;\n'
-       '\t\t\t\t}\n'
-       '\t\t\t\tif (uuidValid && apfsParent) {\n'
-       '\t\t\t\t\tmemcpy(uuid, parsed, sizeof(parsed));\n'
-       '\t\t\t\t\tfound = true;\n'
-       '\t\t\t\t}\n'
-       '\t\t\t\tbreak;\n'
-       '\t\t\t}\n',
-       '\t\t\tif (provider != nullptr) {\n'
-       '\t\t\t\tmediaSeen = true;\n'
-       '\t\t\t\tif (uuidValid) {\n'
-       '\t\t\t\t\tuuidSeen = true;\n'
-       '\t\t\t\t}\n'
-       '\t\t\t\tif (apfsParent || ownApfs) {\n'
-       '\t\t\t\t\tapfsSeen = true;\n'
-       '\t\t\t\t}\n'
-       '\t\t\t\tif (uuidValid) {\n'
-       '\t\t\t\t\tmemcpy(uuid, parsed, sizeof(parsed));\n'
-       '\t\t\t\t\tfound = true;\n'
-       '\t\t\t\t}\n'
-       '\t\t\t\tbreak;\n'
-       '\t\t\t}\n')],
+    ('windows-window-accept',
+     [('\tfound = (globalMatches == 1u) && windowMatch;\n',
+       '\tfound = (globalMatches == 1u) && (windowMatch || true);\n')],
      'windows-publish-foreign'),
+    ('windows-global-duplicate-accept',
+     [('\tfound = (globalMatches == 1u) && windowMatch;\n',
+       '\tfound = (globalMatches >= 1u) && windowMatch;\n')],
+     'windows-publish-media-duplicate'),
     ('windows-discard-started',
      [('\t\tif (started[slot]) {\n\t\t\tcontinue;\n\t\t}\n',
        '\t\t(void)started[slot];\n')],
@@ -1781,13 +1759,19 @@ ADAPTER_MUTATIONS = [
        '\t\tbzero(report.windows_volume_uuid,\n'
        '\t\t    sizeof(report.windows_volume_uuid));\n')],
      'windows-publish'),
+    ('windows-suuid-drop',
+     [('\t\tmemcpy(report.windows_system_volume_uuid, systemVolumeUuid,\n'
+       '\t\t    sizeof(report.windows_system_volume_uuid));\n',
+       '\t\tbzero(report.windows_system_volume_uuid,\n'
+       '\t\t    sizeof(report.windows_system_volume_uuid));\n')],
+     'windows-publish'),
     ('windows-start-ignored',
      [('\t\tif (!pending[slot]->start(this)) {\n',
        '\t\tif (0 && !pending[slot]->start(this)) {\n')],
      'windows-publish-start-fail'),
     ('windows-media-wait-skip',
-     [('\t\tif (!waitWindowMedia(pending[slot], volumeUuid,\n',
-       '\t\tif (0 && !waitWindowMedia(pending[slot], volumeUuid,\n')],
+     [('\t\tif (!waitWindowMedia(pending[slot], foundUuid,\n',
+       '\t\tif (0 && !waitWindowMedia(pending[slot], foundUuid,\n')],
      'windows-publish-media-fail'),
     ('windows-block-limit-dropped',
      [('\tif (!setProperty(kIOMaximumBlockCountReadKey,\n'
@@ -2719,10 +2703,18 @@ def check_adapter_source():
     assert 'windows_match_count' in policy_header and \
         'windows_partition_wait_ms' in policy_header, \
         'the WINDOWS line must carry pmc/pwait'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 728u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 767u' in \
         policy_header, 'the WINDOWS formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2116u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2155u' in \
         policy_header, 'the WINDOWS report bound must stay exact'
+    assert 'GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID \\\n' \
+        '\t"04769D26-2CA0-4825-B443-E2E5F88300F2"' in policy_header and \
+        'GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID \\\n' \
+        '\t"8846FE78-2910-4297-AF97-D59BB6F8FC16"' in policy_header, \
+        'the S4e canonical window volume UUIDs must stay exact'
+    assert 'windows_system_volume_uuid' in policy_header and \
+        '"suuid"' in policy, \
+        'the WINDOWS line must report both window volume UUIDs'
     assert 'gta4l_emmc_block_windows_parse' in policy, \
         'the SHNGROOT manifest parser must live in the shared policy'
     assert 'gta4l_emmc_block_windows_select' in policy, \
@@ -3280,8 +3272,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 522, f'expected 522 adapter PASS lines, got {passes}'
-        print('PASS adapter: 522 scenarios against the host IOKit seam')
+        assert passes == 524, f'expected 524 adapter PASS lines, got {passes}'
+        print('PASS adapter: 524 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

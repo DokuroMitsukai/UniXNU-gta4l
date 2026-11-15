@@ -151,6 +151,12 @@ _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES <=
     (GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS *
     GTA4L_EMMC_BLOCK_SCREEN_COLUMNS),
     "a single WINDOWS line must fit the panic-screen body");
+_Static_assert(sizeof(GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID) ==
+    GTA4L_EMMC_BLOCK_WINDOWS_UUID_TEXT_BYTES,
+    "OS window UUID text must be 36 characters plus NUL");
+_Static_assert(sizeof(GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID) ==
+    GTA4L_EMMC_BLOCK_WINDOWS_UUID_TEXT_BYTES,
+    "SystemOS window UUID text must be 36 characters plus NUL");
 _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES ==
     GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES,
     "windows reads must use the proven bulk chunk size");
@@ -4553,6 +4559,10 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 			gta4l_emmc_block_put_key(&writer, "uuid");
 			gta4l_emmc_block_put_digest(&writer,
 			    report->windows_volume_uuid, 16u);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "suuid");
+			gta4l_emmc_block_put_digest(&writer,
+			    report->windows_system_volume_uuid, 16u);
 		}
 		/* Discovery provenance, printed on every verdict so a
 		 * reason=15 separates a missing partition (pmc=0) from a
