@@ -48,6 +48,10 @@ windows = [
     { name = "OS", component = "OS" },
     { name = "SystemOS", component = "Cryptex1,SystemOS" },
 ]
+objects = [
+    { name = "OS.vroot", path = "out/gta4l/s5-policies/objects/OS.vroot" },
+    { name = "SystemOS.vroot", path = "out/gta4l/s5-policies/objects/SystemOS.vroot" },
+]
 
 [firmware]
 config = "gta4l"

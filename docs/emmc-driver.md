@@ -9445,3 +9445,88 @@ enter the S4 gate. The `WINDOWS` line joined without ambiguity and the
 checker re-derives every digest from the image.
 
 Evidence: `out/gta4l/ram-root-emmc-s4e-windows-candidate-evidence/`.
+
+## 5.4 S5 verified eMMC root
+
+### 5.4.1 Contract and host inputs (2026-11-16)
+
+**Consumer contract.** The owner-root, SystemOS mount, cache-carrier and
+boot-manifest patches (`UniXNU/patches/xnu/offline-owner-*`) call three
+symbols the block driver must export:
+
+- `native_verified_block_root_authorized(dev_t)` returns nonzero only when
+  the device's BSD major/minor names exactly one IOMedia, that media's
+  `UUID` property is one of the signed window identities and the media's
+  provider chain reaches the verified window;
+- `native_verified_block_volume_device(uuid, &dev, path, size)` resolves
+  one exact 36-character UUID string to its authorized device and
+  `/dev/…` path;
+- `native_verified_block_manifest_sha384(dev, uuid, out[48])` returns the
+  SHA-384 over the enrolled policy envelope (160-byte header + 384-byte
+  signature + table) for that authenticated volume.
+
+The reference implementation is `NativeVirtioBlock.cpp`
+(`verifiedVolumeQuery`, `native_verified_block_*`). It matches BSD
+major/minor, requires exactly one IOMedia, compares the UUID exactly, and
+walks providers. The eMMC driver provides its own definitions; the
+VirtIO-only weak `native_ufs_block_authenticates` hook is not part of the
+eMMC path.
+
+**Policy envelope.** `kits/VerifiedRoot` is unchanged: `vr_open` needs the
+header, signature and ordered 4096-byte block hashes in one contiguous
+buffer and verifies the anchor, signature, table hash and signed identity
+(`image_bytes`, volume UUID, generation). The 395-byte public anchor is
+independent of the untrusted envelope. gta4l tables are 47,481,120 bytes
+(OS, 1,483,785 blocks) and 25,804,800 bytes (SystemOS, 806,400 blocks);
+they cannot be linked into the 51.6 MB kernel or fit the 100,663,296-byte
+BOOT partition, so only the header, signature and anchor are embedded and
+the table is read from userdata at start. The kit itself is not forked.
+
+**Version-2 userdata objects.** The current ShengUfs reference
+(`RootLayout.h`, main) extends SHNGROOT with version-2 data objects: block
+size 4096, flags 3, up to four windows and four objects, unique names
+across both, 4 KiB padding in the overlap check, and no publication of
+objects as block devices. The shared builder now writes them
+(`UniXNU` commit `81f81fa`, `[userdata] objects = [{ name, path }]`; v1
+output is byte-identical to `fd43ee70…/bc908a6c…`).
+
+**Owner decisions.** The RSA-3072 owner key lives at
+`$HOME/.local/share/gta4l-owner-key/` (0700 directory, 0600 private key)
+and is used only on this build host; an encrypted copy on the external
+drive awaits the owner's passphrase. No userdata backup (owner choice);
+the v1 image stays reproducible from the builder. Two verdict boots are
+authorized: the report-mode verify rung and the root boot, each with its
+own image and go.
+
+### 5.4.2 Policies and the v2 image (2026-11-16, host-only)
+
+`scripts/build-gta4l-window-policies.py` reads each window from
+`userdata-root.img`, requires `e5634d04…` (OS) and `b4908cde…` (SystemOS),
+signs one policy per window with the owner key, verifies the envelope and
+every block through the kit's actual C parser on Linux
+(`verified_root.c` + `openssl_provider.c`), and writes the table objects
+and `Gta4lEmmcBlockPolicies.h`. Self-test covers open, every block, wrong
+anchor, tampered signature, tampered table, rollback generation and a
+one-byte block mutation.
+
+- Anchor SHA-256 `24375cde912393fd72e37c57a81f871979746905ba0533f24be1173b9cb99f3d`.
+- OS policy: generation 1, table
+  `5f14cb46c74da9cfd64a456d589c845d81ffe3e7547fd035ca3a1961c9eefcb8`;
+  object `out/gta4l/s5-policies/objects/OS.vroot` (47,481,120 bytes).
+- SystemOS policy: generation 1, table
+  `e3cbe58362060689f806cc81ecd5569debedcfa0b8df4da9875bbd79ba01afc8`;
+  object `.../SystemOS.vroot` (25,804,800 bytes).
+- v2 image `ae6e18e79937cd74e33b64749f9945d531bd2c1c5f92b922be2fe165496ef62a`
+  (9,455,947,776 bytes), manifest
+  `3ddf4d4f494a8e6387da12b5cca9af627119abc1a345a84c867afbae93cf989f`,
+  windows unchanged at 1 MiB/6,079,643,648 and the two objects at
+  9,382,658,048 and 9,430,142,976.
+
+Host checks: signer self-test and `scripts/test-gta4l-window-policies.py`
+pass; the APFS probe re-derives both identities from the v2 image; the
+windows checker accepts version 2 and validates the two objects, and its
+self-test covers object attributes, overlap and the v1 refusal.
+
+Next: S5c adds the version-2 parser, the verified read path, the exported
+contract and a report-mode `gta4l-emmc-verify=1` rung. This is host-only;
+no device access, flash or write.

@@ -32,7 +32,6 @@ from pathlib import Path
 BLOCK_BYTES = 4096
 MANIFEST_BYTES = 4096
 WINDOW_ALIGN = 1 << 20
-MAX_WINDOWS = 4
 MAX_VOLUMES = 100
 MAX_DESC_BLOCKS = 1024
 MAX_TREE_DEPTH = 16
@@ -174,10 +173,11 @@ def parse_manifest(stream, image_bytes):
         raise ProbeError('short SHNGROOT header')
     if header[0:8] != SHNGROOT_MAGIC:
         raise ProbeError('no SHNGROOT magic')
-    if u32(header, 8) != 1:
+    version = u32(header, 8)
+    if version not in (1, 2):
         raise ProbeError('unsupported SHNGROOT version')
     count = u32(header, 12)
-    if not 2 <= count <= MAX_WINDOWS:
+    if not 2 <= count <= (4 if version == 1 else 8):
         raise ProbeError(f'unsupported window count {count}')
     if u64(header, 16) != image_bytes:
         raise ProbeError(
@@ -199,14 +199,20 @@ def parse_manifest(stream, image_bytes):
         names.add(name)
         offset = u64(entry, 32)
         size = u64(entry, 40)
+        block_size, flags = u32(entry, 48), u32(entry, 52)
+        if any(entry[88:128]):
+            raise ProbeError(f'window {name} reserved bytes are nonzero')
+        if version == 2 and (block_size, flags) == (4096, 3):
+            if offset % 4096 or not size or \
+                    (size + 4095) // 4096 * 4096 > image_bytes - offset:
+                raise ProbeError(f'object {name} is outside the image')
+            continue
         if offset % WINDOW_ALIGN or size < WINDOW_ALIGN:
             raise ProbeError(f'window {name} is not 1 MiB aligned/sized')
         if offset < WINDOW_ALIGN or offset + size > image_bytes:
             raise ProbeError(f'window {name} is outside the image')
-        if u32(entry, 48) != 512 or u32(entry, 52) != 1:
+        if (block_size, flags) != (512, 1):
             raise ProbeError(f'window {name} has unsupported geometry/flags')
-        if any(entry[88:128]):
-            raise ProbeError(f'window {name} reserved bytes are nonzero')
         for other in windows:
             if offset < other['offset'] + other['size'] and \
                     other['offset'] < offset + size:

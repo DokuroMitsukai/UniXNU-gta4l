@@ -26,6 +26,7 @@ ENTRY_BYTES = 128
 ENTRY_BASE = 24
 DIGEST_BASE = 4064
 ALIGN_BYTES = 1 << 20
+OBJECT_ALIGN_BYTES = 1 << 12
 BLOCK_BYTES = 512
 APFS_TYPE = bytes.fromhex('ef57347c0000aa11aa1100306543ecac')
 HEX32 = re.compile(r'^[0-9a-f]{32}$')
@@ -277,7 +278,8 @@ def expected_from_image(path):
         version = u32(header, 8)
         count = u32(header, 12)
         image_bytes = u64(header, 16)
-        if version != 1 or count < 2 or count > 4:
+        if not ((version == 1 and 2 <= count <= 4) or
+                (version == 2 and 2 <= count <= 8)):
             raise ValueError('unsupported manifest version/count')
         if image_bytes != size:
             raise ValueError(
@@ -286,6 +288,12 @@ def expected_from_image(path):
         if digest != header[DIGEST_BASE:DIGEST_BASE + 32]:
             raise ValueError('manifest header digest mismatch')
         windows = []
+        objects = []
+        names = set()
+        spans = []
+
+        def padded(size):
+            return (size + OBJECT_ALIGN_BYTES - 1) // OBJECT_ALIGN_BYTES * OBJECT_ALIGN_BYTES
         for index in range(count):
             entry = header[ENTRY_BASE + index * ENTRY_BYTES:
                            ENTRY_BASE + (index + 1) * ENTRY_BYTES]
@@ -293,35 +301,63 @@ def expected_from_image(path):
             name = name_bytes.decode('ascii')
             offset = u64(entry, 32)
             window_bytes = u64(entry, 40)
-            if offset % ALIGN_BYTES or window_bytes < EDGE_BYTES:
-                raise ValueError(f'window {index} geometry')
-            end = offset + window_bytes
-            if end > image_bytes:
-                raise ValueError(f'window {index} exceeds the image')
-            stream.seek(offset)
-            first = stream.read(EDGE_BYTES)
-            stream.seek(end - EDGE_BYTES)
-            last = stream.read(EDGE_BYTES)
-            if len(first) != EDGE_BYTES or len(last) != EDGE_BYTES:
-                raise ValueError(f'window {index} is shorter than 1 MiB')
-            windows.append({
-                'name': name,
-                'off': offset,
-                'size': window_bytes,
-                'hd0': digest_prefix(first),
-                'hd1': digest_prefix(last),
-            })
+            block_size = u32(entry, 48)
+            flags = u32(entry, 52)
+            if not name or name in names:
+                raise ValueError('duplicate or empty window/object name')
+            names.add(name)
+            if any(offset < other + padded(other_size) and
+                   other < offset + padded(window_bytes)
+                   for other, other_size in spans):
+                raise ValueError(f'entry {index} overlaps another entry')
+            spans.append((offset, window_bytes))
+            if (block_size, flags) == (512, 1):
+                if offset % ALIGN_BYTES or window_bytes < EDGE_BYTES:
+                    raise ValueError(f'window {index} geometry')
+                end = offset + window_bytes
+                if end > image_bytes:
+                    raise ValueError(f'window {index} exceeds the image')
+                stream.seek(offset)
+                first = stream.read(EDGE_BYTES)
+                stream.seek(end - EDGE_BYTES)
+                last = stream.read(EDGE_BYTES)
+                if len(first) != EDGE_BYTES or len(last) != EDGE_BYTES:
+                    raise ValueError(f'window {index} is shorter than 1 MiB')
+                windows.append({
+                    'name': name,
+                    'off': offset,
+                    'size': window_bytes,
+                    'hd0': digest_prefix(first),
+                    'hd1': digest_prefix(last),
+                })
+            elif version == 2 and (block_size, flags) == (4096, 3):
+                if offset % OBJECT_ALIGN_BYTES or not window_bytes or \
+                        (window_bytes + OBJECT_ALIGN_BYTES - 1) // OBJECT_ALIGN_BYTES * OBJECT_ALIGN_BYTES > image_bytes - offset:
+                    raise ValueError(f'object {index} geometry')
+                stream.seek(offset)
+                blob = stream.read(window_bytes)
+                if len(blob) != window_bytes:
+                    raise ValueError(f'object {index} is truncated')
+                objects.append({'name': name, 'off': offset,
+                                'size': window_bytes,
+                                'sha256': hashlib.sha256(blob).hexdigest()})
+            else:
+                raise ValueError(f'entry {index} has unknown block size/flags')
+        if len(windows) != 2:
+            raise ValueError(f'expected 2 windows, found {len(windows)}')
         stream.seek(windows[0]['off'])
         first_chunk = stream.read(EDGE_BYTES)
         if len(first_chunk) != EDGE_BYTES:
             raise ValueError('first window is shorter than 1 MiB')
     container, _ = find_apfs_container(first_chunk)
     return {
-        'count': count,
+        'count': len(windows),
+        'version': version,
         'image_bytes': image_bytes,
         'manifest': hashlib.sha256(header).hexdigest()[:32],
         'container': container,
         'windows': windows,
+        'objects': objects,
     }
 
 
@@ -418,49 +454,92 @@ def self_test():
         assert check_pre_write(text), f'{label} was accepted'
     with tempfile.TemporaryDirectory(prefix='gta4l-windows-check-') as raw:
         image = Path(raw) / 'userdata.img'
-        total = 4 << 20
-        data = bytearray(total)
-        header = bytearray(HEADER_BYTES)
-        header[0:8] = b'SHNGROOT'
-        struct.pack_into('<I', header, 8, 1)
-        struct.pack_into('<I', header, 12, 2)
-        struct.pack_into('<Q', header, 16, total)
-        for index, (name, offset, window_bytes) in enumerate((
-                ('OS', 1 << 20, 1 << 20),
-                ('SystemOS', 2 << 20, 1 << 20))):
-            entry = ENTRY_BASE + index * ENTRY_BYTES
-            header[entry:entry + len(name)] = name.encode()
-            struct.pack_into('<Q', header, entry + 32, offset)
-            struct.pack_into('<Q', header, entry + 40, window_bytes)
-            struct.pack_into('<I', header, entry + 48, 512)
-            struct.pack_into('<I', header, entry + 52, 1)
-            for byte in range(window_bytes):
-                data[offset + byte] = (index * 0x40 + byte) & 0xff
-        header[DIGEST_BASE:DIGEST_BASE + 32] = \
-            hashlib.sha256(header[:DIGEST_BASE]).digest()
-        data[:HEADER_BYTES] = header
-        gpt = 1 << 20
-        data[gpt + 512:gpt + 520] = b'EFI PART'
-        struct.pack_into('<Q', data, gpt + 512 + 72, 2)
-        struct.pack_into('<I', data, gpt + 512 + 80, 1)
-        struct.pack_into('<I', data, gpt + 512 + 84, 128)
-        data[gpt + 1024:gpt + 1024 + 16] = APFS_TYPE
-        struct.pack_into('<Q', data, gpt + 1024 + 32, 34)
-        struct.pack_into('<Q', data, gpt + 1024 + 40, 35)
-        node = gpt + 34 * 512
-        data[node + 32:node + 36] = b'NXSB'
-        struct.pack_into('<I', data, node + 36, 4096)
-        data[node + 0x48:node + 0x58] = bytes(range(16))
-        image.write_bytes(bytes(data))
+        total = 8 << 20
+
+        def make_image(version, object_entries, duplicate=False):
+            data = bytearray(total)
+            header = bytearray(HEADER_BYTES)
+            header[0:8] = b'SHNGROOT'
+            struct.pack_into('<I', header, 8, version)
+            struct.pack_into('<I', header, 12, 2 + len(object_entries))
+            struct.pack_into('<Q', header, 16, total)
+            entries = [('OS', 1 << 20, 1 << 20, 512, 1),
+                       ('SystemOS', 2 << 20, 1 << 20, 512, 1)] + object_entries
+            for index, (name, offset, window_bytes, block_size, flags) in enumerate(entries):
+                entry = ENTRY_BASE + index * ENTRY_BYTES
+                header[entry:entry + len(name)] = name.encode()
+                struct.pack_into('<Q', header, entry + 32, offset)
+                struct.pack_into('<Q', header, entry + 40, window_bytes)
+                struct.pack_into('<I', header, entry + 48, block_size)
+                struct.pack_into('<I', header, entry + 52, flags)
+            for byte in range(1 << 20):
+                data[(1 << 20) + byte] = byte & 0xff
+                data[(2 << 20) + byte] = (0x40 + byte) & 0xff
+            for name, offset, size, _, _ in object_entries:
+                data[offset:offset + size] = name.encode().ljust(size, b'\0')
+            header[DIGEST_BASE:DIGEST_BASE + 32] = \
+                hashlib.sha256(header[:DIGEST_BASE]).digest()
+            data[:HEADER_BYTES] = header
+            gpt = 1 << 20
+            data[gpt + 512:gpt + 520] = b'EFI PART'
+            struct.pack_into('<Q', data, gpt + 512 + 72, 2)
+            struct.pack_into('<I', data, gpt + 512 + 80, 1)
+            struct.pack_into('<I', data, gpt + 512 + 84, 128)
+            data[gpt + 1024:gpt + 1024 + 16] = APFS_TYPE
+            struct.pack_into('<Q', data, gpt + 1024 + 32, 34)
+            struct.pack_into('<Q', data, gpt + 1024 + 40, 35)
+            node = gpt + 34 * 512
+            data[node + 32:node + 36] = b'NXSB'
+            struct.pack_into('<I', data, node + 36, 4096)
+            data[node + 0x48:node + 0x58] = bytes(range(16))
+            image.write_bytes(bytes(data))
+            return image
+
+        make_image(1, [])
         parsed = expected_from_image(image)
-        assert parsed['count'] == 2
+        assert parsed['count'] == 2 and parsed['version'] == 1
         assert parsed['container'] == bytes(range(16)).hex()
         assert parsed['windows'][0]['name'] == 'OS'
+        assert parsed['objects'] == []
         synthetic = build_line(parsed, volume, system_volume)
         assert not check(synthetic, dict(parsed, volume=volume,
                                         system_volume=system_volume)), \
             check(synthetic, dict(parsed, volume=volume,
                                   system_volume=system_volume))
+        objects = [('OS.vroot', 4 << 20, 4096, 4096, 3),
+                   ('SystemOS.vroot', 5 << 20, 4096, 4096, 3)]
+        make_image(2, objects)
+        parsed = expected_from_image(image)
+        assert parsed['count'] == 2 and parsed['version'] == 2
+        assert [entry['name'] for entry in parsed['objects']] == \
+            ['OS.vroot', 'SystemOS.vroot']
+        assert parsed['objects'][0]['sha256'] == \
+            hashlib.sha256(b'OS.vroot'.ljust(4096, b'\0')).hexdigest()
+        synthetic = build_line(parsed, volume, system_volume)
+        assert not check(synthetic, dict(parsed, volume=volume,
+                                        system_volume=system_volume))
+        for bad_objects, label in (
+                ([('OS.vroot', 4 << 20, 4096, 512, 1)],
+                 'object with window attributes'),
+                ([('OS.vroot', 4 << 20, 4096, 4096, 3),
+                  ('SystemOS.vroot', 4 << 20, 4096, 4096, 3)],
+                 'object overlap with another object'),
+                ([('OS', 6 << 20, 4096, 4096, 3)],
+                 'duplicate window name')):
+            make_image(2, bad_objects)
+            try:
+                expected_from_image(image)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f'{label} was accepted')
+        make_image(1, objects)
+        try:
+            expected_from_image(image)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('a version-1 manifest with objects was accepted')
     print('PASS: windows evidence checker self-test')
 
 
