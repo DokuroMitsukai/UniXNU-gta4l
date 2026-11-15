@@ -8863,3 +8863,40 @@ follow. The APFS kext is not yet confirmed in the prelink roots, and
 the S5 verified path (owner policy, v2 `OS.vroot` table, kernel
 symbols) remains. The device write still needs its own go naming the
 image SHA-256 and the backup answer.
+
+### 5.3.135 S4 windows evidence checker (2026-11-15)
+
+Host-only. `scripts/check-gta4l-windows-evidence.py` closes the host half
+of step 4; the S4 candidate remains. It parses exactly one
+`GTA4L-EMMC P5 WINDOWS:` line and recomputes every expected value from
+the flashed userdata image:
+
+- the 4096-byte SHNGROOT header (magic, version 1, count, `image_bytes`
+  equal to the file length, header digest) and the manifest SHA-256
+  prefix;
+- each window's name, offset and size from the header, and the SHA-256
+  prefixes of its first and last 1 MiB;
+- the first window's GPT and Apple_APFS entry, the `NXSB` block size and
+  the container UUID at `+0x48`.
+
+A post-write report must show `valid=1 reason=0 count=2
+image=9382658048 pub=2 phase=5 perr=0`, the exact OS/SystemOS entries,
+`apfs=1`, `cid=50f8a67fafc14a1bbcbb82162674c67f` and
+`uuid=04769d26...`. `--pre-write` requires `valid=0 reason=2 count=0
+image=0` and no window fields. The checker has a synthetic-image
+self-test, a mutated-line refusal set and the real-image cross-check.
+
+Against the real S4 image the checker reports OS `hd0=268f697a…`,
+`hd1=1fcad76c…` (the §5.3.129 values) and SystemOS `hd0=ffe3bea7…`,
+`hd1=30e14955…`, with manifest `bc908a6c…` and container
+`50f8a67f…`. The values are stored in the gitignored
+`out/gta4l/ram-root-emmc-s4-userdata-evidence/windows-expected.json`.
+
+The dispatcher now has six modes (`width4`, `widthhold`, `widthpub`,
+`speed`, `bulk`, `windows`); `windows` left `FUTURE`. The dispatcher
+self-test runs every mode's self-test and passes.
+
+**Not done yet.** The S4 candidate build and its gates, the read-only
+pre-write boot, the userdata write and the verdict boot remain. The APFS
+kext is still not confirmed in the prelink roots, and the S5 verified
+path is unchanged.
