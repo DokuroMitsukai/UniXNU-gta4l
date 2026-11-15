@@ -1734,11 +1734,31 @@ ADAPTER_MUTATIONS = [
      'windows-short-read'),
     ('windows-ancestor-accept',
      [('\t\t\tif (provider == window) {\n'
-       '\t\t\t\tfound = apfsParent;\n'
+       '\t\t\t\tmediaSeen = true;\n'
+       '\t\t\t\tif (uuidValid) {\n'
+       '\t\t\t\t\tuuidSeen = true;\n'
+       '\t\t\t\t}\n'
+       '\t\t\t\tif (apfsParent || ownApfs) {\n'
+       '\t\t\t\t\tapfsSeen = true;\n'
+       '\t\t\t\t}\n'
+       '\t\t\t\tif (uuidValid && apfsParent) {\n'
+       '\t\t\t\t\tmemcpy(uuid, parsed, sizeof(parsed));\n'
+       '\t\t\t\t\tfound = true;\n'
+       '\t\t\t\t}\n'
        '\t\t\t\tbreak;\n'
        '\t\t\t}\n',
        '\t\t\tif (provider != nullptr) {\n'
-       '\t\t\t\tfound = true; (void)apfsParent;\n'
+       '\t\t\t\tmediaSeen = true;\n'
+       '\t\t\t\tif (uuidValid) {\n'
+       '\t\t\t\t\tuuidSeen = true;\n'
+       '\t\t\t\t}\n'
+       '\t\t\t\tif (apfsParent || ownApfs) {\n'
+       '\t\t\t\t\tapfsSeen = true;\n'
+       '\t\t\t\t}\n'
+       '\t\t\t\tif (uuidValid) {\n'
+       '\t\t\t\t\tmemcpy(uuid, parsed, sizeof(parsed));\n'
+       '\t\t\t\t\tfound = true;\n'
+       '\t\t\t\t}\n'
        '\t\t\t\tbreak;\n'
        '\t\t\t}\n')],
      'windows-publish-foreign'),
@@ -1809,6 +1829,14 @@ ADAPTER_MUTATIONS = [
        '\t\t    GTA4L_EMMC_BLOCK_WINDOWS_READ_BUDGET_MS) {\n',
        '\t\tif (windowsElapsedMs() >= 1000u) {\n')],
      'windows-read'),
+    ('windows-diag-accept',
+     [('\t\t\t\tfailDiag = diag;\n',
+       '\t\t\t\tfailDiag = 15u;\n')],
+     'windows-publish-media-fail'),
+    ('windows-read-time-combined',
+     [('\treadTimed = windowsReadStarted;\n',
+       '\treadTimed = false;\n')],
+     'windows-publish-media-fail'),
 ]
 
 SUPPORT_MUTATIONS = [
@@ -2691,9 +2719,9 @@ def check_adapter_source():
     assert 'windows_match_count' in policy_header and \
         'windows_partition_wait_ms' in policy_header, \
         'the WINDOWS line must carry pmc/pwait'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 660u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 728u' in \
         policy_header, 'the WINDOWS formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2048u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2116u' in \
         policy_header, 'the WINDOWS report bound must stay exact'
     assert 'gta4l_emmc_block_windows_parse' in policy, \
         'the SHNGROOT manifest parser must live in the shared policy'
@@ -3252,8 +3280,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 518, f'expected 518 adapter PASS lines, got {passes}'
-        print('PASS adapter: 518 scenarios against the host IOKit seam')
+        assert passes == 522, f'expected 522 adapter PASS lines, got {passes}'
+        print('PASS adapter: 522 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

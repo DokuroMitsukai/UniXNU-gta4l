@@ -14868,6 +14868,10 @@ screen_windows(struct gta4l_emmc_block_report *report)
 	    GTA4L_EMMC_BLOCK_WINDOWS_PART_WAIT_MS;
 	report->windows_read_ms = 1677u;
 	report->windows_read_chunks = 129u;
+	report->windows_fail_slot = 0xffffffffu;
+	report->windows_fail_diag = 15u;
+	report->windows_media_polls = 1u;
+	report->windows_media_wait_ms = 0u;
 	memset(report->windows_manifest_digest, 0xff,
 	    sizeof(report->windows_manifest_digest));
 	memcpy(report->windows_entry[0].name, "OS", 3u);
@@ -15387,6 +15391,10 @@ scenario_windows_format(void)
 	report.windows_phase = 0xffffffffu;
 	report.windows_published = 0xffffffffu;
 	report.windows_publish_error = 0xffffffffu;
+	report.windows_fail_slot = 0xffffffffu;
+	report.windows_fail_diag = 0xffffffffu;
+	report.windows_media_polls = 0xffffffffu;
+	report.windows_media_wait_ms = 0xffffffffu;
 	memset(report.windows_entry[0].name, 'A', 31u);
 	report.windows_entry[0].name[31] = 0;
 	memset(report.windows_entry[1].name, 'B', 31u);
@@ -15405,7 +15413,9 @@ scenario_windows_format(void)
 	CHECK(strstr(buffer, "GTA4L-EMMC P5 WINDOWS: "
 	    "valid=4294967295 reason=4294967295 count=4294967295 "
 	    "image=18446744073709551615 pub=4294967295 "
-	    "phase=4294967295 perr=4294967295") != 0);
+	    "phase=4294967295 perr=4294967295 "
+	    "wfail=4294967295 wdiag=4294967295 "
+	    "wpoll=4294967295 wtime=4294967295") != 0);
 	CHECK(strstr(buffer, " w0=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "
 	    "off=18446744073709551615 size=18446744073709551615") != 0);
 	CHECK(strstr(buffer, "apfs=4294967295 "
@@ -15444,7 +15454,19 @@ static int g_windows_publish_order[2];
 static int g_windows_publish_count;
 static bool g_windows_media_fail;
 static bool g_windows_media_foreign;
+static bool g_windows_media_nouuid;
+static bool g_windows_media_noapfs;
+static bool g_windows_media_container;
+static uint32_t g_windows_media_delay_polls;
 static bool g_windows_fail_start_os;
+
+static void
+windows_record_publish(int slot)
+{
+	if (g_windows_publish_count < 2) {
+		g_windows_publish_order[g_windows_publish_count++] = slot;
+	}
+}
 static uint64_t g_windows_read_block;
 static uint64_t g_windows_read_nblks;
 static uint32_t g_windows_read_calls;
@@ -15467,6 +15489,10 @@ windows_hook_reset(void)
 	g_windows_publish_count = 0;
 	g_windows_media_fail = false;
 	g_windows_media_foreign = false;
+	g_windows_media_nouuid = false;
+	g_windows_media_noapfs = false;
+	g_windows_media_container = false;
+	g_windows_media_delay_polls = 0u;
 	g_windows_fail_start_os = false;
 	g_windows_read_block = 0;
 	g_windows_read_nblks = 0;
@@ -15498,28 +15524,51 @@ windows_publish_media_hook(IOService *service, const char *label)
 	if (g_windows_media_fail || (g_windows_volume[slot] != 0)) {
 		return;
 	}
+	/* Delay only the OS slot so the final media wait, and therefore the
+	 * reported wpoll/wtime, is the delayed one. */
+	if ((g_windows_media_delay_polls > 0u) && (slot == 1)) {
+		g_windows_media_delay_polls--;
+		return;
+	}
 	volume = new IOMedia();
 	gta4l_test_media_configure(volume, false, 0, 4096, false,
 	    "AppleAPFSVolume");
-	volume->uuid_value_ = g_windows_uuid_text[slot];
+	if (!g_windows_media_nouuid) {
+		volume->uuid_value_ = g_windows_uuid_text[slot];
+	}
 	if (g_windows_media_foreign) {
 		volume->provider_ = static_cast<IOService *>(g_self);
-	} else {
+		gta4l_test_add_media(volume);
+		g_windows_volume[slot] = volume;
+		windows_record_publish(slot);
+		return;
+	}
+	if (g_windows_media_noapfs) {
+		volume->provider_ = service;
+		gta4l_test_add_media(volume);
+		g_windows_volume[slot] = volume;
+		windows_record_publish(slot);
+		return;
+	}
+	{
 		IOMedia *container = new IOMedia();
 
 		gta4l_test_media_configure(container, false, 0, 4096,
 		    false, "7c3457ef-0000-11aa-aa11-00306543ecac");
-		container->uuid_value_ =
+		container->uuid_value_ = g_windows_media_nouuid ?
+		    nullptr :
 		    const_cast<char *>(g_windows_container_uuid_text);
 		container->provider_ = service;
 		gta4l_test_add_media(container);
+		if (g_windows_media_container) {
+			g_windows_volume[slot] = container;
+			return;
+		}
 		volume->provider_ = container;
 	}
 	gta4l_test_add_media(volume);
 	g_windows_volume[slot] = volume;
-	if (g_windows_publish_count < 2) {
-		g_windows_publish_order[g_windows_publish_count++] = slot;
-	}
+	windows_record_publish(slot);
 }
 
 static void
@@ -15697,7 +15746,8 @@ scenario_windows_read(void)
 	CHECK(g_self->report.windows_apfs == 0u);
 	CHECK(strstr(gta4l_test.panic,
 	    "GTA4L-EMMC P5 WINDOWS: valid=1 reason=0 count=2 "
-	    "image=8388608 pub=2 phase=5 perr=0 mdig=") != 0);
+	    "image=8388608 pub=2 phase=5 perr=0 "
+	    "wfail=4294967295 wdiag=15 wpoll=1 wtime=0 mdig=") != 0);
 	snprintf(expected, sizeof(expected),
 	    " w0=OS off=1048576 size=2097152 hd0=%s hd1=%s "
 	    "w1=SystemOS off=3145728 size=2097152 hd0=%s hd1=%s",
@@ -16022,7 +16072,14 @@ scenario_windows_publish(void)
 	CHECK(g_windows_publish_order[0] == 0);
 	CHECK(g_windows_publish_order[1] == 1);
 	CHECK(gta4l_test_detach_count == 0u);
+	CHECK(g_self->report.windows_fail_slot == 0xffffffffu);
+	CHECK(g_self->report.windows_fail_diag == 15u);
+	CHECK(g_self->report.windows_media_polls == 1u);
+	CHECK(g_self->report.windows_media_wait_ms == 0u);
+	CHECK(g_self->report.windows_read_ms == 1677u);
 	CHECK(strstr(gta4l_test.panic, " pub=2 phase=5 perr=0 ") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=4294967295 wdiag=15 wpoll=1 wtime=0 ") != 0);
 	CHECK(strstr(gta4l_test.panic,
 	    " uuid=04769d262ca04825b443e2e5f88300f2") != 0);
 
@@ -16087,7 +16144,110 @@ scenario_windows_publish_media_fail(void)
 	CHECK(g_self->report.windows_media[1] == 0u);
 	CHECK(g_windows_publish_count == 0);
 	CHECK(gta4l_test_detach_count == 1u);
+	CHECK(g_self->report.windows_fail_slot == 1u);
+	CHECK(g_self->report.windows_fail_diag == 0u);
+	CHECK(g_self->report.windows_media_polls == 21u);
+	CHECK(g_self->report.windows_media_wait_ms == 2000u);
+	CHECK(g_self->report.windows_read_ms == 1677u);
 	CHECK(strstr(gta4l_test.panic, " pub=1 phase=4 perr=4 ") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=1 wdiag=0 wpoll=21 wtime=2000 ") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_publish_media_nouuid(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	g_windows_media_nouuid = true;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_phase ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PHASE_MEDIA);
+	CHECK(g_self->report.windows_published == 1u);
+	CHECK(g_self->report.windows_publish_error ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA);
+	CHECK(g_self->report.windows_fail_slot == 1u);
+	CHECK(g_self->report.windows_fail_diag == 5u);
+	CHECK(g_self->report.windows_media_polls == 21u);
+	CHECK(g_self->report.windows_media_wait_ms == 2000u);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=1 wdiag=5 wpoll=21 wtime=2000 ") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_publish_media_noapfs(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	g_windows_media_noapfs = true;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_publish_error ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA);
+	CHECK(g_self->report.windows_fail_slot == 1u);
+	CHECK(g_self->report.windows_fail_diag == 3u);
+	CHECK(g_self->report.windows_media_polls == 21u);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=1 wdiag=3 wpoll=21 wtime=2000 ") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_publish_media_container(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	g_windows_media_container = true;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_publish_error ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA);
+	CHECK(g_self->report.windows_fail_slot == 1u);
+	CHECK(g_self->report.windows_fail_diag == 7u);
+	CHECK(g_self->report.windows_media_polls == 21u);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=1 wdiag=7 wpoll=21 wtime=2000 ") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_publish_media_late(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	g_windows_media_delay_polls = 5u;
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_phase ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PHASE_COMPLETE);
+	CHECK(g_self->report.windows_published == 2u);
+	CHECK(g_self->report.windows_publish_error ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_NONE);
+	CHECK(g_self->report.windows_fail_slot == 0xffffffffu);
+	CHECK(g_self->report.windows_fail_diag == 15u);
+	CHECK(g_self->report.windows_media_polls == 6u);
+	CHECK(g_self->report.windows_media_wait_ms == 500u);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=4294967295 wdiag=15 wpoll=6 wtime=500 ") != 0);
 	return 0;
 }
 
@@ -16110,6 +16270,10 @@ scenario_windows_publish_foreign(void)
 	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA);
 	CHECK(g_windows_publish_count == 1);
 	CHECK(gta4l_test_detach_count == 1u);
+	CHECK(g_self->report.windows_fail_slot == 1u);
+	CHECK(g_self->report.windows_fail_diag == 0u);
+	CHECK(g_self->report.windows_media_polls == 21u);
+	CHECK(g_self->report.windows_media_wait_ms == 2000u);
 	return 0;
 }
 
@@ -16135,7 +16299,13 @@ scenario_windows_publish_start_fail(void)
 	CHECK(g_windows_publish_count == 1);
 	CHECK(g_windows_publish_order[0] == 0);
 	CHECK(gta4l_test_detach_count == 1u);
+	CHECK(g_self->report.windows_fail_slot == 0u);
+	CHECK(g_self->report.windows_fail_diag == 0u);
+	CHECK(g_self->report.windows_media_polls == 0u);
+	CHECK(g_self->report.windows_media_wait_ms == 0u);
 	CHECK(strstr(gta4l_test.panic, " pub=1 phase=3 perr=3 ") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=0 wdiag=0 wpoll=0 wtime=0 ") != 0);
 	return 0;
 }
 
@@ -16158,7 +16328,13 @@ scenario_windows_publish_plan(void)
 	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_PLAN);
 	CHECK(g_windows_publish_count == 0);
 	CHECK(gta4l_test_detach_count == 0u);
+	CHECK(g_self->report.windows_fail_slot == 0xffffffffu);
+	CHECK(g_self->report.windows_fail_diag == 0u);
+	CHECK(g_self->report.windows_media_polls == 0u);
+	CHECK(g_self->report.windows_media_wait_ms == 0u);
 	CHECK(strstr(gta4l_test.panic, " pub=0 phase=1 perr=1 ") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    " wfail=4294967295 wdiag=0 wpoll=0 wtime=0 ") != 0);
 	return 0;
 }
 
@@ -16750,6 +16926,10 @@ static const struct scenario_entry scenarios[] = {
 	{ "windows-budget", scenario_windows_budget },
 	{ "windows-publish", scenario_windows_publish },
 	{ "windows-publish-media-fail", scenario_windows_publish_media_fail },
+	{ "windows-publish-media-nouuid", scenario_windows_publish_media_nouuid },
+	{ "windows-publish-media-noapfs", scenario_windows_publish_media_noapfs },
+	{ "windows-publish-media-container", scenario_windows_publish_media_container },
+	{ "windows-publish-media-late", scenario_windows_publish_media_late },
 	{ "windows-publish-foreign", scenario_windows_publish_foreign },
 	{ "windows-publish-start-fail", scenario_windows_publish_start_fail },
 	{ "windows-publish-plan", scenario_windows_publish_plan },

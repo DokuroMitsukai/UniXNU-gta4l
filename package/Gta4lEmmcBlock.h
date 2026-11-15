@@ -578,9 +578,9 @@ extern "C" {
  * the discovery wait (pmc/pwait) on every verdict. At their widest the two
  * entries and the UUIDs make a 598-byte line; pmc, pwait, rms and rch add
  * at most 64 bytes, and the S4 report adds it to the base, the compact
- * SPEED and SPEEDIO lines (2,048 bytes at their type maxima). */
-#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 660u
-#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2048u
+ * SPEED and SPEEDIO lines (2,116 bytes at their type maxima). */
+#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 728u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2116u
 
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
@@ -886,6 +886,16 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_PREPARE 2u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_START 3u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA 4u
+
+/* Window-media publication stage bits for `wdiag`. The wait ORs the
+ * stages seen on every poll so a timeout separates "no IOMedia above the
+ * window" (0) from "media appeared but no UUID" (1), "UUID media but no
+ * APFS ancestor" (3), "APFS container/media but no accepted volume" (7)
+ * and "accepted volume" (15). */
+#define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_MEDIA 0x1u
+#define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_UUID 0x2u
+#define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_APFS 0x4u
+#define GTA4L_EMMC_BLOCK_WINDOWS_DIAG_ACCEPT 0x8u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_NONE 0u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_PLAN 1u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PHASE_PREPARE 2u
@@ -1717,6 +1727,13 @@ struct gta4l_emmc_block_report {
 	uint32_t windows_phase;
 	uint32_t windows_published;
 	uint32_t windows_publish_error;
+	/* First failing window (manifest slot; 0xffffffff on success), the
+	 * OR of its media-stage bits, and the failing wait's poll count and
+	 * elapsed milliseconds. */
+	uint32_t windows_fail_slot;
+	uint32_t windows_fail_diag;
+	uint32_t windows_media_polls;
+	uint32_t windows_media_wait_ms;
 	uint32_t windows_media[GTA4L_EMMC_BLOCK_WINDOWS_MAX];
 };
 

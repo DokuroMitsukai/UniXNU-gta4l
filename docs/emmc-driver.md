@@ -38,7 +38,7 @@ criterion and every failed or partial rung.
 | `scripts/sim-gta4l-emmc-probe/harness.c` | Simulated SDHCI/GCC windows, eMMC card and kernel stubs for the probe report path |
 | `scripts/test-gta4l-emmc-probe.py` | Runs the probe report, 196 scenarios and 100 mutation controls |
 | `scripts/sim-gta4l-emmc-block/harness.c` | Mock read/copy transport for the portable block request helper |
-| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 517 scenarios with 197 adapter mutations, 3 support mutations and 52 policy mutations |
+| `scripts/test-gta4l-emmc-block.py` | Compiles the helper and covers 47 scenarios plus 35 mutation controls against the host IOKit seam. The block adapter test runs 521 scenarios with 199 adapter mutations, 3 support mutations and 52 policy mutations |
 | `scripts/build-gta4l-emmc-probe.py` | Builds `libGta4lEmmcCore.a` (core, platform, block helper) and `libGta4lEmmcProbe.a` with the `bsd_init.o` compile record; rejects duplicate globals |
 | `scripts/check-gta4l-emmc-evidence.py` | Selects the per-mode evidence predicate (`width4`, `widthhold`, `widthpub`, `speed`) and passes every argument through |
 | `scripts/normalize-gta4l-report.py` | Joins screen-wrapped report lines, logs each join, and never changes a value |
@@ -7903,8 +7903,7 @@ bytes and the combined report worst case from 3,259 to 3,289 of 3,328
 bytes; the header constants, the formatter check and the maximum-field
 fixture were updated together.
 
-Host gates: the block adapter test runs 517 scenarios with 197 adapter
-mutations, 3 support mutations and 52 policy mutations. The new
+Host gates: the block adapter test runs 521 scenarios with 199 adapter mutations, 3 support mutations and 52 policy mutations. The new
 `dma-stack-fallback` scenario fails the first stream transfer
 (`adma_fail_at=4` after the four comparison transfers), expects
 `BULKFAIL stage=12` (`BULK_STAGE_DMA`), `dma_stage=READ`, one request and
@@ -8703,7 +8702,7 @@ write path's before/after comparison; the current rung is read-only.
 
 **Test.** `windows-manifest` now also rejects a sealed version-2
 header (reason 3) and an unaligned `image_bytes` (reason 5). The
-adapter suite is 517 scenarios (518 PASS lines) with 197 adapter,
+adapter suite is 521 scenarios (522 PASS lines) with 199 adapter,
 3 support and 52 policy mutation controls.
 
 **Milestone mapping.** The storage area of `porting.toml` now maps the
@@ -8843,8 +8842,8 @@ formatter-exact line bound rises from 550 to 598 bytes and the S4
 report worst case from 1,938 to 1,986 bytes, inside the 3,584-byte
 buffer and the 23-row screen shape.
 
-**Host tests.** The adapter suite is 517 scenarios (518 PASS lines)
-with 197 adapter, 3 support and 52 policy mutation controls.
+**Host tests.** The adapter suite is 521 scenarios (522 PASS lines)
+with 199 adapter, 3 support and 52 policy mutation controls.
 `windows-publish` asserts the SystemOS-then-OS order, `pub=2 phase=5
 perr=0`, both media verdicts, the OS UUID from the APFS volume, and a
 window read translated to the userdata-relative absolute block plus a
@@ -8933,7 +8932,7 @@ accept the `emmc-block-3-windows` personality, which maps to
 `gta4l-emmc-block=3 gta4l-emmc-windows=1` and requires the
 `fs-timer-hold` fixture. The payload builder test maps the personality
 and checks the fixture; the package self-test still passes. The block
-adapter suite is 517 scenarios (518 PASS lines) with 197 adapter,
+adapter suite is 521 scenarios (522 PASS lines) with 199 adapter,
 3 support and 52 policy mutation controls.
 
 **Not done yet.** The S4 candidate archive/payload/BOOT build and its
@@ -9039,7 +9038,7 @@ lookups, `pmc=1 pwait=150`), `windows-partition-timeout`
 exact pre-write verdict `pmc=1 pwait=0`. New mutation controls
 `windows-whole-wait-skip`, `windows-duplicate-accept` and
 `windows-open-reason-media` are rejected. The adapter suite is 517
-scenarios (518 PASS lines) with 196 adapter, 3 support and 52 policy
+scenarios (522 PASS lines) with 196 adapter, 3 support and 52 policy
 mutation controls. `check-gta4l-windows-evidence.py` requires
 `pmc=1` and a numeric `pwait` within 10,000 ms in both pre- and
 post-write modes and rejects `pmc=0`, `pmc=2`, a missing `pwait` and an
@@ -9141,19 +9140,19 @@ media) + 2,000 (margin) = 20,000 ms, inside 30,000.
 The `WINDOWS` line carries `rms` (window-phase elapsed milliseconds) and
 `rch` (32 KiB chunks read). On a budget failure they show how far the
 hashing got; the S4b boot would have printed `rms=1000 rch=74`. The line
-bound grows from 630 to 660 bytes and the report worst case from 2,018 to
-2,048.
+bound grows from 630 to 728 bytes and the report worst case from 2,018 to
+2,116.
 
 **Tests.** The host read hook now charges 13 ms per 32 KiB chunk (the
 measured 2.4 MB/s), so `windows-read` and `windows-publish` exercise the
 real cost: 129 chunks, about 1.68 s. The new mutation
 `windows-read-budget-1000` restores the old budget and is rejected by
-`windows-read`. `windows-format` pins the exact 660-byte line with the
-four new fields at their type maxima, `screen-capacity` covers the
+`windows-read`. `windows-format` pins the exact 728-byte line with the
+new diagnostics at their type maxima, `screen-capacity` covers the
 realistic 1,677 ms/129-chunk line, and `check-gta4l-windows-evidence.py`
 requires pre-write `rms=0 rch=0` and post-write `rms` at or below 4,000 ms
-and `rch` in 1..257. The adapter suite is 517 scenarios (518 PASS lines)
-with 197 adapter, 3 support and 52 policy mutation controls.
+and `rch` in 1..257. The adapter suite is 521 scenarios (522 PASS lines)
+with 199 adapter, 3 support and 52 policy mutation controls.
 
 ### 5.3.144 S4c windows candidate build (2026-11-15)
 
@@ -9183,3 +9182,56 @@ phase=5 perr=0 pmc=1 pwait=200 rms≈1700 rch=129 apfs=1 cid=50f8a67f…
 uuid=04769d26…`.
 
 Evidence: `out/gta4l/ram-root-emmc-s4c-windows-candidate-evidence/`.
+
+### 5.3.145 S4d publication diagnostics and pure read timing (2026-11-15)
+
+Host-only; not flashed or booted.
+
+The S4c verdict stopped at `pub=1 phase=4 perr=4`: SystemOS started but its
+media wait expired. The report could not distinguish "no IOMedia above the
+window" from "media appeared but the predicate rejected it". The `WINDOWS`
+line now carries four bounded fields on every valid report:
+
+- `wfail`: first failing window's manifest slot (`4294967295` on success);
+- `wdiag`: OR of `media=1`, `uuid=2`, `apfs=4`, `accept=8` stage bits seen
+  on every poll (`15` on success);
+- `wpoll`: number of 100 ms polls in the failing (or last successful) wait;
+- `wtime`: elapsed milliseconds of that wait (0..2000).
+
+The media scan now inspects IOMedia without a UUID as well, records a
+media's own APFS content separately from an APFS ancestor, and keeps the
+acceptance predicate unchanged: a 36-character `UUID` media whose provider
+chain contains an APFS-content ancestor before the window. This makes
+`wdiag` values 0 (no media), 1/5 (media but no UUID), 3 (UUID but no APFS
+ancestor), 7 (APFS container/media but no accepted volume) and 15
+(accepted) directly diagnostic.
+
+`rms` is now sampled immediately after the final window/APFS read and
+before any publication wait. Early read failures still sample at the done
+label. This fixes the S4c `rms=3808` mixture of reads and a 2000 ms media
+wait; the same read set should report about 1,677 ms. The timing now uses
+an explicit `windowsReadStarted` flag instead of treating a zero platform
+counter as "not started", which also fixes host runs starting at counter 0.
+
+**Host tests.** New scenarios cover no media, no UUID, UUID without an
+APFS ancestor, APFS container-only and a five-poll late volume; they pin
+`wdiag` 0/5/3/7/15, `wpoll`, `wtime` and the pure `rms=1677`. New
+mutations `windows-diag-accept` and `windows-read-time-combined` are
+rejected by `windows-publish-media-fail`. `windows-format` pins the exact
+728-byte line at field maxima and the report worst case is 2,116. The
+checker requires success `wfail=4294967295 wdiag=15` with `wpoll` 1..21
+and `wtime` at or below 2,000 ms. The adapter suite is 521 scenarios
+(522 PASS lines) with 199 adapter, 3 support and 52 policy mutation
+controls.
+
+**SystemOS host observation.** The SystemOS window is a raw APFS container,
+not a GPT: its first object is NXSB at window offset 0. The block-0 NXSB
+has xid 14 / next_xid 15, `max_fs=7` and `nx_fs_oid[0]=1026`, but block
+1026 is zero; an older APSB (xid 11, UUID
+`8846fe78-2910-4297-af97-d59bb6f8fc16`) exists at block 4543. The APFS
+whole-disk personality matches any `Whole` IOMedia and probes for NXSB,
+while `AppleAPFSContainer`/`AppleAPFSContainerScheme` match the APFS
+content hint. The next candidate's `wdiag`/`wpoll`/`wtime` will show
+whether the window media was never published, the APFS probe was
+rejected, or attach/replay exceeded 2,000 ms. No timeout change is made
+before that evidence.

@@ -4481,6 +4481,22 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 			gta4l_emmc_block_put_u64(&writer,
 			    report->windows_publish_error);
 			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "wfail");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->windows_fail_slot);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "wdiag");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->windows_fail_diag);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "wpoll");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->windows_media_polls);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "wtime");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->windows_media_wait_ms);
+			gta4l_emmc_block_put_char(&writer, ' ');
 			gta4l_emmc_block_put_key(&writer, "mdig");
 			gta4l_emmc_block_put_digest(&writer,
 			    report->windows_manifest_digest, 16u);

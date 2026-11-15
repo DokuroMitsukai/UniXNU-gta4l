@@ -35,7 +35,7 @@ VOLUME_UUID = '04769D26-2CA0-4825-B443-E2E5F88300F2'
 DISCOVERY_BUDGET_MS = 8000 + 2000
 VALID_FIELDS = (
     'valid', 'reason', 'count', 'image', 'pub', 'phase', 'perr', 'mdig',
-    'pmc', 'pwait', 'rms', 'rch')
+    'pmc', 'pwait', 'rms', 'rch', 'wfail', 'wdiag', 'wpoll', 'wtime')
 # Four 1 MiB edges and one APFS chunk, 32 KiB each, for a two-window
 # image; allow up to four windows.
 MAX_READ_CHUNKS = 2 * 4 * (1 << 20) // (32 << 10) + 1
@@ -159,6 +159,29 @@ def add_read_stats(fields, errors):
                       f'{MAX_READ_CHUNKS}')
 
 
+def add_publication_diag(fields, errors):
+    """Require the bounded window-media publication diagnostics."""
+    fail = fields.get('wfail')
+    if fail != '4294967295':
+        errors.append(f'post-write wfail={fail!r}, expected 4294967295 '
+                      f'(no failing window)')
+    diag = fields.get('wdiag')
+    if diag != '15':
+        errors.append(f'post-write wdiag={diag!r}, expected 15 '
+                      f'(media+UUID+APFS+accept)')
+    polls = fields.get('wpoll')
+    if polls is None or not polls.isdigit():
+        errors.append(f'post-write wpoll={polls!r}, expected a count')
+    elif not 1 <= int(polls) <= 21:
+        errors.append(f'post-write wpoll={polls}, expected 1..21')
+    wait = fields.get('wtime')
+    if wait is None or not wait.isdigit():
+        errors.append(f'post-write wtime={wait!r}, expected milliseconds')
+    elif int(wait) > 2000:
+        errors.append(f'post-write wtime={wait}, above the 2000 ms '
+                      f'window-media budget')
+
+
 def check(line, expected):
     """Check a post-write WINDOWS line against the expected dict."""
     errors = []
@@ -190,6 +213,7 @@ def check(line, expected):
         errors.append(f"pmc={fields.get('pmc')!r}, expected '1'")
     add_wait_check(fields, errors, 'post-write')
     add_read_stats(fields, errors)
+    add_publication_diag(fields, errors)
     if len(windows) != expected['count']:
         errors.append(f'{len(windows)} window blocks, '
                       f'expected {expected["count"]}')
@@ -293,6 +317,7 @@ def expected_from_image(path):
 def build_line(expected, volume):
     parts = [f'{LABEL}valid=1 reason=0 count={expected["count"]} '
              f'image={expected["image_bytes"]} pub=2 phase=5 perr=0 '
+             f'wfail=4294967295 wdiag=15 wpoll=1 wtime=0 '
              f'mdig={expected["manifest"]}']
     for index, window in enumerate(expected['windows']):
         parts.append(
@@ -340,6 +365,10 @@ def self_test():
         (line.replace('uuid=' + volume, 'uuid=' + '0' * 32), 'uuid'),
         (line.replace('rms=1677', 'rms=9999'), 'rms budget'),
         (line.replace('rch=129', 'rch=0'), 'rch zero'),
+        (line.replace('wfail=4294967295', 'wfail=1'), 'wfail'),
+        (line.replace('wdiag=15', 'wdiag=0'), 'wdiag'),
+        (line.replace('wpoll=1', 'wpoll=0'), 'wpoll'),
+        (line.replace('wtime=0', 'wtime=2001'), 'wtime'),
         (line + ' extra=1', 'extra field'),
         (line.replace('w1=SystemOS', 'w1=SystemOS extra=x'), 'gap'),
     )
