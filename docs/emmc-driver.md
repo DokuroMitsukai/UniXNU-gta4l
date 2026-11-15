@@ -9154,3 +9154,32 @@ realistic 1,677 ms/129-chunk line, and `check-gta4l-windows-evidence.py`
 requires pre-write `rms=0 rch=0` and post-write `rms` at or below 4,000 ms
 and `rch` in 1..257. The adapter suite is 517 scenarios (518 PASS lines)
 with 197 adapter, 3 support and 52 policy mutation controls.
+
+### 5.3.144 S4c windows candidate build (2026-11-15)
+
+Host-only. **Kernel**
+`7a602b333717b48a750e0119d0c40c8cacc5e1ad05936e9c78ab45289d54f5ad`
+(51,658,752 bytes), built after restoring the audited `164dabd5…`
+pre-link kernel; the archive report is qualified and
+candidate-matches-audit. The audited storage-ABI addresses are unchanged
+(vtable `fffffff005cb44c0`, metaclass `fffffff006add1d0`, init
+`fffffff00496ee30`); `waitUserdataMedia` is at `fffffff007a47040`.
+**Archive** `795c421dba5a1d3c7dd5e15b886450bfd5c5ad2187fd9bdcebcb6ee4d6e18b0f`.
+**Payload** `37cf86d04a331eefaf986049f3882ad518e97856306768bdc0a998903e0c1519`
+(83,886,080 bytes; `rd=md0 gta4l-emmc-block=3 gta4l-emmc-windows=1`,
+fs-timer-hold, owner trust; contract pass). **BOOT**
+`265136a10a16a45cdd2c1bad04a313fc9bbd9e2ed6ee392385d1c95831f56c36`
+(85,688,320 bytes; 18/18 boot-image gates; only the ramdisk differs from
+the S3a donor).
+
+Userdata is unchanged from the verified `fd43ee70…` write. The four
+1 MiB edges were re-read on the device and match the image
+(`268f697a…`, `1fcad76c…`, `ffe3bea7…`, `30e14955…`); one earlier read
+of the OS window's last edge returned a transient different hash that
+did not reproduce, and the full comparison was re-run before the flash.
+The image is for a verdict-only boot (no pre-write boot and no userdata
+rewrite). Expected: `valid=1 reason=0 count=2 image=9382658048 pub=2
+phase=5 perr=0 pmc=1 pwait=200 rms≈1700 rch=129 apfs=1 cid=50f8a67f…
+uuid=04769d26…`.
+
+Evidence: `out/gta4l/ram-root-emmc-s4c-windows-candidate-evidence/`.
