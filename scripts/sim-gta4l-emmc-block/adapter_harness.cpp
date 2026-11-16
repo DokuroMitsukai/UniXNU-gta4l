@@ -13819,6 +13819,12 @@ scenario_policy(void)
 	    25804800ull) == 0u);
 	CHECK(gta4l_emmc_block_verify_request_bytes(1ull, 0u) == 512u);
 	CHECK(gta4l_emmc_block_verify_request_bytes(0ull, 0u) == 0u);
+	CHECK(gta4l_emmc_block_verify_lba(9382658048ull, 0ull) ==
+	    33528832ull);
+	CHECK(gta4l_emmc_block_verify_lba(9382658048ull, 47480832ull) ==
+	    33621568ull);
+	CHECK(gta4l_emmc_block_verify_lba(9430142976ull, 0ull) ==
+	    33621576ull);
 	{
 		uint8_t table[64];
 
@@ -15548,6 +15554,10 @@ scenario_verify_format(void)
 	report.verify_systemos = 0u;
 	report.verify_blocks = 0u;
 	report.verify_ms = 0xffffffffu;
+	report.verify_load_ms = 0xffffffffu;
+	report.verify_hash_ms = 0xffffffffu;
+	report.verify_open_ms = 0xffffffffu;
+	report.verify_edge_ms = 0xffffffffu;
 	report.verify_fail_block = 0xffffffffu;
 	report.windows_dma = 0xffffffffu;
 	report.verify_fail_object = 0xffffffffu;
@@ -15567,7 +15577,9 @@ scenario_verify_format(void)
 	    GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES);
 	CHECK(strstr(buffer, "GTA4L-EMMC P5 VERIFY: "
 	    "valid=0 reason=4294967295 os=0 sysos=0 blocks=0 ms=4294967295 "
-	    "fail=4294967295 dma=4294967295 vobj=4294967295 "
+	    "vload=4294967295 vhash=4294967295 vopen=4294967295 "
+	    "vedge=4294967295 fail=4294967295 dma=4294967295 "
+	    "vobj=4294967295 "
 	    "voff=18446744073709551615 vlen=4294967295 vio=ffffffff "
 	    "vact=18446744073709551615 osha=ffffffffffffffffffffffffffffffff "
 	    "ssha=ffffffffffffffffffffffffffffffff") != 0);
@@ -15579,6 +15591,10 @@ scenario_verify_format(void)
 	report.verify_systemos = 1u;
 	report.verify_blocks = 1025u;
 	report.verify_ms = 4200u;
+	report.verify_load_ms = 2800u;
+	report.verify_hash_ms = 400u;
+	report.verify_open_ms = 2u;
+	report.verify_edge_ms = 472u;
 	report.verify_fail_block = 0xffffffffu;
 	report.windows_dma = 1u;
 	memset(report.verify_os_sha384, 0xff,
@@ -15589,7 +15605,8 @@ scenario_verify_format(void)
 	    &report);
 	CHECK(length != 0u);
 	CHECK(strstr(buffer, "GTA4L-EMMC P5 VERIFY: valid=1 reason=0 "
-	    "os=1 sysos=1 blocks=1025 ms=4200 fail=4294967295 dma=1 "
+	    "os=1 sysos=1 blocks=1025 ms=4200 vload=2800 vhash=400 "
+	    "vopen=2 vedge=472 fail=4294967295 dma=1 "
 	    "osha=ffffffffffffffffffffffffffffffff "
 	    "ssha=ffffffffffffffffffffffffffffffff") != 0);
 	CHECK(strstr(buffer, " vobj=") == 0);

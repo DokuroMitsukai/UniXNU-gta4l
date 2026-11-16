@@ -641,6 +641,13 @@ gta4l_emmc_block_verify_request_bytes(uint64_t object_bytes, uint64_t offset)
 	    GTA4L_EMMC_BLOCK_BYTES * GTA4L_EMMC_BLOCK_BYTES);
 }
 
+uint64_t
+gta4l_emmc_block_verify_lba(uint64_t object_offset, uint64_t offset)
+{
+	return (GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES + object_offset +
+	    offset) / GTA4L_EMMC_BLOCK_BYTES;
+}
+
 uint32_t
 gta4l_emmc_block_adma_build(uint8_t *table, uint32_t table_bytes,
     uint32_t address, uint32_t length, uint32_t max_entry_bytes)
@@ -4718,6 +4725,22 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "ms");
 		gta4l_emmc_block_put_u64(&writer, report->verify_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "vload");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->verify_load_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "vhash");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->verify_hash_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "vopen");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->verify_open_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "vedge");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->verify_edge_ms);
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "fail");
 		gta4l_emmc_block_put_u64(&writer,

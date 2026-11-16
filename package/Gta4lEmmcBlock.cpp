@@ -11165,6 +11165,10 @@ Gta4lEmmcBlock::runWindows()
 			dmaEnabled = true;
 			IOLockUnlock(gate);
 			dmaActive = 1u;
+			IOLockLock(reportLock);
+			report.dma_cmp_pass = dmaCmpPass;
+			report.dma_cmp_total = dmaCmpTotal;
+			IOLockUnlock(reportLock);
 		} else {
 			IOLockLock(reportLock);
 			report.dma = 1u;
@@ -11477,6 +11481,7 @@ struct gta4l_verified_window_state {
 	const uint8_t *header;
 	const uint8_t *signature;
 	uint8_t *envelope;
+	uint8_t manifest_sha384[48];
 	uint32_t table_bytes;
 	uint32_t blocks;
 	uint64_t image_bytes;
@@ -11573,6 +11578,19 @@ Gta4lEmmcBlock::verifyRange(const struct vr_view *view, IOMedia *media,
 
 #endif
 
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+static uint32_t
+gta4l_verify_ms(uint64_t ticks, uint64_t hz)
+{
+	uint64_t ticksPerMs = hz / 1000u;
+
+	if (ticksPerMs == 0u) {
+		ticksPerMs = 1u;
+	}
+	return (uint32_t)(ticks / ticksPerMs);
+}
+#endif
+
 bool
 Gta4lEmmcBlock::runVerify(IOMedia *media,
     const struct gta4l_emmc_block_manifest *manifest)
@@ -11590,10 +11608,22 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 	uint8_t osSha[16] = {0};
 	uint8_t systemosSha[16] = {0};
 	uint32_t verifyMs = 0;
+	uint32_t loadMs = 0;
+	uint32_t hashMs = 0;
+	uint32_t openMs = 0;
+	uint32_t edgeMs = 0;
+	bool dmaReadFailed = false;
 	bool ok = true;
 
 #if GTA4L_EMMC_BLOCK_VERIFY_BUILT
 	uint32_t index;
+	uint64_t loadStart = 0;
+	uint64_t openStart = 0;
+	uint64_t edgeStart = 0;
+	uint64_t loadTicks = 0;
+	uint64_t hashTicks = 0;
+	uint64_t openTicks = 0;
+	uint64_t edgeTicks = 0;
 	uint64_t verifyStart = gta4l_emmc_platform_counter();
 	uint64_t verifyHz = gta4l_emmc_platform_counter_hz();
 	static const char *labels[2] = { "OS", "SystemOS" };
@@ -11630,7 +11660,6 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 		    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID :
 		    GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID;
 		uint8_t expectedUuid[GTA4L_EMMC_BLOCK_WINDOWS_UUID_BYTES];
-		uint8_t digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
 		uint64_t offset;
 		uint32_t total = GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
 		    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
@@ -11666,6 +11695,7 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 		    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES);
 		memcpy(envelope + GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES,
 		    signature, GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES);
+		loadStart = gta4l_emmc_platform_counter();
 		for (offset = 0; offset < object->size; ) {
 			uint64_t left = object->size - offset;
 			uint32_t copy = (uint32_t)((left >
@@ -11674,39 +11704,70 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 			uint32_t bytes =
 			    gta4l_emmc_block_verify_request_bytes(
 			    object->size, offset);
-			IOReturn ioStatus = kIOReturnSuccess;
-			UInt64 ioActual = 0;
 
-			if (!windowsReadStatus(media, object->offset + offset,
-			    bytes, chunk, &ioStatus, &ioActual)) {
-				reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_READ;
-				failObject = index;
-				failOffset = offset;
-				failLength = bytes;
-				failStatus = (int32_t)ioStatus;
-				failActual = ioActual;
-				ok = false;
-				break;
+			/* A qualified DMA run reads the table directly
+			 * from the userdata LBAs: the stack path costs
+			 * about 3.5 ms per 32 KiB request, while the
+			 * direct ADMA stream measured 25.8 MB/s. The
+			 * no-DMA path keeps the media read for host
+			 * coverage. */
+			if (dmaEnabled && (dmaBuffer != nullptr)) {
+				uint64_t lba =
+				    gta4l_emmc_block_verify_lba(
+				    object->offset, offset);
+
+				dmaRequests++;
+				dmaBlocks +=
+				    bytes / GTA4L_EMMC_BLOCK_BYTES;
+				if ((lba > 0xffffffffull) ||
+				    ((lba + bytes / GTA4L_EMMC_BLOCK_BYTES) >
+				    capacityBlocks) ||
+				    !dmaRead((uint32_t)lba,
+				    bytes / GTA4L_EMMC_BLOCK_BYTES,
+				    bytes)) {
+					reason =
+					    GTA4L_EMMC_BLOCK_VERIFY_REASON_READ;
+					failObject = index;
+					failOffset = offset;
+					failLength = bytes;
+					failStatus =
+					    (int32_t)kIOReturnIOError;
+					failActual = 0;
+					dmaReadFailed = true;
+					ok = false;
+					break;
+				}
+				memcpy(envelope +
+				    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
+				    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
+				    offset, dmaBuffer, copy);
+			} else {
+				IOReturn ioStatus = kIOReturnSuccess;
+				UInt64 ioActual = 0;
+
+				if (!windowsReadStatus(media,
+				    object->offset + offset, bytes, chunk,
+				    &ioStatus, &ioActual)) {
+					reason =
+					    GTA4L_EMMC_BLOCK_VERIFY_REASON_READ;
+					failObject = index;
+					failOffset = offset;
+					failLength = bytes;
+					failStatus = (int32_t)ioStatus;
+					failActual = ioActual;
+					ok = false;
+					break;
+				}
+				memcpy(envelope +
+				    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
+				    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
+				    offset, chunk, copy);
 			}
-			memcpy(envelope +
-			    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
-			    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES + offset,
-			    chunk, copy);
 			offset += copy;
 		}
+		loadTicks += gta4l_emmc_platform_counter() - loadStart;
 		if (!ok) {
 			IOFree(envelope, total);
-			break;
-		}
-		gta4l_emmc_block_sha256(envelope +
-		    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
-		    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES,
-		    object->size, digest);
-		if (memcmp(digest, object->sha256,
-		    sizeof(digest)) != 0) {
-			IOFree(envelope, total);
-			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_OBJECT;
-			ok = false;
 			break;
 		}
 		if (!gta4l_emmc_block_uuid_text(uuidText,
@@ -11716,10 +11777,12 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 			ok = false;
 			break;
 		}
+		openStart = gta4l_emmc_platform_counter();
 		status = vr_open(envelope, total,
 		    gta4l_owner_anchor,
 		    GTA4L_EMMC_BLOCK_VERIFY_GENERATION, &vr_xnu_crypto,
 		    &view);
+		openTicks += gta4l_emmc_platform_counter() - openStart;
 		if ((status != VR_OK) ||
 		    (view.image_bytes != imageBytes[index]) ||
 		    (memcmp(view.volume_uuid, expectedUuid,
@@ -11750,10 +11813,16 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 		{
 			SHA384_CTX context;
 			uint8_t full[48];
+			uint64_t hashStart =
+			    gta4l_emmc_platform_counter();
 
 			SHA384_Init(&context);
 			SHA384_Update(&context, envelope, total);
 			SHA384_Final(full, &context);
+			hashTicks += gta4l_emmc_platform_counter() -
+			    hashStart;
+			memcpy(gta4l_verified_window[index].manifest_sha384,
+			    full, sizeof(full));
 			memcpy((index == 0u) ? osSha : systemosSha,
 			    full, 16);
 		}
@@ -11767,6 +11836,7 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 		IOFreeContiguous(chunk,
 		    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES);
 	}
+	edgeStart = gta4l_emmc_platform_counter();
 	for (index = 0; ok && (index < 2u); index++) {
 		uint32_t other;
 
@@ -11795,15 +11865,16 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 			ok = false;
 		}
 	}
+	edgeTicks += gta4l_emmc_platform_counter() - edgeStart;
 	{
 		uint64_t ticks = gta4l_emmc_platform_counter() -
 		    verifyStart;
-		uint64_t ticksPerMs = verifyHz / 1000u;
 
-		if (ticksPerMs == 0u) {
-			ticksPerMs = 1u;
-		}
-		verifyMs = (uint32_t)(ticks / ticksPerMs);
+		verifyMs = gta4l_verify_ms(ticks, verifyHz);
+		loadMs = gta4l_verify_ms(loadTicks, verifyHz);
+		hashMs = gta4l_verify_ms(hashTicks, verifyHz);
+		openMs = gta4l_verify_ms(openTicks, verifyHz);
+		edgeMs = gta4l_verify_ms(edgeTicks, verifyHz);
 	}
 	if (ok && (verifyMs > GTA4L_EMMC_BLOCK_VERIFY_BUDGET_MS)) {
 		reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_BUDGET;
@@ -11828,6 +11899,16 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 	report.verify_systemos = openedSystemos;
 	report.verify_blocks = verified;
 	report.verify_ms = verifyMs;
+	report.verify_load_ms = loadMs;
+	report.verify_hash_ms = hashMs;
+	report.verify_open_ms = openMs;
+	report.verify_edge_ms = edgeMs;
+	if (dmaReadFailed) {
+		report.dma = 1u;
+		report.dma_mode = GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32;
+		report.dma_smmu = report.smmu_decision;
+		report.dma_fails = dmaFails;
+	}
 	report.verify_fail_block = failBlock;
 	report.verify_fail_object = failObject;
 	report.verify_fail_offset = failOffset;
@@ -13892,7 +13973,6 @@ native_verified_block_manifest_sha384(dev_t device, const char *uuid,
 	IOService *media;
 	OSString *identity;
 	struct gta4l_verified_window_state *state;
-	SHA384_CTX context;
 	uint32_t matches;
 
 	if (digest == nullptr) {
@@ -13918,12 +13998,7 @@ native_verified_block_manifest_sha384(dev_t device, const char *uuid,
 	if ((state == nullptr) || (state->envelope == nullptr)) {
 		return 0;
 	}
-	SHA384_Init(&context);
-	SHA384_Update(&context, state->envelope,
-	    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
-	    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
-	    state->table_bytes);
-	SHA384_Final(digest, &context);
+	memcpy(digest, state->manifest_sha384, 48u);
 	return 1;
 }
 #else

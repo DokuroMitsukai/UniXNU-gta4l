@@ -2707,7 +2707,7 @@ def check_adapter_source():
         'the WINDOWS line must carry pmc/pwait'
     assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 773u' in \
         policy_header, 'the WINDOWS formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2502u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2570u' in \
         policy_header, 'the WINDOWS and VERIFY report bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_DMA 20u' in \
         policy_header, 'a DMA setup failure must have its own reason'
@@ -2718,8 +2718,8 @@ def check_adapter_source():
     assert 'gta4l_emmc_block_verify_request_bytes' in policy and \
         'gta4l_emmc_block_verify_request_bytes(' in adapter, \
         'the verify table loader must use the aligned request helper'
-    assert 'windowsReadStatus(media, object->offset + offset' in adapter \
-        and 'failLength = bytes;' in adapter and \
+    assert 'windowsReadStatus(media,' in adapter and \
+        'failLength = bytes;' in adapter and \
         'failActual = ioActual;' in adapter, \
         'a failed table read must record offset/length/status/actual'
     assert 'if (verifyMode && !runVerify(media, &parsed))' in adapter and \
@@ -2732,6 +2732,17 @@ def check_adapter_source():
         'dmaCompare()' in adapter and \
         'GTA4L_EMMC_BLOCK_WINDOWS_REASON_DMA' in adapter, \
         'the verify rung must qualify and report its ADMA2 path'
+    assert 'gta4l_emmc_block_verify_lba' in policy and \
+        'gta4l_emmc_block_verify_lba(' in adapter and \
+        'dmaRead((uint32_t)lba' in adapter, \
+        'the DMA table load must read the userdata LBAs directly'
+    assert 'verify_load_ms' in policy_header and \
+        'verify_hash_ms' in policy_header and \
+        'verify_open_ms' in policy_header and \
+        'verify_edge_ms' in policy_header, \
+        'the VERIFY line must carry the four phase timers'
+    assert 'SHA384_Update(&context, state->envelope' not in adapter, \
+        'the manifest export must use the cached envelope digest'
     assert 'GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID \\\n' \
         '\t"04769D26-2CA0-4825-B443-E2E5F88300F2"' in policy_header and \
         'GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID \\\n' \

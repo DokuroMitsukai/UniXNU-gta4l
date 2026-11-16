@@ -9694,3 +9694,14 @@ verification, the missing export and the checker.
 line, recomputes both envelope SHA-384 prefixes from the policy
 directory, requires `valid=1 reason=0`, 1,025 blocks, `dma=1` and
 `ms` ≤ 12,000, and rejects the S5c reason=3 line.
+
+S5c″ also adds four phase timers (`vload`, `vhash`, `vopen`, `vedge`),
+drops the separate software table SHA-256 because `vr_open` checks the
+signed table hash, caches the envelope SHA-384 for the manifest export
+instead of re-hashing it per call, and reads the tables directly from the
+userdata LBAs on a qualified DMA run (25.8 MB/s direct versus about
+8.9 MB/s through the 32 KiB stack path). The no-DMA build keeps the
+media read. The next boot's VERIFY line shows the split. The S5c″
+development kernel is `e2c34114…` (archive `9d014051…`, qualified,
+audited addresses unchanged); it is not a device candidate because S5d
+rebuilds the kernel.

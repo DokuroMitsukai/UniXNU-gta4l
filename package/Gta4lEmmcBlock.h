@@ -580,7 +580,7 @@ extern "C" {
  * report adds it to the base, the compact SPEED and SPEEDIO lines (2,155
  * bytes at their type maxima). */
 #define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 773u
-#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2502u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2570u
 
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
@@ -963,7 +963,7 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_VERIFY_REASON_BUDGET 6u
 #define GTA4L_EMMC_BLOCK_VERIFY_REASON_MEMORY 7u
 #define GTA4L_EMMC_BLOCK_VERIFY_BUDGET_MS 12000u
-#define GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES 287u
+#define GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES 355u
 
 /* S4 userdata placement from board.toml [userdata]: LBA 15,203,328 to
  * 61,071,326, 23,484,415,488 bytes. The driver finds the partition media
@@ -1802,6 +1802,13 @@ struct gta4l_emmc_block_report {
 	uint32_t verify_systemos;
 	uint32_t verify_blocks;
 	uint32_t verify_ms;
+	/* Per-phase milliseconds: table read/copy, envelope hashing,
+	 * vr_open, and the sampled edge verification. They separate a
+	 * transport stall from a crypto or policy stall. */
+	uint32_t verify_load_ms;
+	uint32_t verify_hash_ms;
+	uint32_t verify_open_ms;
+	uint32_t verify_edge_ms;
 	uint32_t verify_fail_block;
 	/* First failing read inside the table load: object index, byte
 	 * offset, requested length, IOReturn and actual byte count. A
@@ -1979,6 +1986,14 @@ int gta4l_emmc_block_live_select(int token_present, int token_value,
  * block; the manifest parser guarantees the padding lies inside the
  * image. */
 uint32_t gta4l_emmc_block_verify_request_bytes(uint64_t object_bytes,
+    uint64_t offset);
+
+/* Return the absolute media LBA of a verify table chunk. The object
+ * offset is relative to the userdata image, which starts at
+ * GTA4L_EMMC_BLOCK_USERDATA_BASE_BYTES. The manifest parser requires
+ * 4 KiB objects and the loader uses 512-byte-multiple chunks, so the
+ * result is exact. */
+uint64_t gta4l_emmc_block_verify_lba(uint64_t object_offset,
     uint64_t offset);
 
 /* Select the S4 windows rung. Valid only with exactly one block=3 token,
