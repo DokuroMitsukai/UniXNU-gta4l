@@ -82,7 +82,8 @@ DIAGNOSTICS = {
     'emmc-block-3-live': 'gta4l-emmc-block=3 gta4l-emmc-bulk=1 '
                          'gta4l-emmc-dma=1 gta4l-emmc-live=1',
     'emmc-block-3-windows': 'gta4l-emmc-block=3 gta4l-emmc-windows=1',
-    'emmc-block-3-verify': 'gta4l-emmc-block=3 gta4l-emmc-windows=1 gta4l-emmc-verify=1',
+    'emmc-block-3-verify': 'gta4l-emmc-block=3 gta4l-emmc-windows=1 '
+                           'gta4l-emmc-verify=1 gta4l-emmc-dma=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')

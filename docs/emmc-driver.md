@@ -9594,3 +9594,65 @@ Two device steps remain, each with its own go naming the full hash:
 write the v2 userdata image `ae6e18e7…` (9,455,947,776 bytes), then
 flash this BOOT and boot it once. Not flashed or written; the tablet is
 in TWRP.
+
+### 5.4.5 S5c device verdict and the S5c′ fix (2026-11-16)
+
+BOOT `0fdb8b70…` was flashed once against the v2 image `ae6e18e7…`. The
+v2 windows path passed on hardware (`WINDOWS valid=1 reason=0 count=2
+pub=2 phase=5 perr=0 wdiag=15`, both UUIDs and all four edge digests),
+but the table load failed: `VERIFY valid=0 reason=3 os=0 sysos=0 blocks=0
+ms=16236`, with no controller command, stop or read failures.
+
+The loader read `OS.vroot` in 32 KiB chunks and issued the 288-byte
+remainder as one final request. That request is smaller than the media
+block, so `IOMedia::read` refused it before the controller saw it. The
+driver read exactly 1,449 × 64 = 92,736 blocks of the table, confirming
+the full chunks ran and only the tail was refused. The host suite had
+compiled the verify path out, so no scenario exercised an unaligned
+object.
+
+S5c′ changes, host-only so far:
+
+- `gta4l_emmc_block_verify_request_bytes` rounds every table request up
+  to a whole 512-byte media block; the loader copies only the object
+  bytes. The 4 KiB object padding guarantees the extra bytes exist.
+- The verify rung accepts `gta4l-emmc-dma=1` (with `windows=1` or
+  `bulk=1`, not both). It runs the B10 SMMU gate, allocates the ADMA2
+  bounce path, runs the four-case PIO comparison, re-reads the SMMU
+  fault state and only then enables DMA. A setup failure is terminal
+  (`reason=20`), because a silent PIO fallback would exceed the verify
+  budget. The `WINDOWS` and `VERIFY` lines carry `dma=`.
+- `runVerify` records the first failing read's object index, byte
+  offset, requested length, IOReturn and actual byte count; the
+  failure `VERIFY` line prints `vobj voff vlen vio vact`.
+- A failed verify is fail-closed: the rung publishes nothing
+  (`pub=0 perr=5`), frees the loaded envelopes and clears the verified
+  state so the consumer exports refuse the volume.
+- The host suite now exercises the aligned request arithmetic
+  (including the 47,481,120-byte OS table tail), the selector matrix,
+  the exact failure `VERIFY` line and the panic-screen bound with the
+  extra line.
+
+The v2 userdata image does not change, so the next rung is a BOOT-only
+flash with a new candidate and one verdict boot. Expected pass:
+`VERIFY valid=1 reason=0 os=1 sysos=1 blocks=1025 fail=4294967295 dma=1`
+with envelope prefixes `osha=0fb9adee…` and `ssha=d3257aae…`, and
+`WINDOWS pub=2 phase=5 perr=0 wdiag=15 dma=1` with `rch=129`. A failure
+names its first bad read in `vobj/voff/vlen/vio/vact`.
+
+The S5c′ candidate is built: kernel
+`fdc52902fec288a237636b6a58da5b45bf8893e2507e8f12c00cacc6765ad2d5`
+(51,679,232 bytes; archive `70931301…`, qualified, kernel audit
+unchanged: vtable `fffffff005cb44c0`, metaclass `fffffff006add1d0`,
+init `fffffff00496ee30`; verify helper `fffffff0079ec66c`, exports
+`fffffff007a4eca4`/`fffffff007a4f0d4`/`fffffff007a4f520`), payload
+`06e0fcce9da15e3764b6a98073a0c405f2c402f31925d3a9c7890a011f28b78d`
+(83,886,080 bytes; `emmc-block-3-verify` with
+`gta4l-emmc-dma=1`; rd=md0, fs-timer-hold, owner trust; 133/133) and
+BOOT `d373c0d551f52b67d8a37b133fb40fe835059bc8d4a1b0338d91a4e2cfdf2188`
+(85,688,320 bytes; 18/18 gates, only the ramdisk differs). The block
+suite is green (exit=0, 297 PASS lines, adapter 526 scenarios, core
+47/35). The read-only TWRP preflight matched the v2 manifest
+`3ddf4d4f…`, `OS.vroot 5f14cb46…`, `SystemOS.vroot e3cbe583…` and the
+unchanged protected partitions. The owner approved the BOOT-only flash
+of `d373c0d5…`; it has not been flashed or booted yet.

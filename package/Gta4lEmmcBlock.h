@@ -579,8 +579,8 @@ extern "C" {
  * verdict. The formatter maximum is 767 bytes at the type maxima; the S4
  * report adds it to the base, the compact SPEED and SPEEDIO lines (2,155
  * bytes at their type maxima). */
-#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 767u
-#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2376u
+#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 773u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2502u
 
 /* B10.2 read-only SMMUv2/MMU-500 gate. The gate maps only the 4 KiB GR0
  * page at the DT `apps_smmu` base (sm6115.dtsi iommu@c600000), reads sCR0
@@ -897,6 +897,7 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_CANCEL 17u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_BUDGET 18u
 #define GTA4L_EMMC_BLOCK_WINDOWS_REASON_OPEN 19u
+#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_DMA 20u
 /* S4 publication. The manifest can be valid while a window cannot be
  * started or its APFS volume does not appear; `windows_publish_error`
  * carries that separate verdict. */
@@ -905,6 +906,7 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_PREPARE 2u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_START 3u
 #define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_MEDIA 4u
+#define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_VERIFY 5u
 
 /* Window-media publication stage bits for `wdiag`. The wait ORs the
  * stages seen on every poll so a timeout separates "no IOMedia above the
@@ -961,7 +963,7 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_VERIFY_REASON_BUDGET 6u
 #define GTA4L_EMMC_BLOCK_VERIFY_REASON_MEMORY 7u
 #define GTA4L_EMMC_BLOCK_VERIFY_BUDGET_MS 12000u
-#define GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES 220u
+#define GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES 287u
 
 /* S4 userdata placement from board.toml [userdata]: LBA 15,203,328 to
  * 61,071,326, 23,484,415,488 bytes. The driver finds the partition media
@@ -1770,6 +1772,10 @@ struct gta4l_emmc_block_report {
 	 * reason=18 they show how far the hashing got before the budget. */
 	uint32_t windows_read_ms;
 	uint32_t windows_read_chunks;
+	/* 1 when the verify rung's table load ran through the qualified
+	 * ADMA2 path. The WINDOWS line carries it so a PIO fallback is
+	 * visible without a separate DMA line. */
+	uint32_t windows_dma;
 	uint8_t windows_manifest_digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES];
 	struct gta4l_emmc_block_window
 	    windows_entry[GTA4L_EMMC_BLOCK_WINDOWS_MAX];
@@ -1797,6 +1803,15 @@ struct gta4l_emmc_block_report {
 	uint32_t verify_blocks;
 	uint32_t verify_ms;
 	uint32_t verify_fail_block;
+	/* First failing read inside the table load: object index, byte
+	 * offset, requested length, IOReturn and actual byte count. A
+	 * verify_ms/reason pair alone could not separate an unaligned
+	 * request from a transport error. */
+	uint32_t verify_fail_object;
+	uint64_t verify_fail_offset;
+	uint32_t verify_fail_length;
+	int32_t verify_fail_status;
+	uint64_t verify_fail_actual;
 	uint8_t verify_os_sha384[16];
 	uint8_t verify_systemos_sha384[16];
 	/* First failing window (manifest slot; 0xffffffff on success), the
@@ -1943,7 +1958,8 @@ int gta4l_emmc_block_bulk_select(int token_present, int token_value,
  * bulk token selected and no other diagnostic selector. */
 int gta4l_emmc_block_dma_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
-    int bulk_selected, int partobs_selected, int partcmp_selected,
+    int bulk_selected, int windows_selected, int partobs_selected,
+    int partcmp_selected,
     int partread_selected, int deblock_selected, int breakup_selected,
     int sweep_selected, int consume_selected, int width_selected,
     int widthhold_selected, int widthpub_selected, int speed_selected);
@@ -1956,6 +1972,14 @@ int gta4l_emmc_block_live_select(int token_present, int token_value,
     int slow_duplicate, int block_selected, int block_value,
     int bulk_selected, int bulk_value, int dma_selected, int dma_value,
     int speed_selected, int widthhold_selected, int widthpub_selected);
+
+/* Return the media-block-aligned byte count to request for the verify
+ * table load at `offset`, or 0 when the object is exhausted. Requests are
+ * capped at the 32 KiB window chunk and rounded up to the 512-byte media
+ * block; the manifest parser guarantees the padding lies inside the
+ * image. */
+uint32_t gta4l_emmc_block_verify_request_bytes(uint64_t object_bytes,
+    uint64_t offset);
 
 /* Select the S4 windows rung. Valid only with exactly one block=3 token,
  * value 1, and no other mode token. */

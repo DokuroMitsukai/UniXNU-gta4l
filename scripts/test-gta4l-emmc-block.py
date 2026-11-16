@@ -1642,8 +1642,10 @@ ADAPTER_MUTATIONS = [
        '\t}\n')],
      'bulk-smmu-map-fail'),
     ('dma-compare-skipped',
-     [('\t\t} else if (!dmaCompare()) {\n',
-       '\t\t} else if (0) {\n')],
+     [('\t\t} else if (!dmaCompare()) {\n'
+       '\t\t\tstage = GTA4L_EMMC_BLOCK_BULK_STAGE_DMA;\n',
+       '\t\t} else if (0) {\n'
+       '\t\t\tstage = GTA4L_EMMC_BLOCK_BULK_STAGE_DMA;\n')],
      'dma-compare-mismatch'),
     ('dma-smmu-skip-ignored',
      [('\tif (dmaMode &&\n'
@@ -2703,10 +2705,33 @@ def check_adapter_source():
     assert 'windows_match_count' in policy_header and \
         'windows_partition_wait_ms' in policy_header, \
         'the WINDOWS line must carry pmc/pwait'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 767u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES 773u' in \
         policy_header, 'the WINDOWS formatter bound must stay exact'
-    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2376u' in \
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES 2502u' in \
         policy_header, 'the WINDOWS and VERIFY report bound must stay exact'
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_REASON_DMA 20u' in \
+        policy_header, 'a DMA setup failure must have its own reason'
+    assert '#define GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_VERIFY 5u' in \
+        policy_header, 'a failed verify must have its own publish error'
+    assert 'windows_dma' in policy_header and '"dma"' in policy, \
+        'the WINDOWS line must report whether the ADMA2 path ran'
+    assert 'gta4l_emmc_block_verify_request_bytes' in policy and \
+        'gta4l_emmc_block_verify_request_bytes(' in adapter, \
+        'the verify table loader must use the aligned request helper'
+    assert 'windowsReadStatus(media, object->offset + offset' in adapter \
+        and 'failLength = bytes;' in adapter and \
+        'failActual = ioActual;' in adapter, \
+        'a failed table read must record offset/length/status/actual'
+    assert 'if (verifyMode && !runVerify(media, &parsed))' in adapter and \
+        'GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_VERIFY' in adapter, \
+        'a failed verify must stop publication'
+    assert 'gta4l_verified_reset();' in adapter and \
+        'if (!ok) {' in adapter, \
+        'a failed verify must clear the consumer authorization state'
+    assert 'report.windows_dma = dmaActive;' in adapter and \
+        'dmaCompare()' in adapter and \
+        'GTA4L_EMMC_BLOCK_WINDOWS_REASON_DMA' in adapter, \
+        'the verify rung must qualify and report its ADMA2 path'
     assert 'GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID \\\n' \
         '\t"04769D26-2CA0-4825-B443-E2E5F88300F2"' in policy_header and \
         'GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID \\\n' \
@@ -2725,8 +2750,11 @@ def check_adapter_source():
         'the windows read and refusal scenarios must run'
     assert 'scenario_windows_manifest' in ADAPTER_HARNESS.read_text() and \
         'scenario_windows_format' in ADAPTER_HARNESS.read_text() and \
+        'scenario_windows_verify_fail_closed' in \
+        ADAPTER_HARNESS.read_text() and \
         'screen_windows' in ADAPTER_HARNESS.read_text(), \
-        'the windows manifest, format and screen scenarios must run'
+        'the windows manifest, format, fail-closed and screen scenarios ' \
+        'must run'
     assert '#define GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES 52u' in \
         policy_header, 'the SMMU formatter bound must stay exact'
     assert '#define GTA4L_EMMC_BLOCK_SCREEN_COLUMNS 66u' in \
@@ -3272,8 +3300,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 524, f'expected 524 adapter PASS lines, got {passes}'
-        print('PASS adapter: 524 scenarios against the host IOKit seam')
+        assert passes == 526, f'expected 526 adapter PASS lines, got {passes}'
+        print('PASS adapter: 526 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

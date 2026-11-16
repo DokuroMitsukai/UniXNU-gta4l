@@ -13780,27 +13780,45 @@ scenario_policy(void)
 	    GTA4L_EMMC_BLOCK_SMMU_TYPE_BYPASS <<
 	    GTA4L_EMMC_BLOCK_SMMU_S2CR_TYPE_SHIFT, 0) ==
 	    GTA4L_EMMC_BLOCK_SMMU_DECISION_FAULT);
-	CHECK(gta4l_emmc_block_dma_select(0, 0, 0, 1, 3, 1,
+	CHECK(gta4l_emmc_block_dma_select(0, 0, 0, 1, 3, 1, 0,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_DMA_OFF);
-	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 1,
+	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 1, 0,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_DMA_ON);
-	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 0,
+	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 0, 0,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_DMA_REFUSED);
-	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 1, 1,
+	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 0, 1,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_DMA_ON);
+	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 1, 1,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_DMA_REFUSED);
-	CHECK(gta4l_emmc_block_dma_select(1, 0, 0, 1, 3, 1,
+	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 1, 1, 0,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_DMA_REFUSED);
-	CHECK(gta4l_emmc_block_dma_select(1, 1, 1, 1, 3, 1,
+	CHECK(gta4l_emmc_block_dma_select(1, 0, 0, 1, 3, 1, 0,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
 	    GTA4L_EMMC_BLOCK_DMA_REFUSED);
-	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 1,
+	CHECK(gta4l_emmc_block_dma_select(1, 1, 1, 1, 3, 1, 0,
+	    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0) ==
+	    GTA4L_EMMC_BLOCK_DMA_REFUSED);
+	CHECK(gta4l_emmc_block_dma_select(1, 1, 0, 1, 3, 1, 0,
 	    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0) ==
 	    GTA4L_EMMC_BLOCK_DMA_REFUSED);
+	CHECK(gta4l_emmc_block_verify_request_bytes(47481120ull,
+	    47480832ull) == 512u);
+	CHECK(gta4l_emmc_block_verify_request_bytes(47481120ull,
+	    47448064ull) == 32768u);
+	CHECK(gta4l_emmc_block_verify_request_bytes(47481120ull,
+	    47481120ull) == 0u);
+	CHECK(gta4l_emmc_block_verify_request_bytes(25804800ull,
+	    25772032ull) == 32768u);
+	CHECK(gta4l_emmc_block_verify_request_bytes(25804800ull,
+	    25804800ull) == 0u);
+	CHECK(gta4l_emmc_block_verify_request_bytes(1ull, 0u) == 512u);
+	CHECK(gta4l_emmc_block_verify_request_bytes(0ull, 0u) == 0u);
 	{
 		uint8_t table[64];
 
@@ -14872,7 +14890,9 @@ static void
 screen_windows(struct gta4l_emmc_block_report *report)
 {
 	screen_speed(report);
-	report->smmu = 0u;
+	report->smmu = 1u;
+	report->smmu_stage = GTA4L_EMMC_BLOCK_SMMU_STAGE_DONE;
+	report->smmu_decision = GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF;
 	report->dma = 0u;
 	report->bulk = 0u;
 	report->windows = 1u;
@@ -14900,12 +14920,24 @@ screen_windows(struct gta4l_emmc_block_report *report)
 	memset(report->windows_header_digest, 0xff,
 	    sizeof(report->windows_header_digest));
 	report->windows_apfs = 1u;
+	report->windows_dma = 1u;
 	memset(report->windows_container_uuid, 0xff,
 	    sizeof(report->windows_container_uuid));
 	memset(report->windows_volume_uuid, 0xff,
 	    sizeof(report->windows_volume_uuid));
 	memset(report->windows_system_volume_uuid, 0xff,
 	    sizeof(report->windows_system_volume_uuid));
+	report->verify = 1u;
+	report->verify_valid = 1u;
+	report->verify_os = 1u;
+	report->verify_systemos = 1u;
+	report->verify_blocks = 1025u;
+	report->verify_ms = 4200u;
+	report->verify_fail_block = 0xffffffffu;
+	memset(report->verify_os_sha384, 0xff,
+	    sizeof(report->verify_os_sha384));
+	memset(report->verify_systemos_sha384, 0xff,
+	    sizeof(report->verify_systemos_sha384));
 }
 
 static uint32_t
@@ -15494,9 +15526,73 @@ scenario_windows_format(void)
 	CHECK(GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES ==
 	    (GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES +
 	    GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u +
+	    GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES + 1u +
 	    GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES + 1u));
 	CHECK(length <= GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES);
+	return 0;
+}
+
+static int
+scenario_verify_format(void)
+{
+	struct gta4l_emmc_block_report report;
+	char buffer[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+	uint32_t length;
+
+	bzero(&report, sizeof(report));
+	report.verify = 1u;
+	report.verify_valid = 0u;
+	report.verify_reason = 0xffffffffu;
+	report.verify_os = 0u;
+	report.verify_systemos = 0u;
+	report.verify_blocks = 0u;
+	report.verify_ms = 0xffffffffu;
+	report.verify_fail_block = 0xffffffffu;
+	report.windows_dma = 0xffffffffu;
+	report.verify_fail_object = 0xffffffffu;
+	report.verify_fail_offset = UINT64_MAX;
+	report.verify_fail_length = 0xffffffffu;
+	report.verify_fail_status = (int32_t)0xffffffffu;
+	report.verify_fail_actual = UINT64_MAX;
+	memset(report.verify_os_sha384, 0xff,
+	    sizeof(report.verify_os_sha384));
+	memset(report.verify_systemos_sha384, 0xff,
+	    sizeof(report.verify_systemos_sha384));
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(length < sizeof(buffer));
+	CHECK(report_line_bytes(buffer, "GTA4L-EMMC P5 VERIFY: ") ==
+	    GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 VERIFY: "
+	    "valid=0 reason=4294967295 os=0 sysos=0 blocks=0 ms=4294967295 "
+	    "fail=4294967295 dma=4294967295 vobj=4294967295 "
+	    "voff=18446744073709551615 vlen=4294967295 vio=ffffffff "
+	    "vact=18446744073709551615 osha=ffffffffffffffffffffffffffffffff "
+	    "ssha=ffffffffffffffffffffffffffffffff") != 0);
+
+	bzero(&report, sizeof(report));
+	report.verify = 1u;
+	report.verify_valid = 1u;
+	report.verify_os = 1u;
+	report.verify_systemos = 1u;
+	report.verify_blocks = 1025u;
+	report.verify_ms = 4200u;
+	report.verify_fail_block = 0xffffffffu;
+	report.windows_dma = 1u;
+	memset(report.verify_os_sha384, 0xff,
+	    sizeof(report.verify_os_sha384));
+	memset(report.verify_systemos_sha384, 0xff,
+	    sizeof(report.verify_systemos_sha384));
+	length = gta4l_emmc_block_report_format(buffer, sizeof(buffer),
+	    &report);
+	CHECK(length != 0u);
+	CHECK(strstr(buffer, "GTA4L-EMMC P5 VERIFY: valid=1 reason=0 "
+	    "os=1 sysos=1 blocks=1025 ms=4200 fail=4294967295 dma=1 "
+	    "osha=ffffffffffffffffffffffffffffffff "
+	    "ssha=ffffffffffffffffffffffffffffffff") != 0);
+	CHECK(strstr(buffer, " vobj=") == 0);
 	return 0;
 }
 
@@ -15833,6 +15929,33 @@ scenario_windows_read(void)
 	    digestText, digestText, digestText, digestText);
 	CHECK(strstr(gta4l_test.panic, expected) != 0);
 	CHECK(strstr(gta4l_test.panic, "GTA4L-EMMC P5 SPEED: hs=1") != 0);
+	return 0;
+}
+
+static int
+scenario_windows_verify_fail_closed(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1", speed_fixture) == 0);
+	CHECK(g_started);
+	widthhold_setup(true, true);
+	windows_hook_reset();
+	windows_media_setup();
+	CHECK(invoke_thread(1) == 1);
+	CHECK(g_self->report.windows_valid == 1u);
+	CHECK(g_self->report.windows_published == 0u);
+	CHECK(g_self->report.windows_phase ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PHASE_NONE);
+	CHECK(g_self->report.windows_publish_error ==
+	    GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_VERIFY);
+	CHECK(g_self->report.verify == 1u);
+	CHECK(g_self->report.verify_valid == 0u);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 WINDOWS: valid=1 reason=0 count=2") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    " pub=0 phase=0 perr=5") != 0);
+	CHECK(strstr(gta4l_test.panic,
+	    "GTA4L-EMMC P5 VERIFY: valid=0 reason=1") != 0);
 	return 0;
 }
 
@@ -17040,6 +17163,8 @@ static const struct scenario_entry scenarios[] = {
 	{ "screen-capacity", scenario_screen_capacity },
 	{ "windows-manifest", scenario_windows_manifest },
 	{ "windows-format", scenario_windows_format },
+	{ "windows-verify-fail-closed", scenario_windows_verify_fail_closed },
+	{ "verify-format", scenario_verify_format },
 	{ "windows-read", scenario_windows_read },
 	{ "windows-apfs", scenario_windows_apfs },
 	{ "windows-media-absent", scenario_windows_media_absent },

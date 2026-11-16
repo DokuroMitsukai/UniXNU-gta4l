@@ -38,7 +38,8 @@ SYSTEM_VOLUME_UUID = '8846FE78-2910-4297-AF97-D59BB6F8FC16'
 DISCOVERY_BUDGET_MS = 8000 + 2000
 VALID_FIELDS = (
     'valid', 'reason', 'count', 'image', 'pub', 'phase', 'perr', 'mdig',
-    'pmc', 'pwait', 'rms', 'rch', 'wfail', 'wdiag', 'wpoll', 'wtime')
+    'pmc', 'pwait', 'rms', 'rch', 'dma', 'wfail', 'wdiag', 'wpoll',
+    'wtime')
 # Four 1 MiB edges and one APFS chunk, 32 KiB each, for a two-window
 # image; allow up to four windows.
 MAX_READ_CHUNKS = 2 * 4 * (1 << 20) // (32 << 10) + 1
@@ -200,10 +201,13 @@ def check(line, expected):
         fields, windows = parse_line(line)
     except ValueError as error:
         return [str(error)]
-    required = set(VALID_FIELDS) | {'apfs', 'cid', 'uuid', 'suuid'}
+    required = (set(VALID_FIELDS) - {'dma'}) | {
+        'apfs', 'cid', 'uuid', 'suuid'}
     if set(fields) != required:
         errors.append(f'fields {sorted(fields)!r} do not match '
                       f'{sorted(required)!r}')
+    if ('dma' in fields) and (fields['dma'] not in ('0', '1')):
+        errors.append(f"dma={fields['dma']!r}, expected 0 or 1")
     fixed = {
         'valid': '1',
         'reason': '0',

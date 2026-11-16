@@ -843,6 +843,9 @@ private:
 	    uint32_t *elapsedMs);
 	bool windowsRead(IOMedia *media, uint64_t offset, uint32_t bytes,
 	    uint8_t *buffer);
+	bool windowsReadStatus(IOMedia *media, uint64_t offset,
+	    uint32_t bytes, uint8_t *buffer, IOReturn *statusOut,
+	    UInt64 *actualOut);
 	bool windowsHashEdge(IOMedia *media, uint64_t offset,
 	    uint8_t digest[GTA4L_EMMC_BLOCK_WINDOWS_SHA256_BYTES],
 	    int32_t *reason);
@@ -2382,6 +2385,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    dmaTokens != 0, dmaValue, dmaTokens > 1u,
 	    1, value,
 	    bulk == GTA4L_EMMC_BLOCK_BULK_ON,
+	    windowsTokens != 0u,
 	    partobs == GTA4L_EMMC_BLOCK_PARTOBS_ON,
 	    partcmp == GTA4L_EMMC_BLOCK_PARTCMP_ON,
 	    partread == GTA4L_EMMC_BLOCK_PARTREAD_ON,
@@ -2400,9 +2404,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 		} else if (value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) {
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-dma "
 			    "requires gta4l-emmc-block=3\n");
-		} else if (bulk != GTA4L_EMMC_BLOCK_BULK_ON) {
+		} else if ((bulk != GTA4L_EMMC_BLOCK_BULK_ON) &&
+		    (windowsTokens == 0u)) {
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-dma "
-			    "requires gta4l-emmc-bulk=1\n");
+			    "requires gta4l-emmc-bulk=1 or "
+			    "gta4l-emmc-windows=1\n");
 		} else if (dmaValue != (int)GTA4L_EMMC_BLOCK_DMA_ON) {
 			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-dma "
 			    "value must be 1\n");
@@ -2487,8 +2493,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    (consumeTokens != 0u) || (widthTokens != 0u) ||
 	    (widthholdTokens != 0u) || (widthpubTokens != 0u) ||
 	    (speedTokens != 0u) || (bulkTokens != 0u) ||
-	    (dmaTokens != 0u) || (liveTokens != 0u) ||
-	    (slowTokens != 0u) || (conflictTokens != 0u));
+	    (liveTokens != 0u) || (slowTokens != 0u) ||
+	    (conflictTokens != 0u));
 	if (windows == GTA4L_EMMC_BLOCK_WINDOWS_REFUSED) {
 		if (windowsTokens > 1u) {
 			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
@@ -10852,10 +10858,25 @@ bool
 Gta4lEmmcBlock::windowsRead(IOMedia *media, uint64_t offset,
     uint32_t bytes, uint8_t *buffer)
 {
+	return windowsReadStatus(media, offset, bytes, buffer, nullptr,
+	    nullptr);
+}
+
+bool
+Gta4lEmmcBlock::windowsReadStatus(IOMedia *media, uint64_t offset,
+    uint32_t bytes, uint8_t *buffer, IOReturn *statusOut,
+    UInt64 *actualOut)
+{
 	IOMemoryDescriptor *descriptor;
 	UInt64 actual = 0;
 	IOReturn status;
 
+	if (statusOut != nullptr) {
+		*statusOut = kIOReturnBadArgument;
+	}
+	if (actualOut != nullptr) {
+		*actualOut = 0;
+	}
 	if ((media == nullptr) || (buffer == nullptr) || (bytes == 0u)) {
 		return false;
 	}
@@ -10866,6 +10887,12 @@ Gta4lEmmcBlock::windowsRead(IOMedia *media, uint64_t offset,
 	}
 	status = media->read(this, offset, descriptor, nullptr, &actual);
 	descriptor->release();
+	if (statusOut != nullptr) {
+		*statusOut = status;
+	}
+	if (actualOut != nullptr) {
+		*actualOut = actual;
+	}
 	return (status == kIOReturnSuccess) && (actual == bytes);
 }
 
@@ -11066,6 +11093,7 @@ Gta4lEmmcBlock::runWindows()
 	uint32_t mediaDiag = 0u;
 	uint32_t mediaPolls = 0u;
 	uint32_t mediaWaitMs = 0u;
+	uint32_t dmaActive = 0u;
 	bool readTimed = false;
 
 	bzero(volumeUuid, sizeof(volumeUuid));
@@ -11083,6 +11111,7 @@ Gta4lEmmcBlock::runWindows()
 	report.windows_partition_wait_ms = 0u;
 	report.windows_read_ms = 0u;
 	report.windows_read_chunks = 0u;
+	report.windows_dma = 0u;
 	bzero(report.windows_manifest_digest,
 	    sizeof(report.windows_manifest_digest));
 	bzero(report.windows_entry, sizeof(report.windows_entry));
@@ -11105,6 +11134,52 @@ Gta4lEmmcBlock::runWindows()
 	report.windows_media_wait_ms = 0u;
 	bzero(report.windows_media, sizeof(report.windows_media));
 	IOLockUnlock(reportLock);
+
+	/* The verify rung loads 73.3 MB of signed tables. The PIO path moves
+	 * about 2.9 MB/s, which cannot fit the verify budget, so it runs
+	 * through the ADMA2 stack path qualified by B10. A setup failure is
+	 * terminal: a silent PIO fallback would turn a working verdict into
+	 * a budget exit. */
+	if (dmaMode) {
+		bool dmaOk = true;
+		uint32_t dmaSkip = 0u;
+
+		(void)runSmmuGate();
+		if ((report.smmu_decision !=
+		    GTA4L_EMMC_BLOCK_SMMU_DECISION_BYPASS) &&
+		    (report.smmu_decision !=
+		    GTA4L_EMMC_BLOCK_SMMU_DECISION_CB_OFF)) {
+			dmaSkip = 1u;
+			dmaOk = false;
+		} else if (!dmaAllocate()) {
+			dmaOk = false;
+		} else if (!dmaCompare()) {
+			dmaFails++;
+			dmaOk = false;
+		} else if (!runSmmuPostDma()) {
+			dmaFails++;
+			dmaOk = false;
+		}
+		if (dmaOk) {
+			IOLockLock(gate);
+			dmaEnabled = true;
+			IOLockUnlock(gate);
+			dmaActive = 1u;
+		} else {
+			IOLockLock(reportLock);
+			report.dma = 1u;
+			report.dma_mode =
+			    GTA4L_EMMC_BLOCK_DMA_MODE_ADMA2_32;
+			report.dma_smmu = report.smmu_decision;
+			report.dma_cmp_pass = dmaCmpPass;
+			report.dma_cmp_total = dmaCmpTotal;
+			report.dma_fails = dmaFails;
+			report.dma_skip = dmaSkip;
+			IOLockUnlock(reportLock);
+			reason = GTA4L_EMMC_BLOCK_WINDOWS_REASON_DMA;
+			goto done;
+		}
+	}
 
 	/* The block storage driver publishes the whole media and the GUID
 	 * scheme publishes the partitions asynchronously after start. The
@@ -11155,8 +11230,12 @@ Gta4lEmmcBlock::runWindows()
 	if (parsed.valid == 0u) {
 		goto done;
 	}
-	if (verifyMode) {
-		(void)runVerify(media, &parsed);
+	if (verifyMode && !runVerify(media, &parsed)) {
+		/* An unverified window is never published. Clearing the
+		 * verified state above also makes the consumer exports
+		 * refuse the volume. */
+		publishError = GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_VERIFY;
+		goto publish_done;
 	}
 
 	windowsReadStart = gta4l_emmc_platform_counter();
@@ -11332,6 +11411,7 @@ publish_done:
 	report.windows_fail_diag = failDiag;
 	report.windows_media_polls = mediaPolls;
 	report.windows_media_wait_ms = mediaWaitMs;
+	report.windows_dma = dmaActive;
 	memcpy(report.windows_media, mediaFound,
 	    sizeof(report.windows_media));
 	if (volumeUuidValid) {
@@ -11359,6 +11439,9 @@ done:
 		IOLockUnlock(reportLock);
 	}
 	windowsReadStarted = false;
+	if (dmaMode && (dmaActive == 0u)) {
+		dmaRelease();
+	}
 	if (reason != GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE) {
 		IOLockLock(reportLock);
 		report.windows_valid = 0u;
@@ -11402,6 +11485,24 @@ struct gta4l_verified_window_state {
 };
 
 static struct gta4l_verified_window_state gta4l_verified_window[2];
+
+static void
+gta4l_verified_reset(void)
+{
+	uint32_t index;
+
+	for (index = 0; index < 2u; index++) {
+		if (gta4l_verified_window[index].envelope != nullptr) {
+			IOFree(gta4l_verified_window[index].envelope,
+			    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
+			    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
+			    gta4l_verified_window[index].table_bytes);
+			gta4l_verified_window[index].envelope = nullptr;
+		}
+		bzero(&gta4l_verified_window[index],
+		    sizeof(gta4l_verified_window[index]));
+	}
+}
 #endif
 
 #if GTA4L_EMMC_BLOCK_VERIFY_BUILT
@@ -11479,6 +11580,11 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 	uint32_t reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_NONE;
 	uint32_t verified = 0;
 	uint32_t failBlock = 0xffffffffu;
+	uint32_t failObject = 0xffffffffu;
+	uint64_t failOffset = 0;
+	uint32_t failLength = 0;
+	int32_t failStatus = 0;
+	uint64_t failActual = 0;
 	uint32_t openedOs = 0;
 	uint32_t openedSystemos = 0;
 	uint8_t osSha[16] = {0};
@@ -11500,6 +11606,7 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 	};
 	uint8_t *chunk = nullptr;
 
+	gta4l_verified_reset();
 	if ((manifest == nullptr) || (media == nullptr) ||
 	    (manifest->version != GTA4L_EMMC_BLOCK_WINDOWS_VERSION_TWO) ||
 	    (manifest->object_count != 2u) || (manifest->count != 2u)) {
@@ -11561,21 +11668,31 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 		    signature, GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES);
 		for (offset = 0; offset < object->size; ) {
 			uint64_t left = object->size - offset;
-			uint32_t bytes = (uint32_t)((left >
+			uint32_t copy = (uint32_t)((left >
 			    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES) ?
 			    GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES : left);
+			uint32_t bytes =
+			    gta4l_emmc_block_verify_request_bytes(
+			    object->size, offset);
+			IOReturn ioStatus = kIOReturnSuccess;
+			UInt64 ioActual = 0;
 
-			if (!windowsRead(media, object->offset + offset,
-			    bytes, chunk)) {
+			if (!windowsReadStatus(media, object->offset + offset,
+			    bytes, chunk, &ioStatus, &ioActual)) {
 				reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_READ;
+				failObject = index;
+				failOffset = offset;
+				failLength = bytes;
+				failStatus = (int32_t)ioStatus;
+				failActual = ioActual;
 				ok = false;
 				break;
 			}
 			memcpy(envelope +
 			    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
 			    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES + offset,
-			    chunk, bytes);
-			offset += bytes;
+			    chunk, copy);
+			offset += copy;
 		}
 		if (!ok) {
 			IOFree(envelope, total);
@@ -11698,6 +11815,11 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 	reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_MANIFEST;
 	ok = false;
 #endif
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+	if (!ok) {
+		gta4l_verified_reset();
+	}
+#endif
 	IOLockLock(reportLock);
 	report.verify = 1u;
 	report.verify_valid = ok ? 1u : 0u;
@@ -11707,6 +11829,11 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 	report.verify_blocks = verified;
 	report.verify_ms = verifyMs;
 	report.verify_fail_block = failBlock;
+	report.verify_fail_object = failObject;
+	report.verify_fail_offset = failOffset;
+	report.verify_fail_length = failLength;
+	report.verify_fail_status = failStatus;
+	report.verify_fail_actual = failActual;
 	memcpy(report.verify_os_sha384, osSha, sizeof(osSha));
 	memcpy(report.verify_systemos_sha384, systemosSha,
 	    sizeof(systemosSha));

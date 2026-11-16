@@ -145,6 +145,7 @@ _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES <=
 _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES ==
     (GTA4L_EMMC_BLOCK_SPEED_BULK_REPORT_WORST_BYTES +
     GTA4L_EMMC_BLOCK_SPEEDIO_LINE_BYTES + 1u +
+    GTA4L_EMMC_BLOCK_SMMU_LINE_BYTES + 1u +
     GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES + 1u +
     GTA4L_EMMC_BLOCK_VERIFY_LINE_BYTES + 1u),
     "WINDOWS and VERIFY worst case must match the formatter");
@@ -523,17 +524,20 @@ gta4l_emmc_block_bulk_select(int token_present, int token_value,
 int
 gta4l_emmc_block_dma_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
-    int bulk_selected, int partobs_selected, int partcmp_selected,
-    int partread_selected, int deblock_selected, int breakup_selected,
-    int sweep_selected, int consume_selected, int width_selected,
-    int widthhold_selected, int widthpub_selected, int speed_selected)
+    int bulk_selected, int windows_selected, int partobs_selected,
+    int partcmp_selected, int partread_selected, int deblock_selected,
+    int breakup_selected, int sweep_selected, int consume_selected,
+    int width_selected, int widthhold_selected, int widthpub_selected,
+    int speed_selected)
 {
 	if (token_present == 0) {
 		return GTA4L_EMMC_BLOCK_DMA_OFF;
 	}
 	if ((duplicate_tokens != 0) || (block_selected == 0) ||
 	    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||
-	    (bulk_selected == 0) || (partobs_selected != 0) ||
+	    (((bulk_selected == 0) && (windows_selected == 0)) ||
+	    ((bulk_selected != 0) && (windows_selected != 0))) ||
+	    (partobs_selected != 0) ||
 	    (partcmp_selected != 0) || (partread_selected != 0) ||
 	    (deblock_selected != 0) || (breakup_selected != 0) ||
 	    (sweep_selected != 0) || (consume_selected != 0) ||
@@ -619,6 +623,22 @@ gta4l_emmc_block_windows_select(int token_present, int token_value,
 		return GTA4L_EMMC_BLOCK_WINDOWS_REFUSED;
 	}
 	return GTA4L_EMMC_BLOCK_WINDOWS_ON;
+}
+
+uint32_t
+gta4l_emmc_block_verify_request_bytes(uint64_t object_bytes, uint64_t offset)
+{
+	uint64_t left;
+
+	if (offset >= object_bytes) {
+		return 0;
+	}
+	left = object_bytes - offset;
+	if (left > GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES) {
+		return GTA4L_EMMC_BLOCK_WINDOWS_CHUNK_BYTES;
+	}
+	return (uint32_t)((left + GTA4L_EMMC_BLOCK_BYTES - 1u) /
+	    GTA4L_EMMC_BLOCK_BYTES * GTA4L_EMMC_BLOCK_BYTES);
 }
 
 uint32_t
@@ -4671,6 +4691,9 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_key(&writer, "rch");
 		gta4l_emmc_block_put_u64(&writer,
 		    report->windows_read_chunks);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "dma");
+		gta4l_emmc_block_put_u64(&writer, report->windows_dma);
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
@@ -4699,6 +4722,32 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_key(&writer, "fail");
 		gta4l_emmc_block_put_u64(&writer,
 		    report->verify_fail_block);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "dma");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->windows_dma);
+		if (report->verify_valid == 0u) {
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "vobj");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->verify_fail_object);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "voff");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->verify_fail_offset);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "vlen");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->verify_fail_length);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "vio");
+			gta4l_emmc_block_put_hex(&writer,
+			    (uint32_t)report->verify_fail_status, 8u);
+			gta4l_emmc_block_put_char(&writer, ' ');
+			gta4l_emmc_block_put_key(&writer, "vact");
+			gta4l_emmc_block_put_u64(&writer,
+			    report->verify_fail_actual);
+		}
 		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "osha");
 		gta4l_emmc_block_put_digest(&writer,
