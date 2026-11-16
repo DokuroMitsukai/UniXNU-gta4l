@@ -82,6 +82,7 @@ DIAGNOSTICS = {
     'emmc-block-3-live': 'gta4l-emmc-block=3 gta4l-emmc-bulk=1 '
                          'gta4l-emmc-dma=1 gta4l-emmc-live=1',
     'emmc-block-3-windows': 'gta4l-emmc-block=3 gta4l-emmc-windows=1',
+    'emmc-block-3-verify': 'gta4l-emmc-block=3 gta4l-emmc-windows=1 gta4l-emmc-verify=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
@@ -96,7 +97,7 @@ WIDTHPUB_DIAGNOSTICS = ('emmc-block-3-widthpub',)
 SPEED_DIAGNOSTICS = ('emmc-block-3-speed',)
 BULK_DIAGNOSTICS = ('emmc-block-3-bulk', 'emmc-block-3-bulk-dma')
 LIVE_DIAGNOSTICS = ('emmc-block-3-live',)
-WINDOWS_DIAGNOSTICS = ('emmc-block-3-windows',)
+WINDOWS_DIAGNOSTICS = ('emmc-block-3-windows', 'emmc-block-3-verify')
 PARTITION_DIAGNOSTICS = (PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS +
                          PARTREAD_DIAGNOSTICS)
 OBSERVATION_DIAGNOSTICS = (PARTITION_DIAGNOSTICS + DEBLOCK_DIAGNOSTICS +

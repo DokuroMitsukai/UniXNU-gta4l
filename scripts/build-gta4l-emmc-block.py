@@ -52,6 +52,9 @@ if not (DEVICE / 'Gta4lEmmcBlock.cpp').is_file():
 ARCHIVE = OUT / 'libGta4lEmmcBlock.a'
 STORAGE_INCLUDE = ROOT / 'build/storage-abi/include'
 VERIFIED_ROOT = PRELINK_KIT.parent / 'VerifiedRoot'
+if not (VERIFIED_ROOT / 'src' / 'verified_root.c').is_file():
+    VERIFIED_ROOT = (DEVICE_ROOT.parent / 'UniXNU' / 'kits'
+                     / 'VerifiedRoot')
 POLICY_DIR = DEVICE_ROOT / 'out/gta4l/s5-policies'
 POLICY_HEADER = POLICY_DIR / 'Gta4lEmmcBlockPolicies.h'
 QUALIFICATION = Path(os.environ.get(
@@ -520,6 +523,7 @@ for item in SOURCES:
     if 'kit' in item:
         arguments += ['-I', str(item['kit'])]
     arguments += ['-I', str(POLICY_DIR)]
+    arguments += ['-I', str(VERIFIED_ROOT / 'include')]
     if POLICY_HEADER.is_file():
         arguments += ['-DGTA4L_EMMC_BLOCK_VERIFY=1']
     subprocess.run(arguments, cwd=record['directory'], check=True)

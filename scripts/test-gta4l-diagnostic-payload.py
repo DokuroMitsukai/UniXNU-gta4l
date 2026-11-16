@@ -531,6 +531,11 @@ def test_emmc_block_3_windows(base):
                                   'windows')
 
 
+def test_emmc_block_3_verify(base):
+    check_observation_personality(base, 'emmc-block-3-verify', 3,
+                                  'verify')
+
+
 def test_emmc_block_3_live(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     record = base / 'argv.json'

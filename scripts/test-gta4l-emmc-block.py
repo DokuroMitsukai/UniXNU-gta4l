@@ -2893,8 +2893,8 @@ def check_adapter_source():
         'scheme lookup must enumerate attached service-plane children'
     assert 'object->metaCast("IOGUIDPartitionScheme")' in adapter, \
         'scheme lookup must keep the partition-scheme class guard'
-    assert adapter.count('getMatchingServices(matching)') == 6, \
-        'only whole-media, partition-media, pinned-range and APFS-volume walks may use matching'
+    assert adapter.count('getMatchingServices(matching)') == 8, \
+        'only whole-media, partition, pinned-range, APFS-volume and the two verified-root exports may use matching'
     assert '#define GTA4L_EMMC_BLOCK_PARTREAD_MAX_BLOCKS 64u' in \
         policy_header, 'pinned-range reads must stay inside the request limit'
     assert 'GTA4L_EMMC_BLOCK_PARTREAD_REASON_HASH 7u' in policy_header, \

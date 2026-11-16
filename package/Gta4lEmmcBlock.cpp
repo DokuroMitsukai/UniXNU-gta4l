@@ -643,6 +643,7 @@ public:
 	bool start(IOService *provider) override;
 	void stop(IOService *provider) override;
 	void free() override;
+	const char *windowName(void) const { return windowLabel; }
 
 	IOReturn doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block,
 	    UInt64 nblks, IOStorageAttributes *attributes,
@@ -11388,6 +11389,7 @@ done:
 
 #if GTA4L_EMMC_BLOCK_VERIFY_BUILT
 struct gta4l_verified_window_state {
+	const char *label;
 	const char *uuid_text;
 	const uint8_t *header;
 	const uint8_t *signature;
@@ -11616,6 +11618,7 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 			    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
 			    gta4l_verified_window[index].table_bytes);
 		}
+		gta4l_verified_window[index].label = labels[index];
 		gta4l_verified_window[index].uuid_text = uuidText;
 		gta4l_verified_window[index].header = header;
 		gta4l_verified_window[index].signature = signature;
@@ -13538,3 +13541,282 @@ Gta4lEmmcBlock::reportEntry(void *context, wait_result_t waitResult)
 	}
 	thread_terminate(current_thread());
 }
+
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+static struct gta4l_verified_window_state *
+gta4l_verified_by_uuid(const char *uuid)
+{
+	uint32_t index;
+
+	if (uuid == nullptr) {
+		return nullptr;
+	}
+	for (index = 0; index < 2u; index++) {
+		if ((gta4l_verified_window[index].ready != 0u) &&
+		    (gta4l_verified_window[index].uuid_text != nullptr) &&
+		    (strcmp(gta4l_verified_window[index].uuid_text,
+		    uuid) == 0)) {
+			return &gta4l_verified_window[index];
+		}
+	}
+	return nullptr;
+}
+
+static IOService *
+gta4l_verified_media_by_uuid(const char *uuid, uint32_t *matches)
+{
+	OSDictionary *matching;
+	OSDictionary *properties;
+	OSString *wanted;
+	OSIterator *iterator;
+	IOService *media = nullptr;
+
+	*matches = 0u;
+	matching = IOService::serviceMatching("IOMedia");
+	properties = OSDictionary::withCapacity(1);
+	wanted = OSString::withCString(uuid);
+	if ((matching == nullptr) || (properties == nullptr) ||
+	    (wanted == nullptr)) {
+		OSSafeReleaseNULL(wanted);
+		OSSafeReleaseNULL(properties);
+		OSSafeReleaseNULL(matching);
+		return nullptr;
+	}
+	if (!properties->setObject("UUID", wanted) ||
+	    !matching->setObject("IOPropertyMatch", properties)) {
+		wanted->release();
+		properties->release();
+		matching->release();
+		return nullptr;
+	}
+	wanted->release();
+	properties->release();
+	iterator = IOService::getMatchingServices(matching);
+	matching->release();
+	if (iterator == nullptr) {
+		return nullptr;
+	}
+	while (OSObject *object = iterator->getNextObject()) {
+		IOService *found = OSDynamicCast(IOService, object);
+
+		if (found == nullptr) {
+			continue;
+		}
+		(*matches)++;
+		if (*matches == 1u) {
+			media = found;
+		}
+	}
+	iterator->release();
+	return (*matches == 1u) ? media : nullptr;
+}
+
+static IOService *
+gta4l_verified_media_by_dev(dev_t device, uint32_t *matches)
+{
+	OSDictionary *matching;
+	OSDictionary *properties;
+	OSNumber *majorNumber;
+	OSNumber *minorNumber;
+	OSIterator *iterator;
+	IOService *media = nullptr;
+
+	*matches = 0u;
+	matching = IOService::serviceMatching("IOMedia");
+	properties = OSDictionary::withCapacity(2);
+	majorNumber = OSNumber::withNumber(
+	    static_cast<unsigned>(major(static_cast<uint32_t>(device))), 32);
+	minorNumber = OSNumber::withNumber(
+	    static_cast<unsigned>(minor(static_cast<uint32_t>(device))), 32);
+	if ((matching == nullptr) || (properties == nullptr) ||
+	    (majorNumber == nullptr) || (minorNumber == nullptr)) {
+		OSSafeReleaseNULL(minorNumber);
+		OSSafeReleaseNULL(majorNumber);
+		OSSafeReleaseNULL(properties);
+		OSSafeReleaseNULL(matching);
+		return nullptr;
+	}
+	if (!properties->setObject(gIOBSDMajorKey, majorNumber) ||
+	    !properties->setObject(gIOBSDMinorKey, minorNumber) ||
+	    !matching->setObject("IOPropertyMatch", properties)) {
+		minorNumber->release();
+		majorNumber->release();
+		properties->release();
+		matching->release();
+		return nullptr;
+	}
+	minorNumber->release();
+	majorNumber->release();
+	properties->release();
+	iterator = IOService::getMatchingServices(matching);
+	matching->release();
+	if (iterator == nullptr) {
+		return nullptr;
+	}
+	while (OSObject *object = iterator->getNextObject()) {
+		IOService *found = OSDynamicCast(IOService, object);
+
+		if (found == nullptr) {
+			continue;
+		}
+		(*matches)++;
+		if (*matches == 1u) {
+			media = found;
+		}
+	}
+	iterator->release();
+	return (*matches == 1u) ? media : nullptr;
+}
+
+static bool
+gta4l_verified_media_for_state(IOService *media,
+    const struct gta4l_verified_window_state *state)
+{
+	IOService *provider;
+
+	if ((media == nullptr) || (state == nullptr) ||
+	    (state->ready == 0u)) {
+		return false;
+	}
+	for (provider = media->getProvider();
+	    provider != nullptr; provider = provider->getProvider()) {
+		Gta4lEmmcBlock *window =
+		    OSDynamicCast(Gta4lEmmcBlock, provider);
+
+		if (window == nullptr) {
+			continue;
+		}
+		return (window->windowName() != nullptr) &&
+		    (strcmp(window->windowName(), state->label) == 0);
+	}
+	return false;
+}
+
+extern "C" int
+native_verified_block_root_authorized(dev_t device)
+{
+	uint32_t matches;
+	IOService *media;
+	OSString *identity;
+	struct gta4l_verified_window_state *state;
+
+	media = gta4l_verified_media_by_dev(device, &matches);
+	if ((media == nullptr) || (matches != 1u)) {
+		return 0;
+	}
+	identity = OSDynamicCast(OSString, media->getProperty("UUID"));
+	state = (identity == nullptr) ? nullptr :
+	    gta4l_verified_by_uuid(identity->getCStringNoCopy());
+	return gta4l_verified_media_for_state(media, state) ? 1 : 0;
+}
+
+extern "C" int
+native_verified_block_volume_device(const char *uuid, dev_t *device,
+    char *path, size_t size)
+{
+	uint32_t matches;
+	IOService *media;
+	OSString *name;
+	OSNumber *majorNumber;
+	OSNumber *minorNumber;
+	struct gta4l_verified_window_state *state;
+	dev_t candidate;
+
+	if ((uuid == nullptr) || (device == nullptr) || (path == nullptr) ||
+	    (size < 6u) || (strlen(uuid) != 36u)) {
+		return 0;
+	}
+	state = gta4l_verified_by_uuid(uuid);
+	if (state == nullptr) {
+		return 0;
+	}
+	media = gta4l_verified_media_by_uuid(uuid, &matches);
+	if ((media == nullptr) || (matches != 1u) ||
+	    !gta4l_verified_media_for_state(media, state)) {
+		return 0;
+	}
+	name = OSDynamicCast(OSString, media->getProperty(gIOBSDNameKey));
+	majorNumber = OSDynamicCast(OSNumber,
+	    media->getProperty(gIOBSDMajorKey));
+	minorNumber = OSDynamicCast(OSNumber,
+	    media->getProperty(gIOBSDMinorKey));
+	if ((name == nullptr) || (majorNumber == nullptr) ||
+	    (minorNumber == nullptr) || !name->getLength() ||
+	    (name->getLength() >= sizeof(path) - 6) ||
+	    (majorNumber->unsigned64BitValue() > 255u) ||
+	    (minorNumber->unsigned64BitValue() > 0xffffffu)) {
+		return 0;
+	}
+	candidate = static_cast<dev_t>(makedev(
+	    majorNumber->unsigned32BitValue(),
+	    minorNumber->unsigned32BitValue()));
+	if (!native_verified_block_root_authorized(candidate)) {
+		return 0;
+	}
+	snprintf(path, size, "/dev/%s", name->getCStringNoCopy());
+	*device = candidate;
+	return 1;
+}
+
+extern "C" int
+native_verified_block_manifest_sha384(dev_t device, const char *uuid,
+    uint8_t digest[48])
+{
+	IOService *media;
+	OSString *identity;
+	struct gta4l_verified_window_state *state;
+	SHA384_CTX context;
+	uint32_t matches;
+
+	if (digest == nullptr) {
+		return 0;
+	}
+	bzero(digest, 48u);
+	if ((uuid == nullptr) || (strlen(uuid) != 36u)) {
+		return 0;
+	}
+	if (!native_verified_block_root_authorized(device)) {
+		return 0;
+	}
+	media = gta4l_verified_media_by_dev(device, &matches);
+	if ((media == nullptr) || (matches != 1u)) {
+		return 0;
+	}
+	identity = OSDynamicCast(OSString, media->getProperty("UUID"));
+	if ((identity == nullptr) ||
+	    (strcmp(identity->getCStringNoCopy(), uuid) != 0)) {
+		return 0;
+	}
+	state = gta4l_verified_by_uuid(uuid);
+	if ((state == nullptr) || (state->envelope == nullptr)) {
+		return 0;
+	}
+	SHA384_Init(&context);
+	SHA384_Update(&context, state->envelope,
+	    GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
+	    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
+	    state->table_bytes);
+	SHA384_Final(digest, &context);
+	return 1;
+}
+#else
+extern "C" int native_verified_block_root_authorized(dev_t)
+{
+	return 0;
+}
+
+extern "C" int native_verified_block_volume_device(const char *, dev_t *,
+    char *, size_t)
+{
+	return 0;
+}
+
+extern "C" int native_verified_block_manifest_sha384(dev_t, const char *,
+    uint8_t digest[48])
+{
+	if (digest != nullptr) {
+		bzero(digest, 48u);
+	}
+	return 0;
+}
+#endif

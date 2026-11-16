@@ -123,6 +123,7 @@ LIVE_DIAGNOSTICS = {
 }
 WINDOWS_DIAGNOSTICS = {
     'emmc-block-3-windows': 'emmc-block-3',
+    'emmc-block-3-verify': 'emmc-block-3',
 }
 
 

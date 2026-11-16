@@ -9561,3 +9561,36 @@ block count, elapsed time, first failing block and both envelope
 SHA-384 prefixes. The block suite passes (exit=0, 297 PASS lines); the
 kernel compile record accepts the driver and the kit. Remaining S5c work:
 the three `native_verified_block_*` exports and their host tests.
+
+### 5.4.4 S5c candidate and consumer exports (2026-11-16, host-only)
+
+The driver now exports `native_verified_block_root_authorized`,
+`native_verified_block_volume_device` and
+`native_verified_block_manifest_sha384`. Each matches exactly one IOMedia
+by BSD major/minor or exact UUID, maps the UUID to the enrolled policy,
+walks the provider chain to the publishing window and, for the manifest
+digest, hashes the whole signed envelope (header, signature, table) with
+SHA-384. The host build provides zero-returning stubs; the kernel build
+compiled with the policies exports the real functions
+(`fffffff007a4da7c`, `fffffff007a4deac`, `fffffff007a4e2f8`).
+
+Candidate: kernel
+`34852e949598174a58a1b7e4689367d274b1747dc942a613546c7fc49c605761`
+(51,679,232 bytes; archive `6d491b91…`, qualified, kernel audit
+unchanged, `verified_root.enabled=true`), payload
+`ddff139a07e601b5c525aad57b8e18042031735eb4ae0f4d143542a608b15709`
+(83,886,080 bytes; `emmc-block-3-verify` = block 3, windows 1, verify 1;
+rd=md0, fs-timer-hold, owner trust; 133/133) and BOOT
+`0fdb8b700183f78c42599510a3ffadb42ed4bd7213b308ae0de4cca6f4e06cb7`
+(85,688,320 bytes; 18/18 gates, only the ramdisk differs).
+
+Expected verify verdict: `VERIFY valid=1 reason=0 os=1 sysos=1
+blocks=1025 ms=<measured> fail=4294967295`, both envelope prefixes, and
+the S4 `WINDOWS pub=2 phase=5 perr=0 wdiag=15` result. The 1,025 blocks
+are 256 first-edge blocks plus 257 OS last-edge blocks (the OS end is
+1,536 bytes into its final block) and 256+256 SystemOS edge blocks.
+
+Two device steps remain, each with its own go naming the full hash:
+write the v2 userdata image `ae6e18e7…` (9,455,947,776 bytes), then
+flash this BOOT and boot it once. Not flashed or written; the tablet is
+in TWRP.
