@@ -9766,3 +9766,90 @@ The new-kernel storage-ABI audit
 `fffffff007b4b5b8`, 190 ordinary slots and 181 kernel bindings. The block
 suite is green (exit=0, 297 PASS lines, adapter 526, core 47/35). No
 candidate, flash, boot or device access.
+
+### 5.4.7 S5d′ verified-read host harness and lifetime errors (2026-11-17, host-only)
+
+The S5d suite compiled the verification path out
+(`GTA4L_EMMC_BLOCK_VERIFY_BUILT=0`), so none of the verified-read,
+lifetime or root-token code had ever executed. S5d′ adds a second host
+build with `-DGTA4L_EMMC_BLOCK_HOST_VERIFY=1`:
+
+- `scripts/build-gta4l-verify-fixtures.py` generates a synthetic
+  SHNGROOT image with a 1 MiB-aligned OS window of 2,097,664 bytes and a
+  SystemOS window of 1,049,088 bytes (both with a partial final 4 KiB
+  span), signs both with a throwaway 3072-bit RSA key under the test
+  output directory, writes the matching
+  `Gta4lEmmcBlockPolicies.h`, and never reads the owner key.
+- `scripts/sim-gta4l-emmc-block/verify_harness.cpp` compiles the real
+  adapter with the kit `verified_root.c` and a host OpenSSL
+  `vr_xnu_crypto`, calls the real `runVerify()` and
+  `verifiedWindowRead()`, and serves the synthetic image through the
+  host IOMedia and owner-read seams.
+- 19 scenarios cover load success, short and failed table reads,
+  tampered tables, wrong anchor, wrong UUID, aligned/unaligned/
+  cross-span/final-partial reads, a tampered span, write refusal before
+  I/O, no-policy refusal, S4 pass-through, a skipped completion, short
+  and failed owner reads, lifetime recovery, the lifetime panic
+  boundary and a sequential-read benchmark. Eleven source mutations
+  (skip verify, wrong block index, copy before verify, drop the offline
+  latch, restore pass-through, drop the direction check, accept a
+  missing completion, and four lifetime controls) are each rejected by
+  a named scenario.
+
+The harness found and the driver now fixes a real fail-open path: the
+window object is a separate `Gta4lEmmcBlock` instance whose own
+`verifyMode`/`rootMode` are false, so a policy-less window originally
+forwarded the read unverified even when the owner was in verify or root
+mode. `verifiedWindowRead` and the window role now consult both the
+window and `windowOwner` modes, refuse with `kIOReturnNotPermitted`,
+check the direction and length before any I/O, and treat a completion
+that did not run or returned a short count as `kIOReturnIOError` rather
+than success.
+
+Lifetime root mode (`gta4l-emmc-root=1`) now has a first-error latch,
+one transport recovery through `speedRecover()` (the existing
+width/timing revert; a verify mismatch is never recovered), one offline
+notification, and a terminal report only while
+`native_verified_block_root_authorized()` has not yet accepted the
+volume and less than 120,000 ms have elapsed since publication
+(`GTA4L_EMMC_BLOCK_ROOT_PANIC_MS`). After the export accepts the volume
+the window is taken offline without panicking.
+
+Host benchmark with the OpenSSL provider (1 MiB sequential, 32 KiB
+requests): 512 verified spans in 1.1-1.4 ms, about 370,000-455,000
+spans/s. That is a SHA-256/memcpy proxy only; the S5d″ rung measures the
+real eMMC cost. The host numbers are far below the measured eMMC
+direct-DMA rate (25.8 MB/s in B10.13), so no verified-span cache is
+added for the first root boot; the decision is recorded again after
+S5d″.
+
+`XNU_OWNER_ROOT_TRUST=1` is not compatible with the `rd=md0` diagnostic
+payload: `bsd_init` takes the owner override only when
+`native_verified_block_root_authorized()` accepts the mounted root
+device, and a RAM root has no verified window state. A diagnostic
+payload with the trust flag on can therefore panic at `rootvp`
+authentication even though the block rung ran. S5d″ must use a kernel
+built with `XNU_OWNER_ROOT_TRUST=0`; S5e remains the first boot with the
+trust flag on. The verified-read code is identical in both builds; the
+S5e-only surface is the root authorization and the mount.
+
+Mount inputs for S5e: `XNU_OWNER_CACHE_MOUNT=1` (requires root trust)
+mounts SystemOS at `/private/preboot` (or the union root),
+`XNU_OWNER_CACHE_STARTUP=1` selects the owner dyld cache, and
+`XNU_OWNER_BOOT_MANIFEST`/`XNU_OWNER_DATA_MOUNT`/`XNU_NATIVE_AIR_INIT`
+stay off until the RAM Data seed and its real volume UUID are known.
+`CONFIG_XNU_OWNER_DATA_VOLUME_UUID` currently carries the OS UUID and
+must not be used for a Data mount. The S5e payload omits `rd=md0` and
+selects the OS window as the root volume.
+
+The S5d′ code change rebuilt the kernel: `c13f9a5a…`
+(51,679,232 bytes) with archive `c8cf0695…` (qualified) and a fresh
+storage-ABI audit `out/gta4l/storage-abi-c13f9a5a` PASS (190 ordinary
+slots, 181 kernel bindings; vtable `fffffff005cb44c0`, metaclass
+`fffffff006add1d0`, service `fffffff007b4b5b8`). The new lifetime methods
+`lifetimeRootFailure`/`lifetimeRootOffline` and the root-mount flag are
+present; `bsd_init.o` still records the probe/audit/trust flags as 1.
+The full suite is green: exit=0, 309 PASS lines, default adapter 527
+scenarios, core 47 scenarios/35 mutation controls, verify build 19
+scenarios and 11 mutation controls (all rejected). No candidate, flash,
+boot or device access.

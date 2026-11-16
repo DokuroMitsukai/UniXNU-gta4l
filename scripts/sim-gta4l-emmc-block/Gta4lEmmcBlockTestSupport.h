@@ -16,6 +16,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/types.h>
+#include <sys/sysmacros.h>
 
 #include "Gta4lEmmc.h"
 #include "Gta4lEmmcPlatform.h"
@@ -45,7 +47,9 @@ typedef void *thread_t;
 #define kIOStorageAccessReaderWriter 0x03
 
 #define kIOReturnSuccess ((IOReturn)0)
+#define kIOReturnError ((IOReturn)0xe00002bcu)
 #define kIOReturnBadArgument ((IOReturn)0xe00002c2u)
+#define kIOReturnNotPermitted ((IOReturn)0xe00002e2u)
 #define kIOReturnMessageTooLarge ((IOReturn)0xe00002e1u)
 #define kIOReturnNotReady ((IOReturn)0xe00002d8u)
 #define kIOReturnNotOpen ((IOReturn)0xe00002cdu)
@@ -56,6 +60,18 @@ typedef void *thread_t;
 #define kIOReturnDMAError ((IOReturn)0xe00002d4u)
 #define kIOReturnUnsupported ((IOReturn)0xe00002c7u)
 #define kIOReturnTimeout ((IOReturn)0xe00002d6u)
+
+#define OSSafeReleaseNULL(object) \
+	do { \
+		if ((object) != 0) { \
+			(object)->release(); \
+			(object) = 0; \
+		} \
+	} while (0)
+
+#define gIOBSDNameKey "BSD Name"
+#define gIOBSDMajorKey "BSD Major"
+#define gIOBSDMinorKey "BSD Minor"
 
 #define OSTypeAlloc(type) (new type)
 
@@ -141,8 +157,14 @@ public:
 	inline static const int test_tag = 0;
 	explicit OSNumber(UInt64 value = 0) : value_(value) {}
 	const void *typeTag() const override { return &test_tag; }
+	static OSNumber *withNumber(UInt64 value, unsigned int bits = 32)
+	{
+		(void)bits;
+		return new OSNumber(value);
+	}
 	void setValue(UInt64 value) { value_ = value; }
 	UInt64 unsigned64BitValue() const { return value_; }
+	UInt32 unsigned32BitValue() const { return (UInt32)value_; }
 private:
 	UInt64 value_;
 };
@@ -152,6 +174,10 @@ public:
 	inline static const int test_tag = 0;
 	explicit OSString(const char *value = 0) : value_(value) {}
 	const void *typeTag() const override { return &test_tag; }
+	static OSString *withCString(const char *value)
+	{
+		return new OSString(value);
+	}
 	void setValue(const char *value) { value_ = value; }
 	const char *getCStringNoCopy() const { return value_; }
 	unsigned int getLength() const
@@ -166,11 +192,40 @@ class OSDictionary : public OSObject {
 public:
 	inline static const int test_tag = 0;
 	explicit OSDictionary(const char *className = 0)
-	    : class_name_(className) {}
+	    : class_name_(className), count_(0) {}
 	const void *typeTag() const override { return &test_tag; }
 	const char *className() const { return class_name_; }
+	static OSDictionary *withCapacity(unsigned int capacity)
+	{
+		(void)capacity;
+		return new OSDictionary();
+	}
+	bool setObject(const char *key, OSObject *value)
+	{
+		if ((key == 0) || (value == 0) || (count_ >= 4)) {
+			return false;
+		}
+		keys_[count_] = key;
+		values_[count_] = value;
+		count_++;
+		return true;
+	}
+	OSObject *getObject(const char *key) const
+	{
+		int index;
+
+		for (index = 0; index < count_; index++) {
+			if (strcmp(keys_[index], key) == 0) {
+				return values_[index];
+			}
+		}
+		return 0;
+	}
 private:
 	const char *class_name_;
+	const char *keys_[4];
+	OSObject *values_[4];
+	int count_;
 };
 
 class OSIterator : public OSObject {
@@ -699,6 +754,11 @@ struct gta4l_test_state {
 	uint32_t deadline_arm_calls;
 	uint32_t deadline_clear_calls;
 	uint32_t deadline_last_budget_ms;
+	/* Host verify-build geometry. The production image sizes and table
+	 * lengths are compile-time constants; the host fixture replaces them
+	 * with small signed windows so runVerify can execute unmodified. */
+	uint64_t verify_image_bytes[2];
+	uint32_t verify_table_bytes[2];
 };
 
 typedef void (*gta4l_test_partition_sample_fn)(uint32_t sample,
@@ -757,6 +817,15 @@ extern gta4l_test_state gta4l_test;
 typedef IOReturn (*gta4l_test_media_read_fn)(IOMedia *media, UInt64 byteStart,
     IOMemoryDescriptor *buffer, UInt64 *actualByteCount);
 extern gta4l_test_media_read_fn gta4l_test_media_read_hook;
+
+/* Host verify-read seam. The window's verified read path forwards the
+ * span to its owner through doAsyncReadWrite; the owner is the userdata
+ * driver, so this hook stands in for its transport and can complete,
+ * fail, shorten or skip the completion callback. */
+typedef IOReturn (*gta4l_test_owner_read_fn)(IOService *owner,
+    IOMemoryDescriptor *buffer, UInt64 blockNumber, UInt64 nblks,
+    IOStorageCompletion *completion);
+extern gta4l_test_owner_read_fn gta4l_test_owner_read_hook;
 
 typedef void (*gta4l_test_deblock_sample_fn)(uint32_t call, uint32_t phase);
 extern gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;

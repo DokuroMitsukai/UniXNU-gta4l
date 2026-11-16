@@ -947,6 +947,10 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_ROOT_OFF 0
 #define GTA4L_EMMC_BLOCK_ROOT_ON 1
 #define GTA4L_EMMC_BLOCK_ROOT_REFUSED (-1)
+/* A lifetime root read failure panics only while the root mount is still
+ * being established: before native_verified_block_root_authorized() has
+ * accepted the volume and inside this bounded window after publication. */
+#define GTA4L_EMMC_BLOCK_ROOT_PANIC_MS 120000u
 #define GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES 160u
 #define GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES 384u
 #define GTA4L_EMMC_BLOCK_VERIFY_KEY_BYTES 395u

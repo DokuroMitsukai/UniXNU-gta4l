@@ -9,6 +9,7 @@ static uint8_t gta4l_test_table_shadow[GTA4L_EMMC_BLOCK_DMA_TABLE_BYTES];
 static uint8_t gta4l_test_buffer_shadow[
     GTA4L_EMMC_BLOCK_BULK_CHUNK_BYTES + PAGE_SIZE];
 gta4l_test_media_read_fn gta4l_test_media_read_hook;
+gta4l_test_owner_read_fn gta4l_test_owner_read_hook;
 gta4l_test_deblock_sample_fn gta4l_test_deblock_hook;
 gta4l_test_breakup_sample_fn gta4l_test_breakup_hook;
 gta4l_test_multi_sample_fn gta4l_test_multi_hook;
@@ -35,6 +36,12 @@ gta4l_test_reset(void)
 	gta4l_test.boot_args = "";
 	gta4l_test.init_result = 0;
 	gta4l_test.capacity_blocks = 61071360u;
+	gta4l_test.verify_image_bytes[0] = 6077580800ull;
+	gta4l_test.verify_image_bytes[1] = 3303014400ull;
+	gta4l_test.verify_table_bytes[0] =
+	    GTA4L_EMMC_BLOCK_VERIFY_OS_TABLE_BYTES;
+	gta4l_test.verify_table_bytes[1] =
+	    GTA4L_EMMC_BLOCK_VERIFY_SYSTEMOS_TABLE_BYTES;
 	/* One valid bypass entry for the SDHC stream is the neutral gate
 	 * state; scenarios override the registers for the other rows. */
 	gta4l_test.smmu_regs[GTA4L_EMMC_BLOCK_SMMU_REG_ID0 / 4u] = 1u;
@@ -145,6 +152,7 @@ gta4l_test_reset(void)
 	gta4l_test.widthhold_media_block_delta = 0;
 	gta4l_test.widthhold_media_extra = 0;
 	gta4l_test_media_read_hook = 0;
+	gta4l_test_owner_read_hook = 0;
 	gta4l_test_deblock_hook = 0;
 	gta4l_test_breakup_hook = 0;
 	gta4l_test_multi_hook = 0;

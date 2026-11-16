@@ -41,8 +41,28 @@
 #include "Gta4lEmmcBlockPolicies.h"
 extern "C" const struct vr_crypto vr_xnu_crypto;
 #define GTA4L_EMMC_BLOCK_VERIFY_BUILT 1
+#elif defined(GTA4L_EMMC_BLOCK_HOST_TEST) && \
+    defined(GTA4L_EMMC_BLOCK_HOST_VERIFY) && GTA4L_EMMC_BLOCK_HOST_VERIFY
+#include "Gta4lEmmcBlockHostSha384.h"
+#include "verified_root.h"
+#include "Gta4lEmmcBlockPolicies.h"
+extern "C" const struct vr_crypto vr_xnu_crypto;
+#define GTA4L_EMMC_BLOCK_VERIFY_BUILT 1
 #else
 #define GTA4L_EMMC_BLOCK_VERIFY_BUILT 0
+#endif
+
+#if defined(GTA4L_EMMC_BLOCK_HOST_TEST) && GTA4L_EMMC_BLOCK_VERIFY_BUILT
+#define GTA4L_VERIFY_IMAGE_BYTES(index) \
+	(gta4l_test.verify_image_bytes[(index)])
+#define GTA4L_VERIFY_TABLE_BYTES(index) \
+	(gta4l_test.verify_table_bytes[(index)])
+#else
+#define GTA4L_VERIFY_IMAGE_BYTES(index) \
+	(((index) == 0u) ? 6077580800ull : 3303014400ull)
+#define GTA4L_VERIFY_TABLE_BYTES(index) \
+	(((index) == 0u) ? GTA4L_EMMC_BLOCK_VERIFY_OS_TABLE_BYTES : \
+	GTA4L_EMMC_BLOCK_VERIFY_SYSTEMOS_TABLE_BYTES)
 #endif
 
 #include "Gta4lEmmc.h"
@@ -653,6 +673,9 @@ public:
 #if GTA4L_EMMC_BLOCK_VERIFY_BUILT
 	bool verifiedWindowRead(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	    UInt64 nblks, IOReturn *status, UInt64 *actual);
+	bool lifetimeRootFailure(bool verificationMismatch, uint64_t block,
+	    IOReturn status);
+	void lifetimeRootOffline(void);
 #endif
 
 	IOReturn doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block,
@@ -1017,6 +1040,11 @@ private:
 	bool windowsMode = false;
 	bool verifyMode = false;
 	bool rootMode = false;
+	bool rootErrorLatched = false;
+	bool rootOfflineNotified = false;
+	uint32_t rootErrors = 0;
+	uint32_t rootRecoveries = 0;
+	uint64_t rootPublishedTicks = 0;
 	uint32_t liveErrors = 0;
 	uint32_t liveRecoveries = 0;
 	uint32_t liveNotified = 0;
@@ -3890,6 +3918,12 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 		if (windowOwner == nullptr) {
 			return kIOReturnNotReady;
 		}
+		if (buffer->getDirection() == kIODirectionOut) {
+			return kIOReturnNotWritable;
+		}
+		if (buffer->getDirection() != kIODirectionIn) {
+			return kIOReturnBadArgument;
+		}
 		if (!online) {
 			completion->action(completion->target,
 			    completion->parameter, kIOReturnNoMedia, 0);
@@ -3897,6 +3931,13 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 		}
 		if ((blockNumber >= (UInt64)capacityBlocks) ||
 		    (nblks > (UInt64)capacityBlocks - blockNumber)) {
+			return kIOReturnBadArgument;
+		}
+		if (nblks > GTA4L_EMMC_BLOCK_MAX_BLOCKS) {
+			return kIOReturnMessageTooLarge;
+		}
+		if ((UInt64)buffer->getLength() <
+		    nblks * GTA4L_EMMC_BLOCK_BYTES) {
 			return kIOReturnBadArgument;
 		}
 #ifdef GTA4L_EMMC_BLOCK_HOST_TEST
@@ -3915,6 +3956,15 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 				completion->action(completion->target,
 				    completion->parameter, verifyStatus,
 				    verifyActual);
+				return kIOReturnSuccess;
+			}
+			if (verifyMode || rootMode ||
+			    ((windowOwner != nullptr) &&
+			    (windowOwner->verifyMode ||
+			    windowOwner->rootMode))) {
+				completion->action(completion->target,
+				    completion->parameter,
+				    kIOReturnNotPermitted, 0);
 				return kIOReturnSuccess;
 			}
 		}
@@ -3947,6 +3997,12 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 	if (buffer->getDirection() != kIODirectionIn) {
 		return kIOReturnBadArgument;
 	}
+#ifdef GTA4L_EMMC_BLOCK_HOST_TEST
+	if (gta4l_test_owner_read_hook != nullptr) {
+		return gta4l_test_owner_read_hook(this, buffer, blockNumber,
+		    nblks, completion);
+	}
+#endif
 	if (gate == nullptr) {
 		return kIOReturnNotReady;
 	}
@@ -11579,6 +11635,7 @@ done:
 		 * before root mount. */
 		IOLockLock(reportLock);
 		reportDone = true;
+		rootPublishedTicks = gta4l_emmc_platform_counter();
 		IOLog("GTA4L-EMMC P5 ROOT: online=1 windows=%u verify=%u "
 		    "dma=%u\n", published, report.verify_valid,
 		    report.windows_dma);
@@ -11605,6 +11662,7 @@ struct gta4l_verified_window_state {
 };
 
 static struct gta4l_verified_window_state gta4l_verified_window[2];
+static bool gta4l_root_mount_seen;
 
 static void
 gta4l_verified_reset(void)
@@ -11622,6 +11680,7 @@ gta4l_verified_reset(void)
 		bzero(&gta4l_verified_window[index],
 		    sizeof(gta4l_verified_window[index]));
 	}
+	gta4l_root_mount_seen = false;
 }
 
 static struct gta4l_verified_window_state *
@@ -11681,6 +11740,11 @@ Gta4lEmmcBlock::verifiedWindowRead(IOMemoryDescriptor *buffer,
 	}
 	state = gta4l_verified_by_label(windowLabel);
 	if (state == nullptr) {
+		if (verifyMode || rootMode ||
+		    (windowOwner->verifyMode || windowOwner->rootMode)) {
+			*status = kIOReturnNotPermitted;
+			return true;
+		}
 		return false;
 	}
 	if ((nblks == 0u) ||
@@ -11744,8 +11808,19 @@ Gta4lEmmcBlock::verifiedWindowRead(IOMemoryDescriptor *buffer,
 		    (record.actual != spans[index].bytes)) {
 			IOLockUnlock(verifyLock);
 			*status = (result != kIOReturnSuccess) ? result :
-			    (record.called ? record.status :
-			    kIOReturnIOError);
+			    ((record.called &&
+			    (record.status != kIOReturnSuccess)) ?
+			    record.status : kIOReturnIOError);
+			if (lifetimeRootFailure(false, blockNumber, *status)) {
+				IOLockLock(verifyLock);
+				if (state->ready == 0u) {
+					IOLockUnlock(verifyLock);
+					*status = kIOReturnNoMedia;
+					return true;
+				}
+				index--;
+				continue;
+			}
 			return true;
 		}
 		if (vr_verify_block(&state->view,
@@ -11756,6 +11831,7 @@ Gta4lEmmcBlock::verifiedWindowRead(IOMemoryDescriptor *buffer,
 			online = false;
 			IOLockUnlock(verifyLock);
 			*status = kIOReturnNotPermitted;
+			(void)lifetimeRootFailure(true, blockNumber, *status);
 			return true;
 		}
 		copyStart = (start > spans[index].start) ?
@@ -11775,6 +11851,91 @@ Gta4lEmmcBlock::verifiedWindowRead(IOMemoryDescriptor *buffer,
 	*status = kIOReturnSuccess;
 	*actual = nblks * GTA4L_EMMC_BLOCK_BYTES;
 	return true;
+}
+
+static bool
+gta4l_lifetime_transport_error(IOReturn status)
+{
+	return (status == kIOReturnIOError) ||
+	    (status == kIOReturnTimeout) ||
+	    (status == kIOReturnDMAError);
+}
+
+bool
+Gta4lEmmcBlock::lifetimeRootFailure(bool verificationMismatch,
+    uint64_t block, IOReturn status)
+{
+	bool first = false;
+	bool retry = false;
+	uint32_t errors;
+
+	if ((windowOwner == nullptr) || !windowOwner->rootMode) {
+		return false;
+	}
+	IOLockLock(windowOwner->reportLock);
+	if (!windowOwner->rootErrorLatched) {
+		windowOwner->rootErrorLatched = true;
+		first = true;
+	}
+	windowOwner->rootErrors++;
+	errors = windowOwner->rootErrors;
+	IOLockUnlock(windowOwner->reportLock);
+	if (first) {
+		IOLog("GTA4L-EMMC P5 ROOT: error=1 block=%llu status=%d "
+		    "verify=%u\n", (unsigned long long)block, (int)status,
+		    verificationMismatch ? 1u : 0u);
+	}
+	if (!verificationMismatch &&
+	    gta4l_lifetime_transport_error(status) &&
+	    (windowOwner->rootRecoveries == 0u)) {
+		windowOwner->rootRecoveries++;
+		retry = windowOwner->speedRecover();
+		IOLog("GTA4L-EMMC P5 ROOT: recover=%u errors=%u\n",
+		    retry ? 1u : 0u, errors);
+	}
+	if (!retry) {
+		lifetimeRootOffline();
+	}
+	return retry;
+}
+
+void
+Gta4lEmmcBlock::lifetimeRootOffline(void)
+{
+	bool notify = false;
+	uint64_t elapsedMs = 0;
+	uint64_t hz;
+
+	if (windowOwner == nullptr) {
+		return;
+	}
+	IOLockLock(windowOwner->reportLock);
+	if (!windowOwner->rootOfflineNotified) {
+		windowOwner->rootOfflineNotified = true;
+		notify = true;
+	}
+	IOLockUnlock(windowOwner->reportLock);
+	windowOwner->online = false;
+	online = false;
+	if (notify) {
+		windowOwner->notifyOfflineOnce();
+	}
+	if (windowOwner->rootPublishedTicks != 0u) {
+		hz = gta4l_emmc_platform_counter_hz();
+		if (hz != 0u) {
+			elapsedMs = ((gta4l_emmc_platform_counter() -
+			    windowOwner->rootPublishedTicks) * 1000u) / hz;
+		}
+	}
+	IOLog("GTA4L-EMMC P5 ROOT: offline=1 errors=%u recoveries=%u "
+	    "elapsed=%llu\n", windowOwner->rootErrors,
+	    windowOwner->rootRecoveries, (unsigned long long)elapsedMs);
+	if (gta4l_root_mount_seen) {
+		return;
+	}
+	if (elapsedMs < GTA4L_EMMC_BLOCK_ROOT_PANIC_MS) {
+		windowOwner->panicWithReportNoGate();
+	}
 }
 #endif
 
@@ -11895,13 +12056,6 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 	uint64_t verifyStart = gta4l_emmc_platform_counter();
 	uint64_t verifyHz = gta4l_emmc_platform_counter_hz();
 	static const char *labels[2] = { "OS", "SystemOS" };
-	static const uint64_t imageBytes[2] = {
-		6077580800ull, 3303014400ull
-	};
-	static const uint32_t tableBytes[2] = {
-		GTA4L_EMMC_BLOCK_VERIFY_OS_TABLE_BYTES,
-		GTA4L_EMMC_BLOCK_VERIFY_SYSTEMOS_TABLE_BYTES
-	};
 	uint8_t *chunk = nullptr;
 
 	gta4l_verified_reset();
@@ -11931,7 +12085,7 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 		uint64_t offset;
 		uint32_t total = GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES +
 		    GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES +
-		    tableBytes[index];
+		    GTA4L_VERIFY_TABLE_BYTES(index);
 		uint8_t *envelope;
 		struct vr_view view;
 		int status;
@@ -11946,7 +12100,7 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 			}
 		}
 		if ((object == nullptr) ||
-		    (object->size != tableBytes[index]) ||
+		    (object->size != GTA4L_VERIFY_TABLE_BYTES(index)) ||
 		    (object->block_size !=
 		    GTA4L_EMMC_BLOCK_WINDOWS_OBJECT_BLOCK_SIZE)) {
 			reason = GTA4L_EMMC_BLOCK_VERIFY_REASON_OBJECT;
@@ -12052,7 +12206,7 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 		    &view);
 		openTicks += gta4l_emmc_platform_counter() - openStart;
 		if ((status != VR_OK) ||
-		    (view.image_bytes != imageBytes[index]) ||
+		    (view.image_bytes != GTA4L_VERIFY_IMAGE_BYTES(index)) ||
 		    (memcmp(view.volume_uuid, expectedUuid,
 		    sizeof(expectedUuid)) != 0)) {
 			IOFree(envelope, total);
@@ -12072,7 +12226,7 @@ Gta4lEmmcBlock::runVerify(IOMedia *media,
 		gta4l_verified_window[index].signature = signature;
 		gta4l_verified_window[index].envelope = envelope;
 		gta4l_verified_window[index].table_bytes =
-		    tableBytes[index];
+		    GTA4L_VERIFY_TABLE_BYTES(index);
 		gta4l_verified_window[index].blocks = view.block_count;
 		gta4l_verified_window[index].image_bytes =
 		    view.image_bytes;
@@ -13266,7 +13420,7 @@ Gta4lEmmcBlock::notifyOfflineOnce()
 	 * `reportLock` only. The absent-token 1-bit path and the widthhold
 	 * path keep their prior behavior, and the shared latch suppresses a
 	 * duplicate notification when both callers race. */
-	if (!widthpubMode && !speedMode && !bulkMode) {
+	if (!widthpubMode && !speedMode && !bulkMode && !rootMode) {
 		return;
 	}
 	IOLockLock(reportLock);
@@ -14183,7 +14337,11 @@ native_verified_block_root_authorized(dev_t device)
 	identity = OSDynamicCast(OSString, media->getProperty("UUID"));
 	state = (identity == nullptr) ? nullptr :
 	    gta4l_verified_by_uuid(identity->getCStringNoCopy());
-	return gta4l_verified_media_for_state(media, state) ? 1 : 0;
+	if (!gta4l_verified_media_for_state(media, state)) {
+		return 0;
+	}
+	gta4l_root_mount_seen = true;
+	return 1;
 }
 
 extern "C" int
