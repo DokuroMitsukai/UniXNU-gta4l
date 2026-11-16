@@ -9655,4 +9655,9 @@ suite is green (exit=0, 297 PASS lines, adapter 526 scenarios, core
 47/35). The read-only TWRP preflight matched the v2 manifest
 `3ddf4d4f…`, `OS.vroot 5f14cb46…`, `SystemOS.vroot e3cbe583…` and the
 unchanged protected partitions. The owner approved the BOOT-only flash
-of `d373c0d5…`; it has not been flashed or booted yet.
+of `d373c0d5…`. It was flashed to p69 on 2026-11-16: read-back image
+region `d373c0d5…`, first 4 KiB `32ad9b1f…`, the following 4 KiB zero
+(`ad7facb2…`), p69 full `48e227dd…`; RECOVERY `14e11370…`, EFS
+`51fa824c…` and sec_efs `3a265d58…` are unchanged, battery 100 %. The
+single verdict boot is the remaining device step; the image must not be
+booted twice.
