@@ -9690,3 +9690,7 @@ the sampled `verifyRange`, so published-window reads are not verified
 per request, and `native_ufs_block_authenticates` is not exported.
 S5c″ covers the measurement, the redundancy cut, per-request
 verification, the missing export and the checker.
+`scripts/check-gta4l-windows-evidence.py` now parses the success VERIFY
+line, recomputes both envelope SHA-384 prefixes from the policy
+directory, requires `valid=1 reason=0`, 1,025 blocks, `dma=1` and
+`ms` ≤ 12,000, and rejects the S5c reason=3 line.

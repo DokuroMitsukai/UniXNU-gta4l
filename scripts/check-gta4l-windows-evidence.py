@@ -8,8 +8,11 @@ and both window volume UUIDs (OS `uuid`, SystemOS `suuid`). This host-only
 checker recomputes the manifest digest and every window digest from the
 flashed image, parses the first window's GPT and APFS container UUID, and
 requires the publication verdict (pub=2 phase=5 perr=0). A pre-write
-report must instead show valid=0 reason=2 with no window fields. It never
-reads a device.
+report must instead show valid=0 reason=2 with no window fields. A
+report that carries a VERIFY line is checked against the enrolled policy
+envelopes: valid=1 reason=0 with 1,025 blocks, dma=1, the recomputed
+SHA-384 prefixes and ms inside the 12,000 ms budget; --expect-verify
+makes the line mandatory. It never reads a device.
 """
 import argparse
 import hashlib
@@ -19,6 +22,7 @@ import tempfile
 from pathlib import Path
 
 LABEL = 'GTA4L-EMMC P5 WINDOWS: '
+VERIFY_LABEL = 'GTA4L-EMMC P5 VERIFY: '
 HEADER_BYTES = 4096
 EDGE_BYTES = 1 << 20
 NAME_BYTES = 32
@@ -44,6 +48,11 @@ VALID_FIELDS = (
 # image; allow up to four windows.
 MAX_READ_CHUNKS = 2 * 4 * (1 << 20) // (32 << 10) + 1
 WINDOW_FIELDS = ('off', 'size', 'hd0', 'hd1')
+VERIFY_FIELDS = ('valid', 'reason', 'os', 'sysos', 'blocks', 'ms',
+                 'fail', 'dma', 'osha', 'ssha')
+VERIFY_FAIL_FIELDS = ('vobj', 'voff', 'vlen', 'vio', 'vact')
+VERIFY_BLOCKS = 1025
+VERIFY_BUDGET_MS = 12000
 
 
 def u32(data, offset):
@@ -201,8 +210,11 @@ def check(line, expected):
         fields, windows = parse_line(line)
     except ValueError as error:
         return [str(error)]
-    required = (set(VALID_FIELDS) - {'dma'}) | {
-        'apfs', 'cid', 'uuid', 'suuid'}
+    required = set(VALID_FIELDS) | {'apfs', 'cid', 'uuid', 'suuid'}
+    if 'dma' in fields:
+        required.add('dma')
+    else:
+        required.discard('dma')
     if set(fields) != required:
         errors.append(f'fields {sorted(fields)!r} do not match '
                       f'{sorted(required)!r}')
@@ -242,6 +254,73 @@ def check(line, expected):
                 errors.append(f'w{index}.{key}={got.get(key)!r}, '
                               f'expected {value!r}')
     return errors
+
+
+def parse_verify(line):
+    """Return the VERIFY fields or raise ValueError."""
+    if not line.startswith(VERIFY_LABEL):
+        raise ValueError('missing VERIFY label')
+    fields = {}
+    allowed = set(VERIFY_FIELDS) | set(VERIFY_FAIL_FIELDS)
+    for token in line[len(VERIFY_LABEL):].split():
+        key, value = token.split('=', 1) if '=' in token else (token, None)
+        if key not in allowed:
+            raise ValueError(f'unknown VERIFY field {key!r}')
+        if value is None:
+            raise ValueError(f'malformed VERIFY token {token!r}')
+        if key in fields:
+            raise ValueError(f'duplicate VERIFY field {key!r}')
+        fields[key] = value
+    return fields
+
+
+def check_verify(line, expected_osha, expected_ssha,
+    budget_ms=VERIFY_BUDGET_MS):
+    """Check the success VERIFY line against the enrolled policies."""
+    errors = []
+    try:
+        fields = parse_verify(line)
+    except ValueError as error:
+        return [str(error)]
+    fixed = {
+        'valid': '1',
+        'reason': '0',
+        'os': '1',
+        'sysos': '1',
+        'blocks': str(VERIFY_BLOCKS),
+        'fail': '4294967295',
+        'dma': '1',
+        'osha': expected_osha,
+        'ssha': expected_ssha,
+    }
+    required = set(VERIFY_FIELDS)
+    if set(fields) != required:
+        errors.append(f'VERIFY fields {sorted(fields)!r} do not match '
+                      f'{sorted(required)!r}')
+    for key, value in fixed.items():
+        if fields.get(key) != value:
+            errors.append(f'VERIFY {key}={fields.get(key)!r}, '
+                          f'expected {value!r}')
+    ms = fields.get('ms')
+    if ms is None or not ms.isdigit():
+        errors.append(f'VERIFY ms={ms!r}, expected milliseconds')
+    elif int(ms) > budget_ms:
+        errors.append(f'VERIFY ms={ms}, above the {budget_ms} ms budget')
+    return errors
+
+
+def policy_digests(directory):
+    """Return the SHA-384 prefixes of both enrolled envelopes."""
+    prefixes = []
+    for name in ('OS', 'SystemOS'):
+        header = (directory / name / 'header.bin').read_bytes()
+        signature = (directory / name / 'signature.bin').read_bytes()
+        table = (directory / 'objects' / f'{name}.vroot').read_bytes()
+        if len(header) != 160 or len(signature) != 384:
+            raise ValueError(f'{name} policy header/signature geometry')
+        prefixes.append(hashlib.sha384(
+            header + signature + table).hexdigest()[:32])
+    return prefixes[0], prefixes[1]
 
 
 def find_apfs_container(chunk):
@@ -456,6 +535,34 @@ def self_test():
             (pre.replace('rms=0 rch=0', 'rms=1000 rch=74'),
              'pre read stats')):
         assert check_pre_write(text), f'{label} was accepted'
+    osha, ssha = '1' * 32, '2' * 32
+    verify = (f'{VERIFY_LABEL}valid=1 reason=0 os=1 sysos=1 blocks=1025 '
+              f'ms=10968 fail=4294967295 dma=1 osha={osha} ssha={ssha}')
+    assert not check_verify(verify, osha, ssha), \
+        check_verify(verify, osha, ssha)
+    for text, label in (
+            (verify.replace('valid=1', 'valid=0'), 'verify valid'),
+            (verify.replace('reason=0', 'reason=3'), 'verify reason'),
+            (verify.replace('os=1', 'os=0'), 'verify os'),
+            (verify.replace('sysos=1', 'sysos=0'), 'verify sysos'),
+            (verify.replace('blocks=1025', 'blocks=1024'), 'verify blocks'),
+            (verify.replace('ms=10968', 'ms=12001'), 'verify budget'),
+            (verify.replace('fail=4294967295', 'fail=7'), 'verify fail'),
+            (verify.replace('dma=1', 'dma=0'), 'verify dma'),
+            (verify.replace('osha=' + osha, 'osha=' + '0' * 32),
+             'verify osha'),
+            (verify.replace('ssha=' + ssha, 'ssha=' + '0' * 32),
+             'verify ssha'),
+            (verify + ' vobj=0', 'verify failure field on success'),
+            (verify + ' extra=1', 'verify extra field'),
+            (verify.replace('ms=10968', 'ms=x'), 'verify ms type')):
+        assert check_verify(text, osha, ssha), f'{label} was accepted'
+    failure = (f'{VERIFY_LABEL}valid=0 reason=3 os=0 sysos=0 blocks=0 '
+               f'ms=16236 fail=4294967295 dma=0 vobj=0 voff=47480832 '
+               f'vlen=288 vio=e00002c2 vact=0 osha=' + '0' * 32 +
+               f' ssha=' + '0' * 32)
+    assert check_verify(failure, osha, ssha), \
+        'the S5c reason=3 line was accepted'
     with tempfile.TemporaryDirectory(prefix='gta4l-windows-check-') as raw:
         image = Path(raw) / 'userdata.img'
         total = 8 << 20
@@ -552,6 +659,10 @@ def main():
     parser.add_argument('--image', type=Path)
     parser.add_argument('--report', type=Path)
     parser.add_argument('--line')
+    parser.add_argument('--policies', type=Path,
+                        default=Path(__file__).resolve().parents[1] /
+                        'out/gta4l/s5-policies')
+    parser.add_argument('--expect-verify', action='store_true')
     parser.add_argument('--pre-write', action='store_true')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
@@ -580,12 +691,28 @@ def main():
         expected['volume'] = uuid_bytes(VOLUME_UUID).hex()
         expected['system_volume'] = uuid_bytes(SYSTEM_VOLUME_UUID).hex()
         errors = check(line, expected)
+    verify_lines = [line for line in text.splitlines()
+                    if line.startswith(VERIFY_LABEL)]
+    if args.expect_verify and not verify_lines:
+        errors.append('missing VERIFY line')
+    if verify_lines:
+        if len(verify_lines) != 1:
+            errors.append(f'expected one VERIFY line, found '
+                          f'{len(verify_lines)}')
+        else:
+            try:
+                osha, ssha = policy_digests(args.policies)
+            except (OSError, ValueError) as error:
+                print(f'FAIL: policies: {error}')
+                return 1
+            errors += check_verify(verify_lines[0].strip(), osha, ssha)
     for error in errors:
         print(f'FAIL: {error}')
     if errors:
         return 1
     print('PASS: WINDOWS report matches the image' +
-          (' (pre-write)' if args.pre_write else ''))
+          (' (pre-write)' if args.pre_write else '') +
+          (' and VERIFY matches the policies' if verify_lines else ''))
     return 0
 
 
