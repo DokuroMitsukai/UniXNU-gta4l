@@ -1016,6 +1016,7 @@ private:
 	bool slowMode = false;
 	bool windowsMode = false;
 	bool verifyMode = false;
+	bool rootMode = false;
 	uint32_t liveErrors = 0;
 	uint32_t liveRecoveries = 0;
 	uint32_t liveNotified = 0;
@@ -1532,6 +1533,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 	uint32_t slowTokens;
 	uint32_t windowsTokens;
 	uint32_t verifyTokens;
+	uint32_t rootTokens;
 	int value = 0;
 	int partValue = 0;
 	int partcmpValue = 0;
@@ -1568,6 +1570,9 @@ Gta4lEmmcBlock::start(IOService *provider)
 	int windowsParsed;
 	int verifyValue = 0;
 	int verifyParsed;
+	int rootValue = 0;
+	int rootParsed;
+	int root;
 	int mode;
 	int partobs;
 	int partcmp;
@@ -1629,6 +1634,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    GTA4L_EMMC_BLOCK_WINDOWS_ARG);
 	verifyTokens = gta4l_emmc_block_token_count(arguments,
 	    GTA4L_EMMC_BLOCK_VERIFY_ARG);
+	rootTokens = gta4l_emmc_block_token_count(arguments,
+	    GTA4L_EMMC_BLOCK_ROOT_ARG);
 	conflictTokens = gta4l_emmc_block_token_count(arguments,
 	    "gta4l-sdhci-audit") +
 	    gta4l_emmc_block_token_count(arguments, "gta4l-sdhci-snapshot") +
@@ -1723,6 +1730,11 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    &verifyValue, sizeof(verifyValue));
 	if ((verifyParsed == 0) && (verifyTokens != 0)) {
 		verifyValue = -1;
+	}
+	rootParsed = PE_parse_boot_argn(GTA4L_EMMC_BLOCK_ROOT_ARG,
+	    &rootValue, sizeof(rootValue));
+	if ((rootParsed == 0) && (rootTokens != 0)) {
+		rootValue = -1;
 	}
 	mode = gta4l_emmc_block_mode_select(blockTokens != 0, value,
 	    probeTokens != 0, conflictTokens != 0, blockTokens > 1u);
@@ -2544,6 +2556,42 @@ Gta4lEmmcBlock::start(IOService *provider)
 		}
 		verifyMode = true;
 	}
+	root = gta4l_emmc_block_root_select(
+	    rootTokens != 0, rootValue, rootTokens > 1u,
+	    1, value, windowsMode ? 1 : 0, verifyMode ? 1 : 0,
+	    dmaMode ? 1 : 0,
+	    (partobsTokens != 0u) || (partcmpTokens != 0u) ||
+	    (partreadTokens != 0u) || (deblockTokens != 0u) ||
+	    (breakupTokens != 0u) || (sweepTokens != 0u) ||
+	    (consumeTokens != 0u) || (widthTokens != 0u) ||
+	    (widthholdTokens != 0u) || (widthpubTokens != 0u) ||
+	    (speedTokens != 0u) || (bulkTokens != 0u) ||
+	    (liveTokens != 0u) || (slowTokens != 0u) ||
+	    (conflictTokens != 0u));
+	if (root == GTA4L_EMMC_BLOCK_ROOT_REFUSED) {
+		if (rootTokens > 1u) {
+			IOLog("GTA4L-EMMC P5 REFUSED: duplicate "
+			    "gta4l-emmc-root token\n");
+		} else if (value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-root "
+			    "requires gta4l-emmc-block=3\n");
+		} else if (!windowsMode || !verifyMode) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-root "
+			    "requires gta4l-emmc-windows=1 and "
+			    "gta4l-emmc-verify=1\n");
+		} else if (!dmaMode) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-root "
+			    "requires gta4l-emmc-dma=1\n");
+		} else if (rootValue != (int)GTA4L_EMMC_BLOCK_ROOT_ON) {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-root "
+			    "value must be 1\n");
+		} else {
+			IOLog("GTA4L-EMMC P5 REFUSED: gta4l-emmc-root "
+			    "conflicts with another diagnostic selector\n");
+		}
+		return false;
+	}
+	rootMode = (root == GTA4L_EMMC_BLOCK_ROOT_ON);
 	if (widthMode) {
 		/* The reference and observed copies never alias: the reference
 		 * is filled only by the pre-switch 1-bit read, the observed
@@ -11524,6 +11572,19 @@ done:
 		windowsUserdata->release();
 		windowsUserdata = nullptr;
 	}
+	if (rootMode && (reason == GTA4L_EMMC_BLOCK_WINDOWS_REASON_NONE) &&
+	    (publishError == GTA4L_EMMC_BLOCK_WINDOWS_PUBLISH_NONE)) {
+		/* Lifetime mode: the verified windows stay online and the boot
+		 * continues. The terminal panic is reserved for a failure
+		 * before root mount. */
+		IOLockLock(reportLock);
+		reportDone = true;
+		IOLog("GTA4L-EMMC P5 ROOT: online=1 windows=%u verify=%u "
+		    "dma=%u\n", published, report.verify_valid,
+		    report.windows_dma);
+		IOLockUnlock(reportLock);
+		return false;
+	}
 	panicWithReport();
 	return false;
 }
@@ -14207,6 +14268,12 @@ native_verified_block_manifest_sha384(dev_t device, const char *uuid,
 	}
 	memcpy(digest, state->manifest_sha384, 48u);
 	return 1;
+}
+extern "C" void
+native_verified_root_probe(void)
+{
+	IOLog("GTA4L-EMMC P5 ROOT: offline-owner-root-check is covered by "
+	    "gta4l-emmc-verify=1\n");
 }
 #else
 extern "C" int native_verified_block_root_authorized(dev_t)

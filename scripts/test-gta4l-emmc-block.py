@@ -2744,6 +2744,13 @@ def check_adapter_source():
         'a published window must verify every span and latch a mismatch'
     assert 'verifiedWindowRead(buffer, blockNumber, nblks' in adapter, \
         'the window role must route reads through the verified path'
+    assert 'gta4l_emmc_block_root_select' in policy and \
+        'gta4l_emmc_block_root_select(' in adapter and \
+        'GTA4L_EMMC_BLOCK_ROOT_ARG' in policy_header, \
+        'the lifetime root token must use the shared selector'
+    assert 'GTA4L-EMMC P5 ROOT: online=1 windows=' in adapter and \
+        'rootMode && (reason ==' in adapter, \
+        'lifetime root success must stay online instead of panicking'
     assert 'verify_load_ms' in policy_header and \
         'verify_hash_ms' in policy_header and \
         'verify_open_ms' in policy_header and \

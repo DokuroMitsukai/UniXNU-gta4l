@@ -9723,3 +9723,46 @@ the IOKit wiring.
 XNU source and the offline-owner patch series have no consumer (the
 symbol appears in neither the built kernel nor the patches). Adding an
 unreferenced weak export would not authenticate anything.
+
+### 5.4.6 S5d shared gate and lifetime mode (2026-11-16, host-only)
+
+The shared UniXNU repository gained two changes on branch
+`gta4l-s5d-verified-root-provider`:
+
+- `d20cfc5`: `XNU_VERIFIED_BLOCK_PROVIDER` selects `virtio` or
+  `gta4l-emmc` (inferred from the enabled transport when unset).
+  `XNU_OWNER_ROOT_TRUST` now requires a provider instead of VirtIO
+  specifically, and the gta4l provider does not link the VirtIO probe
+  archive because the block driver supplies the exports.
+- `278cd83`: the owner flags are `-D` values on patched
+  `bsd_init`/`kern_exec`/`vm_unix`/`IOKitBSDInit` sources. Make does not
+  track a changed `-D` set, so a flag change silently reused the stale
+  objects. The script now drops those objects, the linked kernel and the
+  personality table when the flag identity moves.
+
+The gta4l defconfig enables `XNU_VERIFIED_ROOT_PROBE`,
+`XNU_OWNER_ROOT_AUDIT`, `XNU_OWNER_ROOT_TRUST` and
+`XNU_VERIFIED_BLOCK_PROVIDER="gta4l-emmc"`. The build reads the
+output-tree `.config`, not `configs/gta4l_defconfig`; after editing the
+defconfig, run `./unixnu defconfig gta4l_defconfig -D ../UniXNU-gta4l`
+to copy it before building. The S5d rebuild did this, and the compiled
+`bsd_init.o` records all three flags as 1.
+
+The driver adds the lifetime token `gta4l-emmc-root=1`. It requires
+`gta4l-emmc-block=3`, `gta4l-emmc-windows=1`, `gta4l-emmc-verify=1` and
+`gta4l-emmc-dma=1`, and conflicts with every other diagnostic selector.
+On a successful verified publication the rung does not take the terminal
+panic: it sets `reportDone`, logs
+`GTA4L-EMMC P5 ROOT: online=1 windows=2 verify=1 dma=1` and returns, so
+the published windows stay online for root mount. A failure before root
+mount still panics with the report. The shared probe entry point
+`native_verified_root_probe` is a logging stub; the gta4l verify rung is
+the real path.
+
+Kernel `d5d463c3…` (51,679,232 bytes; archive `228577ac…`, qualified).
+The new-kernel storage-ABI audit
+`out/gta4l/storage-abi-d5d463c3` is PASS: vtable
+`fffffff005cb44c0`, metaclass `fffffff006add1d0`, service
+`fffffff007b4b5b8`, 190 ordinary slots and 181 kernel bindings. The block
+suite is green (exit=0, 297 PASS lines, adapter 526, core 47/35). No
+candidate, flash, boot or device access.

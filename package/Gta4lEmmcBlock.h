@@ -943,6 +943,10 @@ struct gta4l_emmc_block_part {
  * Gta4lEmmcBlockPolicies.h; the tables stay in userdata because they do not
  * fit the kernel or BOOT. `verify` selects the VERIFY line. */
 #define GTA4L_EMMC_BLOCK_VERIFY_ARG "gta4l-emmc-verify"
+#define GTA4L_EMMC_BLOCK_ROOT_ARG "gta4l-emmc-root"
+#define GTA4L_EMMC_BLOCK_ROOT_OFF 0
+#define GTA4L_EMMC_BLOCK_ROOT_ON 1
+#define GTA4L_EMMC_BLOCK_ROOT_REFUSED (-1)
 #define GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES 160u
 #define GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES 384u
 #define GTA4L_EMMC_BLOCK_VERIFY_KEY_BYTES 395u
@@ -2012,6 +2016,14 @@ struct gta4l_emmc_block_verify_span {
 uint32_t gta4l_emmc_block_verify_spans(uint64_t image_bytes,
     uint64_t start, uint64_t end,
     struct gta4l_emmc_block_verify_span *spans, uint32_t max_spans);
+
+/* Select the S5 lifetime root rung. Valid only with exactly one block=3
+ * token, the windows, verify and DMA tokens, value 1, and no other
+ * diagnostic selector. */
+int gta4l_emmc_block_root_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int windows_selected, int verify_selected, int dma_selected,
+    int other_selected);
 
 /* Select the S4 windows rung. Valid only with exactly one block=3 token,
  * value 1, and no other mode token. */

@@ -16,3 +16,10 @@ CONFIG_XNU_DT_PANIC_REGION=y
 CONFIG_XNU_SOURCE_CORECRYPTO14=y
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
 CONFIG_XNU_OWNER_DATA_VOLUME_UUID="04769D26-2CA0-4825-B443-E2E5F88300F2"
+# S5d: the owner root path uses the gta4l eMMC window provider, not VirtIO.
+# The block archive forced-loaded above supplies native_verified_block_*;
+# the shared gate skips the VirtIO probe archive for this provider.
+CONFIG_XNU_VERIFIED_ROOT_PROBE=y
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y
+CONFIG_XNU_VERIFIED_BLOCK_PROVIDER="gta4l-emmc"

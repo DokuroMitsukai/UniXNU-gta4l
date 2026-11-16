@@ -13819,6 +13819,24 @@ scenario_policy(void)
 	    25804800ull) == 0u);
 	CHECK(gta4l_emmc_block_verify_request_bytes(1ull, 0u) == 512u);
 	CHECK(gta4l_emmc_block_verify_request_bytes(0ull, 0u) == 0u);
+	CHECK(gta4l_emmc_block_root_select(0, 0, 0, 1, 3, 1, 1, 1,
+	    0) == GTA4L_EMMC_BLOCK_ROOT_OFF);
+	CHECK(gta4l_emmc_block_root_select(1, 1, 0, 1, 3, 1, 1, 1,
+	    0) == GTA4L_EMMC_BLOCK_ROOT_ON);
+	CHECK(gta4l_emmc_block_root_select(1, 1, 0, 1, 3, 0, 1, 1,
+	    0) == GTA4L_EMMC_BLOCK_ROOT_REFUSED);
+	CHECK(gta4l_emmc_block_root_select(1, 1, 0, 1, 3, 1, 0, 1,
+	    0) == GTA4L_EMMC_BLOCK_ROOT_REFUSED);
+	CHECK(gta4l_emmc_block_root_select(1, 1, 0, 1, 3, 1, 1, 0,
+	    0) == GTA4L_EMMC_BLOCK_ROOT_REFUSED);
+	CHECK(gta4l_emmc_block_root_select(1, 1, 0, 1, 1, 1, 1, 1,
+	    0) == GTA4L_EMMC_BLOCK_ROOT_REFUSED);
+	CHECK(gta4l_emmc_block_root_select(1, 1, 1, 1, 3, 1, 1, 1,
+	    0) == GTA4L_EMMC_BLOCK_ROOT_REFUSED);
+	CHECK(gta4l_emmc_block_root_select(1, 0, 0, 1, 3, 1, 1, 1,
+	    0) == GTA4L_EMMC_BLOCK_ROOT_REFUSED);
+	CHECK(gta4l_emmc_block_root_select(1, 1, 0, 1, 3, 1, 1, 1,
+	    1) == GTA4L_EMMC_BLOCK_ROOT_REFUSED);
 	CHECK(gta4l_emmc_block_verify_lba(9382658048ull, 0ull) ==
 	    33528832ull);
 	CHECK(gta4l_emmc_block_verify_lba(9382658048ull, 47480832ull) ==
