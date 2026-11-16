@@ -9659,5 +9659,34 @@ of `d373c0d5…`. It was flashed to p69 on 2026-11-16: read-back image
 region `d373c0d5…`, first 4 KiB `32ad9b1f…`, the following 4 KiB zero
 (`ad7facb2…`), p69 full `48e227dd…`; RECOVERY `14e11370…`, EFS
 `51fa824c…` and sec_efs `3a265d58…` are unchanged, battery 100 %. The
-single verdict boot is the remaining device step; the image must not be
-booted twice.
+single verdict boot was taken on 2026-11-16 and passed:
+
+- `VERIFY valid=1 reason=0 os=1 sysos=1 blocks=1025 ms=10968
+  fail=4294967295 dma=1 osha=0fb9adee2acc4a733c16c3507c2d7781
+  ssha=d3257aae0a6a65528a5a80a5f0cf63e0`. Both prefixes equal the host
+  SHA-384 of the enrolled envelopes.
+- `WINDOWS valid=1 reason=0 count=2 pub=2 phase=5 perr=0
+  wfail=4294967295 wdiag=15 wpoll=2 wtime=100`, unchanged edge digests,
+  `rms=472 rch=129 dma=1`.
+- `SMMU st=3 dec=cb-off`, `SMMUCB fsr/pfsr=00000400` (FORMAT only),
+  `pgfsr=0`; `DRV fails=0`, `XFER cfail=0 sfail=0`.
+- Post-boot TWRP re-measure: p69 region `d373c0d5…`, manifest
+  `3ddf4d4f…`, `OS.vroot 5f14cb46…`, `SystemOS.vroot e3cbe583…`,
+  RECOVERY/EFS/sec_efs unchanged.
+
+The boot is consumed and must not be repeated. What it proves is the v2
+table load, both `vr_open` calls, the sampled edge verification and the
+DMA-backed window reads on one boot; it does not prove verified service
+of arbitrary window reads, root mount, lifetime behaviour or
+repeatability.
+
+The timing leaves 1,032 ms of the 12,000 ms budget (8.6 %). DMA moves
+the 73.3 MB of tables in about 2.6 s, so about 8 s is CPU work. The
+loader makes three full passes over each table: the driver SHA-256
+against the manifest entry, `vr_open`'s signed table hash and the
+report SHA-384. No per-phase timer exists, so this split is inferred.
+Two source gaps remain before S5d/S5e: `vr_verify_block` runs only in
+the sampled `verifyRange`, so published-window reads are not verified
+per request, and `native_ufs_block_authenticates` is not exported.
+S5c″ covers the measurement, the redundancy cut, per-request
+verification, the missing export and the checker.
