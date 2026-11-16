@@ -1996,6 +1996,23 @@ uint32_t gta4l_emmc_block_verify_request_bytes(uint64_t object_bytes,
 uint64_t gta4l_emmc_block_verify_lba(uint64_t object_offset,
     uint64_t offset);
 
+/* One verified 4096-byte span of a window. The final span of an image
+ * whose size is not a 4096 multiple is shorter (the OS window ends 1,536
+ * bytes into its last policy block). */
+struct gta4l_emmc_block_verify_span {
+	uint64_t start;
+	uint32_t bytes;
+};
+
+#define GTA4L_EMMC_BLOCK_VERIFY_MAX_SPANS 9u
+
+/* Enumerate the spans covering [start, end) of a window. Returns the
+ * span count, or 0 when the range is empty/outside the image or needs
+ * more than max_spans. */
+uint32_t gta4l_emmc_block_verify_spans(uint64_t image_bytes,
+    uint64_t start, uint64_t end,
+    struct gta4l_emmc_block_verify_span *spans, uint32_t max_spans);
+
 /* Select the S4 windows rung. Valid only with exactly one block=3 token,
  * value 1, and no other mode token. */
 int gta4l_emmc_block_windows_select(int token_present, int token_value,

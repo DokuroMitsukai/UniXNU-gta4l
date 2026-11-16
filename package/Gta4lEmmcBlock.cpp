@@ -51,6 +51,12 @@ extern "C" const struct vr_crypto vr_xnu_crypto;
 #include "Gta4lEmmcBlockCore.h"
 #include "Gta4lEmmcBlockSha.h"
 
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+struct gta4l_verified_window_state;
+static struct gta4l_verified_window_state *gta4l_verified_by_label(
+    const char *label);
+#endif
+
 #ifndef GTA4L_EMMC_BLOCK_HOST_TEST
 extern "C" kern_return_t kernel_thread_start(void (*)(void *, wait_result_t),
     void *, thread_t *);
@@ -644,6 +650,10 @@ public:
 	void stop(IOService *provider) override;
 	void free() override;
 	const char *windowName(void) const { return windowLabel; }
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+	bool verifiedWindowRead(IOMemoryDescriptor *buffer, UInt64 blockNumber,
+	    UInt64 nblks, IOReturn *status, UInt64 *actual);
+#endif
 
 	IOReturn doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block,
 	    UInt64 nblks, IOStorageAttributes *attributes,
@@ -1093,6 +1103,8 @@ private:
 	uint32_t windowsReadChunks = 0;
 	bool windowRole = false;
 	Gta4lEmmcBlock *windowOwner = nullptr;
+	IOLock *verifyLock = nullptr;
+	uint8_t *verifiedSpan = nullptr;
 	uint64_t windowBaseBlock = 0;
 	char windowLabel[GTA4L_EMMC_BLOCK_WINDOWS_NAME_BYTES] = {};
 	uint64_t bulkReadStart = 0;
@@ -3545,6 +3557,25 @@ Gta4lEmmcBlock::configureWindow(Gta4lEmmcBlock *owner, const char *name,
 	windowBaseBlock = absolute / GTA4L_EMMC_BLOCK_BYTES;
 	capacityBlocks = (uint32_t)(bytes / GTA4L_EMMC_BLOCK_BYTES);
 	windowRole = true;
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+	verifyLock = IOLockAlloc();
+	verifiedSpan = (uint8_t *)IOMallocAligned(
+	    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES, PAGE_SIZE);
+	if ((verifyLock == nullptr) || (verifiedSpan == nullptr)) {
+		if (verifiedSpan != nullptr) {
+			IOFreeAligned(verifiedSpan,
+			    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES);
+			verifiedSpan = nullptr;
+		}
+		if (verifyLock != nullptr) {
+			IOLockFree(verifyLock);
+			verifyLock = nullptr;
+		}
+		windowRole = false;
+		windowOwner = nullptr;
+		return false;
+	}
+#endif
 	return true;
 }
 
@@ -3679,6 +3710,15 @@ Gta4lEmmcBlock::free()
 {
 	windowOwner = nullptr;
 	windowRole = false;
+	if (verifiedSpan != nullptr) {
+		IOFreeAligned(verifiedSpan,
+		    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES);
+		verifiedSpan = nullptr;
+	}
+	if (verifyLock != nullptr) {
+		IOLockFree(verifyLock);
+		verifyLock = nullptr;
+	}
 	if (partreadBuffer != nullptr) {
 		IOFreeAligned(partreadBuffer,
 		    GTA4L_EMMC_BLOCK_PARTREAD_MAX_BYTES);
@@ -3815,6 +3855,20 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 		if (gta4l_test_windows_read_hook != nullptr) {
 			gta4l_test_windows_read_hook(this,
 			    windowBaseBlock + blockNumber, nblks);
+		}
+#endif
+#if GTA4L_EMMC_BLOCK_VERIFY_BUILT
+		{
+			IOReturn verifyStatus = kIOReturnSuccess;
+			UInt64 verifyActual = 0;
+
+			if (verifiedWindowRead(buffer, blockNumber, nblks,
+			    &verifyStatus, &verifyActual)) {
+				completion->action(completion->target,
+				    completion->parameter, verifyStatus,
+				    verifyActual);
+				return kIOReturnSuccess;
+			}
 		}
 #endif
 		return windowOwner->doAsyncReadWrite(buffer,
@@ -11507,6 +11561,159 @@ gta4l_verified_reset(void)
 		bzero(&gta4l_verified_window[index],
 		    sizeof(gta4l_verified_window[index]));
 	}
+}
+
+static struct gta4l_verified_window_state *
+gta4l_verified_by_label(const char *label)
+{
+	uint32_t index;
+
+	if (label == nullptr) {
+		return nullptr;
+	}
+	for (index = 0; index < 2u; index++) {
+		if ((gta4l_verified_window[index].ready != 0u) &&
+		    (gta4l_verified_window[index].label != nullptr) &&
+		    (strcmp(gta4l_verified_window[index].label, label) == 0)) {
+			return &gta4l_verified_window[index];
+		}
+	}
+	return nullptr;
+}
+
+struct gta4l_verify_completion {
+	IOReturn status;
+	UInt64 actual;
+	bool called;
+};
+
+static void
+gta4l_verify_completion_action(void *target, void *parameter,
+    IOReturn status, IOByteCount actual)
+{
+	struct gta4l_verify_completion *record =
+	    (struct gta4l_verify_completion *)target;
+
+	(void)parameter;
+	record->status = status;
+	record->actual = actual;
+	record->called = true;
+}
+
+bool
+Gta4lEmmcBlock::verifiedWindowRead(IOMemoryDescriptor *buffer,
+    UInt64 blockNumber, UInt64 nblks, IOReturn *status, UInt64 *actual)
+{
+	struct gta4l_emmc_block_verify_span
+	    spans[GTA4L_EMMC_BLOCK_VERIFY_MAX_SPANS];
+	struct gta4l_verified_window_state *state;
+	uint64_t start;
+	uint64_t end;
+	uint64_t imageBytes;
+	uint32_t count;
+	uint32_t index;
+
+	if ((buffer == nullptr) || (status == nullptr) || (actual == nullptr) ||
+	    (windowOwner == nullptr) || (verifyLock == nullptr) ||
+	    (verifiedSpan == nullptr)) {
+		return false;
+	}
+	state = gta4l_verified_by_label(windowLabel);
+	if (state == nullptr) {
+		return false;
+	}
+	if ((nblks == 0u) ||
+	    (nblks > ((uint64_t)capacityBlocks - blockNumber))) {
+		*status = kIOReturnBadArgument;
+		return true;
+	}
+	start = blockNumber * GTA4L_EMMC_BLOCK_BYTES;
+	end = start + nblks * GTA4L_EMMC_BLOCK_BYTES;
+	imageBytes = state->image_bytes;
+	if ((end < start) || (end > imageBytes)) {
+		*status = kIOReturnBadArgument;
+		return true;
+	}
+	count = gta4l_emmc_block_verify_spans(imageBytes, start, end,
+	    spans, GTA4L_EMMC_BLOCK_VERIFY_MAX_SPANS);
+	if (count == 0u) {
+		*status = kIOReturnBadArgument;
+		return true;
+	}
+	IOLockLock(verifyLock);
+	if (state->ready == 0u) {
+		IOLockUnlock(verifyLock);
+		*status = kIOReturnNoMedia;
+		return true;
+	}
+	for (index = 0; index < count; index++) {
+		struct gta4l_verify_completion record = {};
+		IOStorageCompletion completion;
+		IOMemoryDescriptor *descriptor;
+		uint64_t copyStart;
+		uint64_t copyEnd;
+		IOReturn result;
+
+		descriptor = IOMemoryDescriptor::withAddress(verifiedSpan,
+		    spans[index].bytes, kIODirectionIn);
+		if (descriptor == nullptr) {
+			IOLockUnlock(verifyLock);
+			*status = kIOReturnNoMemory;
+			return true;
+		}
+		completion.target = &record;
+		completion.action = gta4l_verify_completion_action;
+		completion.parameter = nullptr;
+		if (descriptor->prepare(kIODirectionIn) !=
+		    kIOReturnSuccess) {
+			descriptor->release();
+			IOLockUnlock(verifyLock);
+			*status = kIOReturnNoMemory;
+			return true;
+		}
+		result = windowOwner->doAsyncReadWrite(descriptor,
+		    windowBaseBlock + spans[index].start /
+		    GTA4L_EMMC_BLOCK_BYTES,
+		    spans[index].bytes / GTA4L_EMMC_BLOCK_BYTES,
+		    nullptr, &completion);
+		(void)descriptor->complete(kIODirectionIn);
+		descriptor->release();
+		if ((result != kIOReturnSuccess) || !record.called ||
+		    (record.status != kIOReturnSuccess) ||
+		    (record.actual != spans[index].bytes)) {
+			IOLockUnlock(verifyLock);
+			*status = (result != kIOReturnSuccess) ? result :
+			    (record.called ? record.status :
+			    kIOReturnIOError);
+			return true;
+		}
+		if (vr_verify_block(&state->view,
+		    spans[index].start / GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,
+		    verifiedSpan, spans[index].bytes,
+		    &vr_xnu_crypto) != VR_OK) {
+			state->ready = 0u;
+			online = false;
+			IOLockUnlock(verifyLock);
+			*status = kIOReturnNotPermitted;
+			return true;
+		}
+		copyStart = (start > spans[index].start) ?
+		    start : spans[index].start;
+		copyEnd = (end < spans[index].start + spans[index].bytes) ?
+		    end : spans[index].start + spans[index].bytes;
+		if (buffer->writeBytes((IOByteCount)(copyStart - start),
+		    verifiedSpan + (copyStart - spans[index].start),
+		    (IOByteCount)(copyEnd - copyStart)) !=
+		    (IOByteCount)(copyEnd - copyStart)) {
+			IOLockUnlock(verifyLock);
+			*status = kIOReturnNoMemory;
+			return true;
+		}
+	}
+	IOLockUnlock(verifyLock);
+	*status = kIOReturnSuccess;
+	*actual = nblks * GTA4L_EMMC_BLOCK_BYTES;
+	return true;
 }
 #endif
 

@@ -13826,6 +13826,31 @@ scenario_policy(void)
 	CHECK(gta4l_emmc_block_verify_lba(9430142976ull, 0ull) ==
 	    33621576ull);
 	{
+		struct gta4l_emmc_block_verify_span spans[9];
+
+		CHECK(gta4l_emmc_block_verify_spans(0x2000ull, 0ull, 4096ull,
+		    spans, 9u) == 1u);
+		CHECK(spans[0].start == 0ull && spans[0].bytes == 4096u);
+		CHECK(gta4l_emmc_block_verify_spans(0x2000ull, 512ull,
+		    1024ull, spans, 9u) == 1u);
+		CHECK(spans[0].start == 0ull && spans[0].bytes == 4096u);
+		CHECK(gta4l_emmc_block_verify_spans(0x2000ull, 0ull, 8192ull,
+		    spans, 9u) == 2u);
+		CHECK(gta4l_emmc_block_verify_spans(0x2000ull, 0ull, 8192ull,
+		    spans, 1u) == 0u);
+		CHECK(gta4l_emmc_block_verify_spans(5632ull, 0ull, 5632ull,
+		    spans, 9u) == 2u);
+		CHECK(spans[1].start == 4096ull && spans[1].bytes == 1536u);
+		CHECK(gta4l_emmc_block_verify_spans(0x2000ull, 4096ull,
+		    8193ull, spans, 9u) == 0u);
+		CHECK(gta4l_emmc_block_verify_spans(0x2000ull, 4096ull,
+		    4096ull, spans, 9u) == 0u);
+		CHECK(gta4l_emmc_block_verify_spans(6077580800ull,
+		    6077580800ull - 1536ull, 6077580800ull, spans, 9u) == 1u);
+		CHECK(spans[0].start == 6077580800ull - 1536ull &&
+		    spans[0].bytes == 1536u);
+	}
+	{
 		uint8_t table[64];
 
 		memset(table, 0, sizeof(table));

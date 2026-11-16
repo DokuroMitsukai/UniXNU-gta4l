@@ -2736,6 +2736,14 @@ def check_adapter_source():
         'gta4l_emmc_block_verify_lba(' in adapter and \
         'dmaRead((uint32_t)lba' in adapter, \
         'the DMA table load must read the userdata LBAs directly'
+    assert 'gta4l_emmc_block_verify_spans' in policy and \
+        'gta4l_emmc_block_verify_spans(' in adapter and \
+        'vr_verify_block(&state->view' in adapter and \
+        'state->ready = 0u;' in adapter and \
+        'online = false;' in adapter, \
+        'a published window must verify every span and latch a mismatch'
+    assert 'verifiedWindowRead(buffer, blockNumber, nblks' in adapter, \
+        'the window role must route reads through the verified path'
     assert 'verify_load_ms' in policy_header and \
         'verify_hash_ms' in policy_header and \
         'verify_open_ms' in policy_header and \

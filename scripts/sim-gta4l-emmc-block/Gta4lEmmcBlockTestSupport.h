@@ -211,6 +211,7 @@ public:
 	virtual UInt64 getLength() const { return length_; }
 	virtual int getDirection() const { return direction_; }
 	virtual void *address() const { return address_; }
+	virtual UInt64 getAddress() const { return (UInt64)address_; }
 	virtual void setTag(UInt32 tag) { tag_ = tag; }
 	virtual UInt32 getTag() const { return tag_; }
 	virtual void release() override;

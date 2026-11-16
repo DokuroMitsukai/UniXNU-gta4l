@@ -9705,3 +9705,21 @@ media read. The next boot's VERIFY line shows the split. The S5c″
 development kernel is `e2c34114…` (archive `9d014051…`, qualified,
 audited addresses unchanged); it is not a device candidate because S5d
 rebuilds the kernel.
+
+Published windows now verify every read. `verifiedWindowRead` enumerates
+the 4096-byte spans covering the request (the OS final span is 1,536
+bytes), reads each span through the owner into a private buffer,
+calls `vr_verify_block` before copying the requested subrange into the
+caller's descriptor, and latches the window offline and clears the
+policy's ready flag on a mismatch; the completion reports
+`kIOReturnNotPermitted`. A window with no verified policy (the S4
+personality) stays on the pass-through path. The span arithmetic is
+host-tested for aligned, unaligned, cross-span, final-partial and
+out-of-range requests. The full host `vr_crypto` harness was deferred
+(see the S5c″ plan); the kernel compile and the next device rung cover
+the IOKit wiring.
+
+`native_ufs_block_authenticates` is not exported: the current pinned
+XNU source and the offline-owner patch series have no consumer (the
+symbol appears in neither the built kernel nor the patches). Adding an
+unreferenced weak export would not authenticate anything.

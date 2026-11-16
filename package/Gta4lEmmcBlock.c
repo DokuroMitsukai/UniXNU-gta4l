@@ -649,6 +649,37 @@ gta4l_emmc_block_verify_lba(uint64_t object_offset, uint64_t offset)
 }
 
 uint32_t
+gta4l_emmc_block_verify_spans(uint64_t image_bytes, uint64_t start,
+    uint64_t end, struct gta4l_emmc_block_verify_span *spans,
+    uint32_t max_spans)
+{
+	uint64_t position;
+	uint32_t count = 0;
+
+	if ((spans == 0) || (max_spans == 0u) || (end <= start) ||
+	    (end > image_bytes)) {
+		return 0;
+	}
+	position = start &
+	    ~((uint64_t)(GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES - 1u));
+	while (position < end) {
+		uint64_t left = image_bytes - position;
+		uint32_t bytes = (left <
+		    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES) ?
+		    (uint32_t)left : GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES;
+
+		if (count >= max_spans) {
+			return 0;
+		}
+		spans[count].start = position;
+		spans[count].bytes = bytes;
+		count++;
+		position += GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES;
+	}
+	return count;
+}
+
+uint32_t
 gta4l_emmc_block_adma_build(uint8_t *table, uint32_t table_bytes,
     uint32_t address, uint32_t length, uint32_t max_entry_bytes)
 {
