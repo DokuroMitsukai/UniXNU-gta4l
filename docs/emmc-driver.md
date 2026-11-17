@@ -10351,3 +10351,36 @@ protected partitions); the BOOT-only flash wrote `3cbea4d5…` and the
 region read-back matched, first 4 KiB `1746dd20…`, full p69
 `08c4beda…`. One owner-triggered boot is pending; `3cbea4d5…` is the
 one-shot candidate.
+
+### 5.4.19 S5e-min-d verdict: verified-root authorization passed (2026-11-17)
+
+BOOT `3cbea4d5…` was booted once. The launchd panic line carried the
+verdict:
+
+```
+owner-root: trust=1 apple=80 decision=1 accepted=1 ro=1
+mdev=<same> sdev=<same>
+drv=online=1 win=2 errors=0 recov=0 offline=0 mount=1
+```
+
+The owner corrected the initial mounted/selected device transcription;
+the two values were equal. `csflags` was not reported and is not
+recorded. This proves on hardware that the verified OS window was
+selected, mounted read-only (`ro=1`), authorized through the owner path
+(`apple=80`, `decision=1`) and accepted by `bsd_init` (`accepted=1`),
+with the driver still online, two windows published and no recorded
+lifetime errors, recoveries or offline notification at the checkpoint.
+`mount=1` shows the introspective authorization function ran. The
+launchd SIGKILL remains the separate userland failure: the real launchd
+is ad-hoc signed and no loaded trust cache contains its cdhash.
+
+Post-boot read-only TWRP re-measure: p69 `08c4beda…`, first 4 KiB
+`1746dd20…`, recovery `14e11370…`, efs `51fa824c…`, sec_efs
+`3a265d58…`, userdata manifest `3ddf4d4f…`, `OS.vroot 5f14cb46…`,
+`SystemOS.vroot e3cbe583…`, and the full 9,455,947,776-byte userdata
+image `ae6e18e79937cd74e33b64749f9945d531bd2c1c5f92b922be2fe165496ef62a`
+— byte-identical. The root boot wrote nothing to userdata.
+
+`3cbea4d5…` is consumed and must not be booted again. Next: the
+original trust bundle, a real Data seed and the packaging budget, then
+S5e-full for launchd execution.
