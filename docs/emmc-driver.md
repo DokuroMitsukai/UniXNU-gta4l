@@ -10062,3 +10062,76 @@ It does not prove the root mount, `bsd_init` with
 `XNU_OWNER_ROOT_TRUST=1`, lifetime errors over a full boot, APFS
 mounting a verified volume, or the SystemOS/cache mounts. Those are
 S5e-a/S5e.
+
+### 5.4.12 S5e-a root-boot inventory (2026-11-17, host only)
+
+Read from the pinned sources and the board configuration; no code or
+device action.
+
+**Root selection.** `board.toml [payload.adt]` already carries
+`root_match_volume_uuid = 04769D26-…`, which the device-tree generator
+writes to `/chosen:root-matching` as an `IOPropertyMatch` on `IOMedia`
+`UUID`. `IOFindBSDRoot` uses that dictionary, waits up to
+`ROOTDEVICETIMEOUT` (120 s on iOS) for the service, then reads the BSD
+name/major/minor and panics `Failed to mount root device` on timeout.
+The driver verifies and publishes both windows in ~6 s (VERIFY 5.0-5.2 s
+plus publication), so no root-wait change is needed. A root payload must
+not pass `rd=md0`; that path bypasses the UUID match and has no verified
+volume.
+
+**Root mode.** `gta4l-emmc-root=1` requires block=3, windows, verify and
+DMA and refuses vread and every other selector. After publication it
+logs `ROOT: online=1`, sets `reportDone` and returns without the terminal
+report panic; the watchdog exits. Lifetime errors use the S5d′ latch,
+one transport recovery, one offline notification and the 120,000 ms
+pre-root panic bound. Host scenarios cover success, recovery, verify
+mismatch and after-mount behaviour.
+
+**Mount flags needed for launchd.** On this iPadOS 17 image the dyld
+shared cache lives in the SystemOS cryptex, so a root-only boot is not
+enough for userland. `XNU_OWNER_CACHE_MOUNT=1` mounts SystemOS at
+`/private/preboot` and sets `DYLD_SHARED_CACHE_DIR` and
+`DYLD_FALLBACK_LIBRARY_PATH`; `XNU_OWNER_CACHE_STARTUP=1` selects the
+owner dyld flags. The build script enforces: mount requires
+`XNU_OWNER_ROOT_TRUST=1`; startup requires mount; boot manifest requires
+startup; Data mount requires manifest plus `XNU_NATIVE_RAM_BLOCK` and
+the observed Data UUID; cryptex-file lookup requires startup. The trust
+paths are implemented in `kern_exec` before launchd and therefore after
+the root authorization, so they cannot change the root verdict itself.
+
+**Trust cache.** The fixture owner trust cache used by the diagnostic
+payload is for the RAM-root fixture, not for Apple binaries. The root
+payload must use the two unchanged original modules
+(`build/original-static-system-trust/original-static-system.bundle`)
+built by `scripts/build-original-system-trust.py`. That script needs the
+21H461 restore IPSW (`refer/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw`)
+and `.cache/firmware/target-volumes/static-trustcache.bin`. Neither input
+is present in the current checkout, and the extracted system trust
+module comes from the IPSW `Cryptex1,SystemTrustCache`.
+
+**Data.** `/private/var` needs an APFS Data seed. The current
+`fs-timer-hold` `root.img` is a RAM-root fixture, not a Data volume.
+`scripts/prepare-owner-data-fixture.py` builds a real seed, but it needs
+macOS `hdiutil`/`diskutil` and the extracted OS mount
+`.cache/firmware/target-volumes/os-mount`; neither is available on this
+Linux host. `XNU_OWNER_DATA_MOUNT` also requires the boot manifest and
+the observed Data volume UUID, which is not known.
+
+**Consequence.** Two rungs are possible:
+
+- **S5e-min (recommended first).** Root payload without `rd=md0`, without
+  Data and without the cache flags: prove only that the verified OS
+  window is selected as `rootdev`, mounted read-only and accepted by
+  `bsd_init` through `native_verified_block_root_authorized`. Expected
+  console: `ROOT: online=1`, `Got boot device = …`, `BSD root: …`, no
+  `rootvp not authenticated` panic and no `ROOT: error`. A later
+  userland failure is expected and does not fail S5e-min.
+- **S5e-full.** Add `XNU_OWNER_CACHE_MOUNT=1` and
+  `XNU_OWNER_CACHE_STARTUP=1`, the original trust bundle and a real Data
+  seed (or a RAM Data seed with its UUID wired into the kernel) to reach
+  launchd. This is blocked until the IPSW/static trust cache and the
+  Data seed (or macOS-side seed tooling) are available.
+
+No code change is proposed from the inventory: the only S5e-specific
+work is the root payload personality (five tokens, no `rd=md0`, root
+refusal matrix) and the payload trust/Data inputs.
