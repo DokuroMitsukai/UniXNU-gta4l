@@ -17,3 +17,7 @@ gta4l-emmc-probe.patch
 # Board-only read-only block publication personality. The guard is inert until
 # the shared build script translates CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK.
 gta4l-emmc-block.patch
+
+# Board-only panic summary for the verified-root verdict. Temporary: fold into
+# the shared owner-root patch after all boot work is finished.
+gta4l-owner-root-panic.patch

@@ -10251,3 +10251,60 @@ BOOT-only flash wrote `da670456…` (20,920 blocks); the region read-back
 matched, the first 4 KiB is `8cde4e8a…` and the full p69 is
 `ae9b0ada…`. The tablet stays in TWRP for the one owner-triggered boot;
 no boot or reboot was performed.
+
+### 5.4.16 S5e-min-b verdict and S5e-min-c panic summary (2026-11-17)
+
+BOOT `da670456…` was flashed once and booted once. The final screen
+held only:
+
+```
+unexpected SIGKILL of launchd with reason -- namespace 9 code 0x9 description none
+```
+
+Namespace 9 is `OS_REASON_EXEC`; code 9 is
+`EXEC_EXIT_REASON_TASKGATED_OTHER`, set in the `kern_exec` signature
+check. The `Gta4lEmmcBlock` registry panic did not return, so the
+lifetime fix passed. Root authorization is **inconclusive**: the panic
+screen does not retain the `ROOT: online=1`, `Got boot device` or
+`BSD root` lines.
+
+Host evidence explains the launchd stop. The real `sbin/launchd` from
+the OS DMG `044-76040-038.dmg` (read with `7z x -so`, nothing written)
+is 561,856 bytes, SHA-256 `8cec9a3c…` (the same pin as
+`prepare-owner-data-fixture.py`), ad-hoc signed (CodeDirectory flags
+`0x2`, empty CMS slot), cdhash `1d52c697…`. The payload's only trust
+cache is the 56-byte fixture bundle with one entry (`71f32329…`).
+AMFI therefore refuses the exec and taskgated is absent, which is the
+trust-bundle stop S5e-a predicted. Reaching launchd's exec means
+`bsd_init` accepted an eMMC root (there is no `md0`), but not whose
+check accepted it.
+
+The temporary device patch `patches/xnu/gta4l-owner-root-panic.patch`
+appends the verdict to the initproc SIGKILL panic and both `Process 1
+exec … failed` panics:
+
+```
+owner-root: trust=%u apple=%d decision=%d accepted=%u ro=%d mdev=%x sdev=%x
+```
+
+followed by `drv=online=%u win=%u errors=%u recov=%u offline=%u
+mount=%u` from a weak driver hook. The gta4l driver sets the hook only
+after `ROOT: online=1`, reads its state under a try-lock, and prints
+`busy` or `none` when it cannot. The patch is in the device series
+after the shared owner-root patch; it will be folded into the shared
+patch when the owner asks for the cleanup, after all boot work.
+
+S5e-min-c candidate: kernel `47ef01b0…` (51,699,712 bytes,
+`gta4l_defconfig`, trust flags 1/1/1, `trust_enabled=1`), archive
+`3bab25a5…` from `Gta4lEmmcBlock.cpp 298756fc…`, storage-ABI
+`out/gta4l/storage-abi-47ef01b0` PASS (190 slots, 181 bindings,
+vtable `fffffff005cb44c0`, metaclass `fffffff006add1d0`, service
+`fffffff007b4f5b8`), payload `81303a79…` (143 checks, no Data, no
+`rd=`) and BOOT `1936202d…` (85,688,320 bytes, 18/18, first 4 KiB
+`0537cad2…`). The block suite is green at 528 adapter PASS lines, 25
+verified-read scenarios (including `root-summary`) and core 47/35. The
+TWRP preflight matched (p69 `ae9b0ada…`, first 4 KiB `8cde4e8a…`,
+userdata manifest `3ddf4d4f…`, both vroots and the protected
+partitions); the BOOT-only flash wrote `1936202d…` and the region
+read-back matched, first 4 KiB `0537cad2…`, full p69 `9522e8be…`. One
+owner-triggered boot is pending; `1936202d…` is the one-shot candidate.

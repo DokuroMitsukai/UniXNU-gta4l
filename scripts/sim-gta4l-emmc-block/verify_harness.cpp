@@ -789,6 +789,35 @@ make_vread_chain(Gta4lEmmcBlock *window, const char *uuid, const char *name,
 }
 
 static int
+scenario_root_summary(void)
+{
+	char buffer[256];
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	CHECK(open_windows() == 0);
+	prepare_lifetime_root();
+	g_self->online = true;
+	g_self->report.windows_published = 2u;
+	g_self->rootErrors = 2u;
+	g_self->rootRecoveries = 1u;
+	g_self->rootOfflineNotified = false;
+	gta4l_root_mount_seen = true;
+	g_self->rootSummary(buffer, sizeof(buffer));
+	CHECK(strcmp(buffer,
+	    "drv=online=1 win=2 errors=2 recov=1 offline=0 mount=1") == 0);
+	IOLockLock(g_self->reportLock);
+	g_self->rootSummary(buffer, sizeof(buffer));
+	CHECK(strcmp(buffer, "drv=busy") == 0);
+	IOLockUnlock(g_self->reportLock);
+	gta4l_root_summary_owner = (Gta4lEmmcBlock *)0;
+	native_owner_root_summary(buffer, sizeof(buffer));
+	CHECK(strcmp(buffer, "drv=none") == 0);
+	return 0;
+}
+
+static int
 scenario_vread(void)
 {
 	Gta4lEmmcBlock *pending[2];
@@ -1197,6 +1226,7 @@ static const struct scenario g_scenarios[] = {
 	{ "lifetime-recover-fail", scenario_lifetime_recover_fail },
 	{ "lifetime-verify-fail", scenario_lifetime_verify_fail },
 	{ "lifetime-after-mount", scenario_lifetime_after_mount },
+	{ "root-summary", scenario_root_summary },
 	{ "vread", scenario_vread },
 	{ "vread-whole-size", scenario_vread_whole_size },
 	{ "vread-whole-missing", scenario_vread_whole_missing },

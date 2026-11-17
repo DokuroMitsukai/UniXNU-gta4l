@@ -676,6 +676,7 @@ public:
 	bool lifetimeRootFailure(bool verificationMismatch, uint64_t block,
 	    IOReturn status);
 	void lifetimeRootOffline(void);
+	void rootSummary(char *buffer, size_t size) const;
 #endif
 
 	IOReturn doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block,
@@ -11269,6 +11270,10 @@ Gta4lEmmcBlock::waitUserdataMedia(uint32_t *count, uint32_t *waitedMs,
 	return nullptr;
 }
 
+#if defined(XNU_OWNER_ROOT_AUDIT) && XNU_OWNER_ROOT_AUDIT
+static Gta4lEmmcBlock *gta4l_root_summary_owner = nullptr;
+#endif
+
 bool
 Gta4lEmmcBlock::runWindows()
 {
@@ -11700,6 +11705,9 @@ done:
 		    "dma=%u\n", published, report.verify_valid,
 		    report.windows_dma);
 		IOLockUnlock(reportLock);
+#if defined(XNU_OWNER_ROOT_AUDIT) && XNU_OWNER_ROOT_AUDIT
+		gta4l_root_summary_owner = this;
+#endif
 		return false;
 	}
 	panicWithReport();
@@ -11723,6 +11731,46 @@ struct gta4l_verified_window_state {
 
 static struct gta4l_verified_window_state gta4l_verified_window[2];
 static bool gta4l_root_mount_seen;
+
+#if defined(XNU_OWNER_ROOT_AUDIT) && XNU_OWNER_ROOT_AUDIT
+void
+Gta4lEmmcBlock::rootSummary(char *buffer, size_t size) const
+{
+	bool locked = false;
+
+	if ((buffer == nullptr) || (size == 0u)) {
+		return;
+	}
+	if (reportLock != nullptr) {
+		locked = IOLockTryLock(reportLock);
+	}
+	if (!locked) {
+		snprintf(buffer, size, "drv=busy");
+		return;
+	}
+	snprintf(buffer, size,
+	    "drv=online=%u win=%u errors=%u recov=%u offline=%u mount=%u",
+	    online ? 1u : 0u, report.windows_published, rootErrors,
+	    rootRecoveries, rootOfflineNotified ? 1u : 0u,
+	    gta4l_root_mount_seen ? 1u : 0u);
+	IOLockUnlock(reportLock);
+}
+
+extern "C" void
+native_owner_root_summary(char *buffer, size_t size)
+{
+	Gta4lEmmcBlock *owner = gta4l_root_summary_owner;
+
+	if ((buffer == nullptr) || (size == 0u)) {
+		return;
+	}
+	if (owner == nullptr) {
+		snprintf(buffer, size, "drv=none");
+		return;
+	}
+	owner->rootSummary(buffer, size);
+}
+#endif
 
 static void
 gta4l_verified_reset(void)

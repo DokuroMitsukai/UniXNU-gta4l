@@ -3266,6 +3266,7 @@ def compile_adapter(compiler, temp):
         policy_objects.append(str(target))
     cxx_common = ['-std=c++17', '-Wall', '-Wextra', '-Werror',
                   '-DGTA4L_EMMC_BLOCK_HOST_TEST',
+                  '-DXNU_OWNER_ROOT_AUDIT=1',
                   '-I', str(ROOT / 'package'), '-I', str(SIM)]
     objects = list(policy_objects)
     for source in (ADAPTER_SUPPORT, ADAPTER_HARNESS):
@@ -3310,6 +3311,7 @@ def compile_adapter_mutation(cxx, temp, name, replacements, scenario, objects,
                  sim / 'Gta4lEmmcBlockTestSupport.h')
     cxx_common = ['-std=c++17', '-Wall', '-Wextra', '-Werror',
                   '-DGTA4L_EMMC_BLOCK_HOST_TEST',
+                  '-DXNU_OWNER_ROOT_AUDIT=1',
                   '-I', str(ROOT / 'package'), '-I', str(sim)]
     local = list(objects)
     for source in (sim / ADAPTER_SUPPORT.name, sim / ADAPTER_HARNESS.name):
@@ -3354,6 +3356,7 @@ def compile_policy_mutation(compiler, cxx, temp, name, replacements,
         objects.append(str(target))
     cxx_common = ['-std=c++17', '-Wall', '-Wextra', '-Werror',
                   '-DGTA4L_EMMC_BLOCK_HOST_TEST',
+                  '-DXNU_OWNER_ROOT_AUDIT=1',
                   '-I', str(ROOT / 'package'), '-I', str(SIM)]
     for source in (ADAPTER_SUPPORT, ADAPTER_HARNESS):
         target = temp / f'policy-{name}-{source.stem}.o'
@@ -3486,7 +3489,9 @@ def compile_verify_suite(cxx, compiler, temp, fixture_dir):
     common_c = [compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
                 '-DGTA4L_EMMC_BLOCK_HOST_TEST', '-I', str(ROOT / 'package')]
     common_cxx = [cxx, '-std=c++17', '-Wall', '-Wextra', '-Werror',
-                  '-DGTA4L_EMMC_BLOCK_HOST_TEST', '-I', str(ROOT / 'package'),
+                  '-DGTA4L_EMMC_BLOCK_HOST_TEST',
+                  '-DXNU_OWNER_ROOT_AUDIT=1',
+                  '-I', str(ROOT / 'package'),
                   '-I', str(SIM)]
     commands = [
         common_c + ['-c', str(POLICY), '-o', str(policy)],
@@ -3547,8 +3552,8 @@ def check_verify_adapter(compiler, cxx, temp):
         'verified-read scenarios failed:\n' + run.stdout + run.stderr)
     assert 'PASS gta4l verified read adapter' in run.stdout, run.stdout
     passes = run.stdout.count('PASS ')
-    assert passes == 25, f'expected 25 verified-read PASS lines, got {passes}'
-    print('PASS verified-read adapter: 24 scenarios against real runVerify '
+    assert passes == 26, f'expected 26 verified-read PASS lines, got {passes}'
+    print('PASS verified-read adapter: 25 scenarios against real runVerify '
           'and verifiedWindowRead')
     for name, replacements, scenario in VERIFY_MUTATIONS:
         mirror = temp / f'verify-{name}'
@@ -3569,7 +3574,8 @@ def check_verify_adapter(compiler, cxx, temp):
         harness = temp / f'verify-{name}-harness.o'
         built = subprocess.run(
             [cxx, '-std=c++17', '-Wall', '-Wextra', '-Werror',
-             '-DGTA4L_EMMC_BLOCK_HOST_TEST', '-DGTA4L_EMMC_BLOCK_HOST_VERIFY=1',
+             '-DGTA4L_EMMC_BLOCK_HOST_TEST', '-DXNU_OWNER_ROOT_AUDIT=1',
+             '-DGTA4L_EMMC_BLOCK_HOST_VERIFY=1',
              '-I', str(package), '-I', str(ROOT / 'package'), '-I', str(sim),
              '-I', str(fixture_dir / 'policies'),
              '-I', str(VERIFIED_ROOT_KIT / 'include'),

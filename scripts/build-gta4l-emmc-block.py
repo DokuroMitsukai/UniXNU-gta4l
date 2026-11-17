@@ -506,9 +506,21 @@ if not STORAGE_INCLUDE.is_dir():
     raise SystemExit(f'missing storage ABI include directory: {STORAGE_INCLUDE}')
 
 source_records = []
+policy_arguments = json.loads(
+    POLICY_RECORD.read_text().strip().rstrip(','))['arguments']
+policy_owner_audit = None
+for index, argument in enumerate(policy_arguments):
+    if (argument == '-D' and index + 1 < len(policy_arguments) and
+            policy_arguments[index + 1].startswith(
+                'XNU_OWNER_ROOT_AUDIT=')):
+        policy_owner_audit = ['-D', policy_arguments[index + 1]]
+        break
 for item in SOURCES:
     record = json.loads(item['record'].read_text().strip().rstrip(','))
     arguments = list(record['arguments'])
+    if (item['source'].name == 'Gta4lEmmcBlock.cpp' and
+            policy_owner_audit is not None):
+        arguments.extend(policy_owner_audit)
     try:
         arguments[arguments.index(record['file'])] = str(item['source'])
     except ValueError:
