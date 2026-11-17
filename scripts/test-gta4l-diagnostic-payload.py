@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import struct
 import sys
 import tempfile
 import tomllib
@@ -39,6 +40,18 @@ out.mkdir(parents=True, exist_ok=True)
 FAKE_CHECKER = '''\
 import json, sys
 print(json.dumps({'pass': True, 'payload': sys.argv[sys.argv.index('--payload') + 1]}))
+'''
+
+FAKE_PACKED = '''\
+import struct
+def inspect(path):
+    data = path.read_bytes()
+    magic, version, page, logical, count = struct.unpack_from('<8sIIQQ', data, 0)
+    if magic != b'DBRDISK1' or version != 1 or page != 4096:
+        raise ValueError('invalid packed ramdisk')
+    return {'bytes': logical, 'sha256': 'a' * 64,
+            'encoded_bytes': len(data), 'encoded_sha256': 'b' * 64,
+            'packed': True}, b''
 '''
 
 BOARD = '''\
@@ -630,6 +643,98 @@ def test_emmc_block_3_root_rejects_data_ramdisk(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS emmc-block-3-root refuses a Data ramdisk')
+
+
+def test_emmc_block_3_root_data(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    packed_module = unixnu / 'drivers/DarwinBoot/Test'
+    packed_module.mkdir(parents=True)
+    (packed_module / 'packed_ramdisk.py').write_text(FAKE_PACKED)
+    packed = base / 'owner-data-32.dbr'
+    packed.write_bytes(struct.pack('<8sIIQQ', b'DBRDISK1', 1, 4096,
+                                   33554432, 0))
+    seed = base / 'seed.json'
+    seed.write_text(json.dumps({
+        'sha256': 'a' * 64,
+        'bytes': 33554432,
+        'volume_uuid': 'A3168F05-0F99-42FE-AA9F-F0276C1AFBB1',
+        'seed': 'test owner Data',
+        'guest_mutable': True,
+        'owner_keybag_created': False,
+        'os_inputs_modified': False,
+    }) + '\n')
+    record = base / 'argv.json'
+    board_record = base / 'board.json'
+    os.environ['FAKE_UNIXNU_RECORD'] = str(record)
+    os.environ['FAKE_UNIXNU_BOARD'] = str(board_record)
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--data-ramdisk') + 1] = str(packed)
+    index = args.index('rd=md0')
+    del args[index - 1:index + 1]
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-root-data'
+    args += ['--data-seed-manifest', str(seed)]
+    code = run(module, [
+        *args,
+        '--kernel', str(kernel),
+        '--output', str(output),
+        '--manifest', str(manifest),
+    ])
+    assert code == 0
+    transformed = tomllib.loads(board_record.read_text())
+    assert transformed['payload']['adt']['packed_data_ramdisk'] is True
+    argv = json.loads(record.read_text())
+    assert '--data-ramdisk' in argv
+    kernel_args = [argv[index + 1] for index, value in enumerate(argv)
+                   if value == '--kernel-arg']
+    expected = ['gta4l-emmc-block=3', 'gta4l-emmc-windows=1',
+                'gta4l-emmc-verify=1', 'gta4l-emmc-dma=1',
+                'gta4l-emmc-root=1']
+    assert kernel_args[-5:] == expected, kernel_args
+    assert 'rd=md0' not in kernel_args
+    manifest_record = json.loads(manifest.read_text())
+    assert manifest_record['packed_data_ramdisk'] is True
+    assert manifest_record['data_seed']['volume_uuid'] == \
+        'A3168F05-0F99-42FE-AA9F-F0276C1AFBB1'
+    assert manifest_record['data_seed']['packed']['packed'] is True
+    print('PASS emmc-block-3-root-data maps to the five-token root rung with '
+          'a packed owner Data seed')
+
+
+def test_emmc_block_3_root_data_rejects_raw(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    seed = base / 'seed.json'
+    seed.write_text(json.dumps({
+        'sha256': hashlib.sha256(data.read_bytes()).hexdigest(),
+        'bytes': data.stat().st_size,
+        'volume_uuid': 'A3168F05-0F99-42FE-AA9F-F0276C1AFBB1',
+        'seed': 'raw',
+        'guest_mutable': True,
+        'owner_keybag_created': False,
+        'os_inputs_modified': False,
+    }) + '\n')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-root-data'
+    args += ['--data-seed-manifest', str(seed)]
+    try:
+        run(module, [
+            *args,
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'packed DBRDISK1 seed' in str(error), error
+    else:
+        raise AssertionError('root-data accepted a raw Data seed')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS emmc-block-3-root-data refuses a raw Data seed')
 
 
 def test_emmc_block_3_live(base):
@@ -1753,6 +1858,12 @@ def test_diagnostic_contract(_base):
     root_on_windows = checks(root_args, 'emmc-block-3-windows')
     assert not root_on_windows[
         'emmc-block-3-windows_diagnostic_selected'], root_on_windows
+    root_data = checks(root_args, 'emmc-block-3-root-data')
+    assert all(root_data.values()), root_data
+    root_data_rd = checks(root_args + ' rd=md0',
+                          'emmc-block-3-root-data')
+    assert not root_data_rd[
+        'emmc-block-3-root-data_no_ramdisk_override'], root_data_rd
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -1778,6 +1889,8 @@ def main():
              test_emmc_block_3_windows, test_emmc_block_3_vread,
              test_emmc_block_3_root,
              test_emmc_block_3_root_rejects_data_ramdisk,
+             test_emmc_block_3_root_data,
+             test_emmc_block_3_root_data_rejects_raw,
              test_emmc_block_3_live,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,

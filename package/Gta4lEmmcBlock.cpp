@@ -11772,6 +11772,16 @@ native_owner_root_summary(char *buffer, size_t size)
 }
 #endif
 
+#if !defined(XNU_NATIVE_RAM_BLOCK) || !XNU_NATIVE_RAM_BLOCK
+extern "C" int
+native_ram_block_gpu_addon(const uint8_t **addon, uint64_t *bytes)
+{
+	(void)addon;
+	(void)bytes;
+	return 0;
+}
+#endif
+
 static void
 gta4l_verified_reset(void)
 {

@@ -10384,3 +10384,41 @@ image `ae6e18e79937cd74e33b64749f9945d531bd2c1c5f92b922be2fe165496ef62a`
 `3cbea4d5…` is consumed and must not be booted again. Next: the
 original trust bundle, a real Data seed and the packaging budget, then
 S5e-full for launchd execution.
+
+### 5.4.20 S5e-inputs: original trust bundle and packed Data seed (2026-11-17)
+
+**Trust bundle.** `scripts/fetch-gta4l-trust-inputs.py` read only
+`BuildManifest.plist` (`199fb5de…`), the `StaticTrustCache` IM4P
+(`4563bdbf…`, member `Firmware/044-76040-038.dmg.trustcache`) and the
+`Cryptex1,SystemTrustCache` IM4P (`9742f3d5…`, member
+`Firmware/044-76034-038.dmg.trustcache`) from the public 21H461 restore
+image by HTTP Range. The server returned 206; a non-206 response is
+refused. `scripts/build-gta4l-original-trust.py` re-checked the manifest
+SHA-384 digests and extracted the unchanged version-2 modules:
+`da88460e…` (2,478 entries) and `d121ba89…` (76 entries). The bundle is
+`7416ca4f…` (61,356 bytes) and contains the real launchd cdhash
+`1d52c697…` in the static module (entry 279). No full IPSW was
+downloaded and no trust-cache allowlist was added.
+
+**Data seed.** A fresh macOS staging directory built the real seed with
+the existing `prepare-owner-data-fixture.py`:
+`owner-data-32.cdr`, 33,554,432 bytes, SHA-256 `d2c4bc74…`, volume UUID
+`A3168F05-0F99-42FE-AA9F-F0276C1AFBB1`, 39 regular files from the
+original `private/var` tree. The packed form is
+`owner-data-32.dbr`, 979,024 bytes, SHA-256 `97789988…`, logical size
+32 MiB and logical SHA-256 `d2c4bc74…`. The v5 firmware's inner FV
+contains `PackedRAMDisk` and `DBRDISK1`, so the packed path is
+supported. The real userdata image was never attached or written.
+
+**Budget and personality.** The packed seed fits the 80 MiB payload:
+kernel 51,699,712 + seed 979,024 + trust bundle 61,356 plus FAT/ADT
+overhead. The new `emmc-block-3-root-data` personality maps to the same
+five root tokens, requires `--data-seed-manifest`, preserves
+`packed_data_ramdisk = true`, and refuses the fs-timer fixture. The real
+payload `3f58bd96…` (83,886,080 bytes) passes 146 contract checks with
+the packed seed and original trust bundle. The full-root kernel uses
+`configs/gta4l_fullroot_defconfig` with cache mount, cache startup,
+boot manifest and Data mount enabled; `XNU_NATIVE_RAM_BLOCK` stays off.
+The optional GPU-addon mount references `native_ram_block_gpu_addon`;
+this board's eMMC archive supplies a guarded zero-return stub because it
+does not use the NativeRamBlock provider.

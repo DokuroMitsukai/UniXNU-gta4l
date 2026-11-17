@@ -23,7 +23,10 @@ gta4l-emmc-block=3 gta4l-emmc-windows=1 and also requires the
 fs-timer-hold fixture. The root personality maps to
 gta4l-emmc-block=3 gta4l-emmc-windows=1 gta4l-emmc-verify=1
 gta4l-emmc-dma=1 gta4l-emmc-root=1 and refuses a Data ramdisk: the
-boot must select the verified OS window by UUID, not md0.
+boot must select the verified OS window by UUID, not md0. The root-data
+personality uses the same five tokens but carries the packed owner Data
+seed and the original trust bundle for the full root boot; it requires
+--data-seed-manifest and refuses the fs-timer fixture.
 """
 import argparse
 import datetime
@@ -35,6 +38,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +97,9 @@ DIAGNOSTICS = {
     'emmc-block-3-root': 'gta4l-emmc-block=3 gta4l-emmc-windows=1 '
                          'gta4l-emmc-verify=1 gta4l-emmc-dma=1 '
                          'gta4l-emmc-root=1',
+    'emmc-block-3-root-data': 'gta4l-emmc-block=3 gta4l-emmc-windows=1 '
+                              'gta4l-emmc-verify=1 gta4l-emmc-dma=1 '
+                              'gta4l-emmc-root=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
@@ -110,6 +117,7 @@ LIVE_DIAGNOSTICS = ('emmc-block-3-live',)
 WINDOWS_DIAGNOSTICS = ('emmc-block-3-windows', 'emmc-block-3-verify',
                         'emmc-block-3-vread')
 ROOT_DIAGNOSTICS = ('emmc-block-3-root',)
+ROOT_DATA_DIAGNOSTICS = ('emmc-block-3-root-data',)
 PARTITION_DIAGNOSTICS = (PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS +
                          PARTREAD_DIAGNOSTICS)
 OBSERVATION_DIAGNOSTICS = (PARTITION_DIAGNOSTICS + DEBLOCK_DIAGNOSTICS +
@@ -126,7 +134,7 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def set_diagnostic_board(board_text, size_mib):
+def set_diagnostic_board(board_text, size_mib, packed=False):
     lines = board_text.splitlines(keepends=True)
     section = None
     found_size = False
@@ -141,7 +149,8 @@ def set_diagnostic_board(board_text, size_mib):
             found_size = True
         elif (section == '[payload.adt]' and
               re.match(r'^packed_data_ramdisk\s*=', stripped)):
-            lines[index] = 'packed_data_ramdisk = false\n'
+            lines[index] = ('packed_data_ramdisk = true\n' if packed else
+                            'packed_data_ramdisk = false\n')
             found_packed = True
     if not found_size or not found_packed:
         raise SystemExit('board.toml lacks [payload] size_mib or '
@@ -161,6 +170,9 @@ def main():
                         help='fixture.json describing the data-ramdisk '
                              'diagnostic; required for the observation '
                              'personalities, which require fs-timer-hold')
+    parser.add_argument('--data-seed-manifest', type=Path,
+                        help='seed.json describing the packed owner Data seed; '
+                             'required for emmc-block-3-root-data')
     parser.add_argument('--trust-cache', type=Path)
     parser.add_argument('--owner-trust-cache', action='store_true',
                         help='use --owner-trust-cache instead of --trust-cache')
@@ -185,13 +197,17 @@ def main():
         parsed = tomllib.loads(transformed)
         assert parsed['payload']['size_mib'] == 80
         assert parsed['payload']['adt']['packed_data_ramdisk'] is False
-        print('PASS: raw diagnostic board forces size_mib=80 and '
-              'packed_data_ramdisk=false')
+        packed = tomllib.loads(set_diagnostic_board(board, 80, True))
+        assert packed['payload']['adt']['packed_data_ramdisk'] is True
+        print('PASS: diagnostic board forces size_mib=80, raw by default and '
+              'packed on request')
         return 0
 
     required = ['trust_cache', 'unique_chip_id', 'diagnostic', 'output']
     if args.diagnostic not in NO_DATA_RAMDISK_DIAGNOSTICS:
         required.append('data_ramdisk')
+    if args.diagnostic in ROOT_DATA_DIAGNOSTICS:
+        required.append('data_seed_manifest')
     missing = [name for name in required if getattr(args, name) is None]
     if missing:
         parser.error('missing required options: ' +
@@ -218,6 +234,19 @@ def main():
             raise SystemExit(
                 f'--diagnostic {args.diagnostic} has no Data ramdisk; '
                 'do not pass --data-ramdisk-manifest')
+        if args.data_seed_manifest is not None:
+            raise SystemExit(
+                f'--diagnostic {args.diagnostic} has no Data ramdisk; '
+                'do not pass --data-seed-manifest')
+    if args.diagnostic in ROOT_DATA_DIAGNOSTICS:
+        if args.data_ramdisk_manifest is not None:
+            raise SystemExit(
+                f'--diagnostic {args.diagnostic} uses the owner Data seed; '
+                'do not pass the fs-timer --data-ramdisk-manifest')
+        if args.data_ramdisk.read_bytes()[:8] != b'DBRDISK1':
+            raise SystemExit(
+                f'{args.data_ramdisk}: root-data requires the packed DBRDISK1 '
+                'seed')
     if args.data_ramdisk is not None and not args.data_ramdisk.is_file():
         raise SystemExit(f'{args.data_ramdisk}: data ramdisk not found')
     if not args.trust_cache.is_file():
@@ -265,6 +294,54 @@ def main():
                 f'{args.data_ramdisk_manifest}: hold_after_success disagrees '
                 'with the diagnostic')
         data_ramdisk_manifest_hash = sha(args.data_ramdisk_manifest)
+    data_seed = None
+    data_seed_manifest_hash = None
+    if args.data_seed_manifest is not None:
+        if args.diagnostic not in ROOT_DATA_DIAGNOSTICS:
+            raise SystemExit(
+                '--data-seed-manifest is only for emmc-block-3-root-data')
+        if not args.data_seed_manifest.is_file():
+            raise SystemExit(
+                f'{args.data_seed_manifest}: data-seed manifest not found')
+        try:
+            data_seed = json.loads(args.data_seed_manifest.read_text())
+        except json.JSONDecodeError as error:
+            raise SystemExit(
+                f'{args.data_seed_manifest}: invalid JSON: {error}')
+        if data_seed.get('guest_mutable') is not True:
+            raise SystemExit(
+                f'{args.data_seed_manifest}: seed is not guest mutable')
+        if (data_seed.get('owner_keybag_created') is not False or
+                data_seed.get('os_inputs_modified') is not False):
+            raise SystemExit(
+                f'{args.data_seed_manifest}: seed provenance is not clean')
+        try:
+            uuid.UUID(data_seed['volume_uuid'])
+        except (KeyError, ValueError):
+            raise SystemExit(
+                f'{args.data_seed_manifest}: invalid volume UUID')
+        if args.diagnostic in ROOT_DATA_DIAGNOSTICS:
+            sys.path.insert(0, str(unixnu / 'drivers/DarwinBoot/Test'))
+            import packed_ramdisk
+            try:
+                packed, _ = packed_ramdisk.inspect(args.data_ramdisk)
+            except ValueError as error:
+                raise SystemExit(f'{args.data_ramdisk}: {error}')
+            if (not packed['packed'] or
+                    packed['bytes'] != data_seed.get('bytes') or
+                    packed['sha256'] != data_seed.get('sha256')):
+                raise SystemExit(
+                    f'{args.data_seed_manifest}: logical seed does not match '
+                    'the packed image')
+            data_seed['packed'] = packed
+        else:
+            if data_seed.get('sha256') != data_hash:
+                raise SystemExit(
+                    f'{args.data_seed_manifest}: sha256 does not match the seed')
+            if data_seed.get('bytes') != args.data_ramdisk.stat().st_size:
+                raise SystemExit(
+                    f'{args.data_seed_manifest}: bytes does not match the seed')
+        data_seed_manifest_hash = sha(args.data_seed_manifest)
     if args.diagnostic in OBSERVATION_DIAGNOSTICS:
         if data_ramdisk_diagnostic is None:
             raise SystemExit(
@@ -286,7 +363,8 @@ def main():
             ignore=shutil.ignore_patterns('.git', 'out', 'build',
                                           '__pycache__', '*.pyc'))
         (temp_device / 'board.toml').write_text(
-            set_diagnostic_board(board, args.payload_size_mib))
+            set_diagnostic_board(board, args.payload_size_mib,
+                                 args.diagnostic in ROOT_DATA_DIAGNOSTICS))
         temp_hash = sha(temp_device / 'board.toml')
 
         command = [
@@ -343,7 +421,7 @@ def main():
             'source_board_sha256': board_hash,
             'diagnostic_board_sha256': temp_hash,
             'payload_size_mib': args.payload_size_mib,
-            'packed_data_ramdisk': False,
+            'packed_data_ramdisk': args.diagnostic in ROOT_DATA_DIAGNOSTICS,
             'diagnostic': args.diagnostic,
             'diagnostic_argument': DIAGNOSTICS[args.diagnostic],
             'kernel_args': args.kernel_arg,
@@ -357,6 +435,13 @@ def main():
                 'diagnostic': data_ramdisk_diagnostic,
                 'hold_after_success': data_ramdisk_hold,
             } if args.data_ramdisk else None),
+            'data_seed': ({
+                'path': str(args.data_seed_manifest.resolve()),
+                'manifest_sha256': data_seed_manifest_hash,
+                'volume_uuid': data_seed['volume_uuid'],
+                'seed': data_seed.get('seed'),
+                'packed': data_seed.get('packed'),
+            } if data_seed else None),
             'trust_cache': {
                 'path': str(args.trust_cache.resolve()),
                 'bytes': args.trust_cache.stat().st_size,

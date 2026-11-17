@@ -131,7 +131,8 @@ def main():
                                  'emmc-block-3-windows',
                                  'emmc-block-3-verify',
                                  'emmc-block-3-vread',
-                                 'emmc-block-3-root'),
+                                 'emmc-block-3-root',
+                                 'emmc-block-3-root-data'),
                         default='any',
                         help='require this board diagnostic argument in the payload')
     parser.add_argument('--force', action='store_true')

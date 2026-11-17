@@ -1,0 +1,29 @@
+CONFIG_XNU_BUILD_ARCHIVES=y
+CONFIG_XNU_ARM_DT_PLATFORM=y
+CONFIG_XNU_ARMCPU=y
+CONFIG_XNU_NATIVE_ARCH_TIMER=y
+# SM6115 uses Cortex-A73/A53 (ARMv8.0), which do not implement PAN. The
+# shared ARM64 profile enables it; `msr PAN, #1` is undefined on this SoC.
+CONFIG_XNU_NATIVE_PAN=n
+CONFIG_XNU_SHENG_PMGR=y
+# The read-only block personality is enabled for the host-qualified P5
+# candidate. The shared build script translates this key into
+# PERSONALITY_CFLAGS; the archive is force-loaded below and the adapter still
+# requires report mode gta4l-emmc-block=1 before any MMIO.
+CONFIG_XNU_NATIVE_GTA4L_EMMC_BLOCK=y
+CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/gta4l-sdhci-snapshot/libGta4lSdhciSnapshot.a -Wl,-force_load,{tree}/build/gta4l-emmc-probe/libGta4lEmmcCore.a -Wl,-force_load,{tree}/build/gta4l-emmc-probe/libGta4lEmmcProbe.a -Wl,-force_load,{tree}/build/gta4l-emmc-block/libGta4lEmmcBlock.a"
+CONFIG_XNU_DT_PANIC_REGION=y
+CONFIG_XNU_SOURCE_CORECRYPTO14=y
+CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="04769D26-2CA0-4825-B443-E2E5F88300F2"
+# S5d: the owner root path uses the gta4l eMMC window provider, not VirtIO.
+# The block archive forced-loaded above supplies native_verified_block_*;
+# the shared gate skips the VirtIO probe archive for this provider.
+CONFIG_XNU_VERIFIED_ROOT_PROBE=y
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y
+CONFIG_XNU_VERIFIED_BLOCK_PROVIDER="gta4l-emmc"
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_DATA_MOUNT=y

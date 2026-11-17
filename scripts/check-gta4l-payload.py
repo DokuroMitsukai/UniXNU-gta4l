@@ -132,6 +132,10 @@ WINDOWS_DIAGNOSTICS = {
 ROOT_DIAGNOSTICS = {
     'emmc-block-3-root': 'emmc-block-3',
 }
+ROOT_DATA_DIAGNOSTICS = {
+    'emmc-block-3-root-data': 'emmc-block-3',
+}
+ALL_ROOT_DIAGNOSTICS = {**ROOT_DIAGNOSTICS, **ROOT_DATA_DIAGNOSTICS}
 ROOT_RAMDISK_TOKENS = ('rd=', 'rootdev=')
 
 
@@ -740,8 +744,8 @@ def diagnostic_contract(args, expected='any'):
                 vread_tokens == expected_vread and
                 not root_tokens and
                 not live_tokens and not slow_tokens)
-        elif expected in ROOT_DIAGNOSTICS:
-            base = ROOT_DIAGNOSTICS[expected]
+        elif expected in ALL_ROOT_DIAGNOSTICS:
+            base = ALL_ROOT_DIAGNOSTICS[expected]
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[base]] and
                 windows_tokens == [WINDOWS_PREFIX + '1'] and
@@ -773,17 +777,17 @@ def diagnostic_contract(args, expected='any'):
                                            *LIVE_DIAGNOSTICS,
                                            'emmc-block-3-verify',
                                            'emmc-block-3-vread',
-                                           *ROOT_DIAGNOSTICS):
+                                           *ALL_ROOT_DIAGNOSTICS):
             checks[f'{expected}_diagnostic_selected'] = False
         if live_tokens and expected not in LIVE_DIAGNOSTICS:
             checks[f'{expected}_diagnostic_selected'] = False
         if windows_tokens and expected not in (*WINDOWS_DIAGNOSTICS,
-                                               *ROOT_DIAGNOSTICS):
+                                               *ALL_ROOT_DIAGNOSTICS):
             checks[f'{expected}_diagnostic_selected'] = False
-        if root_tokens and expected not in ROOT_DIAGNOSTICS:
+        if root_tokens and expected not in ALL_ROOT_DIAGNOSTICS:
             checks[f'{expected}_diagnostic_selected'] = False
         if verify_tokens and expected not in (*WINDOWS_DIAGNOSTICS,
-                                              *ROOT_DIAGNOSTICS):
+                                              *ALL_ROOT_DIAGNOSTICS):
             checks[f'{expected}_diagnostic_selected'] = False
         if vread_tokens and expected not in WINDOWS_DIAGNOSTICS:
             checks[f'{expected}_diagnostic_selected'] = False
@@ -822,6 +826,11 @@ def check(image, expected='any'):
                     else not raw_placeholder and not packed_placeholder)
             if expected in ROOT_DIAGNOSTICS:
                 require('root_has_no_data_ramdisk', not data_present)
+            if expected in ROOT_DATA_DIAGNOSTICS:
+                require('root_data_has_ramdisk', data_present)
+                require('root_data_uses_packed_layout',
+                        'PackedRAMDisk' in memory_map and
+                        'RAMDisk' not in memory_map)
             if data_present:
                 ramdisk = extract(image, RAMDISK_MEMBER,
                                   tmp / 'scratch-data.img').read_bytes()
@@ -865,7 +874,8 @@ def main():
                                  *BULK_DIAGNOSTICS,
                                  *LIVE_DIAGNOSTICS,
                                  *WINDOWS_DIAGNOSTICS,
-                                 *ROOT_DIAGNOSTICS),
+                                 *ROOT_DIAGNOSTICS,
+                                 *ROOT_DATA_DIAGNOSTICS),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')
