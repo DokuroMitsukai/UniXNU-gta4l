@@ -739,6 +739,146 @@ scenario_lifetime_after_mount(void)
 	return 0;
 }
 
+static IOMedia *
+make_vread_media(Gta4lEmmcBlock *window, const char *uuid, const char *name,
+    uint64_t size, uint32_t minorNumber)
+{
+	IOMedia *media = new IOMedia();
+
+	media->whole_value = false;
+	media->base_value = 0;
+	media->size_value = size;
+	media->writable_value = false;
+	media->content_value = "Apple_APFS";
+	media->uuid_value_ = uuid;
+	media->provider_ = window;
+	media->setProperty(gIOBSDNameKey, name);
+	media->setProperty(gIOBSDMajorKey, 1ull, 32);
+	media->setProperty(gIOBSDMinorKey, (unsigned long long)minorNumber,
+	    32);
+	gta4l_test_add_media(media);
+	return media;
+}
+
+static int
+scenario_vread(void)
+{
+	Gta4lEmmcBlock *pending[2];
+	IOMedia *osMedia;
+	IOMedia *systemosMedia;
+	struct gta4l_emmc_block_sha256_ctx caseSha;
+	struct gta4l_emmc_block_sha256_ctx seqSha;
+	uint8_t expectedCase[32];
+	uint8_t expectedSeq[32];
+	uint64_t lastStart = g_fixture.os_size - 1536u;
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	g_self->report.content = nullptr;
+	CHECK(open_windows() == 0);
+	osMedia = make_vread_media(g_window_os,
+	    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID, "disk0s1",
+	    g_fixture.os_size, 1u);
+	systemosMedia = make_vread_media(g_window_systemos,
+	    GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID, "disk0s2",
+	    g_fixture.systemos_size, 2u);
+	gta4l_test_media_read_hook = nullptr;
+	pending[0] = g_window_os;
+	pending[1] = g_window_systemos;
+	{
+		dev_t preDevice = 0;
+		char prePath[64] = {};
+		uint8_t preDigest[48] = {};
+		bool vreadOk;
+
+		CHECK(native_verified_block_volume_device(
+		    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID, &preDevice, prePath,
+		    sizeof(prePath)) == 1);
+		CHECK(strcmp(prePath, "/dev/disk0s1") == 0);
+		CHECK(native_verified_block_root_authorized(preDevice) == 1);
+		CHECK(native_verified_block_manifest_sha384(preDevice,
+		    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID, preDigest) == 1);
+		vreadOk = g_self->runVread(pending, &g_manifest);
+		CHECK(vreadOk == true);
+	}
+	CHECK(g_self->report.vread == 1u);
+	CHECK(g_self->report.vread_cases == 8u);
+	CHECK(g_self->report.vread_passed == 8u);
+	CHECK(g_self->report.vread_failed == 0u);
+	CHECK(g_self->report.vread_mask == 0xffu);
+	CHECK(g_self->report.vread_windows == 2u);
+	CHECK(g_self->report.vread_spans == 1030u);
+	CHECK(g_self->report.vread_write == 1u);
+	CHECK(g_self->report.vread_exports == 7u);
+	CHECK(g_self->report.vread_seq_bytes ==
+	    GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES);
+	CHECK(g_self->report.vread_fail_case == 0xffffffffu);
+	CHECK(osMedia->open_calls >= 1);
+	CHECK(systemosMedia->open_calls >= 1);
+	gta4l_emmc_block_sha256_init(&caseSha);
+	gta4l_emmc_block_sha256_update(&caseSha,
+	    g_fixture.image.data() + g_fixture.os_offset, 4096u);
+	gta4l_emmc_block_sha256_update(&caseSha,
+	    g_fixture.image.data() + g_fixture.systemos_offset, 4096u);
+	gta4l_emmc_block_sha256_update(&caseSha,
+	    g_fixture.image.data() + g_fixture.os_offset + 512u, 512u);
+	gta4l_emmc_block_sha256_update(&caseSha,
+	    g_fixture.image.data() + g_fixture.os_offset + 7u * 512u, 1024u);
+	gta4l_emmc_block_sha256_update(&caseSha,
+	    g_fixture.image.data() + g_fixture.os_offset + lastStart, 1536u);
+	gta4l_emmc_block_sha256_final(&caseSha, expectedCase);
+	gta4l_emmc_block_sha256_init(&seqSha);
+	gta4l_emmc_block_sha256_update(&seqSha,
+	    g_fixture.image.data() + g_fixture.os_offset,
+	    GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES);
+	gta4l_emmc_block_sha256_final(&seqSha, expectedSeq);
+	CHECK(memcmp(g_self->report.vread_digest, expectedCase, 16u) == 0);
+	CHECK(memcmp(g_self->report.vread_seq_digest, expectedSeq, 16u) == 0);
+	{
+		static char text[GTA4L_EMMC_BLOCK_REPORT_BYTES];
+		struct gta4l_emmc_block_report clean = {};
+		const char *line;
+		const char *end;
+		uint32_t length;
+
+		clean.vread = g_self->report.vread;
+		clean.vread_cases = g_self->report.vread_cases;
+		clean.vread_passed = g_self->report.vread_passed;
+		clean.vread_failed = g_self->report.vread_failed;
+		clean.vread_reason = g_self->report.vread_reason;
+		clean.vread_mask = g_self->report.vread_mask;
+		clean.vread_windows = g_self->report.vread_windows;
+		clean.vread_spans = g_self->report.vread_spans;
+		clean.vread_mismatches = g_self->report.vread_mismatches;
+		clean.vread_write = g_self->report.vread_write;
+		clean.vread_exports = g_self->report.vread_exports;
+		clean.vread_seq_ms = g_self->report.vread_seq_ms;
+		clean.vread_seq_bytes = g_self->report.vread_seq_bytes;
+		clean.vread_fail_case = g_self->report.vread_fail_case;
+		clean.vread_fail_status = g_self->report.vread_fail_status;
+		clean.vread_fail_block = g_self->report.vread_fail_block;
+		clean.vread_fail_actual = g_self->report.vread_fail_actual;
+		memcpy(clean.vread_digest, g_self->report.vread_digest, 16u);
+		memcpy(clean.vread_seq_digest,
+		    g_self->report.vread_seq_digest, 16u);
+		length = gta4l_emmc_block_report_format(text, sizeof(text),
+		    &clean);
+		CHECK(length > 0u);
+		CHECK(length < sizeof(text));
+		line = strstr(text, "GTA4L-EMMC P5 VREAD: ");
+		CHECK(line != nullptr);
+		end = strchr(line, '\n');
+		CHECK(end != nullptr);
+		CHECK((uint32_t)(end - line) <=
+		    GTA4L_EMMC_BLOCK_VREAD_LINE_BYTES);
+		CHECK((uint32_t)(end - line) <=
+		    (GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS *
+		    GTA4L_EMMC_BLOCK_SCREEN_COLUMNS));
+	}
+	return 0;
+}
+
 static int
 scenario_bench(void)
 {
@@ -867,6 +1007,7 @@ static const struct scenario g_scenarios[] = {
 	{ "lifetime-recover-fail", scenario_lifetime_recover_fail },
 	{ "lifetime-verify-fail", scenario_lifetime_verify_fail },
 	{ "lifetime-after-mount", scenario_lifetime_after_mount },
+	{ "vread", scenario_vread },
 	{ "bench", scenario_bench },
 	{ "completion-skipped", scenario_completion_skipped },
 	{ "owner-short", scenario_owner_short },

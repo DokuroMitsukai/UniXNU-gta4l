@@ -68,6 +68,7 @@ BULK_PREFIX = 'gta4l-emmc-bulk='
 DMA_PREFIX = 'gta4l-emmc-dma='
 LIVE_PREFIX = 'gta4l-emmc-live='
 WINDOWS_PREFIX = 'gta4l-emmc-windows='
+VREAD_PREFIX = 'gta4l-emmc-vread='
 SLOW_PREFIX = 'gta4l-emmc-slow='
 BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
 # The partobs, partcmp, partread, deblock, breakup, sweep, consume, width,
@@ -124,6 +125,7 @@ LIVE_DIAGNOSTICS = {
 WINDOWS_DIAGNOSTICS = {
     'emmc-block-3-windows': 'emmc-block-3',
     'emmc-block-3-verify': 'emmc-block-3',
+    'emmc-block-3-vread': 'emmc-block-3',
 }
 
 
@@ -265,6 +267,8 @@ def diagnostic_contract(args, expected='any'):
                    if item.startswith(LIVE_PREFIX)]
     windows_tokens = [item for item in tokens
                       if item.startswith(WINDOWS_PREFIX)]
+    vread_tokens = [item for item in tokens
+                    if item.startswith(VREAD_PREFIX)]
     slow_tokens = [item for item in tokens
                    if item.startswith(SLOW_PREFIX)]
     checks = {'exactly_one_diagnostic_argument': len(found) == 1}
@@ -678,8 +682,11 @@ def diagnostic_contract(args, expected='any'):
                 not speed_tokens)
         elif expected in WINDOWS_DIAGNOSTICS:
             base = WINDOWS_DIAGNOSTICS[expected]
-            expected_dma = ([DMA_PREFIX + '1'] if
-                            expected == 'emmc-block-3-verify' else [])
+            expected_dma = ([DMA_PREFIX + '1'] if expected in
+                            ('emmc-block-3-verify', 'emmc-block-3-vread')
+                            else [])
+            expected_vread = ([VREAD_PREFIX + '1'] if
+                              expected == 'emmc-block-3-vread' else [])
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[base]] and
                 windows_tokens == [WINDOWS_PREFIX + '1'] and
@@ -690,6 +697,7 @@ def diagnostic_contract(args, expected='any'):
                 not widthhold_tokens and not widthpub_tokens and
                 not speed_tokens and not bulk_tokens and
                 dma_tokens == expected_dma and
+                vread_tokens == expected_vread and
                 not live_tokens and not slow_tokens)
         else:
             checks[f'{expected}_diagnostic_selected'] = (
@@ -705,7 +713,8 @@ def diagnostic_contract(args, expected='any'):
             checks[f'{expected}_diagnostic_selected'] = False
         if dma_tokens and expected not in (*BULK_DIAGNOSTICS,
                                            *LIVE_DIAGNOSTICS,
-                                           'emmc-block-3-verify'):
+                                           'emmc-block-3-verify',
+                                           'emmc-block-3-vread'):
             checks[f'{expected}_diagnostic_selected'] = False
         if live_tokens and expected not in LIVE_DIAGNOSTICS:
             checks[f'{expected}_diagnostic_selected'] = False

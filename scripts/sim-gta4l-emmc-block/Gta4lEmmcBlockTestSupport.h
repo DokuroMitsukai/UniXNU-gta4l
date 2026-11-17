@@ -221,6 +221,16 @@ public:
 		}
 		return 0;
 	}
+	int count() const { return count_; }
+	const char *keyAt(int index) const
+	{
+		return ((index >= 0) && (index < count_)) ? keys_[index] : 0;
+	}
+	OSObject *valueAt(int index) const
+	{
+		return ((index >= 0) && (index < count_)) ?
+		    values_[index] : 0;
+	}
 private:
 	const char *class_name_;
 	const char *keys_[4];
@@ -287,7 +297,8 @@ class IOService : public OSObject {
 public:
 	inline static const int test_tag = 0;
 	IOService() : property_count_(0), provider_(0), registered_(false),
-	    uuid_value_(0), child_count_(0) {}
+	    uuid_value_(0), string_key_(0), string_value_(0),
+	    child_count_(0) {}
 	const void *typeTag() const override { return &test_tag; }	virtual bool init(OSDictionary *properties = nullptr);
 	virtual bool start(IOService *provider) { provider_ = provider; return true; }
 	virtual void stop(IOService *provider) { (void)provider; }
@@ -326,6 +337,9 @@ public:
 	bool registered_;
 	const char *uuid_value_;
 	OSString uuid_object_;
+	const char *string_key_;
+	const char *string_value_;
+	OSString string_object_;
 	OSNumber property_number_;
 	IOService *children_[8];
 	int child_count_;

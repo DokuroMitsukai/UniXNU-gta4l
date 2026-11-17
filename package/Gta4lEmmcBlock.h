@@ -951,6 +951,33 @@ struct gta4l_emmc_block_part {
  * being established: before native_verified_block_root_authorized() has
  * accepted the volume and inside this bounded window after publication. */
 #define GTA4L_EMMC_BLOCK_ROOT_PANIC_MS 120000u
+/* S5d″ verified-read report rung. It runs the S5c′ verify path, then reads
+ * through both published windows, refuses a write, checks the three
+ * native_verified_block_* exports and prints one bounded VREAD line. */
+#define GTA4L_EMMC_BLOCK_VREAD_ARG "gta4l-emmc-vread"
+#define GTA4L_EMMC_BLOCK_VREAD_OFF 0
+#define GTA4L_EMMC_BLOCK_VREAD_ON 1
+#define GTA4L_EMMC_BLOCK_VREAD_REFUSED (-1)
+#define GTA4L_EMMC_BLOCK_VREAD_CASES 8u
+#define GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES (4u << 20)
+#define GTA4L_EMMC_BLOCK_VREAD_LINE_BYTES 512u
+#define GTA4L_EMMC_BLOCK_VREAD_REPORT_WORST_BYTES \
+	(GTA4L_EMMC_BLOCK_WINDOWS_REPORT_WORST_BYTES + \
+	GTA4L_EMMC_BLOCK_VREAD_LINE_BYTES + 1u)
+#define GTA4L_EMMC_BLOCK_VREAD_REASON_NONE 0u
+#define GTA4L_EMMC_BLOCK_VREAD_REASON_MEDIA 1u
+#define GTA4L_EMMC_BLOCK_VREAD_REASON_MEMORY 2u
+#define GTA4L_EMMC_BLOCK_VREAD_REASON_READ 3u
+#define GTA4L_EMMC_BLOCK_VREAD_REASON_WRITE 4u
+#define GTA4L_EMMC_BLOCK_VREAD_REASON_EXPORT 5u
+#define GTA4L_EMMC_BLOCK_VREAD_CASE_OS 0u
+#define GTA4L_EMMC_BLOCK_VREAD_CASE_SYSTEMOS 1u
+#define GTA4L_EMMC_BLOCK_VREAD_CASE_UNALIGNED 2u
+#define GTA4L_EMMC_BLOCK_VREAD_CASE_CROSS 3u
+#define GTA4L_EMMC_BLOCK_VREAD_CASE_LAST 4u
+#define GTA4L_EMMC_BLOCK_VREAD_CASE_SEQ 5u
+#define GTA4L_EMMC_BLOCK_VREAD_CASE_WRITE 6u
+#define GTA4L_EMMC_BLOCK_VREAD_CASE_EXPORT 7u
 #define GTA4L_EMMC_BLOCK_VERIFY_HEADER_BYTES 160u
 #define GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES 384u
 #define GTA4L_EMMC_BLOCK_VERIFY_KEY_BYTES 395u
@@ -1829,6 +1856,32 @@ struct gta4l_emmc_block_report {
 	uint64_t verify_fail_actual;
 	uint8_t verify_os_sha384[16];
 	uint8_t verify_systemos_sha384[16];
+	/* S5d″ VREAD rung. `vread` selects the line; `vread_mask` is the
+	 * per-case pass bitmask (OS block0, SystemOS block0, unaligned,
+	 * cross-span, final partial, sequential, write refused, exports).
+	 * `vread_spans` counts every verified 4096-byte span and
+	 * `vread_mismatches` is the required zero. `vread_seq_ms` is the
+	 * measured 4 MiB sequential time; the two digest prefixes cover the
+	 * concatenated fixed cases and the sequential read. */
+	uint32_t vread;
+	uint32_t vread_cases;
+	uint32_t vread_passed;
+	uint32_t vread_failed;
+	uint32_t vread_reason;
+	uint32_t vread_mask;
+	uint32_t vread_windows;
+	uint32_t vread_spans;
+	uint32_t vread_mismatches;
+	uint32_t vread_write;
+	uint32_t vread_exports;
+	uint32_t vread_seq_ms;
+	uint64_t vread_seq_bytes;
+	uint32_t vread_fail_case;
+	int32_t vread_fail_status;
+	uint64_t vread_fail_block;
+	uint64_t vread_fail_actual;
+	uint8_t vread_digest[16];
+	uint8_t vread_seq_digest[16];
 	/* First failing window (manifest slot; 0xffffffff on success), the
 	 * OR of its media-stage bits, and the failing wait's poll count and
 	 * elapsed milliseconds. */
@@ -2028,6 +2081,14 @@ int gta4l_emmc_block_root_select(int token_present, int token_value,
     int duplicate_tokens, int block_selected, int block_value,
     int windows_selected, int verify_selected, int dma_selected,
     int other_selected);
+
+/* Select the S5d″ verified-read report rung. Valid only with exactly one
+ * block=3 token, the windows, verify and DMA tokens, value 1, no root
+ * token and no other diagnostic selector. */
+int gta4l_emmc_block_vread_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int windows_selected, int verify_selected, int dma_selected,
+    int root_selected, int other_selected);
 
 /* Select the S4 windows rung. Valid only with exactly one block=3 token,
  * value 1, and no other mode token. */

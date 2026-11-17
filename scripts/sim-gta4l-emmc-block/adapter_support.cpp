@@ -1491,8 +1491,11 @@ IOService::messageClients(UInt32 type, void *argument)
 bool
 IOService::setProperty(const char *key, const char *value)
 {
-	(void)key;
-	(void)value;
+	if ((key == 0) || (value == 0)) {
+		return false;
+	}
+	string_key_ = key;
+	string_value_ = value;
 	return true;
 }
 
@@ -1536,6 +1539,11 @@ IOService::getProperty(const char *key) const
 			    uuid_value_);
 			return const_cast<OSString *>(&uuid_object_);
 		}
+		if ((string_key_ != 0) && (strcmp(key, string_key_) == 0)) {
+			const_cast<IOService *>(this)->string_object_.setValue(
+			    string_value_);
+			return const_cast<OSString *>(&string_object_);
+		}
 		for (index = 0; index < property_count_; index++) {
 			if ((properties_[index].key != 0) &&
 			    (strcmp(properties_[index].key, key) == 0)) {
@@ -1569,6 +1577,55 @@ IOService::getChildIterator(const IORegistryPlane *plane) const
 		items[count++] = children_[index];
 	}
 	return new OSIterator(items, count);
+}
+
+static bool
+gta4l_test_media_matches(IOMedia *media, OSDictionary *filter)
+{
+	int index;
+
+	if (filter == 0) {
+		return true;
+	}
+	for (index = 0; index < filter->count(); index++) {
+		const char *key = filter->keyAt(index);
+		OSObject *wanted = filter->valueAt(index);
+		OSObject *actual;
+		OSString *wantedString;
+		OSString *actualString;
+		OSNumber *wantedNumber;
+		OSNumber *actualNumber;
+
+		if ((key == 0) || (wanted == 0) || (media == 0)) {
+			return false;
+		}
+		actual = media->getProperty(key);
+		if (actual == 0) {
+			return false;
+		}
+		wantedString = OSDynamicCast(OSString, wanted);
+		if (wantedString != 0) {
+			actualString = OSDynamicCast(OSString, actual);
+			if ((actualString == 0) ||
+			    (strcmp(wantedString->getCStringNoCopy(),
+			    actualString->getCStringNoCopy()) != 0)) {
+				return false;
+			}
+			continue;
+		}
+		wantedNumber = OSDynamicCast(OSNumber, wanted);
+		if (wantedNumber != 0) {
+			actualNumber = OSDynamicCast(OSNumber, actual);
+			if ((actualNumber == 0) ||
+			    (wantedNumber->unsigned64BitValue() !=
+			    actualNumber->unsigned64BitValue())) {
+				return false;
+			}
+			continue;
+		}
+		return false;
+	}
+	return true;
 }
 
 OSIterator *
@@ -1642,10 +1699,23 @@ IOService::getMatchingServices(OSDictionary *matching)
 		}
 		return new OSIterator(items, visible);
 	}
-	for (index = 0; index < gta4l_test_media_count; index++) {
-		items[index] = gta4l_test_media[index];
+	{
+		OSDictionary *filter = (matching != 0) ?
+		    OSDynamicCast(OSDictionary,
+		    matching->getObject("IOPropertyMatch")) : 0;
+		int matched = 0;
+
+		for (index = 0; index < gta4l_test_media_count; index++) {
+			IOMedia *media = gta4l_test_media[index];
+
+			if ((media != 0) &&
+			    gta4l_test_media_matches(media, filter) &&
+			    (matched < GTA4L_TEST_MAX_MEDIA)) {
+				items[matched++] = media;
+			}
+		}
+		return new OSIterator(items, matched);
 	}
-	return new OSIterator(items, gta4l_test_media_count);
 }
 
 IOMedia::IOMedia()
@@ -1775,7 +1845,7 @@ IOMedia::getProperty(const char *key) const
 		    writable_value);
 		return const_cast<OSBoolean *>(&writable_object);
 	}
-	return 0;
+	return IOService::getProperty(key);
 }
 
 struct gta4l_test_media_completion {

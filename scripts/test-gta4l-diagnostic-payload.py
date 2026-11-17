@@ -536,6 +536,39 @@ def test_emmc_block_3_verify(base):
                                   'verify')
 
 
+def test_emmc_block_3_vread(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    record = base / 'argv.json'
+    os.environ['FAKE_UNIXNU_RECORD'] = str(record)
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    fixture = write_fixture_manifest(base)
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-vread'
+    code = run(module, [
+        *args,
+        '--data-ramdisk-manifest', str(fixture),
+        '--kernel', str(kernel),
+        '--output', str(output),
+        '--manifest', str(manifest),
+    ])
+    assert code == 0
+    argv = json.loads(record.read_text())
+    kernel_args = [argv[index + 1] for index, value in enumerate(argv)
+                   if value == '--kernel-arg']
+    expected = ['gta4l-emmc-block=3', 'gta4l-emmc-windows=1',
+                'gta4l-emmc-verify=1', 'gta4l-emmc-dma=1',
+                'gta4l-emmc-vread=1']
+    assert kernel_args[-5:] == expected, kernel_args
+    manifest_record = json.loads(manifest.read_text())
+    assert manifest_record['diagnostic_argument'] == ' '.join(expected)
+    assert manifest_record['data_ramdisk']['diagnostic'] == 'fs-timer-hold'
+    assert manifest_record['data_ramdisk']['hold_after_success'] is True
+    print('PASS emmc-block-3-vread maps to the five-token VREAD rung')
+
+
 def test_emmc_block_3_live(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     record = base / 'argv.json'
@@ -1602,7 +1635,8 @@ def main():
              test_emmc_block_3_consume, test_emmc_block_3_width4,
              test_emmc_block_3_widthhold, test_emmc_block_3_widthpub,
              test_emmc_block_3_speed, test_emmc_block_3_bulk,
-             test_emmc_block_3_windows, test_emmc_block_3_live,
+             test_emmc_block_3_windows, test_emmc_block_3_vread,
+             test_emmc_block_3_live,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
              test_partread_rejects_early_panic_fixture,

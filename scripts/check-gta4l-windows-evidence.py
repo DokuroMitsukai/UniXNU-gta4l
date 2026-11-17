@@ -23,6 +23,7 @@ from pathlib import Path
 
 LABEL = 'GTA4L-EMMC P5 WINDOWS: '
 VERIFY_LABEL = 'GTA4L-EMMC P5 VERIFY: '
+VREAD_LABEL = 'GTA4L-EMMC P5 VREAD: '
 HEADER_BYTES = 4096
 EDGE_BYTES = 1 << 20
 NAME_BYTES = 32
@@ -53,6 +54,13 @@ VERIFY_FIELDS = ('valid', 'reason', 'os', 'sysos', 'blocks', 'ms',
 VERIFY_FAIL_FIELDS = ('vobj', 'voff', 'vlen', 'vio', 'vact')
 VERIFY_BLOCKS = 1025
 VERIFY_BUDGET_MS = 12000
+VREAD_CASES = 8
+VREAD_SEQ_BYTES = 4 << 20
+VREAD_SEQ_BUDGET_MS = 30000
+VREAD_FIELDS = ('cases', 'passed', 'failed', 'reason', 'mask',
+                'windows', 'spans', 'mismatches', 'write', 'exports',
+                'seq_ms', 'seq_bytes', 'failcase', 'failstatus',
+                'failblock', 'failactual', 'dig', 'sdig')
 
 
 def u32(data, offset):
@@ -306,6 +314,108 @@ def check_verify(line, expected_osha, expected_ssha,
         errors.append(f'VERIFY ms={ms!r}, expected milliseconds')
     elif int(ms) > budget_ms:
         errors.append(f'VERIFY ms={ms}, above the {budget_ms} ms budget')
+    return errors
+
+
+def parse_vread(line):
+    if not line.startswith(VREAD_LABEL):
+        raise ValueError('missing VREAD label')
+    fields = {}
+    for token in line[len(VREAD_LABEL):].split():
+        if '=' not in token:
+            raise ValueError(f'malformed token {token!r}')
+        key, value = token.split('=', 1)
+        if key not in VREAD_FIELDS:
+            raise ValueError(f'unknown VREAD field {key}')
+        if key in fields:
+            raise ValueError(f'duplicate VREAD field {key}')
+        fields[key] = value
+    missing = [key for key in VREAD_FIELDS if key not in fields]
+    if missing:
+        raise ValueError(f'missing VREAD field {missing[0]}')
+    return fields
+
+
+def vread_spans(image_bytes, start, end):
+    count = 0
+    position = start & ~(HEADER_BYTES - 1)
+    while position < end:
+        count += 1
+        position += HEADER_BYTES
+    if end > image_bytes:
+        return 0
+    return count
+
+
+def check_vread(line, image, expected):
+    errors = []
+    try:
+        fields = parse_vread(line)
+    except ValueError as error:
+        return [str(error)]
+    required = {
+        'cases': str(VREAD_CASES), 'passed': str(VREAD_CASES),
+        'failed': '0', 'reason': '0', 'mask': 'ff', 'windows': '2',
+        'mismatches': '0', 'write': '1', 'exports': '7',
+        'failcase': '4294967295', 'failstatus': '00000000',
+        'failblock': '0', 'failactual': '0',
+    }
+    for key, value in required.items():
+        if fields[key] != value:
+            errors.append(f'VREAD {key} {fields[key]} != {value}')
+    if fields['seq_bytes'] != str(VREAD_SEQ_BYTES):
+        errors.append(f'VREAD seq_bytes {fields["seq_bytes"]} != '
+                      f'{VREAD_SEQ_BYTES}')
+    try:
+        seq_ms = int(fields['seq_ms'])
+    except ValueError:
+        errors.append('VREAD seq_ms is not an integer')
+        seq_ms = 0
+    if seq_ms > VREAD_SEQ_BUDGET_MS:
+        errors.append(f'VREAD seq_ms {seq_ms} exceeds '
+                      f'{VREAD_SEQ_BUDGET_MS}')
+    windows = {window['name']: window for window in expected['windows']}
+    if 'OS' not in windows or 'SystemOS' not in windows:
+        errors.append('VREAD needs OS and SystemOS windows')
+        return errors
+    os_window = windows['OS']
+    system_window = windows['SystemOS']
+    os_size = os_window['size']
+    system_size = system_window['size']
+    if os_size < VREAD_SEQ_BYTES or os_size < 1536:
+        errors.append('VREAD OS window is too small for the cases')
+        return errors
+    spans = (1 + 1 + 1 + 2 +
+             vread_spans(os_size, os_size - 1536, os_size) +
+             VREAD_SEQ_BYTES // HEADER_BYTES)
+    if fields['spans'] != str(spans):
+        errors.append(f'VREAD spans {fields["spans"]} != {spans}')
+    with image.open('rb') as stream:
+        case_hash = hashlib.sha256()
+        for offset, length in (
+                (os_window['off'], 4096),
+                (system_window['off'], 4096),
+                (os_window['off'] + 512, 512),
+                (os_window['off'] + 7 * 512, 1024),
+                (os_window['off'] + os_size - 1536, 1536)):
+            stream.seek(offset)
+            data = stream.read(length)
+            if len(data) != length:
+                errors.append(f'VREAD image range {offset}+{length} '
+                              'is short')
+                return errors
+            case_hash.update(data)
+        stream.seek(os_window['off'])
+        seq = stream.read(VREAD_SEQ_BYTES)
+        if len(seq) != VREAD_SEQ_BYTES:
+            errors.append('VREAD sequential range is short')
+            return errors
+    expected_digest = case_hash.hexdigest()[:32]
+    expected_seq = hashlib.sha256(seq).hexdigest()[:32]
+    if fields['dig'] != expected_digest:
+        errors.append(f'VREAD dig {fields["dig"]} != {expected_digest}')
+    if fields['sdig'] != expected_seq:
+        errors.append(f'VREAD sdig {fields["sdig"]} != {expected_seq}')
     return errors
 
 
@@ -651,6 +761,57 @@ def self_test():
             pass
         else:
             raise AssertionError('a version-1 manifest with objects was accepted')
+    with tempfile.TemporaryDirectory(prefix='gta4l-vread-check-') as raw:
+        image = Path(raw) / 'vread.img'
+        total = 8 << 20
+        os_off = 1 << 20
+        os_size = (4 << 20) + 1536
+        system_off = 6 << 20
+        system_size = (1 << 20) + 1536
+        data = bytearray(total)
+        for index in range(total):
+            data[index] = (index * 29 + index // 4096) & 0xff
+        image.write_bytes(bytes(data))
+        expected_vread = {
+            'windows': [
+                {'name': 'OS', 'off': os_off, 'size': os_size},
+                {'name': 'SystemOS', 'off': system_off,
+                 'size': system_size},
+            ],
+        }
+        case_hash = hashlib.sha256()
+        for offset, length in (
+                (os_off, 4096), (system_off, 4096),
+                (os_off + 512, 512), (os_off + 7 * 512, 1024),
+                (os_off + os_size - 1536, 1536)):
+            case_hash.update(data[offset:offset + length])
+        seq_digest = hashlib.sha256(
+            data[os_off:os_off + (4 << 20)]).hexdigest()[:32]
+        vread = (f'{VREAD_LABEL}cases=8 passed=8 failed=0 reason=0 '
+                 f'mask=ff windows=2 spans=1030 mismatches=0 write=1 '
+                 f'exports=7 seq_ms=1000 seq_bytes=4194304 '
+                 f'failcase=4294967295 failstatus=00000000 failblock=0 '
+                 f'failactual=0 dig={case_hash.hexdigest()[:32]} '
+                 f'sdig={seq_digest}')
+        assert not check_vread(vread, image, expected_vread), \
+            check_vread(vread, image, expected_vread)
+        for text, label in (
+                (vread.replace('mask=ff', 'mask=7f'), 'vread mask'),
+                (vread.replace('spans=1030', 'spans=1029'), 'vread spans'),
+                (vread.replace('write=1', 'write=0'), 'vread write'),
+                (vread.replace('exports=7', 'exports=3'), 'vread exports'),
+                (vread.replace('seq_bytes=4194304', 'seq_bytes=1048576'),
+                 'vread seq bytes'),
+                (vread.replace('cases=8', 'cases=7'), 'vread cases'),
+                (vread.replace('dig=' + case_hash.hexdigest()[:32],
+                               'dig=' + '0' * 32), 'vread dig'),
+                (vread.replace('sdig=' + seq_digest, 'sdig=' + '0' * 32),
+                 'vread sdig'),
+                (vread.replace('seq_ms=1000', 'seq_ms=30001'),
+                 'vread seq budget'),
+                (vread + ' extra=1', 'vread extra field')):
+            assert check_vread(text, image, expected_vread), \
+                f'{label} was accepted'
     print('PASS: windows evidence checker self-test')
 
 
@@ -663,6 +824,7 @@ def main():
                         default=Path(__file__).resolve().parents[1] /
                         'out/gta4l/s5-policies')
     parser.add_argument('--expect-verify', action='store_true')
+    parser.add_argument('--expect-vread', action='store_true')
     parser.add_argument('--pre-write', action='store_true')
     parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args()
@@ -706,13 +868,30 @@ def main():
                 print(f'FAIL: policies: {error}')
                 return 1
             errors += check_verify(verify_lines[0].strip(), osha, ssha)
+    vread_lines = [line for line in text.splitlines()
+                   if line.startswith(VREAD_LABEL)]
+    if args.expect_vread and not vread_lines:
+        errors.append('missing VREAD line')
+    if vread_lines:
+        if len(vread_lines) != 1:
+            errors.append(f'expected one VREAD line, found '
+                          f'{len(vread_lines)}')
+        elif not args.pre_write:
+            try:
+                expected = expected_from_image(args.image)
+            except (OSError, ValueError, struct.error) as error:
+                print(f'FAIL: {error}')
+                return 1
+            errors += check_vread(vread_lines[0].strip(), args.image,
+                                  expected)
     for error in errors:
         print(f'FAIL: {error}')
     if errors:
         return 1
     print('PASS: WINDOWS report matches the image' +
           (' (pre-write)' if args.pre_write else '') +
-          (' and VERIFY matches the policies' if verify_lines else ''))
+          (' and VERIFY matches the policies' if verify_lines else '') +
+          (' and VREAD matches the image' if vread_lines else ''))
     return 0
 
 

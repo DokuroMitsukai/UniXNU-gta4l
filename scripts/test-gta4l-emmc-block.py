@@ -1736,7 +1736,23 @@ ADAPTER_MUTATIONS = [
        '\t\t\treturn GTA4L_EMMC_ERR_ADMA;\n')],
      'dma-stack-fallback'),
     ('windows-short-read-accept',
-     [('\treturn (status == kIOReturnSuccess) && (actual == bytes);\n',
+     [('\tstatus = media->read(this, offset, descriptor, nullptr, &actual);\n'
+       '\tdescriptor->release();\n'
+       '\tif (statusOut != nullptr) {\n'
+       '\t\t*statusOut = status;\n'
+       '\t}\n'
+       '\tif (actualOut != nullptr) {\n'
+       '\t\t*actualOut = actual;\n'
+       '\t}\n'
+       '\treturn (status == kIOReturnSuccess) && (actual == bytes);\n',
+       '\tstatus = media->read(this, offset, descriptor, nullptr, &actual);\n'
+       '\tdescriptor->release();\n'
+       '\tif (statusOut != nullptr) {\n'
+       '\t\t*statusOut = status;\n'
+       '\t}\n'
+       '\tif (actualOut != nullptr) {\n'
+       '\t\t*actualOut = actual;\n'
+       '\t}\n'
        '\treturn (status == kIOReturnSuccess);\n')],
      'windows-short-read'),
     ('windows-window-accept',
@@ -2216,8 +2232,10 @@ POLICY_MUTATIONS = [
        '\t\tgta4l_emmc_block_put_hex(&writer, report->speed_hispd, 1u);\n')],
      'speed-match-8bit'),
     ('speed-formatter-part-line',
-     [('\t} else if ((report->widthhold == 0) && (report->speed == 0)) {\n',
-       '\t} else if (report->widthhold == 0) {\n')],
+     [('\t} else if ((report->widthhold == 0) && (report->speed == 0) &&\n'
+       '\t    (report->vread == 0u)) {\n',
+       '\t} else if ((report->widthhold == 0) &&\n'
+       '\t    (report->vread == 0u)) {\n')],
      'speed-match-8bit'),
     ('speed-formatter-read-line',
      [('\tif ((report->consume == 0) && (report->width == 0) &&\n'
@@ -2414,6 +2432,25 @@ VERIFY_MUTATIONS = [
        '\tif ((gta4l_lifetime_transport_error(status) || 1) &&\n'
        '\t    (windowOwner->rootRecoveries == 0u)) {\n')],
      'lifetime-verify-fail'),
+    ('vread-seq-truncate',
+     [('\twhile (position < GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES) {\n',
+       '\twhile (position < 32768u) {\n')],
+     'vread'),
+    ('vread-write-status',
+     [('\t\t\tif ((status == kIOReturnNotWritable) &&\n',
+       '\t\t\tif ((status == kIOReturnSuccess) &&\n')],
+     'vread'),
+    ('vread-export-accept',
+     [('\tif (exports == 7u) {\n', '\tif (exports == 0u) {\n')],
+     'vread'),
+    ('vread-media-open',
+     [('\t\t\tif (!media[index]->open(this, 0,\n',
+       '\t\t\tif (0 && !media[index]->open(this, 0,\n')],
+     'vread'),
+    ('vread-span-count',
+     [('\t\t\tspans += gta4l_vread_spans(osSize, 0u, 4096u);\n',
+       '\t\t\tspans += 0u;\n')],
+     'vread'),
 ]
 
 
@@ -2864,6 +2901,16 @@ def check_adapter_source():
     assert 'GTA4L-EMMC P5 ROOT: online=1 windows=' in adapter and \
         'rootMode && (reason ==' in adapter, \
         'lifetime root success must stay online instead of panicking'
+    assert 'GTA4L_EMMC_BLOCK_VREAD_ARG' in policy_header and \
+        'gta4l_emmc_block_vread_select' in policy and \
+        'gta4l_emmc_block_vread_select(' in adapter and \
+        'GTA4L-EMMC P5 VREAD: ' in policy and \
+        'runVread(pending, &parsed)' in adapter, \
+        'the verified-read report rung must use the shared selector'
+    assert 'GTA4L_EMMC_BLOCK_VREAD_REPORT_WORST_BYTES' in policy_header and \
+        'GTA4L_EMMC_BLOCK_VREAD_CASES' in policy_header and \
+        'kIOReturnNotWritable' in adapter, \
+        'the VREAD line must be bounded and refuse the write case'
     assert 'verify_load_ms' in policy_header and \
         'verify_hash_ms' in policy_header and \
         'verify_open_ms' in policy_header and \
@@ -3466,8 +3513,8 @@ def check_verify_adapter(compiler, cxx, temp):
         'verified-read scenarios failed:\n' + run.stdout + run.stderr)
     assert 'PASS gta4l verified read adapter' in run.stdout, run.stdout
     passes = run.stdout.count('PASS ')
-    assert passes == 20, f'expected 20 verified-read PASS lines, got {passes}'
-    print('PASS verified-read adapter: 19 scenarios against real runVerify '
+    assert passes == 21, f'expected 21 verified-read PASS lines, got {passes}'
+    print('PASS verified-read adapter: 20 scenarios against real runVerify '
           'and verifiedWindowRead')
     for name, replacements, scenario in VERIFY_MUTATIONS:
         mirror = temp / f'verify-{name}'

@@ -9853,3 +9853,59 @@ The full suite is green: exit=0, 309 PASS lines, default adapter 527
 scenarios, core 47 scenarios/35 mutation controls, verify build 19
 scenarios and 11 mutation controls (all rejected). No candidate, flash,
 boot or device access.
+
+### 5.4.8 S5d″ verified-read report rung (2026-11-17, host)
+
+`gta4l-emmc-vread=1` selects the S5d″ report rung. It requires
+`gta4l-emmc-block=3`, `gta4l-emmc-windows=1`, `gta4l-emmc-verify=1` and
+`gta4l-emmc-dma=1`, and conflicts with `gta4l-emmc-root=1` and every
+other diagnostic selector. After the S5c′ verification and both window
+publications, `runVread` reads through the published OS and SystemOS
+media: OS block 0, SystemOS block 0, an unaligned 512-byte read inside a
+span, a 1,024-byte read crossing a span boundary, the OS final
+1,536-byte partial span, and a bounded 4 MiB sequential read in 32 KiB
+requests. It then attempts one write and requires
+`kIOReturnNotWritable` with no completion, and checks the three
+`native_verified_block_*` exports: device path resolution, root
+authorization and the cached envelope SHA-384. The VREAD line carries
+the case count/mask, window count, verified span count (1,030 on the
+production image), mismatch count, write and export results, the
+sequential milliseconds/bytes, the first failure case/status/block/
+actual, and two 16-byte digest prefixes (fixed cases and sequential).
+The widest VREAD line is 411 bytes and the VREAD report shape is 29
+panic-screen rows; the line is bounded by 512 bytes and the report
+buffer by 3,584 bytes. The rung suppresses the base DRV/XFER/MEDIA/PART/
+SNAP/FAIL lines when VREAD is selected; WINDOWS and VERIFY remain.
+
+The host verify build now runs 20 scenarios and 16 mutations. The new
+VREAD scenarios cover the token and every read/write/export case; the
+five VREAD mutations cover sequential truncation, a wrong write status,
+an export acceptance bypass, a missing media open and a span-count
+bypass. The host harness also found a real export bug: the
+`native_verified_block_volume_device` path used `sizeof(path)` on a
+pointer parameter instead of the caller's `size`, so any BSD name longer
+than two characters was rejected. It now uses `size` and the host export
+test resolves `/dev/disk0s1`, authorizes the device and reproduces the
+OS envelope digest.
+
+The trust-on kernel (the S5e build) is `ba1ad3ec…` (51,699,712 bytes)
+with archive `5a549151…`, and storage-ABI audit
+`out/gta4l/storage-abi-ba1ad3ec` PASS (190 slots, 181 bindings; service
+`fffffff007b4f5b8`). The S5d″ diagnostic kernel uses
+`configs/gta4l_vread_defconfig`, which turns `XNU_VERIFIED_ROOT_PROBE`,
+`XNU_OWNER_ROOT_AUDIT` and `XNU_OWNER_ROOT_TRUST` off because an
+`rd=md0` RAM root has no verified state. Its kernel hash, archive and
+audit are recorded with the candidate; userdata stays
+`ae6e18e7…`. The diagnostic kernel is `2b39e25c…` (51,695,616
+bytes) with the same archive `5a549151…`; its storage-ABI audit
+`out/gta4l/storage-abi-2b39e25c` is PASS (190 slots, 181 bindings;
+service `fffffff007b4f5b8`), and its `bsd_init.o` records
+`XNU_VERIFIED_ROOT_PROBE=0`, `XNU_OWNER_ROOT_AUDIT=0` and
+`XNU_OWNER_ROOT_TRUST=0`. The S5d″ candidate payload is `e26e37f5…`
+(83,886,080 bytes; contract 133/133; `emmc-block-3-vread`) and the BOOT
+image is `10ea06bb…` (85,688,320 bytes; gate 18/18; only the ramdisk
+differs from the v5 baseline). Userdata stays `ae6e18e7…`. The full host
+suite is green: exit=0, 314 PASS lines, default adapter 527, core 47/35,
+verify build 20 scenarios and 16 mutations (all rejected). The image has
+not been flashed or booted; it needs the owner's go naming the full BOOT
+SHA-256.

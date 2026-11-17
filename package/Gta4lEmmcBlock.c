@@ -153,6 +153,16 @@ _Static_assert(GTA4L_EMMC_BLOCK_WINDOWS_LINE_BYTES <=
     (GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS *
     GTA4L_EMMC_BLOCK_SCREEN_COLUMNS),
     "a single WINDOWS line must fit the panic-screen body");
+_Static_assert(GTA4L_EMMC_BLOCK_VREAD_LINE_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "VREAD line must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_VREAD_REPORT_WORST_BYTES <=
+    GTA4L_EMMC_BLOCK_REPORT_BYTES,
+    "VREAD worst case must fit the report buffer");
+_Static_assert(GTA4L_EMMC_BLOCK_VREAD_LINE_BYTES <=
+    (GTA4L_EMMC_BLOCK_SCREEN_REPORT_ROWS *
+    GTA4L_EMMC_BLOCK_SCREEN_COLUMNS),
+    "a single VREAD line must fit the panic-screen body");
 _Static_assert(sizeof(GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID) ==
     GTA4L_EMMC_BLOCK_WINDOWS_UUID_TEXT_BYTES,
     "OS window UUID text must be 36 characters plus NUL");
@@ -625,6 +635,28 @@ gta4l_emmc_block_root_select(int token_present, int token_value,
 		return GTA4L_EMMC_BLOCK_ROOT_REFUSED;
 	}
 	return GTA4L_EMMC_BLOCK_ROOT_ON;
+}
+
+int
+gta4l_emmc_block_vread_select(int token_present, int token_value,
+    int duplicate_tokens, int block_selected, int block_value,
+    int windows_selected, int verify_selected, int dma_selected,
+    int root_selected, int other_selected)
+{
+	if (token_present == 0) {
+		return GTA4L_EMMC_BLOCK_VREAD_OFF;
+	}
+	if ((duplicate_tokens != 0) || (block_selected == 0) ||
+	    (block_value != GTA4L_EMMC_BLOCK_MODE_REPORT_CHUNKED) ||
+	    (windows_selected == 0) || (verify_selected == 0) ||
+	    (dma_selected == 0) || (root_selected != 0) ||
+	    (other_selected != 0)) {
+		return GTA4L_EMMC_BLOCK_VREAD_REFUSED;
+	}
+	if (token_value != (int)GTA4L_EMMC_BLOCK_VREAD_ON) {
+		return GTA4L_EMMC_BLOCK_VREAD_REFUSED;
+	}
+	return GTA4L_EMMC_BLOCK_VREAD_ON;
 }
 
 int
@@ -2742,6 +2774,7 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 	gta4l_emmc_block_put_u64(&writer, report->clock_hz);
 	gta4l_emmc_block_put_char(&writer, '\n');
 
+	if (report->vread == 0u) {
 	gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 DRV: ");
 	gta4l_emmc_block_put_key(&writer, "online");
 	gta4l_emmc_block_put_u64(&writer, report->online);
@@ -2787,7 +2820,9 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 	gta4l_emmc_block_put_key(&writer, "last_stop");
 	gta4l_emmc_block_put_i32(&writer, report->last_stop_result);
 	gta4l_emmc_block_put_char(&writer, '\n');
+	}
 
+	if (report->vread == 0u) {
 	gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 MEDIA: ");
 	gta4l_emmc_block_put_key(&writer, "whole");
 	gta4l_emmc_block_put_u64(&writer, report->whole);
@@ -2804,6 +2839,7 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 	gta4l_emmc_block_put_key(&writer, "writable");
 	gta4l_emmc_block_put_u64(&writer, report->writable);
 	gta4l_emmc_block_put_char(&writer, '\n');
+	}
 
 	if (report->partmap != 0) {
 		gta4l_emmc_block_put_string(&writer,
@@ -4834,6 +4870,72 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
+	if (report->vread != 0u) {
+		gta4l_emmc_block_put_string(&writer,
+		    "GTA4L-EMMC P5 VREAD: ");
+		gta4l_emmc_block_put_key(&writer, "cases");
+		gta4l_emmc_block_put_u64(&writer, report->vread_cases);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "passed");
+		gta4l_emmc_block_put_u64(&writer, report->vread_passed);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "failed");
+		gta4l_emmc_block_put_u64(&writer, report->vread_failed);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "reason");
+		gta4l_emmc_block_put_u64(&writer, report->vread_reason);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "mask");
+		gta4l_emmc_block_put_hex(&writer, report->vread_mask, 2u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "windows");
+		gta4l_emmc_block_put_u64(&writer, report->vread_windows);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "spans");
+		gta4l_emmc_block_put_u64(&writer, report->vread_spans);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "mismatches");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->vread_mismatches);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "write");
+		gta4l_emmc_block_put_u64(&writer, report->vread_write);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "exports");
+		gta4l_emmc_block_put_hex(&writer, report->vread_exports, 1u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "seq_ms");
+		gta4l_emmc_block_put_u64(&writer, report->vread_seq_ms);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "seq_bytes");
+		gta4l_emmc_block_put_u64(&writer, report->vread_seq_bytes);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "failcase");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->vread_fail_case);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "failstatus");
+		gta4l_emmc_block_put_hex(&writer,
+		    (uint32_t)report->vread_fail_status, 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "failblock");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->vread_fail_block);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "failactual");
+		gta4l_emmc_block_put_u64(&writer,
+		    report->vread_fail_actual);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "dig");
+		gta4l_emmc_block_put_digest(&writer, report->vread_digest,
+		    16u);
+		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "sdig");
+		gta4l_emmc_block_put_digest(&writer,
+		    report->vread_seq_digest, 16u);
+		gta4l_emmc_block_put_char(&writer, '\n');
+	}
+
 	if (report->part_obs != 0) {
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 PARTOBS: ");
@@ -4900,7 +5002,8 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_u64(&writer,
 		    report->part_obs_complete);
 		gta4l_emmc_block_put_char(&writer, '\n');
-	} else if ((report->widthhold == 0) && (report->speed == 0)) {
+	} else if ((report->widthhold == 0) && (report->speed == 0) &&
+	    (report->vread == 0u)) {
 		gta4l_emmc_block_put_string(&writer,
 		    "GTA4L-EMMC P5 PART: ");
 		gta4l_emmc_block_put_key(&writer, "count");
@@ -5051,6 +5154,7 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_char(&writer, '\n');
 	}
 
+	if (report->vread == 0u) {
 	gta4l_emmc_block_put_string(&writer, "GTA4L-EMMC P5 SNAP: ");
 	gta4l_emmc_block_put_key(&writer, "locked");
 	gta4l_emmc_block_put_u64(&writer, report->snapshot_locked);
@@ -5072,6 +5176,7 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 	gta4l_emmc_block_put_key(&writer, "error");
 	gta4l_emmc_block_put_i32(&writer, report->first_fail_error);
 	gta4l_emmc_block_put_char(&writer, '\n');
+	}
 
 	if (writer.ok == 0) {
 		buffer[0] = 0;
