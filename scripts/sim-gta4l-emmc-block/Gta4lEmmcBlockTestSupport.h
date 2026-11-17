@@ -128,9 +128,10 @@ class OSObject {
 public:
 	virtual ~OSObject() {}
 	virtual const void *typeTag() const = 0;
-	virtual void retain() {}
-	virtual void release() {}
+	virtual void retain() { test_retain_count++; }
+	virtual void release() { test_retain_count--; }
 	OSObject *metaCast(const char *name) const;
+	int32_t test_retain_count = 0;
 };
 
 template <typename T>

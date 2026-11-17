@@ -3373,6 +3373,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 		}
 		thread_deallocate(watchdogThread);
 		watchdogThread = nullptr;
+		retain();
 		if (kernel_thread_start(&Gta4lEmmcBlock::reportEntry, this,
 		    &reportThread) != KERN_SUCCESS) {
 			release();
@@ -3407,6 +3408,7 @@ Gta4lEmmcBlock::start(IOService *provider)
 		}
 		thread_deallocate(watchdogThread);
 		watchdogThread = nullptr;
+		retain();
 		if (kernel_thread_start(&Gta4lEmmcBlock::reportEntry, this,
 		    &reportThread) != KERN_SUCCESS) {
 			release();

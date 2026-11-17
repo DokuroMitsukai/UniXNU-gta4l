@@ -10185,4 +10185,64 @@ One device boot is the rung. Pass: `WINDOWS valid=1`, `VERIFY valid=1`,
 original trust bundle and Data volume is expected and recorded, not a
 failure. The expected console and failure markers were written to
 `out/gta4l/ram-root-emmc-s5e-min-candidate-evidence/expected-console.txt`
-before the boot. Not flashed or booted; the tablet is in TWRP.
+before the boot. The TWRP preflight matched the expected p69
+`c58fc82d…`, first 4 KiB `5afccfff…`, userdata manifest `3ddf4d4f…`,
+both vroots and the protected partitions. The BOOT-only flash pushed
+and wrote `9719dae3…` (20,920 blocks) and the region read-back matched
+byte-for-byte; the first 4 KiB is `425b24a2…`, the full p69 is
+`c5b196a1…` (the tail after the image is unchanged). The tablet stays
+in TWRP for the one owner-triggered boot; no boot or reboot was
+performed.
+
+### 5.4.14 S5e-min device verdict and registry-lifetime fix (2026-11-17)
+
+BOOT `9719dae3…` was flashed once to BOOT after the full TWRP preflight
+matched, and the owner booted it once. The region read-back was exact
+(`9719dae3…`, first 4 KiB `425b24a2…`, full p69 `c5b196a1…`). The boot
+did not reach a usable root; it panicked with:
+
+```
+A kext releasing a(n) Gta4lEmmcBlock has corrupted the registry @OSObject.cpp:224
+```
+
+`9719dae3…` is consumed and added to the do-not-boot list.
+
+Root cause: the windows and widthhold start paths start two threads
+(watchdog and reporter) but take one retain, while each thread entry
+releases once. Every diagnostic personality panicked before the second
+release, so the imbalance was invisible. Root mode returns after
+`ROOT: online=1`, both releases run, and the second one drops the
+registered `Gta4lEmmcBlock` below its collection count. The fix adds the
+missing retain before the reporter start in both paths. The host seam
+now tracks retain/release counts and a new `windows-retain-balance`
+scenario pins the two-thread count; it also prevents the latent bug from
+returning through the widthhold path. The block suite is green at 528
+adapter PASS lines and core 47/35; the payload, package and evidence
+gates also pass.
+
+The fixed archive needs a new trust-on kernel built from
+`gta4l_defconfig`, a new storage-ABI audit and a fresh payload/BOOT
+candidate (S5e-min-b). No new candidate or device action yet.
+
+### 5.4.15 S5e-min-b candidate after the lifetime fix (2026-11-17)
+
+The trust-on kernel was rebuilt from `gta4l_defconfig` with the fixed
+archive. The archive is `3100a35c…`; `Gta4lEmmcBlock.cpp` is
+`1de81ea6…` and the block suite is green at 528 adapter PASS lines with
+core 47/35. The bootstrap link used the qualified `82b2def0…` audit;
+the fixpoint archive was then qualified and the final kernel
+`028fdbd2…` (51,699,712 bytes) was audited separately
+(`out/gta4l/storage-abi-028fdbd2` PASS: 190 slots, 181 bindings,
+vtable `fffffff005cb44c0`, metaclass `fffffff006add1d0`, service
+`fffffff007b4f5b8`). The link hash changes between passes; the ABI
+does not. The exact kernel has `_native_owner_root_trust_enabled = 1`
+and `_native_owner_root_decision = -1` before boot.
+
+Candidate: payload `b349789a…` (83,886,080 bytes, 143 contract checks,
+no Data ramdisk, no `rd=`) and BOOT `da670456…` (85,688,320 bytes,
+gate 18/18, first 4 KiB `8cde4e8a…`). The retained S5d⁗ image
+`0c25d559…` is again the packaging baseline because the v5 file is
+absent; the gate checks the same pinned header, kernel section
+`a4b054e0…`, padding, firmware and boot DTB. The expected console adds
+the explicit absence of the `Gta4lEmmcBlock` registry panic. Not
+flashed or booted yet.

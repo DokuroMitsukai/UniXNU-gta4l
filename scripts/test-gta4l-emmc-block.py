@@ -3645,8 +3645,8 @@ def main():
             'adapter scenarios failed:\n' + (run.stdout + run.stderr)
         assert 'PASS gta4l eMMC block adapter' in run.stdout, run.stdout
         passes = run.stdout.count('PASS ')
-        assert passes == 527, f'expected 527 adapter PASS lines, got {passes}'
-        print('PASS adapter: 527 scenarios against the host IOKit seam')
+        assert passes == 528, f'expected 528 adapter PASS lines, got {passes}'
+        print('PASS adapter: 528 scenarios against the host IOKit seam')
         check_speed_report_roundtrip(run.stdout, temp)
         cxx = shutil.which('g++') or shutil.which('clang++')
         for name, replacements, scenario in ADAPTER_MUTATIONS:

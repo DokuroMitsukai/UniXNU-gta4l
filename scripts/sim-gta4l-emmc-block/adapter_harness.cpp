@@ -16018,6 +16018,17 @@ scenario_windows_read(void)
 }
 
 static int
+scenario_windows_retain_balance(void)
+{
+	CHECK(begin_with("gta4l-emmc-block=3 gta4l-emmc-windows=1",
+	    speed_fixture) == 0);
+	CHECK(g_started);
+	CHECK(gta4l_test.thread_count == 2);
+	CHECK(g_self->test_retain_count == 2);
+	return 0;
+}
+
+static int
 scenario_windows_write_refused(void)
 {
 	Gta4lEmmcBlock *window;
@@ -17280,6 +17291,7 @@ static const struct scenario_entry scenarios[] = {
 	{ "windows-manifest", scenario_windows_manifest },
 	{ "windows-format", scenario_windows_format },
 	{ "windows-write-refused", scenario_windows_write_refused },
+	{ "windows-retain-balance", scenario_windows_retain_balance },
 	{ "windows-verify-fail-closed", scenario_windows_verify_fail_closed },
 	{ "verify-format", scenario_verify_format },
 	{ "windows-read", scenario_windows_read },
