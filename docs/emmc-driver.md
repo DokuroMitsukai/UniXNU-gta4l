@@ -10752,7 +10752,9 @@ audit with the same ABI (`…44c0`/`…d1d0`/`…b5f738`, 190/181) and the
 ABI test. Payload `1deea675…` (83,886,080 bytes, contract pass) and BOOT
 `ea56c1d1…` (85,688,320 bytes, gate 18/18, first 4 KiB `34043244…`),
 args `sheng-pmgr=2 gta4l-deadline=120`. The TWRP preflight matched p69
-`770f8c75…` and the unchanged regions; the final BOOT is staged but
-**not flashed**: the block suite is rerunning against this source.
-p69 remains the consumed S5i `12333314…`; do not boot it. Complete the
-block suite, re-preflight and flash `ea56c1d1…` for the one S5j boot.
+`770f8c75…` and the unchanged regions. The block suite is **green**
+against this source (528 adapter, 25 verified-read, core 47/35). The
+final BOOT is staged but **not flashed**: the one S5j boot is pending
+the owner. p69 remains the consumed S5i `12333314…`; do not boot it.
+On the next session, re-preflight and flash `ea56c1d1…` for that one
+boot.
