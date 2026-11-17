@@ -10568,3 +10568,13 @@ positive launchd/userland execution. If a mount fails, the panic now
 carries `cache=<status>/<mount>` or `stage=<n> cache=<status>/<mount>
 dev=<dev> base=<base> size=<size>` plus the `owner-root:` summary, so
 one visible line identifies the failure point and the root verdict.
+
+### 5.4.24 S5f-native BOOT-only flash (2026-11-17)
+
+The TWRP preflight matched p69 `01e7439e…`, first 4 KiB `a169cd5d…`,
+userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot
+`e3cbe583…`, efs `51fa824c…`, sec_efs `3a265d58…` and recovery
+`14e11370…`. The BOOT-only flash wrote `a817bdde…` (20,920 blocks); the
+region read-back matched, first 4 KiB `78c4ddf7…`, full p69
+`4ff21dd1…`. One owner-triggered S5f-native boot is pending. No boot,
+reboot or other write; userdata stays `ae6e18e7…`.
