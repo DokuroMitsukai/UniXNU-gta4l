@@ -521,6 +521,12 @@ for item in SOURCES:
     if (item['source'].name == 'Gta4lEmmcBlock.cpp' and
             policy_owner_audit is not None):
         arguments.extend(policy_owner_audit)
+    # The kernel selects the native RAM-block provider per config; the adapter
+    # must see it so the GPU-addon stub stays out and the UFS/doUnmap hooks
+    # are defined in the same object.
+    if (item['source'].name == 'Gta4lEmmcBlock.cpp' and
+            os.environ.get('XNU_NATIVE_RAM_BLOCK') == '1'):
+        arguments.extend(['-D', 'XNU_NATIVE_RAM_BLOCK=1'])
     try:
         arguments[arguments.index(record['file'])] = str(item['source'])
     except ValueError:

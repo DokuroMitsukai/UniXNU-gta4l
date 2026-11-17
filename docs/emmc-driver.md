@@ -10502,3 +10502,69 @@ fixture volume `A3168F05…`. No loader, seed or payload-layout change is
 needed; `packed_data_ramdisk=true` is exactly the provider's input. The
 eMMC `native_ram_block_gpu_addon` stub compiles out once the provider is
 linked.
+
+**Link inputs for the native provider.** Two references in
+`NativeRamBlock.cpp` need board definitions in the static kernel link.
+The provider declares the optional persistent-store hooks
+(`native_ufs_store_mode/open/read/write/sync/gpt_check`) as weak imports;
+this board has no UFS store window, so `package/Gta4lEmmcBlock.cpp`
+defines zero-return stubs that keep the Data seed volatile. The
+provider's vtable also inherits `IOBlockStorageDevice::doUnmap` and
+`doGetProvisionStatus`, which the prelinked original storage class does
+not export; the same object defines unsupported stubs (the RAM seed is
+not unmapped and is fully provisioned). `scripts/build-gta4l-emmc-block.py` passes
+`-DXNU_NATIVE_RAM_BLOCK=1` from the kernel environment so the adapter's
+GPU-addon stub is omitted when the provider is linked, avoiding a
+duplicate symbol. The eMMC driver's own `doUnmap` override and the
+storage-ABI bindings are unchanged.
+
+**Audit-tool note.** Linking the provider adds a second
+`IOBlockStorageDevice` subclass, and the two board shims define base
+names (`doUnmap`, `doGetProvisionStatus`) that the original class does
+not export. The derive step now ranks candidate dispatch tables by
+exported-name hits among tables whose unexported slots stay in the
+original IOStorageFamily text, instead of requiring every exported name
+to match; the subclass vtable fails the text test. The board shims are
+`visibility("hidden")` so the original class's exported names still
+resolve to its own methods, and the name-to-address map used by the
+audit stays correct. The audit's post-snapshot check now compares the derived binding
+count with the slots whose target actually equals the export, not with
+name presence, for the same shadowing reason. These are host-tool
+robustness fixes in `UniXNU/scripts/audit-storage-interface.py`, not
+device changes.
+
+The SystemOS cache panic carries the same treatment: `cache_error`,
+`native_owner_cache_stage`/`status`/`mount_status` and the owner root
+summary, so a single visible cache line also gives the cache failure
+point and the root verdict. This is a temporary device panic patch to
+fold into the shared owner-root patch after the boot work.
+
+### 5.4.23 S5f native-provider candidate (2026-11-17)
+
+The native-provider kernel is `59d8d372…` (51,802,112 bytes). Its
+`.config` has `XNU_NATIVE_RAM_BLOCK=y`, `XNU_NATIVE_AES=y` and the
+fixture volume `A3168F05-0F99-42FE-AA9F-F0276C1AFBB1`. The exact-kernel
+storage audit passes on Linux/QEMU: vtable `…44c0`, original metaclass
+`…d1d0`, service `…b5f738`, 190 slots and 181 bindings
+(`out/gta4l/storage-abi-59d8d372`); the storage-ABI test with
+`--kernel`/`--plan` passes. The archive is `bda0124f…`.
+
+The two base-method shims are local symbols in the final link
+(`llvm-nm` shows `doUnmap`/`doGetProvisionStatus` as local, and the
+kernel export table does not contain them), so the original storage
+class keeps its own exported names. The `NativeRamBlock` personality is
+present in `KernelConfigTables`.
+
+Candidate: payload `13ea2360…` (83,886,080 bytes; contract pass with
+`packed_data_ramdisk=true`, the packed seed `97789988…`, the original
+trust bundle `7416ca4f…`, seed UUID `A3168F05…` and no `rd=`), and BOOT
+`a817bdde…` (85,688,320 bytes, gate 18/18, first 4 KiB
+`78c4ddf7…`). The kernel args are `sheng-pmgr=2`; the diagnostic is
+`emmc-block-3-root-data`.
+
+Expected next evidence: the SystemOS cache mount and Data mount both
+succeed, then `load_init_program: attempting to load /sbin/launchd` and
+positive launchd/userland execution. If a mount fails, the panic now
+carries `cache=<status>/<mount>` or `stage=<n> cache=<status>/<mount>
+dev=<dev> base=<base> size=<size>` plus the `owner-root:` summary, so
+one visible line identifies the failure point and the root verdict.

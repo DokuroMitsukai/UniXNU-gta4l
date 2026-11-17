@@ -84,6 +84,20 @@
  
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
+@@ -8032,2 +8032,12 @@
+-	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
++	if (cache_error) {
++		extern void native_owner_root_panic_summary(char *, size_t);
++		char owner_summary[128];
++
++		native_owner_root_panic_summary(owner_summary,
++		    sizeof(owner_summary));
++		panic("offline owner SystemOS mount failed: %d "
++		    "stage=%d status=%d mount=%d %s", cache_error,
++		    native_owner_cache_stage, native_owner_cache_status,
++		    native_owner_cache_mount_status, owner_summary);
++	}
+ #endif
 @@ -8038,2 +8038,25 @@
 -	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
 +	if (data_error) {

@@ -11780,6 +11780,64 @@ native_ram_block_gpu_addon(const uint8_t **addon, uint64_t *bytes)
 	(void)bytes;
 	return 0;
 }
+#else
+/* This board has no persistent UFS store window, so the native RAM-block
+ * provider's optional backend stays off and the Data seed is volatile.
+ * The provider declares these weak imports, which this static kernel link
+ * still has to resolve. */
+extern "C" unsigned
+native_ufs_store_mode(void)
+{
+	return 0;
+}
+
+extern "C" int
+native_ufs_store_open(uint64_t, uint64_t *, const char **)
+{
+	return 0;
+}
+
+extern "C" int
+native_ufs_store_read(uint64_t, uint32_t, void *)
+{
+	return 0;
+}
+
+extern "C" int
+native_ufs_store_write(uint64_t, uint32_t, const void *)
+{
+	return 0;
+}
+
+extern "C" int
+native_ufs_store_sync(void)
+{
+	return 0;
+}
+
+extern "C" unsigned
+native_ufs_store_gpt_check(void)
+{
+	return 0;
+}
+
+/* The prelinked original storage class has no exported doUnmap or
+ * provision-status implementation, while the provider's vtable inherits
+ * those slots. Keep these local so the original class's exported names
+ * still resolve to its own methods. */
+__attribute__((visibility("hidden"))) IOReturn
+IOBlockStorageDevice::doUnmap(IOBlockStorageDeviceExtent *, UInt32,
+    IOStorageUnmapOptions)
+{
+	return kIOReturnUnsupported;
+}
+
+__attribute__((visibility("hidden"))) IOReturn
+IOBlockStorageDevice::doGetProvisionStatus(UInt64, UInt64, UInt32 *,
+    IOBlockStorageProvisionDeviceExtent *, IOStorageGetProvisionStatusOptions)
+{
+	return kIOReturnUnsupported;
+}
 #endif
 
 static void
