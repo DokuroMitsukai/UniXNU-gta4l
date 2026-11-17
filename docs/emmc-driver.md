@@ -10674,3 +10674,56 @@ args `sheng-pmgr=2 gta4l-deadline=120`. The TWRP preflight matched;
 the BOOT-only flash wrote `a422425b…`, region read-back exact, full
 p69 `8f091a6c…`. One owner-triggered S5h boot is pending; `200818ba…`
 stays retired.
+
+### 5.4.28 S5h result and S5i read sketch (2026-11-18)
+
+**S5h-activity (BOOT `a422425b…`) result.** Owner transcription, wraps
+joined:
+
+```
+cache=0/0/6 data=0/4 dev=1000002 size=2000000 pid1=launchd
+cs=22002301 pb=1
+t0 ram=57/0/0 emmc=54315/448856 np=1 ex=2 x=2
+t1 ram=57/0   emmc=216373/1745320 np=1 ex=2 x=2
+last=init/1/0/0/0
+owner-root: trust=1 apple=80 decision=1 accepted=1 ro=1
+mdev=100005a sdev=100005a drv=online=1 win=2 errors=0 recov=0 offline=0 mount=1
+@kern_exec.c:7998
+pages=0x79d0b free=0x73222
+```
+
+SystemOS and writable RAM Data still pass; `pb=1` confirms platform
+classification. Between the samples the block driver accepted 162,058
+more read requests and 1,296,464 more 512-byte blocks: 633.039 MiB
+requested, 4 KiB per request, over a nominal 90 s. These counters are
+incremented before transport I/O (`Gta4lEmmcBlockCore.c`) and count
+requests/blocks, not completed or unique bytes. RAM reads stayed 57,
+device writes 0, and np/ex/x flat. This rules out an idle kernel but
+does **not** establish userland progress; repeated reads of the same
+blocks or ordinary loading both fit.
+
+`last=init/1` is not evidence launchd exited. The hook runs at
+`proc_prepareexit` entry, which is also used during task teardown, and
+it does not distinguish old exec-related objects from the live
+initproc. `ex` counts `execve` attempts; `np` is instantaneous. The
+root driver records no errors/recoveries, which supports healthy
+observed root I/O but not every completion. **S5f remains unobserved
+beyond its static bar.** No trust or write-path change is implied.
+
+The 4 KiB average matches the verified-window path: `verifiedWindowRead`
+splits requests into 4 KiB spans and reads each through the core. S5i
+adds a passive `gta4l_emmc_verify_spans/bytes` count at that path, a
+fixed 64-entry repeated-LBA sketch (`repeat`, `last_lba`, hottest LBA
+and count) in the core, real sample timestamps and final RAM failures.
+It drops the misleading `ex/x/last` print. The sketch is approximate
+under concurrency, bounded and payload-free.
+
+Kernel `104231ae…` (51,802,112 bytes) passes the exact-kernel storage
+audit with the same ABI (`…44c0`/`…d1d0`/`…b5f738`, 190/181) and the
+ABI test; the block suite is green (528 adapter, 25 verified-read, core
+47/35). Payload `2c2578f7…` (83,886,080 bytes, contract pass) and BOOT
+`12333314…` (85,688,320 bytes, gate 18/18, first 4 KiB `7c921e66…`),
+args `sheng-pmgr=2 gta4l-deadline=120`. The TWRP preflight matched p69
+`8f091a6c…` and the unchanged regions; the BOOT-only flash wrote
+`12333314…`, region read-back exact, full p69 `770f8c75…`. One
+owner-triggered S5i boot is pending; `a422425b…` stays retired.

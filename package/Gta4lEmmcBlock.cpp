@@ -11840,6 +11840,10 @@ IOBlockStorageDevice::doGetProvisionStatus(UInt64, UInt64, UInt32 *,
 }
 #endif
 
+/* S5i: successful verified 4 KiB spans and their bytes. */
+volatile uint64_t gta4l_emmc_verify_spans = 0;
+volatile uint64_t gta4l_emmc_verify_bytes = 0;
+
 extern "C" void
 native_gta4l_emmc_activity(uint64_t *requests, uint64_t *blocks)
 {
@@ -11848,6 +11852,47 @@ native_gta4l_emmc_activity(uint64_t *requests, uint64_t *blocks)
 	}
 	if (blocks != nullptr) {
 		*blocks = gta4l_emmc_lifetime_read_blocks;
+	}
+}
+
+/* S5i: verify spans versus all core reads, plus the repeated-LBA sketch.
+ * Lock-free reads; the sketch is approximate under concurrency. */
+extern "C" void
+native_gta4l_emmc_activity2(uint64_t *verify_spans, uint64_t *verify_bytes,
+    uint64_t *repeat, uint64_t *last_lba, uint64_t *hot_lba,
+    uint64_t *hot_count)
+{
+	uint64_t best = 0, best_lba = 0;
+	uint32_t index;
+
+	for (index = 0; index < GTA4L_EMMC_SKETCH_SLOTS; index++) {
+		uint64_t lba = __atomic_load_n(&gta4l_emmc_sketch[index].lba,
+		    __ATOMIC_RELAXED);
+		uint32_t count = __atomic_load_n(
+		    &gta4l_emmc_sketch[index].count, __ATOMIC_RELAXED);
+
+		if (count > best) {
+			best = count;
+			best_lba = lba;
+		}
+	}
+	if (verify_spans != nullptr) {
+		*verify_spans = gta4l_emmc_verify_spans;
+	}
+	if (verify_bytes != nullptr) {
+		*verify_bytes = gta4l_emmc_verify_bytes;
+	}
+	if (repeat != nullptr) {
+		*repeat = gta4l_emmc_sketch_repeat;
+	}
+	if (last_lba != nullptr) {
+		*last_lba = gta4l_emmc_sketch_last_lba;
+	}
+	if (hot_lba != nullptr) {
+		*hot_lba = best_lba;
+	}
+	if (hot_count != nullptr) {
+		*hot_count = best;
 	}
 }
 
@@ -12021,6 +12066,10 @@ Gta4lEmmcBlock::verifiedWindowRead(IOMemoryDescriptor *buffer,
 			(void)lifetimeRootFailure(true, blockNumber, *status);
 			return true;
 		}
+		__atomic_fetch_add(&gta4l_emmc_verify_spans, 1,
+		    __ATOMIC_RELAXED);
+		__atomic_fetch_add(&gta4l_emmc_verify_bytes,
+		    spans[index].bytes, __ATOMIC_RELAXED);
 		copyStart = (start > spans[index].start) ?
 		    start : spans[index].start;
 		copyEnd = (end < spans[index].start + spans[index].bytes) ?

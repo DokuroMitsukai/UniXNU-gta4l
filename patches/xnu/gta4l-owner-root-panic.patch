@@ -1,5 +1,5 @@
 diff --git a/devpatch-baseline/bsd/kern/kern_exec.c b/s5h-after/bsd/kern/kern_exec.c
-index 7ddd310..6de1414 100644
+index 7ddd310..3a7a06a 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
 @@ -88,6 +88,8 @@
@@ -50,7 +50,7 @@ index 7ddd310..6de1414 100644
  
  	muap.fname = uap->fname;
  	muap.argp = uap->argp;
-@@ -7888,6 +7914,91 @@ done:
+@@ -7888,6 +7914,114 @@ done:
  }
  #endif
  
@@ -64,11 +64,16 @@ index 7ddd310..6de1414 100644
 +extern volatile uint64_t native_ram_block_failures;
 +extern void native_gta4l_emmc_activity(uint64_t *, uint64_t *)
 +    __attribute__((weak_import));
++extern void native_gta4l_emmc_activity2(uint64_t *, uint64_t *,
++    uint64_t *, uint64_t *, uint64_t *, uint64_t *)
++    __attribute__((weak_import));
 +struct gta4l_deadline_sample {
 +	uint64_t ram_ready, ram_reads, ram_writes, ram_failures;
 +	uint64_t emmc_requests, emmc_blocks;
++	uint64_t verify_spans, verify_bytes;
++	uint64_t repeat, last_lba, hot_lba, hot_count;
++	uint64_t uptime;
 +	int procs;
-+	uint64_t execs, exits;
 +};
 +static struct gta4l_deadline_sample gta4l_first_sample;
 +static int gta4l_first_sample_valid = 0;
@@ -82,12 +87,21 @@ index 7ddd310..6de1414 100644
 +	s->ram_failures = native_ram_block_failures;
 +	s->emmc_requests = 0;
 +	s->emmc_blocks = 0;
++	s->verify_spans = 0;
++	s->verify_bytes = 0;
++	s->repeat = 0;
++	s->last_lba = 0;
++	s->hot_lba = 0;
++	s->hot_count = 0;
 +	if (native_gta4l_emmc_activity != NULL) {
 +		native_gta4l_emmc_activity(&s->emmc_requests, &s->emmc_blocks);
 +	}
++	if (native_gta4l_emmc_activity2 != NULL) {
++		native_gta4l_emmc_activity2(&s->verify_spans, &s->verify_bytes,
++		    &s->repeat, &s->last_lba, &s->hot_lba, &s->hot_count);
++	}
 +	s->procs = nprocs;
-+	s->execs = gta4l_exec_count;
-+	s->exits = gta4l_exit_count;
++	clock_get_uptime(&s->uptime);
 +}
 +
 +static void
@@ -107,42 +121,51 @@ index 7ddd310..6de1414 100644
 +	struct gta4l_deadline_sample now;
 +	proc_t p = initproc;
 +	const char *name = (p != PROC_NULL) ? p->p_name : "none";
-+	unsigned cs = (p != PROC_NULL) ? proc_getcsflags(p) : 0u;
 +	int pbin = (p != PROC_NULL) ? csproc_get_platform_binary(p) : -1;
++	uint64_t delta_ns = 0;
 +
 +	native_owner_root_panic_summary(summary, sizeof(summary));
 +	gta4l_deadline_read(&now);
-+	panic("gta4l d: cache=%d/%d/%d data=%d/%d dev=%x size=%llx pid1=%s "
-+	    "cs=%x pb=%d t0 ram=%llu/%llu/%llu emmc=%llu/%llu np=%d ex=%llu "
-+	    "x=%llu t1 ram=%llu/%llu emmc=%llu/%llu np=%d ex=%llu x=%llu "
-+	    "last=%s/%d/%d/%d/%llx %s",
++	if (gta4l_first_sample_valid &&
++	    (now.uptime > gta4l_first_sample.uptime)) {
++		absolutetime_to_nanoseconds(now.uptime -
++		    gta4l_first_sample.uptime, &delta_ns);
++	}
++	panic("gta4l i: cache=%d/%d/%d data=%d/%d dev=%x size=%llx pid1=%s "
++	    "pb=%d t0 ram=%llu/%llu/%llu emmc=%llu/%llu vrfy=%llu/%llu np=%d "
++	    "t1 ram=%llu/%llu/%llu emmc=%llu/%llu vrfy=%llu/%llu np=%d "
++	    "dt=%llu sk=%llu/%llx/%llx/%llu %s",
 +	    native_owner_cache_status, native_owner_cache_mount_status,
 +	    native_owner_cache_stage, native_owner_data_status,
 +	    native_owner_data_stage, (unsigned)native_owner_data_device,
-+	    (unsigned long long)native_owner_data_seed_size, name, cs, pbin,
++	    (unsigned long long)native_owner_data_seed_size, name, pbin,
 +	    (unsigned long long)gta4l_first_sample.ram_reads,
 +	    (unsigned long long)gta4l_first_sample.ram_writes,
 +	    (unsigned long long)gta4l_first_sample.ram_failures,
 +	    (unsigned long long)gta4l_first_sample.emmc_requests,
 +	    (unsigned long long)gta4l_first_sample.emmc_blocks,
++	    (unsigned long long)gta4l_first_sample.verify_spans,
++	    (unsigned long long)gta4l_first_sample.verify_bytes,
 +	    gta4l_first_sample.procs,
-+	    (unsigned long long)gta4l_first_sample.execs,
-+	    (unsigned long long)gta4l_first_sample.exits,
 +	    (unsigned long long)now.ram_reads,
 +	    (unsigned long long)now.ram_writes,
++	    (unsigned long long)now.ram_failures,
 +	    (unsigned long long)now.emmc_requests,
-+	    (unsigned long long)now.emmc_blocks, now.procs,
-+	    (unsigned long long)now.execs,
-+	    (unsigned long long)now.exits,
-+	    gta4l_exit_name, gta4l_exit_pid, gta4l_exit_status,
-+	    gta4l_exit_ns, (unsigned long long)gta4l_exit_code, summary);
++	    (unsigned long long)now.emmc_blocks,
++	    (unsigned long long)now.verify_spans,
++	    (unsigned long long)now.verify_bytes, now.procs,
++	    (unsigned long long)(delta_ns / 1000000ULL),
++	    (unsigned long long)now.repeat,
++	    (unsigned long long)now.last_lba,
++	    (unsigned long long)now.hot_lba,
++	    (unsigned long long)now.hot_count, summary);
 +}
 +#endif
 +
  static int
  load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path, user_addr_t envp)
  {
-@@ -8025,17 +8136,89 @@ load_init_program(proc_t p)
+@@ -8025,17 +8159,89 @@ load_init_program(proc_t p)
  
  	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);
  	user_addr_t init_envp = USER_ADDR_NULL;
@@ -234,7 +257,7 @@ index 7ddd310..6de1414 100644
  #if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
  	extern int sheng_boot_watchdog_policy(void *, uint64_t);
  	boot_progress_stage("temporary watchdog launch policy enter");
-@@ -8074,7 +8257,16 @@ load_init_program(proc_t p)
+@@ -8074,7 +8280,16 @@ load_init_program(proc_t p)
  				return;
  			}
  
@@ -252,7 +275,7 @@ index 7ddd310..6de1414 100644
  		} else {
  			strlcpy(launchd_path, "/usr/appleinternal/sbin/launchd.", sizeof(launchd_path));
  			strlcat(launchd_path, launchd_suffix, sizeof(launchd_path));
-@@ -8101,7 +8293,16 @@ load_init_program(proc_t p)
+@@ -8101,7 +8316,16 @@ load_init_program(proc_t p)
  		}
  	}
  

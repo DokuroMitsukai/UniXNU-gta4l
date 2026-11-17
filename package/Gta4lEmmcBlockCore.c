@@ -12,6 +12,40 @@
 volatile uint64_t gta4l_emmc_lifetime_read_requests = 0;
 volatile uint64_t gta4l_emmc_lifetime_read_blocks = 0;
 
+/* Small fixed sketch of accepted read LBAs for the boot deadline: repeated
+ * hits, the last LBA and the hottest slot. It is deliberately approximate
+ * under concurrency; it never grows and stores no payload bytes. */
+struct gta4l_emmc_sketch_entry gta4l_emmc_sketch[GTA4L_EMMC_SKETCH_SLOTS];
+volatile uint64_t gta4l_emmc_sketch_repeat = 0;
+volatile uint64_t gta4l_emmc_sketch_last_lba = 0;
+volatile uint32_t gta4l_emmc_sketch_next = 0;
+
+static void
+gta4l_emmc_sketch_note(uint64_t block_number)
+{
+	uint32_t index;
+
+	__atomic_store_n(&gta4l_emmc_sketch_last_lba, block_number,
+	    __ATOMIC_RELAXED);
+	for (index = 0; index < GTA4L_EMMC_SKETCH_SLOTS; index++) {
+		if (__atomic_load_n(&gta4l_emmc_sketch[index].lba,
+		    __ATOMIC_RELAXED) == block_number) {
+			__atomic_fetch_add(&gta4l_emmc_sketch[index].count, 1,
+			    __ATOMIC_RELAXED);
+			__atomic_fetch_add(&gta4l_emmc_sketch_repeat, 1,
+			    __ATOMIC_RELAXED);
+			return;
+		}
+	}
+	index = __atomic_fetch_add(&gta4l_emmc_sketch_next, 1,
+	    __ATOMIC_RELAXED) % GTA4L_EMMC_SKETCH_SLOTS;
+	__atomic_store_n(&gta4l_emmc_sketch[index].lba, block_number,
+	    __ATOMIC_RELAXED);
+	__atomic_store_n(&gta4l_emmc_sketch[index].count, 1u,
+	    __ATOMIC_RELAXED);
+}
+
+
 static void gta4l_emmc_block_clear_counters(
     struct gta4l_emmc_block_counters *counters)
 {
@@ -135,6 +169,7 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
 	    __ATOMIC_RELAXED);
 	__atomic_fetch_add(&gta4l_emmc_lifetime_read_blocks, nblks,
 	    __ATOMIC_RELAXED);
+	gta4l_emmc_sketch_note(block_number);
 	if (nblks > block->counters.max_request_blocks) {
 		block->counters.max_request_blocks = nblks;
 	}
