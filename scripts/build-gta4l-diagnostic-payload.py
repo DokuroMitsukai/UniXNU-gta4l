@@ -20,7 +20,10 @@ gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 gta4l-emmc-live=1
 and also requires the fs-timer-hold fixture; force-slow is a host-only
 token and is not a payload personality. The windows personality maps to
 gta4l-emmc-block=3 gta4l-emmc-windows=1 and also requires the
-fs-timer-hold fixture.
+fs-timer-hold fixture. The root personality maps to
+gta4l-emmc-block=3 gta4l-emmc-windows=1 gta4l-emmc-verify=1
+gta4l-emmc-dma=1 gta4l-emmc-root=1 and refuses a Data ramdisk: the
+boot must select the verified OS window by UUID, not md0.
 """
 import argparse
 import datetime
@@ -87,6 +90,9 @@ DIAGNOSTICS = {
     'emmc-block-3-vread': 'gta4l-emmc-block=3 gta4l-emmc-windows=1 '
                           'gta4l-emmc-verify=1 gta4l-emmc-dma=1 '
                           'gta4l-emmc-vread=1',
+    'emmc-block-3-root': 'gta4l-emmc-block=3 gta4l-emmc-windows=1 '
+                         'gta4l-emmc-verify=1 gta4l-emmc-dma=1 '
+                         'gta4l-emmc-root=1',
 }
 PARTOBS_DIAGNOSTICS = ('emmc-block-1-partobs', 'emmc-block-3-partobs')
 PARTCMP_DIAGNOSTICS = ('emmc-block-1-partcmp', 'emmc-block-3-partcmp')
@@ -103,6 +109,7 @@ BULK_DIAGNOSTICS = ('emmc-block-3-bulk', 'emmc-block-3-bulk-dma')
 LIVE_DIAGNOSTICS = ('emmc-block-3-live',)
 WINDOWS_DIAGNOSTICS = ('emmc-block-3-windows', 'emmc-block-3-verify',
                         'emmc-block-3-vread')
+ROOT_DIAGNOSTICS = ('emmc-block-3-root',)
 PARTITION_DIAGNOSTICS = (PARTOBS_DIAGNOSTICS + PARTCMP_DIAGNOSTICS +
                          PARTREAD_DIAGNOSTICS)
 OBSERVATION_DIAGNOSTICS = (PARTITION_DIAGNOSTICS + DEBLOCK_DIAGNOSTICS +
@@ -112,6 +119,7 @@ OBSERVATION_DIAGNOSTICS = (PARTITION_DIAGNOSTICS + DEBLOCK_DIAGNOSTICS +
                            SPEED_DIAGNOSTICS + BULK_DIAGNOSTICS +
                            LIVE_DIAGNOSTICS + WINDOWS_DIAGNOSTICS)
 DATA_RAMDISK_DIAGNOSTICS = ('report', 'fs-timer', 'fs-timer-hold')
+NO_DATA_RAMDISK_DIAGNOSTICS = ROOT_DIAGNOSTICS
 
 
 def sha(path):
@@ -181,9 +189,10 @@ def main():
               'packed_data_ramdisk=false')
         return 0
 
-    missing = [name for name in ('data_ramdisk', 'trust_cache',
-                                 'unique_chip_id', 'diagnostic', 'output')
-               if getattr(args, name) is None]
+    required = ['trust_cache', 'unique_chip_id', 'diagnostic', 'output']
+    if args.diagnostic not in NO_DATA_RAMDISK_DIAGNOSTICS:
+        required.append('data_ramdisk')
+    missing = [name for name in required if getattr(args, name) is None]
     if missing:
         parser.error('missing required options: ' +
                      ', '.join('--' + name.replace('_', '-')
@@ -200,7 +209,16 @@ def main():
         raise SystemExit(f'{unixnu}: unixnu not found')
     if not uefi.is_dir():
         raise SystemExit(f'{uefi}: Mu-Silicium checkout not found')
-    if not args.data_ramdisk.is_file():
+    if args.diagnostic in NO_DATA_RAMDISK_DIAGNOSTICS:
+        if args.data_ramdisk is not None:
+            raise SystemExit(
+                f'--diagnostic {args.diagnostic} boots from the verified eMMC '
+                'window; do not pass --data-ramdisk')
+        if args.data_ramdisk_manifest is not None:
+            raise SystemExit(
+                f'--diagnostic {args.diagnostic} has no Data ramdisk; '
+                'do not pass --data-ramdisk-manifest')
+    if args.data_ramdisk is not None and not args.data_ramdisk.is_file():
         raise SystemExit(f'{args.data_ramdisk}: data ramdisk not found')
     if not args.trust_cache.is_file():
         raise SystemExit(f'{args.trust_cache}: trust cache not found')
@@ -217,7 +235,7 @@ def main():
     config = tomllib.loads(board)
     os_profile = config['board']['os_profile']
     board_hash = sha(device / 'board.toml')
-    data_hash = sha(args.data_ramdisk)
+    data_hash = sha(args.data_ramdisk) if args.data_ramdisk else None
     trust_hash = sha(args.trust_cache)
 
     data_ramdisk_manifest = None
@@ -277,7 +295,8 @@ def main():
             '--uefi', str(uefi),
             *(['--kernel', str(args.kernel.resolve())] if args.kernel else []),
             '--unique-chip-id', args.unique_chip_id,
-            '--data-ramdisk', str(args.data_ramdisk.resolve()),
+            *(['--data-ramdisk', str(args.data_ramdisk.resolve())]
+              if args.data_ramdisk else []),
             '--owner-trust-cache' if args.owner_trust_cache else '--trust-cache',
             str(args.trust_cache.resolve()),
         ]
@@ -328,7 +347,7 @@ def main():
             'diagnostic': args.diagnostic,
             'diagnostic_argument': DIAGNOSTICS[args.diagnostic],
             'kernel_args': args.kernel_arg,
-            'data_ramdisk': {
+            'data_ramdisk': ({
                 'path': str(args.data_ramdisk.resolve()),
                 'bytes': args.data_ramdisk.stat().st_size,
                 'sha256': data_hash,
@@ -337,7 +356,7 @@ def main():
                 'manifest_sha256': data_ramdisk_manifest_hash,
                 'diagnostic': data_ramdisk_diagnostic,
                 'hold_after_success': data_ramdisk_hold,
-            },
+            } if args.data_ramdisk else None),
             'trust_cache': {
                 'path': str(args.trust_cache.resolve()),
                 'bytes': args.trust_cache.stat().st_size,

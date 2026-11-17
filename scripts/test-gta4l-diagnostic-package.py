@@ -206,6 +206,15 @@ def main():
         print('PASS live personality accepted and forwarded to the '
               'contract')
 
+        bad = tmp / 'root-diagnostic.img'
+        result = run(base_args(bad, tmp / 'root-diagnostic.json')
+                     + ['--expect-diagnostic', 'emmc-block-3-root'])
+        assert result.returncode != 0
+        assert 'payload/ADT contract' in result.stderr, result.stderr
+        assert not bad.exists()
+        print('PASS root personality accepted and forwarded to the '
+              'contract')
+
         failed_payload = (REPO / 'out/gta4l/ram-root-sdhci-host-init-evidence/'
                           'payload.img')
         if failed_payload.is_file():

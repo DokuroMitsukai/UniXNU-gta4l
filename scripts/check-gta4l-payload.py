@@ -68,7 +68,9 @@ BULK_PREFIX = 'gta4l-emmc-bulk='
 DMA_PREFIX = 'gta4l-emmc-dma='
 LIVE_PREFIX = 'gta4l-emmc-live='
 WINDOWS_PREFIX = 'gta4l-emmc-windows='
+VERIFY_PREFIX = 'gta4l-emmc-verify='
 VREAD_PREFIX = 'gta4l-emmc-vread='
+ROOT_PREFIX = 'gta4l-emmc-root='
 SLOW_PREFIX = 'gta4l-emmc-slow='
 BLOCK_DIAGNOSTICS = ('emmc-block-1', 'emmc-block-3')
 # The partobs, partcmp, partread, deblock, breakup, sweep, consume, width,
@@ -127,6 +129,10 @@ WINDOWS_DIAGNOSTICS = {
     'emmc-block-3-verify': 'emmc-block-3',
     'emmc-block-3-vread': 'emmc-block-3',
 }
+ROOT_DIAGNOSTICS = {
+    'emmc-block-3-root': 'emmc-block-3',
+}
+ROOT_RAMDISK_TOKENS = ('rd=', 'rootdev=')
 
 
 def run_tool(*args):
@@ -267,8 +273,14 @@ def diagnostic_contract(args, expected='any'):
                    if item.startswith(LIVE_PREFIX)]
     windows_tokens = [item for item in tokens
                       if item.startswith(WINDOWS_PREFIX)]
+    verify_tokens = [item for item in tokens
+                     if item.startswith(VERIFY_PREFIX)]
     vread_tokens = [item for item in tokens
                     if item.startswith(VREAD_PREFIX)]
+    root_tokens = [item for item in tokens
+                   if item.startswith(ROOT_PREFIX)]
+    ramdisk_tokens = [item for item in tokens
+                      if item.startswith(ROOT_RAMDISK_TOKENS)]
     slow_tokens = [item for item in tokens
                    if item.startswith(SLOW_PREFIX)]
     checks = {'exactly_one_diagnostic_argument': len(found) == 1}
@@ -473,6 +485,30 @@ def diagnostic_contract(args, expected='any'):
             not windows_tokens or block_tokens == [BLOCK_PREFIX + '3'])
         checks['windows_no_other_modifier'] = (
             not windows_tokens or not (
+                partobs_tokens or partcmp_tokens or partread_tokens or
+                deblock_tokens or breakup_tokens or sweep_tokens or
+                consume_tokens or width_tokens or widthhold_tokens or
+                widthpub_tokens or speed_tokens or bulk_tokens or
+                live_tokens or slow_tokens))
+        checks['at_most_one_verify_token'] = len(verify_tokens) <= 1
+        checks['verify_value_one'] = all(
+            item == VERIFY_PREFIX + '1' for item in verify_tokens)
+        checks['verify_requires_windows'] = (
+            not verify_tokens or
+            windows_tokens == [WINDOWS_PREFIX + '1'])
+        checks['at_most_one_root_token'] = len(root_tokens) <= 1
+        checks['root_value_one'] = all(
+            item == ROOT_PREFIX + '1' for item in root_tokens)
+        checks['root_requires_block_three'] = (
+            not root_tokens or block_tokens == [BLOCK_PREFIX + '3'])
+        checks['root_requires_windows_verify_dma'] = (
+            not root_tokens or (
+                windows_tokens == [WINDOWS_PREFIX + '1'] and
+                verify_tokens == [VERIFY_PREFIX + '1'] and
+                dma_tokens == [DMA_PREFIX + '1']))
+        checks['root_excludes_vread'] = not (root_tokens and vread_tokens)
+        checks['root_no_other_modifier'] = (
+            not root_tokens or not (
                 partobs_tokens or partcmp_tokens or partread_tokens or
                 deblock_tokens or breakup_tokens or sweep_tokens or
                 consume_tokens or width_tokens or widthhold_tokens or
@@ -685,6 +721,9 @@ def diagnostic_contract(args, expected='any'):
             expected_dma = ([DMA_PREFIX + '1'] if expected in
                             ('emmc-block-3-verify', 'emmc-block-3-vread')
                             else [])
+            expected_verify = ([VERIFY_PREFIX + '1'] if expected in
+                               ('emmc-block-3-verify',
+                                'emmc-block-3-vread') else [])
             expected_vread = ([VREAD_PREFIX + '1'] if
                               expected == 'emmc-block-3-vread' else [])
             checks[f'{expected}_diagnostic_selected'] = (
@@ -696,9 +735,28 @@ def diagnostic_contract(args, expected='any'):
                 not consume_tokens and not width_tokens and
                 not widthhold_tokens and not widthpub_tokens and
                 not speed_tokens and not bulk_tokens and
+                verify_tokens == expected_verify and
                 dma_tokens == expected_dma and
                 vread_tokens == expected_vread and
+                not root_tokens and
                 not live_tokens and not slow_tokens)
+        elif expected in ROOT_DIAGNOSTICS:
+            base = ROOT_DIAGNOSTICS[expected]
+            checks[f'{expected}_diagnostic_selected'] = (
+                found == [DIAGNOSTIC_NAMES[base]] and
+                windows_tokens == [WINDOWS_PREFIX + '1'] and
+                verify_tokens == [VERIFY_PREFIX + '1'] and
+                dma_tokens == [DMA_PREFIX + '1'] and
+                root_tokens == [ROOT_PREFIX + '1'] and
+                not partobs_tokens and not partcmp_tokens and
+                not partread_tokens and not deblock_tokens and
+                not breakup_tokens and not sweep_tokens and
+                not consume_tokens and not width_tokens and
+                not widthhold_tokens and not widthpub_tokens and
+                not speed_tokens and not bulk_tokens and
+                not vread_tokens and
+                not live_tokens and not slow_tokens)
+            checks[f'{expected}_no_ramdisk_override'] = not ramdisk_tokens
         else:
             checks[f'{expected}_diagnostic_selected'] = (
                 found == [DIAGNOSTIC_NAMES[expected]] and
@@ -714,11 +772,20 @@ def diagnostic_contract(args, expected='any'):
         if dma_tokens and expected not in (*BULK_DIAGNOSTICS,
                                            *LIVE_DIAGNOSTICS,
                                            'emmc-block-3-verify',
-                                           'emmc-block-3-vread'):
+                                           'emmc-block-3-vread',
+                                           *ROOT_DIAGNOSTICS):
             checks[f'{expected}_diagnostic_selected'] = False
         if live_tokens and expected not in LIVE_DIAGNOSTICS:
             checks[f'{expected}_diagnostic_selected'] = False
-        if windows_tokens and expected not in WINDOWS_DIAGNOSTICS:
+        if windows_tokens and expected not in (*WINDOWS_DIAGNOSTICS,
+                                               *ROOT_DIAGNOSTICS):
+            checks[f'{expected}_diagnostic_selected'] = False
+        if root_tokens and expected not in ROOT_DIAGNOSTICS:
+            checks[f'{expected}_diagnostic_selected'] = False
+        if verify_tokens and expected not in (*WINDOWS_DIAGNOSTICS,
+                                              *ROOT_DIAGNOSTICS):
+            checks[f'{expected}_diagnostic_selected'] = False
+        if vread_tokens and expected not in WINDOWS_DIAGNOSTICS:
             checks[f'{expected}_diagnostic_selected'] = False
         if slow_tokens:
             checks[f'{expected}_diagnostic_selected'] = False
@@ -753,6 +820,8 @@ def check(image, expected='any'):
             require('exactly_one_ramdisk_placeholder',
                     raw_placeholder != packed_placeholder if data_present
                     else not raw_placeholder and not packed_placeholder)
+            if expected in ROOT_DIAGNOSTICS:
+                require('root_has_no_data_ramdisk', not data_present)
             if data_present:
                 ramdisk = extract(image, RAMDISK_MEMBER,
                                   tmp / 'scratch-data.img').read_bytes()
@@ -795,7 +864,8 @@ def main():
                                  *SPEED_DIAGNOSTICS,
                                  *BULK_DIAGNOSTICS,
                                  *LIVE_DIAGNOSTICS,
-                                 *WINDOWS_DIAGNOSTICS),
+                                 *WINDOWS_DIAGNOSTICS,
+                                 *ROOT_DIAGNOSTICS),
                         default='any',
                         help='require this board diagnostic argument')
     parser.add_argument('--json', action='store_true')

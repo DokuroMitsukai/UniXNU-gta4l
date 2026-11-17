@@ -10135,3 +10135,54 @@ the observed Data volume UUID, which is not known.
 No code change is proposed from the inventory: the only S5e-specific
 work is the root payload personality (five tokens, no `rd=md0`, root
 refusal matrix) and the payload trust/Data inputs.
+
+### 5.4.13 S5e-min root personality and candidate (2026-11-17, host only)
+
+The wrapper, contract checker and packager accept a new root
+personality, `emmc-block-3-root`. It maps to exactly
+`gta4l-emmc-block=3 gta4l-emmc-windows=1 gta4l-emmc-verify=1
+gta4l-emmc-dma=1 gta4l-emmc-root=1`, refuses a Data ramdisk and a
+Data-ramdisk manifest, and therefore cannot boot `md0`. The checker
+also refuses `rd=` and `rootdev=` in root mode, a missing windows,
+verify or DMA token, a vread token, a duplicate or non-1 root token,
+another modifier, and a payload that contains `scratch-data.img`. It
+now parses the verify token for the existing windows personalities as
+well, which closes a gap where `emmc-block-3-verify` could omit
+`gta4l-emmc-verify=1`. The builder tests cover the five-token mapping,
+the missing `rd=md0`, the absent Data ramdisk and the refusal matrix;
+the packager accepts the new name.
+
+Candidate inputs and hashes:
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| trust-on kernel `f0026cde…` | 51,699,712 | `f0026cde0ac7a4cd1b51135e3825bcc8d5f4d5f2c2e27b3db98e9915c666e364` |
+| payload `emmc-block-3-root` | 83,886,080 | `6aebc9bc0195e364b46daee4c596985c5856733d9b5d56895e57b77b17bdd339` |
+| BOOT `9719dae3…` | 85,688,320 | `9719dae313b055f225e78fd77ee8cde7b11817493aa6f52fd17e4b7c654fa8d9` |
+
+The payload contract is PASS (143 checks) and the boot-image gate is
+18/18. The payload's xnu arguments carry the five tokens and no
+`rd=`; the ADT still carries `/chosen:root-matching` with
+`04769D26-2CA0-4825-B443-E2E5F88300F2`. The fixture owner trust cache
+(56 bytes, `30a72f78…`) is included unchanged; it only adds hashes and
+is not the S5e-full trust input. The exact kernel binary was audited
+for the trust wiring: `_native_owner_root_trust_enabled = 1`,
+`_native_owner_root_decision = -1` before boot,
+`_native_verified_block_root_authorized` and both root checkpoints are
+present. The documented `bsd_init` flags are 1/1/1.
+
+The packaging baseline is the retained S5d⁗ image `0c25d559…`, not
+the v5 file: `out/gta4l/boot/boot-ram-root-sdhci-v5.img` is no longer
+in the checkout. The gate verified the retained image's header page,
+kernel section `a4b054e0…`, zero padding, firmware, boot DTB and
+section boundaries against the pinned v5 values, so only the ramdisk
+differs. The candidate's BOOT is the same 85,688,320-byte shape.
+
+One device boot is the rung. Pass: `WINDOWS valid=1`, `VERIFY valid=1`,
+`ROOT: online=1`, `Got boot device`, `BSD root`, no
+`rootvp not authenticated after mounting` and no `ROOT: error`/
+`offline`. A later userland stop without the SystemOS dyld cache,
+original trust bundle and Data volume is expected and recorded, not a
+failure. The expected console and failure markers were written to
+`out/gta4l/ram-root-emmc-s5e-min-candidate-evidence/expected-console.txt`
+before the boot. Not flashed or booted; the tablet is in TWRP.

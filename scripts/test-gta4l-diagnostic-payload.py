@@ -569,6 +569,69 @@ def test_emmc_block_3_vread(base):
     print('PASS emmc-block-3-vread maps to the five-token VREAD rung')
 
 
+def test_emmc_block_3_root(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    record = base / 'argv.json'
+    os.environ['FAKE_UNIXNU_RECORD'] = str(record)
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    index = args.index('--data-ramdisk')
+    del args[index:index + 2]
+    index = args.index('rd=md0')
+    del args[index - 1:index + 1]
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-root'
+    code = run(module, [
+        *args,
+        '--kernel', str(kernel),
+        '--output', str(output),
+        '--manifest', str(manifest),
+    ])
+    assert code == 0
+    argv = json.loads(record.read_text())
+    assert '--data-ramdisk' not in argv
+    assert '--data-ramdisk-manifest' not in argv
+    kernel_args = [argv[index + 1] for index, value in enumerate(argv)
+                   if value == '--kernel-arg']
+    expected = ['gta4l-emmc-block=3', 'gta4l-emmc-windows=1',
+                'gta4l-emmc-verify=1', 'gta4l-emmc-dma=1',
+                'gta4l-emmc-root=1']
+    assert kernel_args[-5:] == expected, kernel_args
+    assert 'rd=md0' not in kernel_args
+    manifest_record = json.loads(manifest.read_text())
+    assert manifest_record['diagnostic_argument'] == ' '.join(expected)
+    assert manifest_record['data_ramdisk'] is None
+    print('PASS emmc-block-3-root maps to the five-token root rung without a '
+          'Data ramdisk')
+
+
+def test_emmc_block_3_root_rejects_data_ramdisk(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    output = base / 'payload.img'
+    manifest = base / 'payload.manifest.json'
+    module = load_builder(checker)
+    args = common_arguments(unixnu, uefi, device, data, trust)
+    args[args.index('--diagnostic') + 1] = 'emmc-block-3-root'
+    try:
+        run(module, [
+            *args,
+            '--kernel', str(kernel),
+            '--output', str(output),
+            '--manifest', str(manifest),
+        ])
+    except SystemExit as error:
+        assert 'do not pass --data-ramdisk' in str(error), error
+    else:
+        raise AssertionError('the root personality accepted a Data ramdisk')
+    assert not output.exists()
+    assert not manifest.exists()
+    print('PASS emmc-block-3-root refuses a Data ramdisk')
+
+
 def test_emmc_block_3_live(base):
     unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
     record = base / 'argv.json'
@@ -1613,6 +1676,83 @@ def test_diagnostic_contract(_base):
         'gta4l-emmc-block=3 gta4l-emmc-bulk=1 gta4l-emmc-dma=1 '
         'gta4l-emmc-live=1', 'emmc-block-3')
     assert not plain_live_expected['emmc-block-3_diagnostic_selected']
+    good_verify = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-windows=1 gta4l-emmc-verify=1 '
+        'gta4l-emmc-dma=1', 'emmc-block-3-verify')
+    assert all(good_verify.values()), good_verify
+    missing_verify = checks(
+        'gta4l-emmc-block=3 gta4l-emmc-windows=1 gta4l-emmc-dma=1',
+        'emmc-block-3-verify')
+    assert not missing_verify['emmc-block-3-verify_diagnostic_selected'], \
+        missing_verify
+    root_args = ('gta4l-emmc-block=3 gta4l-emmc-windows=1 '
+                 'gta4l-emmc-verify=1 gta4l-emmc-dma=1 '
+                 'gta4l-emmc-root=1')
+    root = checks(root_args, 'emmc-block-3-root')
+    assert all(root.values()), root
+    root_rd = checks(root_args + ' rd=md0', 'emmc-block-3-root')
+    assert not root_rd['emmc-block-3-root_no_ramdisk_override'], root_rd
+    root_rootdev = checks(root_args + ' rootdev=md0', 'emmc-block-3-root')
+    assert not root_rootdev[
+        'emmc-block-3-root_no_ramdisk_override'], root_rootdev
+    root_block_one = checks(
+        root_args.replace('gta4l-emmc-block=3', 'gta4l-emmc-block=1'),
+        'emmc-block-3-root')
+    assert not root_block_one['root_requires_block_three'], root_block_one
+    assert not root_block_one[
+        'emmc-block-3-root_diagnostic_selected'], root_block_one
+    root_missing_windows = checks(
+        root_args.replace('gta4l-emmc-windows=1 ', ''),
+        'emmc-block-3-root')
+    assert not root_missing_windows[
+        'root_requires_windows_verify_dma'], root_missing_windows
+    assert not root_missing_windows[
+        'emmc-block-3-root_diagnostic_selected'], root_missing_windows
+    root_missing_verify = checks(
+        root_args.replace('gta4l-emmc-verify=1 ', ''),
+        'emmc-block-3-root')
+    assert not root_missing_verify[
+        'root_requires_windows_verify_dma'], root_missing_verify
+    assert not root_missing_verify[
+        'emmc-block-3-root_diagnostic_selected'], root_missing_verify
+    root_missing_dma = checks(
+        root_args.replace('gta4l-emmc-dma=1', ''),
+        'emmc-block-3-root')
+    assert not root_missing_dma[
+        'root_requires_windows_verify_dma'], root_missing_dma
+    assert not root_missing_dma[
+        'emmc-block-3-root_diagnostic_selected'], root_missing_dma
+    root_vread = checks(root_args + ' gta4l-emmc-vread=1',
+                        'emmc-block-3-root')
+    assert not root_vread['root_excludes_vread'], root_vread
+    assert not root_vread[
+        'emmc-block-3-root_diagnostic_selected'], root_vread
+    root_duplicate = checks(root_args + ' gta4l-emmc-root=1',
+                           'emmc-block-3-root')
+    assert not root_duplicate['at_most_one_root_token'], root_duplicate
+    assert not root_duplicate[
+        'emmc-block-3-root_diagnostic_selected'], root_duplicate
+    root_value = checks(root_args.replace('gta4l-emmc-root=1',
+                                          'gta4l-emmc-root=2'),
+                        'emmc-block-3-root')
+    assert not root_value['root_value_one'], root_value
+    assert not root_value[
+        'emmc-block-3-root_diagnostic_selected'], root_value
+    root_bulk = checks(root_args + ' gta4l-emmc-bulk=1',
+                       'emmc-block-3-root')
+    assert not root_bulk['root_no_other_modifier'], root_bulk
+    assert not root_bulk[
+        'emmc-block-3-root_diagnostic_selected'], root_bulk
+    root_no_block = checks(
+        'gta4l-emmc-windows=1 gta4l-emmc-verify=1 gta4l-emmc-dma=1 '
+        'gta4l-emmc-root=1', 'emmc-block-3-root')
+    assert not root_no_block['exactly_one_diagnostic_argument'], \
+        root_no_block
+    assert not root_no_block[
+        'emmc-block-3-root_diagnostic_selected'], root_no_block
+    root_on_windows = checks(root_args, 'emmc-block-3-windows')
+    assert not root_on_windows[
+        'emmc-block-3-windows_diagnostic_selected'], root_on_windows
     empty = checks('')
     assert not empty['exactly_one_diagnostic_argument']
     assert not empty['unixnu_toml_has_xnu_args']
@@ -1636,6 +1776,8 @@ def main():
              test_emmc_block_3_widthhold, test_emmc_block_3_widthpub,
              test_emmc_block_3_speed, test_emmc_block_3_bulk,
              test_emmc_block_3_windows, test_emmc_block_3_vread,
+             test_emmc_block_3_root,
+             test_emmc_block_3_root_rejects_data_ramdisk,
              test_emmc_block_3_live,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,
