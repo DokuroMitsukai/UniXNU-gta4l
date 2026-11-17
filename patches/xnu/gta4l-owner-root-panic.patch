@@ -1,13 +1,14 @@
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -1279,6 +1279,41 @@
- {
- 	__asm__ volatile("" : : "r"(apple), "r"(owner), "r"(device) : "memory");
+@@ -1281,6 +1281,49 @@
  }
+ #endif
+ 
 +void native_owner_root_panic_summary(char *, size_t);
 +void
 +native_owner_root_panic_summary(char *buffer, size_t size)
 +{
++#if defined(XNU_OWNER_ROOT_AUDIT) && XNU_OWNER_ROOT_AUDIT
 +	extern void native_owner_root_summary(char *, size_t)
 +	    __attribute__((weak));
 +	int written;
@@ -38,27 +39,29 @@
 +		(void)snprintf(&buffer[written], size - (size_t)written,
 +		    " drv=none");
 +	}
++#else
++	if ((buffer == NULL) || (size == 0u)) {
++		return;
++	}
++	(void)snprintf(buffer, size, "owner-root: unavailable");
++#endif
 +}
- #endif
- 
++
  void
+ bsdinit_task(void)
+ {
 --- a/bsd/kern/kern_sig.c
 +++ b/bsd/kern/kern_sig.c
-@@ -2068,17 +2068,30 @@
+@@ -2068,17 +2068,25 @@
  
  	/* catch unexpected initproc kills early for easier debuggging */
  	if (signum == SIGKILL && p == initproc) {
-+#if defined(XNU_OWNER_ROOT_AUDIT) && XNU_OWNER_ROOT_AUDIT
 +		extern void native_owner_root_panic_summary(char *, size_t);
 +		char owner_summary[256];
-+		const char *owner_suffix;
++		const char *owner_suffix = owner_summary;
 +
 +		native_owner_root_panic_summary(owner_summary,
 +		    sizeof(owner_summary));
-+		owner_suffix = owner_summary;
-+#else
-+		const char *owner_suffix = "";
-+#endif
  		if (signal_reason == NULL) {
 -			panic_plain("unexpected SIGKILL of %s %s (no reason provided)",
 +			panic_plain("unexpected SIGKILL of %s %s (no reason provided)%s%s",
@@ -81,34 +84,29 @@
  
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -8074,7 +8074,21 @@
+@@ -8074,7 +8074,16 @@
  				return;
  			}
  
 -			panic("Process 1 exec of launchd.release failed, errno %d", error);
-+#if defined(XNU_OWNER_ROOT_AUDIT) && XNU_OWNER_ROOT_AUDIT
 +			extern void native_owner_root_panic_summary(char *,
 +			    size_t);
 +			char owner_summary[256];
-+			const char *owner_suffix;
++			const char *owner_suffix = owner_summary;
 +
 +			native_owner_root_panic_summary(owner_summary,
 +			    sizeof(owner_summary));
-+			owner_suffix = owner_summary;
-+#else
-+			const char *owner_suffix = "";
-+#endif
 +			panic("Process 1 exec of launchd.release failed, errno %d%s%s",
 +			    error, (*owner_suffix != '\0') ? " " : "",
 +			    owner_suffix);
  		} else {
  			strlcpy(launchd_path, "/usr/appleinternal/sbin/launchd.", sizeof(launchd_path));
  			strlcat(launchd_path, launchd_suffix, sizeof(launchd_path));
-@@ -8101,7 +8115,20 @@
+@@ -8101,7 +8110,16 @@
  		}
  	}
  
-+#if defined(XNU_OWNER_ROOT_AUDIT) && XNU_OWNER_ROOT_AUDIT
+-	panic("Process 1 exec of %s failed, errno %d", ((i == 0) ? "<null>" : init_programs[i - 1]), error);
 +	{
 +		extern void native_owner_root_panic_summary(char *, size_t);
 +		char owner_summary[256];
@@ -119,9 +117,6 @@
 +		    ((i == 0) ? "<null>" : init_programs[i - 1]), error,
 +		    owner_summary);
 +	}
-+#else
- 	panic("Process 1 exec of %s failed, errno %d", ((i == 0) ? "<null>" : init_programs[i - 1]), error);
-+#endif
  }
  
  /*

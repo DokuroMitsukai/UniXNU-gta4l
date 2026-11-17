@@ -10308,3 +10308,46 @@ userdata manifest `3ddf4d4f…`, both vroots and the protected
 partitions); the BOOT-only flash wrote `1936202d…` and the region
 read-back matched, first 4 KiB `0537cad2…`, full p69 `9522e8be…`. One
 owner-triggered boot is pending; `1936202d…` is the one-shot candidate.
+
+### 5.4.17 S5e-min-c verdict and the per-file audit guard (2026-11-17)
+
+BOOT `1936202d…` was flashed once after the matching preflight and
+booted once. The final line was byte-identical to S5e-min-b and carried
+no `owner-root:` suffix. The cause was the build flag, not the panic
+path: `XNU_OWNER_ROOT_AUDIT` is added only to
+`bsd_init.o_CFLAGS_ADD`, so `kern_sig.o` and `kern_exec.o` saw it
+undefined and compiled the empty-suffix branch. The helper and the
+`%s%s` formats were in the binary, but there were no call sites to
+`_native_owner_root_panic_summary`.
+
+The fix makes the helper unconditional in `bsd_init.c`; an internal
+`#if XNU_OWNER_ROOT_AUDIT` prints the owner globals and calls the weak
+driver hook, while the diagnostic build prints `owner-root:
+unavailable`. Both panic sites call the helper unconditionally. The
+next candidate (S5e-min-d) is rebuilt from the trust-on config.
+`1936202d…` is consumed and must not be booted again.
+
+### 5.4.18 S5e-min-d candidate after the unconditional call (2026-11-17)
+
+The revised patch leaves the helper in `bsd_init.c`, whose compile record
+carries `XNU_OWNER_ROOT_AUDIT=1`, and calls it unconditionally from both
+`kern_sig.c` and `kern_exec.c`. The exact kernel `5e6ecdb2…` was checked
+before flashing: only the real `owner-root: trust=…` string is present
+(not `owner-root: unavailable`), there are three call sites to
+`_native_owner_root_panic_summary` (two exec, one signal), and the driver
+symbol `_native_owner_root_summary` resolves. The earlier S5e-min-c
+candidate had the formats but no call sites because
+`XNU_OWNER_ROOT_AUDIT` is a `bsd_init.o`-only define; the unconditional
+call closes that gap.
+
+Candidate: kernel `5e6ecdb2…` (51,699,712 bytes, trust flags 1/1/1,
+`trust_enabled=1`), archive `3bab25a5…`, storage-ABI
+`out/gta4l/storage-abi-5e6ecdb2` PASS (190 slots, 181 bindings, same
+vtable/metaclass/service), payload `9cb5e01b…` (143 checks, no Data, no
+`rd=`) and BOOT `3cbea4d5…` (85,688,320 bytes, 18/18, first 4 KiB
+`1746dd20…`). The TWRP preflight matched (p69 `9522e8be…`, first 4 KiB
+`0537cad2…`, userdata manifest `3ddf4d4f…`, both vroots and the
+protected partitions); the BOOT-only flash wrote `3cbea4d5…` and the
+region read-back matched, first 4 KiB `1746dd20…`, full p69
+`08c4beda…`. One owner-triggered boot is pending; `3cbea4d5…` is the
+one-shot candidate.
