@@ -158,6 +158,11 @@ void gta4l_emmc_block_sha256_final(
 void gta4l_emmc_block_sha256(const uint8_t *data, uint32_t length,
     uint8_t digest[32]);
 
+/* Lifetime accepted read requests/blocks, read lock-free by the boot
+ * deadline diagnostic. */
+extern volatile uint64_t gta4l_emmc_lifetime_read_requests;
+extern volatile uint64_t gta4l_emmc_lifetime_read_blocks;
+
 #ifdef __cplusplus
 }
 #endif

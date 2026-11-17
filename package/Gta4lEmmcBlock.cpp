@@ -11840,6 +11840,17 @@ IOBlockStorageDevice::doGetProvisionStatus(UInt64, UInt64, UInt32 *,
 }
 #endif
 
+extern "C" void
+native_gta4l_emmc_activity(uint64_t *requests, uint64_t *blocks)
+{
+	if (requests != nullptr) {
+		*requests = gta4l_emmc_lifetime_read_requests;
+	}
+	if (blocks != nullptr) {
+		*blocks = gta4l_emmc_lifetime_read_blocks;
+	}
+}
+
 static void
 gta4l_verified_reset(void)
 {

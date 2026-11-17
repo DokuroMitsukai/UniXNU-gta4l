@@ -1,6 +1,280 @@
+diff --git a/devpatch-baseline/bsd/kern/kern_exec.c b/s5h-after/bsd/kern/kern_exec.c
+index 7ddd310..6de1414 100644
+--- a/bsd/kern/kern_exec.c
++++ b/bsd/kern/kern_exec.c
+@@ -88,6 +88,8 @@
+ #include <sys/filedesc.h>
+ #include <sys/kernel.h>
+ #include <sys/proc_internal.h>
++#include <kern/clock.h>
++#include <kern/thread_call.h>
+ #include <sys/kauth.h>
+ #include <sys/user.h>
+ #include <sys/socketvar.h>
+@@ -5120,14 +5122,38 @@ proc_exec_switch_task(proc_t old_proc, proc_t new_proc, task_t old_task, task_t
+  *
+  * TODO:	Dynamic linker header address on stack is copied via suword()
+  */
++/* Device diagnostic: total exec/exit activity for the boot deadline. */
++volatile uint64_t gta4l_exec_count = 0;
++volatile uint64_t gta4l_exit_count = 0;
++volatile int gta4l_exit_pid = -1;
++volatile int gta4l_exit_status = 0;
++volatile int gta4l_exit_ns = 0;
++volatile uint64_t gta4l_exit_code = 0;
++char gta4l_exit_name[32] = "none";
++
++void
++gta4l_note_exit(int pid, const char *name, int status, int ns, uint64_t code)
++{
++	if (name != NULL) {
++		strlcpy(gta4l_exit_name, name, sizeof(gta4l_exit_name));
++	}
++	gta4l_exit_pid = pid;
++	gta4l_exit_status = status;
++	gta4l_exit_ns = ns;
++	gta4l_exit_code = code;
++	__atomic_fetch_add(&gta4l_exit_count, 1, __ATOMIC_RELAXED);
++}
++
+ /* ARGSUSED */
+ int
++
+ execve(proc_t p, struct execve_args *uap, int32_t *retval)
+ {
+ 	struct __mac_execve_args muap;
+ 	int err;
+ 
+ 	memoryshot(VM_EXECVE, DBG_FUNC_NONE);
++	__atomic_fetch_add(&gta4l_exec_count, 1, __ATOMIC_RELAXED);
+ 
+ 	muap.fname = uap->fname;
+ 	muap.argp = uap->argp;
+@@ -7888,6 +7914,91 @@ done:
+ }
+ #endif
+ 
++
++#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT && \
++    defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT && \
++    defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
++extern volatile uint32_t native_ram_block_ready;
++extern volatile uint64_t native_ram_block_reads;
++extern volatile uint64_t native_ram_block_writes;
++extern volatile uint64_t native_ram_block_failures;
++extern void native_gta4l_emmc_activity(uint64_t *, uint64_t *)
++    __attribute__((weak_import));
++struct gta4l_deadline_sample {
++	uint64_t ram_ready, ram_reads, ram_writes, ram_failures;
++	uint64_t emmc_requests, emmc_blocks;
++	int procs;
++	uint64_t execs, exits;
++};
++static struct gta4l_deadline_sample gta4l_first_sample;
++static int gta4l_first_sample_valid = 0;
++
++static void
++gta4l_deadline_read(struct gta4l_deadline_sample *s)
++{
++	s->ram_ready = native_ram_block_ready;
++	s->ram_reads = native_ram_block_reads;
++	s->ram_writes = native_ram_block_writes;
++	s->ram_failures = native_ram_block_failures;
++	s->emmc_requests = 0;
++	s->emmc_blocks = 0;
++	if (native_gta4l_emmc_activity != NULL) {
++		native_gta4l_emmc_activity(&s->emmc_requests, &s->emmc_blocks);
++	}
++	s->procs = nprocs;
++	s->execs = gta4l_exec_count;
++	s->exits = gta4l_exit_count;
++}
++
++static void
++gta4l_deadline_sample(thread_call_param_t p0 __unused,
++    thread_call_param_t p1 __unused)
++{
++	gta4l_deadline_read(&gta4l_first_sample);
++	gta4l_first_sample_valid = 1;
++}
++
++static void
++gta4l_deadline_fire(thread_call_param_t p0 __unused,
++    thread_call_param_t p1 __unused)
++{
++	extern void native_owner_root_panic_summary(char *, size_t);
++	char summary[192];
++	struct gta4l_deadline_sample now;
++	proc_t p = initproc;
++	const char *name = (p != PROC_NULL) ? p->p_name : "none";
++	unsigned cs = (p != PROC_NULL) ? proc_getcsflags(p) : 0u;
++	int pbin = (p != PROC_NULL) ? csproc_get_platform_binary(p) : -1;
++
++	native_owner_root_panic_summary(summary, sizeof(summary));
++	gta4l_deadline_read(&now);
++	panic("gta4l d: cache=%d/%d/%d data=%d/%d dev=%x size=%llx pid1=%s "
++	    "cs=%x pb=%d t0 ram=%llu/%llu/%llu emmc=%llu/%llu np=%d ex=%llu "
++	    "x=%llu t1 ram=%llu/%llu emmc=%llu/%llu np=%d ex=%llu x=%llu "
++	    "last=%s/%d/%d/%d/%llx %s",
++	    native_owner_cache_status, native_owner_cache_mount_status,
++	    native_owner_cache_stage, native_owner_data_status,
++	    native_owner_data_stage, (unsigned)native_owner_data_device,
++	    (unsigned long long)native_owner_data_seed_size, name, cs, pbin,
++	    (unsigned long long)gta4l_first_sample.ram_reads,
++	    (unsigned long long)gta4l_first_sample.ram_writes,
++	    (unsigned long long)gta4l_first_sample.ram_failures,
++	    (unsigned long long)gta4l_first_sample.emmc_requests,
++	    (unsigned long long)gta4l_first_sample.emmc_blocks,
++	    gta4l_first_sample.procs,
++	    (unsigned long long)gta4l_first_sample.execs,
++	    (unsigned long long)gta4l_first_sample.exits,
++	    (unsigned long long)now.ram_reads,
++	    (unsigned long long)now.ram_writes,
++	    (unsigned long long)now.emmc_requests,
++	    (unsigned long long)now.emmc_blocks, now.procs,
++	    (unsigned long long)now.execs,
++	    (unsigned long long)now.exits,
++	    gta4l_exit_name, gta4l_exit_pid, gta4l_exit_status,
++	    gta4l_exit_ns, (unsigned long long)gta4l_exit_code, summary);
++}
++#endif
++
+ static int
+ load_init_program_at_path(proc_t p, user_addr_t scratch_addr, const char* path, user_addr_t envp)
+ {
+@@ -8025,17 +8136,89 @@ load_init_program(proc_t p)
+ 
+ 	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);
+ 	user_addr_t init_envp = USER_ADDR_NULL;
++#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT && \
++    defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT && \
++    defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
++	{
++		uint32_t seconds = 0;
++
++		if (PE_parse_boot_argn("gta4l-deadline", &seconds,
++		    sizeof(seconds)) && seconds) {
++			static thread_call_t sample_call;
++			static thread_call_t fire_call;
++			uint32_t early = seconds / 4u;
++
++			if (early == 0u) {
++				early = 1u;
++			}
++			if (sample_call == NULL) {
++				sample_call = thread_call_allocate(
++				    gta4l_deadline_sample, NULL);
++			}
++			if (fire_call == NULL) {
++				fire_call = thread_call_allocate(
++				    gta4l_deadline_fire, NULL);
++			}
++			if ((sample_call != NULL) && (fire_call != NULL)) {
++				uint64_t sample_deadline;
++				uint64_t fire_deadline;
++
++				clock_interval_to_deadline(early, NSEC_PER_SEC,
++				    &sample_deadline);
++				clock_interval_to_deadline(seconds, NSEC_PER_SEC,
++				    &fire_deadline);
++				(void)thread_call_enter_delayed(sample_call,
++				    sample_deadline);
++				(void)thread_call_enter_delayed(fire_call,
++				    fire_deadline);
++			}
++		}
++	}
++#endif
+ #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
+ 	boot_progress_stage("SystemOS mount enter");
+ 	int cache_error = native_owner_cache_prepare(p, (user_addr_t)scratch_addr, &init_envp);
+ 	boot_progress_stage("SystemOS mount returned");
+-	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
++	if (cache_error) {
++		extern void native_owner_root_panic_summary(char *, size_t);
++		char owner_summary[128];
++
++		native_owner_root_panic_summary(owner_summary,
++		    sizeof(owner_summary));
++		panic("offline owner SystemOS mount failed: %d "
++		    "stage=%d status=%d mount=%d %s", cache_error,
++		    native_owner_cache_stage, native_owner_cache_status,
++		    native_owner_cache_mount_status, owner_summary);
++	}
+ #endif
+ #if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
+ 	boot_progress_stage("Data mount enter");
+ 	int data_error = native_owner_data_prepare(p, (user_addr_t)scratch_addr);
+ 	boot_progress_stage("Data mount returned");
+-	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
++	if (data_error) {
++		extern void native_owner_root_panic_summary(char *, size_t);
++		char owner_summary[128];
++
++		native_owner_root_panic_summary(owner_summary,
++		    sizeof(owner_summary));
++#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
++		panic("offline scratch Data mount failed: %d stage=%d "
++		    "cache=%d/%d dev=%x base=%llx size=%llx %s", data_error,
++		    native_owner_data_stage, native_owner_cache_status,
++		    native_owner_cache_mount_status,
++		    (unsigned)native_owner_data_device,
++		    (unsigned long long)native_owner_data_seed_base,
++		    (unsigned long long)native_owner_data_seed_size,
++		    owner_summary);
++#else
++		panic("offline scratch Data mount failed: %d stage=%d "
++		    "dev=%x base=%llx size=%llx %s", data_error,
++		    native_owner_data_stage, (unsigned)native_owner_data_device,
++		    (unsigned long long)native_owner_data_seed_base,
++		    (unsigned long long)native_owner_data_seed_size,
++		    owner_summary);
++#endif
++	}
+ #if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
+ 	extern int sheng_boot_watchdog_policy(void *, uint64_t);
+ 	boot_progress_stage("temporary watchdog launch policy enter");
+@@ -8074,7 +8257,16 @@ load_init_program(proc_t p)
+ 				return;
+ 			}
+ 
+-			panic("Process 1 exec of launchd.release failed, errno %d", error);
++			extern void native_owner_root_panic_summary(char *,
++			    size_t);
++			char owner_summary[256];
++			const char *owner_suffix = owner_summary;
++
++			native_owner_root_panic_summary(owner_summary,
++			    sizeof(owner_summary));
++			panic("Process 1 exec of launchd.release failed, errno %d%s%s",
++			    error, (*owner_suffix != '\0') ? " " : "",
++			    owner_suffix);
+ 		} else {
+ 			strlcpy(launchd_path, "/usr/appleinternal/sbin/launchd.", sizeof(launchd_path));
+ 			strlcat(launchd_path, launchd_suffix, sizeof(launchd_path));
+@@ -8101,7 +8293,16 @@ load_init_program(proc_t p)
+ 		}
+ 	}
+ 
+-	panic("Process 1 exec of %s failed, errno %d", ((i == 0) ? "<null>" : init_programs[i - 1]), error);
++	{
++		extern void native_owner_root_panic_summary(char *, size_t);
++		char owner_summary[256];
++
++		native_owner_root_panic_summary(owner_summary,
++		    sizeof(owner_summary));
++		panic("Process 1 exec of %s failed, errno %d %s",
++		    ((i == 0) ? "<null>" : init_programs[i - 1]), error,
++		    owner_summary);
++	}
+ }
+ 
+ /*
+diff --git a/devpatch-baseline/bsd/kern/bsd_init.c b/s5h-before/bsd/kern/bsd_init.c
+index dbd0d8e..e23c3a7 100644
 --- a/bsd/kern/bsd_init.c
 +++ b/bsd/kern/bsd_init.c
-@@ -1281,6 +1281,49 @@
+@@ -1281,6 +1281,49 @@ native_owner_root_checkpoint(int apple, int owner, dev_t device)
  }
  #endif
  
@@ -50,9 +324,11 @@
  void
  bsdinit_task(void)
  {
+diff --git a/devpatch-baseline/bsd/kern/kern_sig.c b/s5h-before/bsd/kern/kern_sig.c
+index 6f93e15..e064831 100644
 --- a/bsd/kern/kern_sig.c
 +++ b/bsd/kern/kern_sig.c
-@@ -2068,17 +2068,25 @@
+@@ -2068,17 +2068,25 @@ psignal_internal(proc_t p, task_t task, thread_t thread, int flavor, int signum,
  
  	/* catch unexpected initproc kills early for easier debuggging */
  	if (signum == SIGKILL && p == initproc) {
@@ -82,158 +358,23 @@
  		}
  	}
  
---- a/bsd/kern/kern_exec.c
-+++ b/bsd/kern/kern_exec.c
-@@ -90,2 +90,4 @@
- #include <sys/proc_internal.h>
-+#include <kern/clock.h>
-+#include <kern/thread_call.h>
- #include <sys/kauth.h>
-@@ -7891,1 +7893,44 @@
-+#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT && \
-+    defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
-+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
-+extern volatile uint32_t native_ram_block_ready;
-+extern volatile uint64_t native_ram_block_reads;
-+extern volatile uint64_t native_ram_block_writes;
-+extern volatile uint64_t native_ram_block_failures;
-+#endif
-+/* One visible line at T+seconds: the mount stages, the RAM-block counters,
-+ * PID 1's executable name/csflags and the owner root verdict. */
-+static void
-+gta4l_deadline_fire(thread_call_param_t p0 __unused,
-+    thread_call_param_t p1 __unused)
-+{
-+	extern void native_owner_root_panic_summary(char *, size_t);
-+	char summary[160];
-+	proc_t p = initproc;
-+	const char *name = (p != PROC_NULL) ? p->p_name : "none";
-+	unsigned cs = (p != PROC_NULL) ? proc_getcsflags(p) : 0u;
-+
-+	native_owner_root_panic_summary(summary, sizeof(summary));
-+#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
-+	panic("gta4l deadline: cache=%d/%d/%d data=%d/%d dev=%x size=%llx "
-+	    "ram=%u/%llu/%llu/%llu pid1=%s cs=%x %s",
-+	    native_owner_cache_status, native_owner_cache_mount_status,
-+	    native_owner_cache_stage, native_owner_data_status,
-+	    native_owner_data_stage, (unsigned)native_owner_data_device,
-+	    (unsigned long long)native_owner_data_seed_size,
-+	    (unsigned)native_ram_block_ready,
-+	    (unsigned long long)native_ram_block_reads,
-+	    (unsigned long long)native_ram_block_writes,
-+	    (unsigned long long)native_ram_block_failures, name, cs, summary);
-+#else
-+	panic("gta4l deadline: cache=%d/%d/%d data=%d/%d dev=%x size=%llx "
-+	    "pid1=%s cs=%x %s", native_owner_cache_status,
-+	    native_owner_cache_mount_status, native_owner_cache_stage,
-+	    native_owner_data_status, native_owner_data_stage,
-+	    (unsigned)native_owner_data_device,
-+	    (unsigned long long)native_owner_data_seed_size, name, cs, summary);
-+#endif
-+}
-+#endif
-+
- static int
-@@ -8028,1 +8073,25 @@
-+#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT && \
-+    defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
-+	{
-+		uint32_t seconds = 0;
-+
-+		if (PE_parse_boot_argn("gta4l-deadline", &seconds,
-+		    sizeof(seconds)) && seconds) {
-+			static thread_call_t deadline_call;
-+
-+			if (deadline_call == NULL) {
-+				deadline_call = thread_call_allocate(
-+				    gta4l_deadline_fire, NULL);
-+			}
-+			if (deadline_call != NULL) {
-+				uint64_t deadline;
-+
-+				clock_interval_to_deadline(seconds, NSEC_PER_SEC,
-+				    &deadline);
-+				(void)thread_call_enter_delayed(deadline_call,
-+				    deadline);
-+			}
-+		}
-+	}
-+#endif
- #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
-@@ -8032,2 +8032,12 @@
--	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
-+	if (cache_error) {
-+		extern void native_owner_root_panic_summary(char *, size_t);
-+		char owner_summary[128];
-+
-+		native_owner_root_panic_summary(owner_summary,
-+		    sizeof(owner_summary));
-+		panic("offline owner SystemOS mount failed: %d "
-+		    "stage=%d status=%d mount=%d %s", cache_error,
-+		    native_owner_cache_stage, native_owner_cache_status,
-+		    native_owner_cache_mount_status, owner_summary);
-+	}
- #endif
-@@ -8038,2 +8038,25 @@
--	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
-+	if (data_error) {
-+		extern void native_owner_root_panic_summary(char *, size_t);
-+		char owner_summary[128];
-+
-+		native_owner_root_panic_summary(owner_summary,
-+		    sizeof(owner_summary));
-+#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
-+		panic("offline scratch Data mount failed: %d stage=%d "
-+		    "cache=%d/%d dev=%x base=%llx size=%llx %s", data_error,
-+		    native_owner_data_stage, native_owner_cache_status,
-+		    native_owner_cache_mount_status,
-+		    (unsigned)native_owner_data_device,
-+		    (unsigned long long)native_owner_data_seed_base,
-+		    (unsigned long long)native_owner_data_seed_size,
-+		    owner_summary);
-+#else
-+		panic("offline scratch Data mount failed: %d stage=%d "
-+		    "dev=%x base=%llx size=%llx %s", data_error,
-+		    native_owner_data_stage, (unsigned)native_owner_data_device,
-+		    (unsigned long long)native_owner_data_seed_base,
-+		    (unsigned long long)native_owner_data_seed_size,
-+		    owner_summary);
-+#endif
-+	}
- #if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
-@@ -8074,7 +8074,16 @@
- 				return;
- 			}
+diff --git a/s5h-before/bsd/kern/kern_exit.c b/s5h-after/bsd/kern/kern_exit.c
+index 760c339..2bd8bda 100644
+--- a/bsd/kern/kern_exit.c
++++ b/bsd/kern/kern_exit.c
+@@ -1902,6 +1902,15 @@ proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
+ 	    p->p_exit_reason ? p->p_exit_reason->osr_namespace : 0,
+ 	    p->p_exit_reason ? p->p_exit_reason->osr_code : 0);
  
--			panic("Process 1 exec of launchd.release failed, errno %d", error);
-+			extern void native_owner_root_panic_summary(char *,
-+			    size_t);
-+			char owner_summary[256];
-+			const char *owner_suffix = owner_summary;
++	{
++		extern void gta4l_note_exit(int, const char *, int, int,
++		    uint64_t);
 +
-+			native_owner_root_panic_summary(owner_summary,
-+			    sizeof(owner_summary));
-+			panic("Process 1 exec of launchd.release failed, errno %d%s%s",
-+			    error, (*owner_suffix != '\0') ? " " : "",
-+			    owner_suffix);
- 		} else {
- 			strlcpy(launchd_path, "/usr/appleinternal/sbin/launchd.", sizeof(launchd_path));
- 			strlcat(launchd_path, launchd_suffix, sizeof(launchd_path));
-@@ -8101,7 +8110,16 @@
- 		}
++		gta4l_note_exit(proc_getpid(p), p->p_name, rv,
++		    p->p_exit_reason ? p->p_exit_reason->osr_namespace : 0,
++		    p->p_exit_reason ? p->p_exit_reason->osr_code : 0);
++	}
++
+ 	if (p->p_crash_behavior != 0 || p == initproc) {
+ 		proc_handle_critical_exit(p, rv);
  	}
- 
--	panic("Process 1 exec of %s failed, errno %d", ((i == 0) ? "<null>" : init_programs[i - 1]), error);
-+	{
-+		extern void native_owner_root_panic_summary(char *, size_t);
-+		char owner_summary[256];
-+
-+		native_owner_root_panic_summary(owner_summary,
-+		    sizeof(owner_summary));
-+		panic("Process 1 exec of %s failed, errno %d %s",
-+		    ((i == 0) ? "<null>" : init_programs[i - 1]), error,
-+		    owner_summary);
-+	}
- }
- 
- /*

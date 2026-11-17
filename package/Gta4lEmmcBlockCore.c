@@ -7,6 +7,11 @@
 
 #include "Gta4lEmmcBlockCore.h"
 
+/* Lifetime read activity for the boot deadline diagnostic. Counters only;
+ * no request content and no per-request state. */
+volatile uint64_t gta4l_emmc_lifetime_read_requests = 0;
+volatile uint64_t gta4l_emmc_lifetime_read_blocks = 0;
+
 static void gta4l_emmc_block_clear_counters(
     struct gta4l_emmc_block_counters *counters)
 {
@@ -126,6 +131,10 @@ int gta4l_emmc_block_read(struct gta4l_emmc_block *block,
 
 	block->counters.requests++;
 	block->counters.requested_blocks += nblks;
+	__atomic_fetch_add(&gta4l_emmc_lifetime_read_requests, 1,
+	    __ATOMIC_RELAXED);
+	__atomic_fetch_add(&gta4l_emmc_lifetime_read_blocks, nblks,
+	    __ATOMIC_RELAXED);
 	if (nblks > block->counters.max_request_blocks) {
 		block->counters.max_request_blocks = nblks;
 	}

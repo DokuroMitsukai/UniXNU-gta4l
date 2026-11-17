@@ -10627,3 +10627,50 @@ first 4 KiB `b2b4d0be…`). The TWRP preflight matched p69 `4ff21dd1…`
 and the unchanged userdata/vroot/protected regions; the BOOT-only flash
 wrote `200818ba…`, region read-back exact, full p69 `30385793…`. One
 owner-triggered deadline boot is pending; `a817bdde…` stays retired.
+
+### 5.4.27 S5g verdict and S5h activity candidate (2026-11-18)
+
+**S5g-deadline (BOOT `200818ba…`) passed storage, root and launchd
+exec.** Owner photo: `cache=0/0/6 data=0/4 dev=1000002 size=2000000
+ram=1/57/0/0 pid1=launchd cs=22002301 owner-root: trust=1 apple=80
+decision=1 accepted=1 ro=1 mdev=1000005a sdev=1000005a drv=online=1
+win=2 errors=0 recov=0 offline=0 mount=1`.
+
+- SystemOS status 0, mount 0, final stage 6; Data status 0, stage 4,
+  writable at `/private/var` on the native RAM disk. `dev 1000002` is
+  the reference Data device (16777218); the size is the 32 MiB seed.
+- PID 1 is `launchd`, csflags `22002301` (VALID, HARD, KILL,
+  REQUIRE_LV, NO_UNTRUSTED_HELPERS, SIGNED; not KILLED). `bsd_init.c`
+  names PID 1 `init` before exec, so this is positive launchd-execution
+  evidence. The root verdict is accepted read-only on the verified
+  device.
+- **0 Data writes in 45 s** is the open question: 57 reads is about the
+  APFS mount, and the reference QEMU runs wrote early. Writes are not
+  failing (failure counter 0). `CS_PLATFORM_BINARY` was absent from the
+  raw flags, but this XNU keeps platform status on the task/blob
+  (`kern_exec.c:1733`) and `csops` adds the bit only when reporting
+  (`kern_proc.c:3261`), so that was a false alarm; S5h prints
+  `csproc_get_platform_binary` explicitly.
+- TWRP remeasure after S5g matched p69 `30385793…`, first 4 KiB
+  `b2b4d0be…`, the userdata manifest, both vroots and the protected
+  partitions; no eMMC write.
+
+**S5h-activity** adds two samples (30 s and 120 s after
+`load_init_program`) with RAM reads/writes/failures, eMMC lifetime read
+requests/blocks (new `gta4l_emmc_lifetime_*` counters in the core and a
+lock-free `native_gta4l_emmc_activity` accessor), `nprocs`, total
+execs, total exits and the last exited process's name/pid/status/
+namespace/code (a `gta4l_note_exit` hook in `proc_exit`). The panic
+line reports both samples plus launchd's raw csflags, platform-binary
+status and the root summary.
+
+Kernel `7650934a…` (51,802,112 bytes) passes the exact-kernel storage
+audit (vtable/metaclass/service `…44c0`/`…d1d0`/`…b5f738`, 190/181) and
+the ABI test; the eMMC archive changed only by the counters and the
+block suite is green again (528 adapter, 25 verified-read, core 47/35).
+Payload `9ba6ea12…` (83,886,080 bytes, contract pass) and BOOT
+`a422425b…` (85,688,320 bytes, gate 18/18, first 4 KiB `8b722c83…`),
+args `sheng-pmgr=2 gta4l-deadline=120`. The TWRP preflight matched;
+the BOOT-only flash wrote `a422425b…`, region read-back exact, full
+p69 `8f091a6c…`. One owner-triggered S5h boot is pending; `200818ba…`
+stays retired.
