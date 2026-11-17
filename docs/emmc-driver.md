@@ -10578,3 +10578,52 @@ userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot
 region read-back matched, first 4 KiB `78c4ddf7…`, full p69
 `4ff21dd1…`. One owner-triggered S5f-native boot is pending. No boot,
 reboot or other write; userdata stays `ae6e18e7…`.
+
+### 5.4.25 S5f-native boot outcome: no panic, static magenta bar (2026-11-17)
+
+One boot of BOOT `a817bdde…` showed only the static magenta bar for
+about 2–3 minutes: no panic screen, no text, and no self-reboot or
+watchdog reset. The owner forced power-off, then the TWRP remeasure
+matched p69 `4ff21dd1…`, first 4 KiB `78c4ddf7…`, userdata manifest
+`3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot `e3cbe583…`, efs
+`51fa824c…`, sec_efs `3a265d58…` and recovery `14e11370…`; the boot
+wrote nothing.
+
+The magenta band is the entry probe's stage 2, painted once before the
+MMU is enabled (`docs/guide/debugging.md`, "Color bars"); it does not
+animate. With `XNU_BOOT_PROGRESS=0` and no video-console output, the
+panic screen is the only thing that can draw after it. "Static magenta"
+therefore means "no panic", not "stopped at the MMU". The outcome is
+undetermined: either both mounts and launchd succeeded silently, or the
+new provider/APFS path hung before a panic site. `a817bdde…` is
+consumed and must not be booted again.
+
+The next rung adds a deadline checkpoint panic: a one-shot
+`thread_call` armed at `load_init_program` entry by the boot argument
+`gta4l-deadline=<seconds>`. At the deadline it panics with the cache and
+Data stages/status, the RAM-block ready/read/write/failure counters,
+PID 1's name and csflags, and the `owner-root:` summary. The callout
+still reports if the BSD thread is stuck in a mount, and it gives
+positive launchd evidence when userland is running. If it does not fire
+at all, the system is wedged with interrupts off and the next rung uses
+the entry-probe reset/boot-progress path instead.
+
+### 5.4.26 S5g-deadline candidate (2026-11-17)
+
+The deadline checkpoint is in the device panic patch: a one-shot
+`thread_call` armed at `load_init_program` entry by
+`gta4l-deadline=<seconds>`, panicking with the cache/Data stages and
+status, the RAM-block ready/read/write/failure counters, PID 1's name
+and csflags, and the `owner-root:` summary. Kernel `158ae8b0…`
+(51,802,112 bytes) passes the exact-kernel storage audit with the same
+vtable/metaclass/service (`…44c0`/`…d1d0`/`…b5f738`, 190/181) and the
+ABI test. The archive is unchanged (`bda0124f…`), so the block suite
+result still applies.
+
+Candidate: payload `2c203af5…` (83,886,080 bytes, contract pass,
+packed seed, original trust, kernel args `sheng-pmgr=2
+gta4l-deadline=45`) and BOOT `200818ba…` (85,688,320 bytes, gate 18/18,
+first 4 KiB `b2b4d0be…`). The TWRP preflight matched p69 `4ff21dd1…`
+and the unchanged userdata/vroot/protected regions; the BOOT-only flash
+wrote `200818ba…`, region read-back exact, full p69 `30385793…`. One
+owner-triggered deadline boot is pending; `a817bdde…` stays retired.

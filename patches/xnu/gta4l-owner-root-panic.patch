@@ -84,6 +84,82 @@
  
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
+@@ -90,2 +90,4 @@
+ #include <sys/proc_internal.h>
++#include <kern/clock.h>
++#include <kern/thread_call.h>
+ #include <sys/kauth.h>
+@@ -7891,1 +7893,44 @@
++#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT && \
++    defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
++#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
++extern volatile uint32_t native_ram_block_ready;
++extern volatile uint64_t native_ram_block_reads;
++extern volatile uint64_t native_ram_block_writes;
++extern volatile uint64_t native_ram_block_failures;
++#endif
++/* One visible line at T+seconds: the mount stages, the RAM-block counters,
++ * PID 1's executable name/csflags and the owner root verdict. */
++static void
++gta4l_deadline_fire(thread_call_param_t p0 __unused,
++    thread_call_param_t p1 __unused)
++{
++	extern void native_owner_root_panic_summary(char *, size_t);
++	char summary[160];
++	proc_t p = initproc;
++	const char *name = (p != PROC_NULL) ? p->p_name : "none";
++	unsigned cs = (p != PROC_NULL) ? proc_getcsflags(p) : 0u;
++
++	native_owner_root_panic_summary(summary, sizeof(summary));
++#if defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
++	panic("gta4l deadline: cache=%d/%d/%d data=%d/%d dev=%x size=%llx "
++	    "ram=%u/%llu/%llu/%llu pid1=%s cs=%x %s",
++	    native_owner_cache_status, native_owner_cache_mount_status,
++	    native_owner_cache_stage, native_owner_data_status,
++	    native_owner_data_stage, (unsigned)native_owner_data_device,
++	    (unsigned long long)native_owner_data_seed_size,
++	    (unsigned)native_ram_block_ready,
++	    (unsigned long long)native_ram_block_reads,
++	    (unsigned long long)native_ram_block_writes,
++	    (unsigned long long)native_ram_block_failures, name, cs, summary);
++#else
++	panic("gta4l deadline: cache=%d/%d/%d data=%d/%d dev=%x size=%llx "
++	    "pid1=%s cs=%x %s", native_owner_cache_status,
++	    native_owner_cache_mount_status, native_owner_cache_stage,
++	    native_owner_data_status, native_owner_data_stage,
++	    (unsigned)native_owner_data_device,
++	    (unsigned long long)native_owner_data_seed_size, name, cs, summary);
++#endif
++}
++#endif
++
+ static int
+@@ -8028,1 +8073,25 @@
++#if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT && \
++    defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
++	{
++		uint32_t seconds = 0;
++
++		if (PE_parse_boot_argn("gta4l-deadline", &seconds,
++		    sizeof(seconds)) && seconds) {
++			static thread_call_t deadline_call;
++
++			if (deadline_call == NULL) {
++				deadline_call = thread_call_allocate(
++				    gta4l_deadline_fire, NULL);
++			}
++			if (deadline_call != NULL) {
++				uint64_t deadline;
++
++				clock_interval_to_deadline(seconds, NSEC_PER_SEC,
++				    &deadline);
++				(void)thread_call_enter_delayed(deadline_call,
++				    deadline);
++			}
++		}
++	}
++#endif
+ #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
 @@ -8032,2 +8032,12 @@
 -	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
 +	if (cache_error) {
