@@ -50,6 +50,7 @@ VALID_FIELDS = (
 MAX_READ_CHUNKS = 2 * 4 * (1 << 20) // (32 << 10) + 1
 WINDOW_FIELDS = ('off', 'size', 'hd0', 'hd1')
 VERIFY_FIELDS = ('valid', 'reason', 'os', 'sysos', 'blocks', 'ms',
+                 'vload', 'vhash', 'vopen', 'vedge',
                  'fail', 'dma', 'osha', 'ssha')
 VERIFY_FAIL_FIELDS = ('vobj', 'voff', 'vlen', 'vio', 'vact')
 VERIFY_BLOCKS = 1025
@@ -315,6 +316,16 @@ def check_verify(line, expected_osha, expected_ssha,
         errors.append(f'VERIFY ms={ms!r}, expected milliseconds')
     elif int(ms) > budget_ms:
         errors.append(f'VERIFY ms={ms}, above the {budget_ms} ms budget')
+    phases = ('vload', 'vhash', 'vopen', 'vedge')
+    total = 0
+    for key in phases:
+        value = fields.get(key)
+        if value is None or not value.isdigit():
+            errors.append(f'VERIFY {key}={value!r}, expected milliseconds')
+            continue
+        total += int(value)
+    if ms is not None and ms.isdigit() and total > int(ms):
+        errors.append(f'VERIFY phase sum {total} exceeds ms={ms}')
     return errors
 
 
@@ -670,7 +681,8 @@ def self_test():
         assert check_pre_write(text), f'{label} was accepted'
     osha, ssha = '1' * 32, '2' * 32
     verify = (f'{VERIFY_LABEL}valid=1 reason=0 os=1 sysos=1 blocks=1025 '
-              f'ms=10968 fail=4294967295 dma=1 osha={osha} ssha={ssha}')
+              f'ms=10968 vload=4000 vhash=4000 vopen=2000 vedge=500 '
+              f'fail=4294967295 dma=1 osha={osha} ssha={ssha}')
     assert not check_verify(verify, osha, ssha), \
         check_verify(verify, osha, ssha)
     for text, label in (
@@ -688,7 +700,11 @@ def self_test():
              'verify ssha'),
             (verify + ' vobj=0', 'verify failure field on success'),
             (verify + ' extra=1', 'verify extra field'),
-            (verify.replace('ms=10968', 'ms=x'), 'verify ms type')):
+            (verify.replace('ms=10968', 'ms=x'), 'verify ms type'),
+            (verify.replace(' vedge=500', ''), 'verify phase missing'),
+            (verify.replace('vload=4000', 'vload=99999'),
+             'verify phase sum'),
+            (verify.replace('vhash=4000', 'vhash=x'), 'verify phase type')):
         assert check_verify(text, osha, ssha), f'{label} was accepted'
     failure = (f'{VERIFY_LABEL}valid=0 reason=3 os=0 sysos=0 blocks=0 '
                f'ms=16236 fail=4294967295 dma=0 vobj=0 voff=47480832 '

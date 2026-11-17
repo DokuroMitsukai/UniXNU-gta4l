@@ -10011,3 +10011,54 @@ and diagnostic `82b2def0…` (same archive; audit
 payload is `1088ee2c…` (83,886,080 bytes; contract 133/133;
 `emmc-block-3-vread`) and the BOOT image is `0c25d559…` (85,688,320
 bytes; gate 18/18; only the ramdisk differs from the v5 baseline).
+
+### 5.4.11 S5d⁗ device verdict and closeout (2026-11-17)
+
+The one boot of `0c25d559…` **passed**. Its budget is consumed; the
+tablet returned to TWRP.
+
+- WINDOWS `valid=1 reason=0 count=2 pub=2 phase=5 perr=0 wdiag=15 dma=1`,
+  `pwait=100 rms=465 rch=129`. Third device pass.
+- VERIFY `valid=1 os=1 sysos=1 blocks=1025 ms=5186 vload=2171 vhash=2074
+  vopen=646 vedge=177 dma=1`. Third device pass; 5,026-5,186 ms over
+  three boots.
+- VREAD `cases=8 passed=8 failed=0 reason=0 mask=ff windows=2
+  msize=6077580800 mwhole=1 vst=00000000 mdiag=06000206/06000204
+  spans=1030 mismatches=0 write=1 exports=7 seq_ms=726
+  seq_bytes=4194304`, `dig=4b6a7a20…`, `sdig=37945379…`.
+- `mdiag` decoded: both windows code 0, target opened, volume found,
+  two whole nodes (synthesized container + real whole media), real media
+  not writable. Walk depth OS 6, SystemOS 4. The depth difference is
+  real registry shape; no code may hard-code a depth.
+- The report panic `@Gta4lEmmcBlock.cpp:13452` is the intended
+  end-of-rung panic.
+
+Host validation: the evidence checker was run against the v2 image
+`ae6e18e7…` (9,455,947,776 bytes) with the owner report and
+`--expect-verify --expect-vread`: **PASS** for WINDOWS, VERIFY and VREAD
+(recomputed `dig`/`sdig`, span count, `msize`, `mdiag`, both envelope
+prefixes). The checker gained the VERIFY phase fields
+`vload/vhash/vopen/vedge` and the rule that their sum cannot exceed
+`ms`; its self-test rejects a missing phase, an over-budget sum and a
+non-numeric phase.
+
+Post-boot read-only TWRP re-measure: p69 `c58fc82d…`, first 4 KiB
+`5afccfff…`, userdata manifest `3ddf4d4f…`, `OS.vroot 5f14cb46…`,
+`SystemOS.vroot e3cbe583…`, recovery/efs/sec_efs unchanged. No writes
+were issued.
+
+Verified sequential read through the whole stack: 4 MiB in 726 ms
+(≈5.78 MB/s at 32 KiB requests). Raw direct DMA measured 25.8 MB/s in
+B10.13; the difference is per-span owner I/O, SHA-256 and the copy.
+Decision: no verified-span cache for the first root boot. The 120,000 ms
+pre-root bound covers ≈690 MB at this rate, far more than the window
+needs to reach the root mount; revisit only if S5e stalls.
+
+This verdict proves on hardware: published-window reads go through
+`verifiedWindowRead` and return image-matching bytes; the window refuses
+writes before I/O; the three `native_verified_block_*` exports resolve
+the OS volume, authorize its dev_t and reproduce the envelope SHA-384.
+It does not prove the root mount, `bsd_init` with
+`XNU_OWNER_ROOT_TRUST=1`, lifetime errors over a full boot, APFS
+mounting a verified volume, or the SystemOS/cache mounts. Those are
+S5e-a/S5e.
