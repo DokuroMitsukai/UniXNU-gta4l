@@ -10727,3 +10727,32 @@ args `sheng-pmgr=2 gta4l-deadline=120`. The TWRP preflight matched p69
 `8f091a6c…` and the unchanged regions; the BOOT-only flash wrote
 `12333314…`, region read-back exact, full p69 `770f8c75…`. One
 owner-triggered S5i boot is pending; `a422425b…` stays retired.
+
+### 5.4.29 S5j window counters and host audit (2026-11-18)
+
+The S5i physical LBAs map into SystemOS (`0x1a47ae0` and `0x1a47950` ->
+SystemOS bytes `0x0e9dc000`/`0x0e9aa000`). The SystemOS is the sealed
+`SystemCryptex` volume `8846FE78-2910-4297-AF97-D59BB6F8FC16`. Its
+aligned dyld subcache at `0x8592000` is 113.8 MB; the sampled offsets
+are about 105 MB in, near its end. 633.7 MiB requested in 90 s is about
+5.6 times that subcache with 99.8% sketch hits, so the stream is
+re-reading the same cache file, not one sequential pass.
+`VerifiedRoot/src/verified_root.c` `vr_verify_block` hashes bytes
+already supplied and compares with in-memory hashes; it adds no disk
+I/O. `ubc_subr.c` `cs_validate_page` receives the page. The open
+question is the caller (AMFI page validation versus dyld/APFS page-in),
+the parent request size, the origin PID and UBC retention.
+
+S5j adds passive per-window parent counters: 4 KiB/≤64 KiB/>64 KiB
+size bins, physical first/last/min/max offsets, origin PID bins
+(1/0/other), error and verify counts. The deadline prints `p0`/`p1`.
+
+Kernel `cff6b491…` (51,802,112 bytes) passes the exact-kernel storage
+audit with the same ABI (`…44c0`/`…d1d0`/`…b5f738`, 190/181) and the
+ABI test. Payload `1deea675…` (83,886,080 bytes, contract pass) and BOOT
+`ea56c1d1…` (85,688,320 bytes, gate 18/18, first 4 KiB `34043244…`),
+args `sheng-pmgr=2 gta4l-deadline=120`. The TWRP preflight matched p69
+`770f8c75…` and the unchanged regions; the final BOOT is staged but
+**not flashed**: the block suite is rerunning against this source.
+p69 remains the consumed S5i `12333314…`; do not boot it. Complete the
+block suite, re-preflight and flash `ea56c1d1…` for the one S5j boot.

@@ -29,10 +29,14 @@
 #include <libkern/c++/OSString.h>
 #include <pexpert/pexpert.h>
 #include <kern/debug.h>
+#include <sys/proc.h>
 #endif
 
 #include <stdint.h>
 #include <string.h>
+
+static void gta4l_window_parent(const char *label, uint64_t lba,
+    uint32_t nblks, int verify, int error);
 
 #if defined(GTA4L_EMMC_BLOCK_VERIFY) && GTA4L_EMMC_BLOCK_VERIFY && \
     !defined(GTA4L_EMMC_BLOCK_HOST_TEST)
@@ -70,6 +74,158 @@ extern "C" const struct vr_crypto vr_xnu_crypto;
 #include "Gta4lEmmcBlock.h"
 #include "Gta4lEmmcBlockCore.h"
 #include "Gta4lEmmcBlockSha.h"
+
+/* S5i: successful verified 4 KiB spans and their bytes. */
+volatile uint64_t gta4l_emmc_verify_spans = 0;
+volatile uint64_t gta4l_emmc_verify_bytes = 0;
+
+/* S5j: parent (caller) read requests per window. Counts are cumulative and
+ * approximate under concurrency; they store no content. */
+struct gta4l_window_activity {
+	volatile uint64_t reads, blocks, bytes, errors, verify;
+	volatile uint64_t first, last, min, max;
+	volatile uint64_t bin4k, bin64k, binbig;
+	volatile uint64_t pid1, pid0, pidother;
+};
+struct gta4l_window_activity gta4l_window_activity[2];
+
+static void
+gta4l_window_parent(const char *label, uint64_t lba, uint32_t nblks,
+    int verify, int error)
+{
+	unsigned index = (label != NULL && label[0] == 'S') ? 1u : 0u;
+	struct gta4l_window_activity *s = &gta4l_window_activity[index];
+	uint64_t bytes = (uint64_t)nblks * GTA4L_EMMC_BLOCK_BYTES;
+	uint64_t prior;
+	uint64_t current;
+	int pid = 0;
+
+#ifndef GTA4L_EMMC_BLOCK_HOST_TEST
+	pid = proc_selfpid();
+#endif
+	if (verify) {
+		__atomic_fetch_add(&s->verify, 1, __ATOMIC_RELAXED);
+	} else {
+		prior = __atomic_load_n(&s->reads, __ATOMIC_RELAXED);
+		if (prior == 0) {
+			__atomic_store_n(&s->first, lba, __ATOMIC_RELAXED);
+			__atomic_store_n(&s->min, lba, __ATOMIC_RELAXED);
+			__atomic_store_n(&s->max, lba + nblks, __ATOMIC_RELAXED);
+		} else {
+			current = __atomic_load_n(&s->min, __ATOMIC_RELAXED);
+			if (lba < current) {
+				__atomic_store_n(&s->min, lba, __ATOMIC_RELAXED);
+			}
+			current = __atomic_load_n(&s->max, __ATOMIC_RELAXED);
+			if (lba + nblks > current) {
+				__atomic_store_n(&s->max, lba + nblks,
+				    __ATOMIC_RELAXED);
+			}
+		}
+		__atomic_store_n(&s->last, lba, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&s->reads, 1, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&s->blocks, nblks, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&s->bytes, bytes, __ATOMIC_RELAXED);
+		if (bytes <= 4096u) {
+			__atomic_fetch_add(&s->bin4k, 1, __ATOMIC_RELAXED);
+		} else if (bytes <= 65536u) {
+			__atomic_fetch_add(&s->bin64k, 1, __ATOMIC_RELAXED);
+		} else {
+			__atomic_fetch_add(&s->binbig, 1, __ATOMIC_RELAXED);
+		}
+		if (pid == 1) {
+			__atomic_fetch_add(&s->pid1, 1, __ATOMIC_RELAXED);
+		} else if (pid == 0) {
+			__atomic_fetch_add(&s->pid0, 1, __ATOMIC_RELAXED);
+		} else {
+			__atomic_fetch_add(&s->pidother, 1, __ATOMIC_RELAXED);
+		}
+	}
+	if (error) {
+		__atomic_fetch_add(&s->errors, 1, __ATOMIC_RELAXED);
+	}
+}
+
+extern "C" void
+native_gta4l_emmc_window(unsigned index, uint64_t out[15])
+{
+	struct gta4l_window_activity *s;
+
+	if (out == nullptr) {
+		return;
+	}
+	if (index > 1u) {
+		index = 1u;
+	}
+	s = &gta4l_window_activity[index];
+	out[0] = s->reads;
+	out[1] = s->blocks;
+	out[2] = s->errors;
+	out[3] = s->first;
+	out[4] = s->last;
+	out[5] = s->min;
+	out[6] = s->max;
+	out[7] = s->bin4k;
+	out[8] = s->bin64k;
+	out[9] = s->binbig;
+	out[10] = s->pid1;
+	out[11] = s->pid0;
+	out[12] = s->pidother;
+	out[13] = s->verify;
+	out[14] = s->bytes;
+}
+
+extern "C" void
+native_gta4l_emmc_activity(uint64_t *requests, uint64_t *blocks)
+{
+	if (requests != nullptr) {
+		*requests = gta4l_emmc_lifetime_read_requests;
+	}
+	if (blocks != nullptr) {
+		*blocks = gta4l_emmc_lifetime_read_blocks;
+	}
+}
+
+/* S5i: verify spans versus all core reads, plus the repeated-LBA sketch.
+ * Lock-free reads; the sketch is approximate under concurrency. */
+extern "C" void
+native_gta4l_emmc_activity2(uint64_t *verify_spans, uint64_t *verify_bytes,
+    uint64_t *repeat, uint64_t *last_lba, uint64_t *hot_lba,
+    uint64_t *hot_count)
+{
+	uint64_t best = 0, best_lba = 0;
+	uint32_t index;
+
+	for (index = 0; index < GTA4L_EMMC_SKETCH_SLOTS; index++) {
+		uint64_t lba = __atomic_load_n(&gta4l_emmc_sketch[index].lba,
+		    __ATOMIC_RELAXED);
+		uint32_t count = __atomic_load_n(
+		    &gta4l_emmc_sketch[index].count, __ATOMIC_RELAXED);
+
+		if (count > best) {
+			best = count;
+			best_lba = lba;
+		}
+	}
+	if (verify_spans != nullptr) {
+		*verify_spans = gta4l_emmc_verify_spans;
+	}
+	if (verify_bytes != nullptr) {
+		*verify_bytes = gta4l_emmc_verify_bytes;
+	}
+	if (repeat != nullptr) {
+		*repeat = gta4l_emmc_sketch_repeat;
+	}
+	if (last_lba != nullptr) {
+		*last_lba = gta4l_emmc_sketch_last_lba;
+	}
+	if (hot_lba != nullptr) {
+		*hot_lba = best_lba;
+	}
+	if (hot_count != nullptr) {
+		*hot_count = best;
+	}
+}
 
 #if GTA4L_EMMC_BLOCK_VERIFY_BUILT
 struct gta4l_verified_window_state;
@@ -3993,6 +4149,8 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 		    nblks * GTA4L_EMMC_BLOCK_BYTES) {
 			return kIOReturnBadArgument;
 		}
+		gta4l_window_parent(windowLabel, windowBaseBlock + blockNumber,
+		    (uint32_t)nblks, 0, 0);
 #ifdef GTA4L_EMMC_BLOCK_HOST_TEST
 		if (gta4l_test_windows_read_hook != nullptr) {
 			gta4l_test_windows_read_hook(this,
@@ -4006,6 +4164,12 @@ Gta4lEmmcBlock::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 blockNumber,
 
 			if (verifiedWindowRead(buffer, blockNumber, nblks,
 			    &verifyStatus, &verifyActual)) {
+				gta4l_window_parent(windowLabel,
+				    windowBaseBlock + blockNumber,
+				    (uint32_t)nblks, 1,
+				    (verifyStatus != kIOReturnSuccess) ||
+				    (verifyActual != nblks *
+				    GTA4L_EMMC_BLOCK_BYTES));
 				completion->action(completion->target,
 				    completion->parameter, verifyStatus,
 				    verifyActual);
@@ -11840,61 +12004,6 @@ IOBlockStorageDevice::doGetProvisionStatus(UInt64, UInt64, UInt32 *,
 }
 #endif
 
-/* S5i: successful verified 4 KiB spans and their bytes. */
-volatile uint64_t gta4l_emmc_verify_spans = 0;
-volatile uint64_t gta4l_emmc_verify_bytes = 0;
-
-extern "C" void
-native_gta4l_emmc_activity(uint64_t *requests, uint64_t *blocks)
-{
-	if (requests != nullptr) {
-		*requests = gta4l_emmc_lifetime_read_requests;
-	}
-	if (blocks != nullptr) {
-		*blocks = gta4l_emmc_lifetime_read_blocks;
-	}
-}
-
-/* S5i: verify spans versus all core reads, plus the repeated-LBA sketch.
- * Lock-free reads; the sketch is approximate under concurrency. */
-extern "C" void
-native_gta4l_emmc_activity2(uint64_t *verify_spans, uint64_t *verify_bytes,
-    uint64_t *repeat, uint64_t *last_lba, uint64_t *hot_lba,
-    uint64_t *hot_count)
-{
-	uint64_t best = 0, best_lba = 0;
-	uint32_t index;
-
-	for (index = 0; index < GTA4L_EMMC_SKETCH_SLOTS; index++) {
-		uint64_t lba = __atomic_load_n(&gta4l_emmc_sketch[index].lba,
-		    __ATOMIC_RELAXED);
-		uint32_t count = __atomic_load_n(
-		    &gta4l_emmc_sketch[index].count, __ATOMIC_RELAXED);
-
-		if (count > best) {
-			best = count;
-			best_lba = lba;
-		}
-	}
-	if (verify_spans != nullptr) {
-		*verify_spans = gta4l_emmc_verify_spans;
-	}
-	if (verify_bytes != nullptr) {
-		*verify_bytes = gta4l_emmc_verify_bytes;
-	}
-	if (repeat != nullptr) {
-		*repeat = gta4l_emmc_sketch_repeat;
-	}
-	if (last_lba != nullptr) {
-		*last_lba = gta4l_emmc_sketch_last_lba;
-	}
-	if (hot_lba != nullptr) {
-		*hot_lba = best_lba;
-	}
-	if (hot_count != nullptr) {
-		*hot_count = best;
-	}
-}
 
 static void
 gta4l_verified_reset(void)
