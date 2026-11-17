@@ -15,7 +15,16 @@ CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/gta4l-sdhci-snapshot/
 CONFIG_XNU_DT_PANIC_REGION=y
 CONFIG_XNU_SOURCE_CORECRYPTO14=y
 CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
-CONFIG_XNU_OWNER_DATA_VOLUME_UUID="04769D26-2CA0-4825-B443-E2E5F88300F2"
+# The Data mount uses the qualified NativeRamBlock provider, not md0: this
+# XNU tree never creates md0 (mdevinit has no caller). The provider publishes
+# an IOMedia from /chosen/memory-map/PackedRAMDisk and the original APFS
+# discovers the volume before the mount. It requires the AES/crypto prelink
+# closure already selected above.
+CONFIG_XNU_NATIVE_RAM_BLOCK=y
+# The fixture Data seed's APFS volume UUID (out/gta4l/owner-data-fixture/
+# seed.json). 04769D26 is the tablet's original root volume, not this seed;
+# the native provider selects the scrub volume by this identity.
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="A3168F05-0F99-42FE-AA9F-F0276C1AFBB1"
 # S5d: the owner root path uses the gta4l eMMC window provider, not VirtIO.
 # The block archive forced-loaded above supplies native_verified_block_*;
 # the shared gate skips the VirtIO probe archive for this provider.

@@ -84,6 +84,33 @@
  
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
+@@ -8038,2 +8038,25 @@
+-	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
++	if (data_error) {
++		extern void native_owner_root_panic_summary(char *, size_t);
++		char owner_summary[128];
++
++		native_owner_root_panic_summary(owner_summary,
++		    sizeof(owner_summary));
++#if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
++		panic("offline scratch Data mount failed: %d stage=%d "
++		    "cache=%d/%d dev=%x base=%llx size=%llx %s", data_error,
++		    native_owner_data_stage, native_owner_cache_status,
++		    native_owner_cache_mount_status,
++		    (unsigned)native_owner_data_device,
++		    (unsigned long long)native_owner_data_seed_base,
++		    (unsigned long long)native_owner_data_seed_size,
++		    owner_summary);
++#else
++		panic("offline scratch Data mount failed: %d stage=%d "
++		    "dev=%x base=%llx size=%llx %s", data_error,
++		    native_owner_data_stage, (unsigned)native_owner_data_device,
++		    (unsigned long long)native_owner_data_seed_base,
++		    (unsigned long long)native_owner_data_seed_size,
++		    owner_summary);
++#endif
++	}
+ #if defined(XNU_BOOT_PROGRESS) && XNU_BOOT_PROGRESS
 @@ -8074,7 +8074,16 @@
  				return;
  			}

@@ -10454,3 +10454,51 @@ protected partitions). The BOOT-only flash wrote `5b6f3b9b…` and the
 region read-back matched, first 4 KiB `a169cd5d…`, full p69
 `01e7439e…`. One owner-triggered full-root boot is pending;
 `5b6f3b9b…` is the one-shot candidate.
+
+### 5.4.22 S5e-full device verdict: Data prepare failed with EINVAL (2026-11-17)
+
+One boot of BOOT `5b6f3b9b…` printed only
+`offline scratch Data mount failed: 22 @kern_exec.c:8038`. No
+`P5 REPORT/WINDOWS/VERIFY/ROOT` lines, no `owner-root:` summary and no
+`load_init_program: attempting to load /sbin/launchd` were visible. The
+root, verify and SystemOS cache-mount stages are therefore unobserved on
+this boot, not passed; the Data panic carries no root verdict. The BOOT
+is consumed and must never be booted again.
+
+The TWRP remeasure after the boot matched: p69 full
+`01e7439e…`, first 4 KiB `a169cd5d…`, userdata manifest `3ddf4d4f…`,
+OS.vroot `5f14cb46…`, SystemOS.vroot `e3cbe583…`, efs `51fa824c…`,
+sec_efs `3a265d58…` and recovery `14e11370…`. The boot wrote nothing.
+
+**Cause.** `kern_exec.c:8038` panics after `native_owner_data_prepare()`
+returns nonzero. With `XNU_NATIVE_RAM_BLOCK` off that function uses
+`mdevlookup(0)`/`mdevgetrange(0)`, but no code in this XNU tree creates
+`md0`: `mdevinit` has no caller and its only producer is the
+`CONFIG_MEMDEV_INSECURE` boot-argument parser, which this kernel does
+not call. The payload also publishes `PackedRAMDisk` with the packed
+979,024-byte range, which only the native sparse provider understands;
+the loader deliberately keeps it packed (DarwinBoot `KeepPacked`). The
+first check in the md branch therefore failed with its initial `EINVAL`.
+This path had never run before: earlier rungs printed `mount=1` for
+`gta4l_root_mount_seen`, not a Data mount.
+
+**Seed check (host).** Expanding `owner-data-32.dbr` reproduces
+`d2c4bc74…` (33,554,432 bytes). The APFS volume superblock at block 162
+carries `A3168F05-0F99-42FE-AA9F-F0276C1AFBB1`; the container UUID is
+`544de0a0-158c-4d53-b15c-4851fc1edfcc`. `04769D26-…`, previously in
+`CONFIG_XNU_OWNER_DATA_VOLUME_UUID`, is the tablet's original root
+volume from the userdata probe, not this fixture's Data volume.
+
+**Fix.** Use the qualified native provider, as the shared Data checkpoints
+do: select the `RamBlock` component, add `component:RamBlock` to the
+kernel archive plan so `libRamBlock.a` is built and force-loaded, and set
+`CONFIG_XNU_NATIVE_RAM_BLOCK=y`. That also adds the `NativeRamBlock`
+`IOResources`/`IOBSD` personality, which publishes an IOMedia from
+`/chosen/memory-map/PackedRAMDisk`; the original APFS discovers the
+volume before the mount. The provider requires the AES/crypto prelink
+closure already selected (`XNU_NATIVE_AES`, `prelinked`,
+`SOURCE_CORECRYPTO14`). `CONFIG_XNU_OWNER_DATA_VOLUME_UUID` is set to the
+fixture volume `A3168F05…`. No loader, seed or payload-layout change is
+needed; `packed_data_ramdisk=true` is exactly the provider's input. The
+eMMC `native_ram_block_gpu_addon` stub compiles out once the provider is
+linked.

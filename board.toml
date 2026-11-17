@@ -9,7 +9,7 @@ description = "Samsung Galaxy Tab A7 10.4 (2020)"
 kit = "gta4l"
 
 [components]
-include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "XnuPrelink", "DarwinBoot"]
+include = ["ArmDTPlatform", "ArmCpu", "SoftwareAES", "RamBlock", "XnuPrelink", "DarwinBoot"]
 
 [kernel]
 defconfig = "gta4l_defconfig"
@@ -28,6 +28,7 @@ archives = [
   "component:ArmCpu",
   "component:SoftwareAES",
   "build-software-aes-bindings.py",
+  "component:RamBlock",
   "build-mockfs-fixture.py",
   "build-libpthread-kernel.py",
   "build-platform-power.py",
