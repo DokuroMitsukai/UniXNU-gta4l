@@ -506,6 +506,10 @@ public:
 	uint32_t size_reads;
 	bool open_value;
 	bool open_refuse;
+	/* APFS volume media reject a raw linear read; the whole media below
+	 * the container serves the window. This flag models that split. */
+	bool read_refuse;
+	IOReturn read_refuse_value;
 	int open_calls;
 	int close_calls;
 	IOService *open_client;

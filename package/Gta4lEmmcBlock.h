@@ -1865,6 +1865,15 @@ struct gta4l_emmc_block_report {
 	 * concatenated fixed cases and the sequential read. */
 	uint32_t vread;
 	uint32_t vread_cases;
+	/* S5d‴ target fields. `vread_msize` is the OS whole-media size the
+	 * reads used (the volume media above it refuses a linear read);
+	 * `vread_mwhole` is 1 only when both windows resolved to exactly one
+	 * whole media of the window size; `vread_case_status` packs one hex
+	 * nibble per case (0 ok, 1 BadArgument, 2 NotOpen, 3 IOError,
+	 * 4 short, 5 NotPermitted, 6 NoMedia, 0xf other). */
+	uint64_t vread_msize;
+	uint32_t vread_mwhole;
+	uint32_t vread_case_status;
 	uint32_t vread_passed;
 	uint32_t vread_failed;
 	uint32_t vread_reason;

@@ -1729,6 +1729,8 @@ IOMedia::IOMedia()
       size_reads(0),
       open_value(false),
       open_refuse(false),
+      read_refuse(false),
+      read_refuse_value(kIOReturnSuccess),
       open_calls(0),
       close_calls(0),
       open_client(0),
@@ -2725,6 +2727,9 @@ IOMedia::read(IOService *client, UInt64 byteStart,
 	(void)client;
 	if (!open_value) {
 		return kIOReturnNotOpen;
+	}
+	if (read_refuse) {
+		return read_refuse_value;
 	}
 	if ((buffer == 0) || (buffer->address() == 0) ||
 	    (buffer->getLength() == 0) ||

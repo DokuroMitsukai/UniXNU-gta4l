@@ -58,7 +58,8 @@ VREAD_CASES = 8
 VREAD_SEQ_BYTES = 4 << 20
 VREAD_SEQ_BUDGET_MS = 30000
 VREAD_FIELDS = ('cases', 'passed', 'failed', 'reason', 'mask',
-                'windows', 'spans', 'mismatches', 'write', 'exports',
+                'windows', 'msize', 'mwhole', 'vst', 'spans', 'mismatches',
+                'write', 'exports',
                 'seq_ms', 'seq_bytes', 'failcase', 'failstatus',
                 'failblock', 'failactual', 'dig', 'sdig')
 
@@ -382,6 +383,12 @@ def check_vread(line, image, expected):
     system_window = windows['SystemOS']
     os_size = os_window['size']
     system_size = system_window['size']
+    if fields['mwhole'] != '1':
+        errors.append(f'VREAD mwhole {fields["mwhole"]} != 1')
+    if fields['vst'] != '00000000':
+        errors.append(f'VREAD vst {fields["vst"]} != 00000000')
+    if fields['msize'] != str(os_size):
+        errors.append(f'VREAD msize {fields["msize"]} != {os_size}')
     if os_size < VREAD_SEQ_BYTES or os_size < 1536:
         errors.append('VREAD OS window is too small for the cases')
         return errors
@@ -788,7 +795,8 @@ def self_test():
         seq_digest = hashlib.sha256(
             data[os_off:os_off + (4 << 20)]).hexdigest()[:32]
         vread = (f'{VREAD_LABEL}cases=8 passed=8 failed=0 reason=0 '
-                 f'mask=ff windows=2 spans=1030 mismatches=0 write=1 '
+                 f'mask=ff windows=2 msize={os_size} mwhole=1 '
+                 f'vst=00000000 spans=1030 mismatches=0 write=1 '
                  f'exports=7 seq_ms=1000 seq_bytes=4194304 '
                  f'failcase=4294967295 failstatus=00000000 failblock=0 '
                  f'failactual=0 dig={case_hash.hexdigest()[:32]} '
@@ -797,6 +805,11 @@ def self_test():
             check_vread(vread, image, expected_vread)
         for text, label in (
                 (vread.replace('mask=ff', 'mask=7f'), 'vread mask'),
+                (vread.replace(f'msize={os_size}', 'msize=1'),
+                 'vread msize'),
+                (vread.replace('mwhole=1', 'mwhole=0'), 'vread mwhole'),
+                (vread.replace('vst=00000000', 'vst=00000001'),
+                 'vread target status'),
                 (vread.replace('spans=1030', 'spans=1029'), 'vread spans'),
                 (vread.replace('write=1', 'write=0'), 'vread write'),
                 (vread.replace('exports=7', 'exports=3'), 'vread exports'),

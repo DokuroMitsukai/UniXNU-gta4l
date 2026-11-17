@@ -14532,12 +14532,44 @@ gta4l_vread_spans(uint64_t image_bytes, uint64_t start, uint32_t bytes)
 	    start + bytes, spans, GTA4L_EMMC_BLOCK_VERIFY_MAX_SPANS);
 }
 
+static uint32_t
+gta4l_vread_status_code(IOReturn status, UInt64 actual, uint32_t bytes)
+{
+	if ((status == kIOReturnSuccess) && (actual == (UInt64)bytes)) {
+		return 0u;
+	}
+	if (status == kIOReturnSuccess) {
+		return 4u;
+	}
+	if (status == kIOReturnBadArgument) {
+		return 1u;
+	}
+	if (status == kIOReturnNotOpen) {
+		return 2u;
+	}
+	if (status == kIOReturnIOError) {
+		return 3u;
+	}
+	if (status == kIOReturnNotPermitted) {
+		return 5u;
+	}
+	if (status == kIOReturnNoMedia) {
+		return 6u;
+	}
+	return 0xfu;
+}
+
 static void
 gta4l_vread_failure(uint32_t *failCase, int32_t *failStatus,
     uint64_t *failBlock, uint64_t *failActual, uint32_t *reason,
-    uint32_t caseIndex, IOReturn status, uint64_t block, uint64_t actual,
-    uint32_t caseReason)
+    uint32_t *statuses, uint32_t caseIndex, IOReturn status, uint64_t block,
+    uint64_t actual, uint32_t caseReason)
 {
+	static const uint32_t caseBytes[GTA4L_EMMC_BLOCK_VREAD_CASES] = {
+		4096u, 4096u, 512u, 1024u, 1536u, 32768u, 0u, 0u
+	};
+	uint32_t code;
+
 	if (*failCase == 0xffffffffu) {
 		*failCase = caseIndex;
 		*failStatus = (int32_t)status;
@@ -14545,6 +14577,67 @@ gta4l_vread_failure(uint32_t *failCase, int32_t *failStatus,
 		*failActual = actual;
 		*reason = caseReason;
 	}
+	if ((caseIndex == GTA4L_EMMC_BLOCK_VREAD_CASE_WRITE) ||
+	    (caseIndex == GTA4L_EMMC_BLOCK_VREAD_CASE_EXPORT)) {
+		code = (status == kIOReturnSuccess) ? 0xfu :
+		    gta4l_vread_status_code(status, 0u, 1u);
+	} else {
+		code = gta4l_vread_status_code(status, actual,
+		    caseBytes[caseIndex]);
+	}
+	*statuses |= (code & 0xfu) << (caseIndex * 4u);
+}
+
+static IOMedia *
+gta4l_vread_whole_media(IOMedia *volume, IOService *window,
+    uint64_t expectedBytes, uint64_t *bytes)
+{
+	IOService *provider;
+	IOMedia *found = nullptr;
+	uint32_t matches = 0u;
+	uint32_t depth = 0u;
+
+	if (bytes != nullptr) {
+		*bytes = 0u;
+	}
+	if ((volume == nullptr) || (window == nullptr) ||
+	    (expectedBytes == 0u)) {
+		return nullptr;
+	}
+	for (provider = volume->getProvider();
+	    (provider != nullptr) && (provider != window);
+	    provider = provider->getProvider()) {
+		OSBoolean *whole;
+		OSBoolean *writable;
+		OSNumber *size;
+
+		if (++depth > GTA4L_EMMC_BLOCK_WINDOWS_ANCESTRY_DEPTH) {
+			return nullptr;
+		}
+		whole = OSDynamicCast(OSBoolean,
+		    provider->getProperty(kIOMediaWholeKey));
+		if ((whole == nullptr) || !whole->getValue()) {
+			continue;
+		}
+		writable = OSDynamicCast(OSBoolean,
+		    provider->getProperty(kIOMediaWritableKey));
+		size = OSDynamicCast(OSNumber,
+		    provider->getProperty(kIOMediaSizeKey));
+		if ((writable == nullptr) || writable->getValue() ||
+		    (size == nullptr) ||
+		    (size->unsigned64BitValue() != expectedBytes)) {
+			return nullptr;
+		}
+		matches++;
+		found = static_cast<IOMedia *>(provider);
+	}
+	if (matches != 1u) {
+		return nullptr;
+	}
+	if (bytes != nullptr) {
+		*bytes = expectedBytes;
+	}
+	return found;
 }
 
 bool
@@ -14557,6 +14650,8 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 	};
 	static const char *stateLabels[2] = { "OS", "SystemOS" };
 	IOMedia *media[2] = {};
+	IOMedia *whole[2] = {};
+	Gta4lEmmcBlock *windowByIndex[2] = {};
 	Gta4lEmmcBlock *osWindow = nullptr;
 	uint8_t *buffer = nullptr;
 	struct gta4l_emmc_block_sha256_ctx caseSha;
@@ -14570,6 +14665,9 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 	uint32_t writeRefused = 0u;
 	uint32_t exports = 0u;
 	uint32_t seqMs = 0u;
+	uint32_t statuses = 0u;
+	uint32_t mwhole = 0u;
+	uint64_t msize = 0u;
 	uint32_t failCase = 0xffffffffu;
 	uint32_t reason = GTA4L_EMMC_BLOCK_VREAD_REASON_NONE;
 	int32_t failStatus = 0;
@@ -14598,9 +14696,11 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 		if ((strcmp(manifest->window[index].name, "OS") == 0)) {
 			osWindow = pending[index];
 			osSize = manifest->window[index].size;
+			windowByIndex[0] = pending[index];
 		} else if (strcmp(manifest->window[index].name,
 		    "SystemOS") == 0) {
 			systemosSize = manifest->window[index].size;
+			windowByIndex[1] = pending[index];
 		}
 	}
 	if (osWindow == nullptr) {
@@ -14621,10 +14721,28 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 			}
 		}
 		if (media[index] != nullptr) {
+			uint64_t mediaBytes = 0u;
+
 			windows++;
-			if (!media[index]->open(this, 0,
+			if (windowByIndex[index] == nullptr) {
+				whole[index] = nullptr;
+			} else {
+				whole[index] = gta4l_vread_whole_media(
+				    media[index], windowByIndex[index],
+				    (uint64_t)windowByIndex[index]
+				    ->capacityBlocks * GTA4L_EMMC_BLOCK_BYTES,
+				    &mediaBytes);
+			}
+			if ((whole[index] != nullptr) &&
+			    (index == 0u) && (mediaBytes != 0u)) {
+				msize = mediaBytes;
+			}
+			if ((whole[index] != nullptr) &&
+			    !whole[index]->open(this, 0,
 			    kIOStorageAccessReader)) {
-				media[index] = nullptr;
+				whole[index] = nullptr;
+			}
+			if (whole[index] == nullptr) {
 				windows--;
 				if (reason ==
 				    GTA4L_EMMC_BLOCK_VREAD_REASON_NONE) {
@@ -14634,11 +14752,12 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 			}
 		}
 	}
-	if ((media[0] == nullptr) || (media[1] == nullptr) ||
+	if ((whole[0] == nullptr) || (whole[1] == nullptr) ||
 	    (osWindow == nullptr)) {
 		reason = GTA4L_EMMC_BLOCK_VREAD_REASON_MEDIA;
 		goto done;
 	}
+	mwhole = 1u;
 	buffer = (uint8_t *)IOMallocAligned(32768u, PAGE_SIZE);
 	if (buffer == nullptr) {
 		reason = GTA4L_EMMC_BLOCK_VREAD_REASON_MEMORY;
@@ -14649,10 +14768,10 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 		IOReturn status = kIOReturnError;
 		UInt64 actual = 0;
 
-		if (!gta4l_vread_read(this, media[0], 0u, 4096u, buffer,
+		if (!gta4l_vread_read(this, whole[0], 0u, 4096u, buffer,
 		    &status, &actual)) {
 			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason,
+			    &failActual, &reason, &statuses,
 			    GTA4L_EMMC_BLOCK_VREAD_CASE_OS, status, 0u,
 			    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
 		} else {
@@ -14667,10 +14786,10 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 		IOReturn status = kIOReturnError;
 		UInt64 actual = 0;
 
-		if (!gta4l_vread_read(this, media[1], 0u, 4096u, buffer,
+		if (!gta4l_vread_read(this, whole[1], 0u, 4096u, buffer,
 		    &status, &actual)) {
 			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason,
+			    &failActual, &reason, &statuses,
 			    GTA4L_EMMC_BLOCK_VREAD_CASE_SYSTEMOS, status, 0u,
 			    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
 		} else {
@@ -14685,10 +14804,10 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 		IOReturn status = kIOReturnError;
 		UInt64 actual = 0;
 
-		if (!gta4l_vread_read(this, media[0], 512u, 512u, buffer,
+		if (!gta4l_vread_read(this, whole[0], 512u, 512u, buffer,
 		    &status, &actual)) {
 			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason,
+			    &failActual, &reason, &statuses,
 			    GTA4L_EMMC_BLOCK_VREAD_CASE_UNALIGNED, status,
 			    1u, actual,
 			    GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
@@ -14704,10 +14823,10 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 		IOReturn status = kIOReturnError;
 		UInt64 actual = 0;
 
-		if (!gta4l_vread_read(this, media[0], 7u * 512u, 1024u,
+		if (!gta4l_vread_read(this, whole[0], 7u * 512u, 1024u,
 		    buffer, &status, &actual)) {
 			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason,
+			    &failActual, &reason, &statuses,
 			    GTA4L_EMMC_BLOCK_VREAD_CASE_CROSS, status, 7u,
 			    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
 		} else {
@@ -14722,10 +14841,10 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 		IOReturn status = kIOReturnError;
 		UInt64 actual = 0;
 
-		if (!gta4l_vread_read(this, media[0], osSize - 1536u, 1536u,
+		if (!gta4l_vread_read(this, whole[0], osSize - 1536u, 1536u,
 		    buffer, &status, &actual)) {
 			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason,
+			    &failActual, &reason, &statuses,
 			    GTA4L_EMMC_BLOCK_VREAD_CASE_LAST, status,
 			    (osSize - 1536u) / GTA4L_EMMC_BLOCK_BYTES,
 			    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
@@ -14749,10 +14868,10 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 			IOReturn status = kIOReturnError;
 			UInt64 actual = 0;
 
-			if (!gta4l_vread_read(this, media[0], position, 32768u,
+			if (!gta4l_vread_read(this, whole[0], position, 32768u,
 			    buffer, &status, &actual)) {
 				gta4l_vread_failure(&failCase, &failStatus,
-				    &failBlock, &failActual, &reason,
+				    &failBlock, &failActual, &reason, &statuses,
 				    GTA4L_EMMC_BLOCK_VREAD_CASE_SEQ, status,
 				    position / GTA4L_EMMC_BLOCK_BYTES, actual,
 				    GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
@@ -14784,7 +14903,7 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 		    kIODirectionOut);
 		if (descriptor == nullptr) {
 			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason,
+			    &failActual, &reason, &statuses,
 			    GTA4L_EMMC_BLOCK_VREAD_CASE_WRITE,
 			    kIOReturnNoMemory, 0u, 0u,
 			    GTA4L_EMMC_BLOCK_VREAD_REASON_WRITE);
@@ -14802,7 +14921,7 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 				passed++;
 			} else {
 				gta4l_vread_failure(&failCase, &failStatus,
-				    &failBlock, &failActual, &reason,
+				    &failBlock, &failActual, &reason, &statuses,
 				    GTA4L_EMMC_BLOCK_VREAD_CASE_WRITE, status,
 				    0u, 0u,
 				    GTA4L_EMMC_BLOCK_VREAD_REASON_WRITE);
@@ -14831,7 +14950,7 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 		passed++;
 	} else {
 		gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-		    &failActual, &reason,
+		    &failActual, &reason, &statuses,
 		    GTA4L_EMMC_BLOCK_VREAD_CASE_EXPORT, kIOReturnError,
 		    0u, 0u, GTA4L_EMMC_BLOCK_VREAD_REASON_EXPORT);
 	}
@@ -14840,8 +14959,8 @@ done:
 		IOFreeAligned(buffer, 32768u);
 	}
 	for (index = 0; index < 2u; index++) {
-		if (media[index] != nullptr) {
-			media[index]->close(this, 0);
+		if (whole[index] != nullptr) {
+			whole[index]->close(this, 0);
 		}
 	}
 	gta4l_emmc_block_sha256_final(&caseSha, caseDigest);
@@ -14857,6 +14976,9 @@ done:
 	report.vread_reason = reason;
 	report.vread_mask = mask;
 	report.vread_windows = windows;
+	report.vread_msize = msize;
+	report.vread_mwhole = mwhole;
+	report.vread_case_status = statuses;
 	report.vread_spans = spans;
 	report.vread_mismatches = 0u;
 	report.vread_write = writeRefused;

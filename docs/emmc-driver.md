@@ -9861,8 +9861,8 @@ boot or device access.
 `gta4l-emmc-dma=1`, and conflicts with `gta4l-emmc-root=1` and every
 other diagnostic selector. After the S5c′ verification and both window
 publications, `runVread` reads through the published OS and SystemOS
-media: OS block 0, SystemOS block 0, an unaligned 512-byte read inside a
-span, a 1,024-byte read crossing a span boundary, the OS final
+windows: OS block 0, SystemOS block 0, an unaligned 512-byte read inside
+a span, a 1,024-byte read crossing a span boundary, the OS final
 1,536-byte partial span, and a bounded 4 MiB sequential read in 32 KiB
 requests. It then attempts one write and requires
 `kIOReturnNotWritable` with no completion, and checks the three
@@ -9872,16 +9872,20 @@ the case count/mask, window count, verified span count (1,030 on the
 production image), mismatch count, write and export results, the
 sequential milliseconds/bytes, the first failure case/status/block/
 actual, and two 16-byte digest prefixes (fixed cases and sequential).
-The widest VREAD line is 411 bytes and the VREAD report shape is 29
-panic-screen rows; the line is bounded by 512 bytes and the report
-buffer by 3,584 bytes. The rung suppresses the base DRV/XFER/MEDIA/PART/
+The line also carries `msize` (the OS whole-media size the reads used),
+`mwhole` (both windows resolved to exactly one whole media of the window
+size) and `vst` (one hex nibble per case). The widest VREAD line is 460
+bytes and the VREAD report shape is 29 panic-screen rows; the line is
+bounded by 512 bytes and the report buffer by 3,584 bytes. The rung suppresses the base DRV/XFER/MEDIA/PART/
 SNAP/FAIL lines when VREAD is selected; WINDOWS and VERIFY remain.
 
-The host verify build now runs 20 scenarios and 16 mutations. The new
-VREAD scenarios cover the token and every read/write/export case; the
-five VREAD mutations cover sequential truncation, a wrong write status,
-an export acceptance bypass, a missing media open and a span-count
-bypass. The host harness also found a real export bug: the
+The host verify build runs 23 scenarios and 21 mutations. The VREAD
+scenarios cover the token, every read/write/export case and the whole-
+media target failures (missing, wrong size, duplicate); the VREAD
+mutations cover sequential truncation, a wrong write status, an export
+acceptance bypass, a missing window open, a read retargeted at the APFS
+volume, a dropped whole-media check, a dropped size check, an accepted
+duplicate whole media and a span-count bypass. The host harness also found a real export bug: the
 `native_verified_block_volume_device` path used `sizeof(path)` on a
 pointer parameter instead of the caller's `size`, so any BSD name longer
 than two characters was rejected. It now uses `size` and the host export
@@ -9905,7 +9909,58 @@ service `fffffff007b4f5b8`), and its `bsd_init.o` records
 (83,886,080 bytes; contract 133/133; `emmc-block-3-vread`) and the BOOT
 image is `10ea06bb…` (85,688,320 bytes; gate 18/18; only the ramdisk
 differs from the v5 baseline). Userdata stays `ae6e18e7…`. The full host
-suite is green: exit=0, 314 PASS lines, default adapter 527, core 47/35,
-verify build 20 scenarios and 16 mutations (all rejected). The image has
-not been flashed or booted; it needs the owner's go naming the full BOOT
-SHA-256.
+suite was green at build time (314 PASS lines, default adapter 527, core
+47/35, verify build 20 scenarios and 16 mutations). The owner approved
+the BOOT-only flash and the single boot: preflight p69 `48e227dd…`,
+region read-back `10ea06bb…`, first 4 KiB `c5f3dbaf…`, p69 full
+`20e91998…`; userdata and the protected partitions unchanged.
+
+### 5.4.9 S5d″ device verdict and whole-media target fix (2026-11-17)
+
+The one boot of `10ea06bb…` failed in VREAD; its budget is consumed.
+WINDOWS (`valid=1 count=2 pub=2 phase=5 perr=0 wdiag=15 dma=1`) and
+VERIFY (`valid=1 os=1 sysos=1 blocks=1025 ms=5136 dma=1`) passed. VREAD
+reported `passed=2 failed=6 reason=3 mask=c0 windows=2 spans=0
+mismatches=0 write=1 exports=7 seq_ms=0 seq_bytes=0 failcase=0
+failstatus=e00002c2 failblock=0 failactual=0`, with both digest prefixes
+equal to the SHA-256 of empty input. `mask=c0` means only the write
+refusal and the export checks passed. `e00002c2` is
+`kIOReturnBadArgument`, returned by the first read before any data
+arrived; `@Gta4lEmmcBlock.cpp:13452` is the intentional report panic.
+
+Cause: `runVread` selected its read target by volume UUID, i.e. the APFS
+volume media, and issued a raw linear read there. The APFS volume does
+not serve window-linear bytes and rejects the request. The evidence
+checker and the expected digests assume window bytes, and the plan
+asked for reads through the window's IOMedia. The host harness had
+modelled the volume as a linear view directly under the window, so the
+path passed on the host. Reads now resolve the window's single whole
+IOMedia by walking the provider chain from the volume to the window,
+requiring exactly one whole media with the window size, not writable,
+opened reader-only. The volume media stays the target of the three
+`native_verified_block_*` exports, which is what `bsd_init` and the
+cache mount use. `msize`/`mwhole`/`vst` were added so a future failure
+names its target and per-case status.
+
+The host model now mirrors the device: window, whole media, APFS
+container, APFS volume whose linear read returns
+`kIOReturnBadArgument`. Before the fix it reproduced the device line
+exactly (`passed=2 mask=c0 reason=3 failcase=0 failstatus=e00002c2
+spans=0`); after the fix all eight cases pass with `spans=1030`, and
+the three whole-media failure scenarios and their mutations pass.
+
+The S5d‴ kernels are rebuilt from the fixed driver. The trust-on kernel
+is `d8a89161…` (51,699,712 bytes; archive `e6e75cc4…`, qualified;
+audit `out/gta4l/storage-abi-d8a89161` PASS, 190 slots/181 bindings;
+`bsd_init.o` probe/audit/trust = 1). The diagnostic kernel from
+`configs/gta4l_vread_defconfig` is `88af03fe…` (51,699,712 bytes; same
+archive; audit `out/gta4l/storage-abi-88af03fe` PASS; probe/audit/
+trust = 0). This is host evidence only; the next device rung is the
+S5d‴ candidate. That payload is `dee221a7…` (83,886,080 bytes; contract
+133/133; `emmc-block-3-vread`) and the BOOT image is `401f6a7a…`
+(85,688,320 bytes; gate 18/18; only the ramdisk differs from the v5
+baseline). The final host suite is green against this exact source:
+exit=0, 318 PASS lines, default adapter 527 scenarios, core 47/35,
+verify build 23 scenarios and 21 mutations (all rejected). Nothing has
+been flashed or booted; the device is in TWRP with p69 `20e91998…` (the
+consumed S5d″ image) and userdata unchanged.

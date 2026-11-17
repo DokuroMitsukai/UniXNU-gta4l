@@ -2444,9 +2444,30 @@ VERIFY_MUTATIONS = [
      [('\tif (exports == 7u) {\n', '\tif (exports == 0u) {\n')],
      'vread'),
     ('vread-media-open',
-     [('\t\t\tif (!media[index]->open(this, 0,\n',
-       '\t\t\tif (0 && !media[index]->open(this, 0,\n')],
+     [('\t\t\tif ((whole[index] != nullptr) &&\n'
+       '\t\t\t    !whole[index]->open(this, 0,\n',
+       '\t\t\tif ((whole[index] != nullptr) && 0 &&\n'
+       '\t\t\t    !whole[index]->open(this, 0,\n')],
      'vread'),
+    ('vread-target-volume',
+     [('\t\tif (!gta4l_vread_read(this, whole[0], 0u, 4096u, buffer,\n',
+       '\t\tif (!gta4l_vread_read(this, media[0], 0u, 4096u, buffer,\n')],
+     'vread'),
+    ('vread-drop-whole-check',
+     [('\t\twhole = OSDynamicCast(OSBoolean,\n'
+       '\t\t    provider->getProperty(kIOMediaWholeKey));\n'
+       '\t\tif ((whole == nullptr) || !whole->getValue()) {\n',
+       '\t\twhole = OSDynamicCast(OSBoolean,\n'
+       '\t\t    provider->getProperty(kIOMediaWholeKey));\n'
+       '\t\tif (whole == nullptr) {\n')],
+     'vread'),
+    ('vread-drop-size-check',
+     [('\t\t    (size->unsigned64BitValue() != expectedBytes)) {\n',
+       '\t\t    0) {\n')],
+     'vread-whole-size'),
+    ('vread-accept-duplicate',
+     [('\tif (matches != 1u) {\n', '\tif (matches == 0u) {\n')],
+     'vread-whole-duplicate'),
     ('vread-span-count',
      [('\t\t\tspans += gta4l_vread_spans(osSize, 0u, 4096u);\n',
        '\t\t\tspans += 0u;\n')],
@@ -2911,6 +2932,13 @@ def check_adapter_source():
         'GTA4L_EMMC_BLOCK_VREAD_CASES' in policy_header and \
         'kIOReturnNotWritable' in adapter, \
         'the VREAD line must be bounded and refuse the write case'
+    assert 'gta4l_vread_whole_media' in adapter and \
+        'gta4l_vread_whole_media(' in adapter and \
+        'kIOMediaWholeKey' in adapter and \
+        'whole[index]->open(this, 0' in adapter and \
+        'vread_msize' in adapter and 'vread_mwhole' in adapter and \
+        'vread_case_status' in adapter, \
+        'VREAD must read the window whole media and report its target'
     assert 'verify_load_ms' in policy_header and \
         'verify_hash_ms' in policy_header and \
         'verify_open_ms' in policy_header and \
@@ -3513,8 +3541,8 @@ def check_verify_adapter(compiler, cxx, temp):
         'verified-read scenarios failed:\n' + run.stdout + run.stderr)
     assert 'PASS gta4l verified read adapter' in run.stdout, run.stdout
     passes = run.stdout.count('PASS ')
-    assert passes == 21, f'expected 21 verified-read PASS lines, got {passes}'
-    print('PASS verified-read adapter: 20 scenarios against real runVerify '
+    assert passes == 24, f'expected 24 verified-read PASS lines, got {passes}'
+    print('PASS verified-read adapter: 23 scenarios against real runVerify '
           'and verifiedWindowRead')
     for name, replacements, scenario in VERIFY_MUTATIONS:
         mirror = temp / f'verify-{name}'

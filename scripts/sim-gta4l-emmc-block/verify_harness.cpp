@@ -740,24 +740,43 @@ scenario_lifetime_after_mount(void)
 }
 
 static IOMedia *
-make_vread_media(Gta4lEmmcBlock *window, const char *uuid, const char *name,
-    uint64_t size, uint32_t minorNumber)
+make_vread_chain(Gta4lEmmcBlock *window, const char *uuid, const char *name,
+    uint64_t size, uint32_t minorNumber, IOMedia **wholeOut)
 {
-	IOMedia *media = new IOMedia();
+	IOMedia *whole = new IOMedia();
+	IOMedia *container = new IOMedia();
+	IOMedia *volume = new IOMedia();
 
-	media->whole_value = false;
-	media->base_value = 0;
-	media->size_value = size;
-	media->writable_value = false;
-	media->content_value = "Apple_APFS";
-	media->uuid_value_ = uuid;
-	media->provider_ = window;
-	media->setProperty(gIOBSDNameKey, name);
-	media->setProperty(gIOBSDMajorKey, 1ull, 32);
-	media->setProperty(gIOBSDMinorKey, (unsigned long long)minorNumber,
+	whole->whole_value = true;
+	whole->base_value = 0;
+	whole->size_value = size;
+	whole->writable_value = false;
+	whole->content_value = "Apple_APFS";
+	whole->provider_ = window;
+	container->whole_value = false;
+	container->base_value = 0;
+	container->size_value = size;
+	container->writable_value = false;
+	container->content_value = "Apple_APFS";
+	container->provider_ = whole;
+	volume->whole_value = false;
+	volume->base_value = 0;
+	volume->size_value = size;
+	volume->writable_value = false;
+	volume->content_value = "Apple_APFS";
+	volume->uuid_value_ = uuid;
+	volume->provider_ = container;
+	volume->read_refuse = true;
+	volume->read_refuse_value = kIOReturnBadArgument;
+	volume->setProperty(gIOBSDNameKey, name);
+	volume->setProperty(gIOBSDMajorKey, 1ull, 32);
+	volume->setProperty(gIOBSDMinorKey, (unsigned long long)minorNumber,
 	    32);
-	gta4l_test_add_media(media);
-	return media;
+	gta4l_test_add_media(volume);
+	if (wholeOut != nullptr) {
+		*wholeOut = whole;
+	}
+	return volume;
 }
 
 static int
@@ -766,6 +785,8 @@ scenario_vread(void)
 	Gta4lEmmcBlock *pending[2];
 	IOMedia *osMedia;
 	IOMedia *systemosMedia;
+	IOMedia *osWhole = nullptr;
+	IOMedia *systemosWhole = nullptr;
 	struct gta4l_emmc_block_sha256_ctx caseSha;
 	struct gta4l_emmc_block_sha256_ctx seqSha;
 	uint8_t expectedCase[32];
@@ -777,12 +798,12 @@ scenario_vread(void)
 	CHECK(run_verify() == 0);
 	g_self->report.content = nullptr;
 	CHECK(open_windows() == 0);
-	osMedia = make_vread_media(g_window_os,
+	osMedia = make_vread_chain(g_window_os,
 	    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID, "disk0s1",
-	    g_fixture.os_size, 1u);
-	systemosMedia = make_vread_media(g_window_systemos,
+	    g_fixture.os_size, 1u, &osWhole);
+	systemosMedia = make_vread_chain(g_window_systemos,
 	    GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID, "disk0s2",
-	    g_fixture.systemos_size, 2u);
+	    g_fixture.systemos_size, 2u, &systemosWhole);
 	gta4l_test_media_read_hook = nullptr;
 	pending[0] = g_window_os;
 	pending[1] = g_window_systemos;
@@ -800,6 +821,23 @@ scenario_vread(void)
 		CHECK(native_verified_block_manifest_sha384(preDevice,
 		    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID, preDigest) == 1);
 		vreadOk = g_self->runVread(pending, &g_manifest);
+		if (!vreadOk) {
+			printf("  vread passed=%u failed=%u mask=%x reason=%u "
+			    "msize=%llu mwhole=%u vst=%08x spans=%u "
+			    "failcase=%u failstatus=%x failblock=%llu "
+			    "failactual=%llu\n", g_self->report.vread_passed,
+			    g_self->report.vread_failed,
+			    g_self->report.vread_mask,
+			    g_self->report.vread_reason,
+			    (unsigned long long)g_self->report.vread_msize,
+			    g_self->report.vread_mwhole,
+			    g_self->report.vread_case_status,
+			    g_self->report.vread_spans,
+			    g_self->report.vread_fail_case,
+			    (unsigned)g_self->report.vread_fail_status,
+			    (unsigned long long)g_self->report.vread_fail_block,
+			    (unsigned long long)g_self->report.vread_fail_actual);
+		}
 		CHECK(vreadOk == true);
 	}
 	CHECK(g_self->report.vread == 1u);
@@ -814,8 +852,15 @@ scenario_vread(void)
 	CHECK(g_self->report.vread_seq_bytes ==
 	    GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES);
 	CHECK(g_self->report.vread_fail_case == 0xffffffffu);
-	CHECK(osMedia->open_calls >= 1);
-	CHECK(systemosMedia->open_calls >= 1);
+	CHECK(g_self->report.vread_msize == g_fixture.os_size);
+	CHECK(g_self->report.vread_mwhole == 1u);
+	CHECK(g_self->report.vread_case_status == 0u);
+	CHECK(osWhole != nullptr);
+	CHECK(systemosWhole != nullptr);
+	CHECK(osWhole->open_calls >= 1);
+	CHECK(systemosWhole->open_calls >= 1);
+	CHECK(osMedia->open_calls == 0);
+	CHECK(systemosMedia->open_calls == 0);
 	gta4l_emmc_block_sha256_init(&caseSha);
 	gta4l_emmc_block_sha256_update(&caseSha,
 	    g_fixture.image.data() + g_fixture.os_offset, 4096u);
@@ -877,6 +922,104 @@ scenario_vread(void)
 		    GTA4L_EMMC_BLOCK_SCREEN_COLUMNS));
 	}
 	return 0;
+}
+
+static int
+vread_expect_media_failure(void)
+{
+	Gta4lEmmcBlock *pending[2];
+
+	pending[0] = g_window_os;
+	pending[1] = g_window_systemos;
+	CHECK(g_self->runVread(pending, &g_manifest) == false);
+	CHECK(g_self->report.vread == 1u);
+	CHECK(g_self->report.vread_passed == 0u);
+	CHECK(g_self->report.vread_failed == 8u);
+	CHECK(g_self->report.vread_mask == 0u);
+	CHECK(g_self->report.vread_reason ==
+	    GTA4L_EMMC_BLOCK_VREAD_REASON_MEDIA);
+	CHECK(g_self->report.vread_mwhole == 0u);
+	CHECK(g_self->report.vread_case_status == 0u);
+	CHECK(g_self->report.vread_write == 0u);
+	CHECK(g_self->report.vread_exports == 0u);
+	return 0;
+}
+
+static int
+scenario_vread_whole_size(void)
+{
+	IOMedia *osWhole = nullptr;
+	IOMedia *systemosWhole = nullptr;
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	CHECK(open_windows() == 0);
+	(void)make_vread_chain(g_window_os,
+	    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID, "disk0s1",
+	    g_fixture.os_size, 1u, &osWhole);
+	(void)make_vread_chain(g_window_systemos,
+	    GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID, "disk0s2",
+	    g_fixture.systemos_size, 2u, &systemosWhole);
+	gta4l_test_media_read_hook = nullptr;
+	CHECK(osWhole != nullptr);
+	osWhole->size_value = g_fixture.os_size - 4096u;
+	return vread_expect_media_failure();
+}
+
+static int
+scenario_vread_whole_missing(void)
+{
+	IOMedia *osWhole = nullptr;
+	IOMedia *systemosWhole = nullptr;
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	CHECK(open_windows() == 0);
+	(void)make_vread_chain(g_window_os,
+	    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID, "disk0s1",
+	    g_fixture.os_size, 1u, &osWhole);
+	(void)make_vread_chain(g_window_systemos,
+	    GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID, "disk0s2",
+	    g_fixture.systemos_size, 2u, &systemosWhole);
+	gta4l_test_media_read_hook = nullptr;
+	CHECK(osWhole != nullptr);
+	osWhole->whole_value = false;
+	return vread_expect_media_failure();
+}
+
+static int
+scenario_vread_whole_duplicate(void)
+{
+	IOMedia *osVolume;
+	IOMedia *osWhole = nullptr;
+	IOMedia *systemosWhole = nullptr;
+	IOMedia *extraWhole;
+	IOMedia *container;
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	CHECK(open_windows() == 0);
+	osVolume = make_vread_chain(g_window_os,
+	    GTA4L_EMMC_BLOCK_WINDOWS_OS_UUID, "disk0s1",
+	    g_fixture.os_size, 1u, &osWhole);
+	(void)make_vread_chain(g_window_systemos,
+	    GTA4L_EMMC_BLOCK_WINDOWS_SYSTEMOS_UUID, "disk0s2",
+	    g_fixture.systemos_size, 2u, &systemosWhole);
+	gta4l_test_media_read_hook = nullptr;
+	CHECK(osWhole != nullptr);
+	container = static_cast<IOMedia *>(osVolume->getProvider());
+	CHECK(container != nullptr);
+	extraWhole = new IOMedia();
+	extraWhole->whole_value = true;
+	extraWhole->size_value = g_fixture.os_size;
+	extraWhole->writable_value = false;
+	extraWhole->content_value = "Apple_APFS";
+	extraWhole->provider_ = osWhole;
+	container->provider_ = extraWhole;
+	return vread_expect_media_failure();
 }
 
 static int
@@ -1008,6 +1151,9 @@ static const struct scenario g_scenarios[] = {
 	{ "lifetime-verify-fail", scenario_lifetime_verify_fail },
 	{ "lifetime-after-mount", scenario_lifetime_after_mount },
 	{ "vread", scenario_vread },
+	{ "vread-whole-size", scenario_vread_whole_size },
+	{ "vread-whole-missing", scenario_vread_whole_missing },
+	{ "vread-whole-duplicate", scenario_vread_whole_duplicate },
 	{ "bench", scenario_bench },
 	{ "completion-skipped", scenario_completion_skipped },
 	{ "owner-short", scenario_owner_short },
