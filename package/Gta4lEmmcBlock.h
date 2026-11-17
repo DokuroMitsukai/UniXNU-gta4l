@@ -1874,6 +1874,12 @@ struct gta4l_emmc_block_report {
 	uint64_t vread_msize;
 	uint32_t vread_mwhole;
 	uint32_t vread_case_status;
+	/* Per-window target diagnostics (OS, SystemOS). Packed:
+	 * depth[7:0], whole-node count[15:8], code[23:16]
+	 * (0 ok, 1 no volume, 2 depth, 3 no media under the window,
+	 * 4 size mismatch, 5 open failed), then flags bit24 writable,
+	 * bit25 opened, bit26 volume found. */
+	uint32_t vread_mdiag[2];
 	uint32_t vread_passed;
 	uint32_t vread_failed;
 	uint32_t vread_reason;

@@ -14588,54 +14588,102 @@ gta4l_vread_failure(uint32_t *failCase, int32_t *failStatus,
 	*statuses |= (code & 0xfu) << (caseIndex * 4u);
 }
 
+#define GTA4L_VREAD_TARGET_OK 0u
+#define GTA4L_VREAD_TARGET_NO_VOLUME 1u
+#define GTA4L_VREAD_TARGET_DEPTH 2u
+#define GTA4L_VREAD_TARGET_NO_POSITION 3u
+#define GTA4L_VREAD_TARGET_SIZE 4u
+#define GTA4L_VREAD_TARGET_OPEN 5u
+
+static uint32_t
+gta4l_vread_target_diag(uint32_t depth, uint32_t wholes, uint32_t code,
+    uint32_t writable, uint32_t opened, uint32_t volumeFound)
+{
+	return (depth & 0xffu) | ((wholes & 0xffu) << 8) |
+	    ((code & 0xffu) << 16) |
+	    ((writable & 1u) << 24) | ((opened & 1u) << 25) |
+	    ((volumeFound & 1u) << 26);
+}
+
 static IOMedia *
 gta4l_vread_whole_media(IOMedia *volume, IOService *window,
-    uint64_t expectedBytes, uint64_t *bytes)
+    IOService *client, uint64_t expectedBytes, uint64_t *bytes,
+    uint32_t *diag)
 {
 	IOService *provider;
 	IOMedia *found = nullptr;
-	uint32_t matches = 0u;
 	uint32_t depth = 0u;
+	uint32_t wholes = 0u;
+	uint32_t code = GTA4L_VREAD_TARGET_NO_VOLUME;
+	uint32_t writable = 0u;
+	uint32_t opened = 0u;
+	uint32_t volumeFound = (volume != nullptr) ? 1u : 0u;
 
 	if (bytes != nullptr) {
 		*bytes = 0u;
 	}
 	if ((volume == nullptr) || (window == nullptr) ||
-	    (expectedBytes == 0u)) {
+	    (client == nullptr) || (expectedBytes == 0u)) {
+		if (diag != nullptr) {
+			*diag = gta4l_vread_target_diag(0u, 0u, code, 0u, 0u,
+			    volumeFound);
+		}
 		return nullptr;
 	}
+	code = GTA4L_VREAD_TARGET_NO_POSITION;
 	for (provider = volume->getProvider();
 	    (provider != nullptr) && (provider != window);
 	    provider = provider->getProvider()) {
 		OSBoolean *whole;
-		OSBoolean *writable;
+		OSBoolean *writableProperty;
 		OSNumber *size;
+		IOService *parent;
 
 		if (++depth > GTA4L_EMMC_BLOCK_WINDOWS_ANCESTRY_DEPTH) {
-			return nullptr;
+			code = GTA4L_VREAD_TARGET_DEPTH;
+			goto done;
 		}
 		whole = OSDynamicCast(OSBoolean,
 		    provider->getProperty(kIOMediaWholeKey));
 		if ((whole == nullptr) || !whole->getValue()) {
 			continue;
 		}
-		writable = OSDynamicCast(OSBoolean,
-		    provider->getProperty(kIOMediaWritableKey));
+		wholes++;
+		parent = provider->getProvider();
+		if ((parent == nullptr) || (parent->getProvider() != window)) {
+			continue;
+		}
 		size = OSDynamicCast(OSNumber,
 		    provider->getProperty(kIOMediaSizeKey));
-		if ((writable == nullptr) || writable->getValue() ||
-		    (size == nullptr) ||
+		if ((size == nullptr) ||
 		    (size->unsigned64BitValue() != expectedBytes)) {
-			return nullptr;
+			code = GTA4L_VREAD_TARGET_SIZE;
+			goto done;
 		}
-		matches++;
+		writableProperty = OSDynamicCast(OSBoolean,
+		    provider->getProperty(kIOMediaWritableKey));
+		writable = ((writableProperty != nullptr) &&
+		    writableProperty->getValue()) ? 1u : 0u;
 		found = static_cast<IOMedia *>(provider);
+		break;
 	}
-	if (matches != 1u) {
-		return nullptr;
+	if (found == nullptr) {
+		goto done;
 	}
+	if (!found->open(client, 0, kIOStorageAccessReader)) {
+		found = nullptr;
+		code = GTA4L_VREAD_TARGET_OPEN;
+		goto done;
+	}
+	opened = 1u;
+	code = GTA4L_VREAD_TARGET_OK;
 	if (bytes != nullptr) {
 		*bytes = expectedBytes;
+	}
+done:
+	if (diag != nullptr) {
+		*diag = gta4l_vread_target_diag(depth, wholes, code, writable,
+		    opened, volumeFound);
 	}
 	return found;
 }
@@ -14666,6 +14714,8 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 	uint32_t exports = 0u;
 	uint32_t seqMs = 0u;
 	uint32_t statuses = 0u;
+	uint32_t targetDiag[2] = {};
+	uint32_t targetsOk = 0u;
 	uint32_t mwhole = 0u;
 	uint64_t msize = 0u;
 	uint32_t failCase = 0xffffffffu;
@@ -14726,21 +14776,19 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 			windows++;
 			if (windowByIndex[index] == nullptr) {
 				whole[index] = nullptr;
+				targetDiag[index] = gta4l_vread_target_diag(
+				    0u, 0u, GTA4L_VREAD_TARGET_NO_VOLUME, 0u,
+				    0u, 1u);
 			} else {
 				whole[index] = gta4l_vread_whole_media(
-				    media[index], windowByIndex[index],
+				    media[index], windowByIndex[index], this,
 				    (uint64_t)windowByIndex[index]
 				    ->capacityBlocks * GTA4L_EMMC_BLOCK_BYTES,
-				    &mediaBytes);
+				    &mediaBytes, &targetDiag[index]);
 			}
 			if ((whole[index] != nullptr) &&
 			    (index == 0u) && (mediaBytes != 0u)) {
 				msize = mediaBytes;
-			}
-			if ((whole[index] != nullptr) &&
-			    !whole[index]->open(this, 0,
-			    kIOStorageAccessReader)) {
-				whole[index] = nullptr;
 			}
 			if (whole[index] == nullptr) {
 				windows--;
@@ -14752,145 +14800,153 @@ Gta4lEmmcBlock::runVread(Gta4lEmmcBlock **pending,
 			}
 		}
 	}
-	if ((whole[0] == nullptr) || (whole[1] == nullptr) ||
-	    (osWindow == nullptr)) {
+	targetsOk = ((whole[0] != nullptr) && (whole[1] != nullptr) &&
+	    (osWindow != nullptr)) ? 1u : 0u;
+	if (targetsOk == 0u) {
 		reason = GTA4L_EMMC_BLOCK_VREAD_REASON_MEDIA;
-		goto done;
+	} else {
+		mwhole = 1u;
 	}
-	mwhole = 1u;
 	buffer = (uint8_t *)IOMallocAligned(32768u, PAGE_SIZE);
 	if (buffer == nullptr) {
 		reason = GTA4L_EMMC_BLOCK_VREAD_REASON_MEMORY;
 		goto done;
 	}
-	/* OS APFS container superblock. */
-	{
-		IOReturn status = kIOReturnError;
-		UInt64 actual = 0;
-
-		if (!gta4l_vread_read(this, whole[0], 0u, 4096u, buffer,
-		    &status, &actual)) {
-			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason, &statuses,
-			    GTA4L_EMMC_BLOCK_VREAD_CASE_OS, status, 0u,
-			    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
-		} else {
-			gta4l_emmc_block_sha256_update(&caseSha, buffer, 4096u);
-			mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_OS;
-			passed++;
-			spans += gta4l_vread_spans(osSize, 0u, 4096u);
+	if (targetsOk == 0u) {
+		for (index = 0; index < 6u; index++) {
+			statuses |= 7u << (index * 4u);
 		}
 	}
-	/* SystemOS APFS superblock. */
-	{
-		IOReturn status = kIOReturnError;
-		UInt64 actual = 0;
-
-		if (!gta4l_vread_read(this, whole[1], 0u, 4096u, buffer,
-		    &status, &actual)) {
-			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason, &statuses,
-			    GTA4L_EMMC_BLOCK_VREAD_CASE_SYSTEMOS, status, 0u,
-			    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
-		} else {
-			gta4l_emmc_block_sha256_update(&caseSha, buffer, 4096u);
-			mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_SYSTEMOS;
-			passed++;
-			spans += gta4l_vread_spans(systemosSize, 0u, 4096u);
-		}
-	}
-	/* Unaligned 512-byte read inside a span. */
-	{
-		IOReturn status = kIOReturnError;
-		UInt64 actual = 0;
-
-		if (!gta4l_vread_read(this, whole[0], 512u, 512u, buffer,
-		    &status, &actual)) {
-			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason, &statuses,
-			    GTA4L_EMMC_BLOCK_VREAD_CASE_UNALIGNED, status,
-			    1u, actual,
-			    GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
-		} else {
-			gta4l_emmc_block_sha256_update(&caseSha, buffer, 512u);
-			mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_UNALIGNED;
-			passed++;
-			spans += gta4l_vread_spans(osSize, 512u, 512u);
-		}
-	}
-	/* Read crossing a span boundary. */
-	{
-		IOReturn status = kIOReturnError;
-		UInt64 actual = 0;
-
-		if (!gta4l_vread_read(this, whole[0], 7u * 512u, 1024u,
-		    buffer, &status, &actual)) {
-			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason, &statuses,
-			    GTA4L_EMMC_BLOCK_VREAD_CASE_CROSS, status, 7u,
-			    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
-		} else {
-			gta4l_emmc_block_sha256_update(&caseSha, buffer, 1024u);
-			mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_CROSS;
-			passed++;
-			spans += gta4l_vread_spans(osSize, 7u * 512u, 1024u);
-		}
-	}
-	/* OS final partial span: 1,536 bytes in the production image. */
-	if (osSize >= 1536u) {
-		IOReturn status = kIOReturnError;
-		UInt64 actual = 0;
-
-		if (!gta4l_vread_read(this, whole[0], osSize - 1536u, 1536u,
-		    buffer, &status, &actual)) {
-			gta4l_vread_failure(&failCase, &failStatus, &failBlock,
-			    &failActual, &reason, &statuses,
-			    GTA4L_EMMC_BLOCK_VREAD_CASE_LAST, status,
-			    (osSize - 1536u) / GTA4L_EMMC_BLOCK_BYTES,
-			    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
-		} else {
-			gta4l_emmc_block_sha256_update(&caseSha, buffer, 1536u);
-			mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_LAST;
-			passed++;
-			spans += gta4l_vread_spans(osSize, osSize - 1536u,
-			    1536u);
-		}
-	}
-	/* Bounded 4 MiB sequential read; the storage stack splits it into
-	 * the advertised 32 KiB requests, each through the verified path. */
-	hz = gta4l_emmc_platform_counter_hz();
-	seqStart = gta4l_emmc_platform_counter();
-	{
-		uint64_t position = 0;
-		bool ok = true;
-
-		while (position < GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES) {
+	if (targetsOk != 0u) {
+		/* OS APFS container superblock. */
+		{
 			IOReturn status = kIOReturnError;
 			UInt64 actual = 0;
 
-			if (!gta4l_vread_read(this, whole[0], position, 32768u,
-			    buffer, &status, &actual)) {
-				gta4l_vread_failure(&failCase, &failStatus,
-				    &failBlock, &failActual, &reason, &statuses,
-				    GTA4L_EMMC_BLOCK_VREAD_CASE_SEQ, status,
-				    position / GTA4L_EMMC_BLOCK_BYTES, actual,
-				    GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
-				ok = false;
-				break;
+			if (!gta4l_vread_read(this, whole[0], 0u, 4096u, buffer,
+			    &status, &actual)) {
+				gta4l_vread_failure(&failCase, &failStatus, &failBlock,
+				    &failActual, &reason, &statuses,
+				    GTA4L_EMMC_BLOCK_VREAD_CASE_OS, status, 0u,
+				    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
+			} else {
+				gta4l_emmc_block_sha256_update(&caseSha, buffer, 4096u);
+				mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_OS;
+				passed++;
+				spans += gta4l_vread_spans(osSize, 0u, 4096u);
 			}
-			gta4l_emmc_block_sha256_update(&seqSha, buffer, 32768u);
-			spans += gta4l_vread_spans(osSize, position, 32768u);
-			seqBytes += 32768u;
-			position += 32768u;
 		}
-		if (ok && (seqBytes == GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES)) {
-			mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_SEQ;
-			passed++;
+		/* SystemOS APFS superblock. */
+		{
+			IOReturn status = kIOReturnError;
+			UInt64 actual = 0;
+
+			if (!gta4l_vread_read(this, whole[1], 0u, 4096u, buffer,
+			    &status, &actual)) {
+				gta4l_vread_failure(&failCase, &failStatus, &failBlock,
+				    &failActual, &reason, &statuses,
+				    GTA4L_EMMC_BLOCK_VREAD_CASE_SYSTEMOS, status, 0u,
+				    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
+			} else {
+				gta4l_emmc_block_sha256_update(&caseSha, buffer, 4096u);
+				mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_SYSTEMOS;
+				passed++;
+				spans += gta4l_vread_spans(systemosSize, 0u, 4096u);
+			}
 		}
-	}
-	seqTicks = gta4l_emmc_platform_counter() - seqStart;
-	if (hz != 0u) {
-		seqMs = (uint32_t)((seqTicks * 1000u) / hz);
+		/* Unaligned 512-byte read inside a span. */
+		{
+			IOReturn status = kIOReturnError;
+			UInt64 actual = 0;
+
+			if (!gta4l_vread_read(this, whole[0], 512u, 512u, buffer,
+			    &status, &actual)) {
+				gta4l_vread_failure(&failCase, &failStatus, &failBlock,
+				    &failActual, &reason, &statuses,
+				    GTA4L_EMMC_BLOCK_VREAD_CASE_UNALIGNED, status,
+				    1u, actual,
+				    GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
+			} else {
+				gta4l_emmc_block_sha256_update(&caseSha, buffer, 512u);
+				mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_UNALIGNED;
+				passed++;
+				spans += gta4l_vread_spans(osSize, 512u, 512u);
+			}
+		}
+		/* Read crossing a span boundary. */
+		{
+			IOReturn status = kIOReturnError;
+			UInt64 actual = 0;
+
+			if (!gta4l_vread_read(this, whole[0], 7u * 512u, 1024u,
+			    buffer, &status, &actual)) {
+				gta4l_vread_failure(&failCase, &failStatus, &failBlock,
+				    &failActual, &reason, &statuses,
+				    GTA4L_EMMC_BLOCK_VREAD_CASE_CROSS, status, 7u,
+				    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
+			} else {
+				gta4l_emmc_block_sha256_update(&caseSha, buffer, 1024u);
+				mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_CROSS;
+				passed++;
+				spans += gta4l_vread_spans(osSize, 7u * 512u, 1024u);
+			}
+		}
+		/* OS final partial span: 1,536 bytes in the production image. */
+		if (osSize >= 1536u) {
+			IOReturn status = kIOReturnError;
+			UInt64 actual = 0;
+
+			if (!gta4l_vread_read(this, whole[0], osSize - 1536u, 1536u,
+			    buffer, &status, &actual)) {
+				gta4l_vread_failure(&failCase, &failStatus, &failBlock,
+				    &failActual, &reason, &statuses,
+				    GTA4L_EMMC_BLOCK_VREAD_CASE_LAST, status,
+				    (osSize - 1536u) / GTA4L_EMMC_BLOCK_BYTES,
+				    actual, GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
+			} else {
+				gta4l_emmc_block_sha256_update(&caseSha, buffer, 1536u);
+				mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_LAST;
+				passed++;
+				spans += gta4l_vread_spans(osSize, osSize - 1536u,
+				    1536u);
+			}
+		}
+		/* Bounded 4 MiB sequential read; the storage stack splits it into
+		 * the advertised 32 KiB requests, each through the verified path. */
+		hz = gta4l_emmc_platform_counter_hz();
+		seqStart = gta4l_emmc_platform_counter();
+		{
+			uint64_t position = 0;
+			bool ok = true;
+
+			while (position < GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES) {
+				IOReturn status = kIOReturnError;
+				UInt64 actual = 0;
+
+				if (!gta4l_vread_read(this, whole[0], position, 32768u,
+				    buffer, &status, &actual)) {
+					gta4l_vread_failure(&failCase, &failStatus,
+					    &failBlock, &failActual, &reason, &statuses,
+					    GTA4L_EMMC_BLOCK_VREAD_CASE_SEQ, status,
+					    position / GTA4L_EMMC_BLOCK_BYTES, actual,
+					    GTA4L_EMMC_BLOCK_VREAD_REASON_READ);
+					ok = false;
+					break;
+				}
+				gta4l_emmc_block_sha256_update(&seqSha, buffer, 32768u);
+				spans += gta4l_vread_spans(osSize, position, 32768u);
+				seqBytes += 32768u;
+				position += 32768u;
+			}
+			if (ok && (seqBytes == GTA4L_EMMC_BLOCK_VREAD_SEQ_BYTES)) {
+				mask |= 1u << GTA4L_EMMC_BLOCK_VREAD_CASE_SEQ;
+				passed++;
+			}
+		}
+		seqTicks = gta4l_emmc_platform_counter() - seqStart;
+		if (hz != 0u) {
+			seqMs = (uint32_t)((seqTicks * 1000u) / hz);
+		}
 	}
 	/* One write must be refused before any I/O. */
 	{
@@ -14979,6 +15035,8 @@ done:
 	report.vread_msize = msize;
 	report.vread_mwhole = mwhole;
 	report.vread_case_status = statuses;
+	report.vread_mdiag[0] = targetDiag[0];
+	report.vread_mdiag[1] = targetDiag[1];
 	report.vread_spans = spans;
 	report.vread_mismatches = 0u;
 	report.vread_write = writeRefused;

@@ -9964,3 +9964,50 @@ exit=0, 318 PASS lines, default adapter 527 scenarios, core 47/35,
 verify build 23 scenarios and 21 mutations (all rejected). Nothing has
 been flashed or booted; the device is in TWRP with p69 `20e91998…` (the
 consumed S5d″ image) and userdata unchanged.
+
+### 5.4.10 S5d‴ verdict and whole-media position fix (2026-11-17)
+
+The one boot of `401f6a7a…` failed in VREAD; its budget is consumed.
+WINDOWS (`valid=1 count=2 pub=2 phase=5 perr=0 wdiag=15 dma=1`) and
+VERIFY (`valid=1 os=1 sysos=1 blocks=1025 ms=5026 dma=1`) passed for the
+second time. VREAD stopped at target resolution: `passed=0 failed=8
+reason=1 mask=00 windows=0 msize=0 mwhole=0 vst=00000000`, so no case
+ran and the write/export evidence was skipped as well.
+
+Cause: `gta4l_vread_whole_media` walked from the volume to the window
+and returned null at the first `Whole=true` node whose size or writable
+flag did not match. Apple's APFS stack publishes a synthesized container
+disk that is itself `Whole=true` and sits between the volume and the
+real whole media, so the walk stopped there. The host model had omitted
+that disk.
+
+The harness now models the full stack: window, block-storage driver,
+real whole media, synthesized container disk (whole, writable), APFS
+container core, and the volume whose linear read returns
+`kIOReturnBadArgument`. With the previous driver it reproduced the
+device line exactly (`passed=0 reason=1 msize=0 mwhole=0`).
+
+The driver now selects the media **directly under the window** (the
+driver child), not the first whole node: it walks the same bounded
+chain, requires `Whole=true` and the window size, opens it reader-only,
+and records `Writable` without rejecting it. A target failure no longer
+exits early; the six read cases are marked not-run (`vst` nibble 7) and
+the write and export cases still run. VREAD adds `mdiag=<OS>/<SystemOS>`
+with depth, whole-node count, code (0 ok, 1 no volume, 2 depth, 3 no
+media under the window, 4 size, 5 open) and flags for writable, opened
+and volume found. The widest line is 484 bytes, the report shape is 30
+screen rows, and the line bound stays 512 bytes.
+
+The host verify build has 24 scenarios and 21 mutations, including the
+synthesized container, a writable target, a missing driver, wrong size,
+early-exit and writable-report controls. The evidence checker validates
+`mdiag` and its self-test rejects bad code, unopened-target and
+missing-volume values.
+
+The S5d⁗ kernels: trust-on `f0026cde…` (51,699,712 bytes; archive
+`97982b7f…`; audit `out/gta4l/storage-abi-f0026cde` PASS; flags 1/1/1)
+and diagnostic `82b2def0…` (same archive; audit
+`out/gta4l/storage-abi-82b2def0` PASS; flags 0/0/0). The candidate
+payload is `1088ee2c…` (83,886,080 bytes; contract 133/133;
+`emmc-block-3-vread`) and the BOOT image is `0c25d559…` (85,688,320
+bytes; gate 18/18; only the ramdisk differs from the v5 baseline).

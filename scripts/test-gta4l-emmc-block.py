@@ -2444,30 +2444,32 @@ VERIFY_MUTATIONS = [
      [('\tif (exports == 7u) {\n', '\tif (exports == 0u) {\n')],
      'vread'),
     ('vread-media-open',
-     [('\t\t\tif ((whole[index] != nullptr) &&\n'
-       '\t\t\t    !whole[index]->open(this, 0,\n',
-       '\t\t\tif ((whole[index] != nullptr) && 0 &&\n'
-       '\t\t\t    !whole[index]->open(this, 0,\n')],
+     [('\tif (!found->open(client, 0, kIOStorageAccessReader)) {\n',
+       '\tif (0 && !found->open(client, 0, kIOStorageAccessReader)) {\n')],
      'vread'),
-    ('vread-target-volume',
-     [('\t\tif (!gta4l_vread_read(this, whole[0], 0u, 4096u, buffer,\n',
-       '\t\tif (!gta4l_vread_read(this, media[0], 0u, 4096u, buffer,\n')],
-     'vread'),
-    ('vread-drop-whole-check',
-     [('\t\twhole = OSDynamicCast(OSBoolean,\n'
-       '\t\t    provider->getProperty(kIOMediaWholeKey));\n'
-       '\t\tif ((whole == nullptr) || !whole->getValue()) {\n',
-       '\t\twhole = OSDynamicCast(OSBoolean,\n'
-       '\t\t    provider->getProperty(kIOMediaWholeKey));\n'
-       '\t\tif (whole == nullptr) {\n')],
+    ('vread-select-synth',
+     [('\t\tif ((parent == nullptr) || (parent->getProvider() != window)) {\n',
+       '\t\tif (((void)parent, false)) {\n')],
      'vread'),
     ('vread-drop-size-check',
      [('\t\t    (size->unsigned64BitValue() != expectedBytes)) {\n',
        '\t\t    0) {\n')],
      'vread-whole-size'),
-    ('vread-accept-duplicate',
-     [('\tif (matches != 1u) {\n', '\tif (matches == 0u) {\n')],
-     'vread-whole-duplicate'),
+    ('vread-early-exit',
+     [('\tif (targetsOk == 0u) {\n'
+       '\t\treason = GTA4L_EMMC_BLOCK_VREAD_REASON_MEDIA;\n'
+       '\t} else {\n',
+       '\tif (targetsOk == 0u) {\n'
+       '\t\treason = GTA4L_EMMC_BLOCK_VREAD_REASON_MEDIA;\n'
+       '\t\tgoto done;\n'
+       '\t} else {\n')],
+     'vread-whole-size'),
+    ('vread-drop-writable-report',
+     [('\t\twritable = ((writableProperty != nullptr) &&\n'
+       '\t\t    writableProperty->getValue()) ? 1u : 0u;\n',
+       '\t\twritable = 0u;\n'
+       '\t\t(void)writableProperty;\n')],
+     'vread-whole-writable'),
     ('vread-span-count',
      [('\t\t\tspans += gta4l_vread_spans(osSize, 0u, 4096u);\n',
        '\t\t\tspans += 0u;\n')],
@@ -2935,10 +2937,14 @@ def check_adapter_source():
     assert 'gta4l_vread_whole_media' in adapter and \
         'gta4l_vread_whole_media(' in adapter and \
         'kIOMediaWholeKey' in adapter and \
-        'whole[index]->open(this, 0' in adapter and \
+        'whole[index] = gta4l_vread_whole_media' in adapter and \
         'vread_msize' in adapter and 'vread_mwhole' in adapter and \
-        'vread_case_status' in adapter, \
+        'vread_case_status' in adapter and 'vread_mdiag' in adapter, \
         'VREAD must read the window whole media and report its target'
+    assert 'parent->getProvider() != window' in adapter and \
+        'GTA4L_VREAD_TARGET_SIZE' in adapter and \
+        'found->open(client, 0' in adapter, \
+        'the whole media must be the one directly under the window'
     assert 'verify_load_ms' in policy_header and \
         'verify_hash_ms' in policy_header and \
         'verify_open_ms' in policy_header and \
@@ -3541,8 +3547,8 @@ def check_verify_adapter(compiler, cxx, temp):
         'verified-read scenarios failed:\n' + run.stdout + run.stderr)
     assert 'PASS gta4l verified read adapter' in run.stdout, run.stdout
     passes = run.stdout.count('PASS ')
-    assert passes == 24, f'expected 24 verified-read PASS lines, got {passes}'
-    print('PASS verified-read adapter: 23 scenarios against real runVerify '
+    assert passes == 25, f'expected 25 verified-read PASS lines, got {passes}'
+    print('PASS verified-read adapter: 24 scenarios against real runVerify '
           'and verifiedWindowRead')
     for name, replacements, scenario in VERIFY_MUTATIONS:
         mirror = temp / f'verify-{name}'

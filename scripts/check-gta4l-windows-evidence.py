@@ -58,8 +58,8 @@ VREAD_CASES = 8
 VREAD_SEQ_BYTES = 4 << 20
 VREAD_SEQ_BUDGET_MS = 30000
 VREAD_FIELDS = ('cases', 'passed', 'failed', 'reason', 'mask',
-                'windows', 'msize', 'mwhole', 'vst', 'spans', 'mismatches',
-                'write', 'exports',
+                'windows', 'msize', 'mwhole', 'vst', 'mdiag', 'spans',
+                'mismatches', 'write', 'exports',
                 'seq_ms', 'seq_bytes', 'failcase', 'failstatus',
                 'failblock', 'failactual', 'dig', 'sdig')
 
@@ -389,6 +389,22 @@ def check_vread(line, image, expected):
         errors.append(f'VREAD vst {fields["vst"]} != 00000000')
     if fields['msize'] != str(os_size):
         errors.append(f'VREAD msize {fields["msize"]} != {os_size}')
+    halves = fields['mdiag'].split('/')
+    if len(halves) != 2:
+        errors.append(f'VREAD mdiag {fields["mdiag"]} is not OS/SystemOS')
+    else:
+        for label, half in zip(('OS', 'SystemOS'), halves):
+            if not re.fullmatch(r'[0-9a-f]{8}', half):
+                errors.append(f'VREAD mdiag {label} {half} is not 8 hex')
+                continue
+            diag = int(half, 16)
+            if (diag >> 16) & 0xff:
+                errors.append(f'VREAD mdiag {label} code '
+                              f'{(diag >> 16) & 0xff} != 0')
+            if not diag & (1 << 25):
+                errors.append(f'VREAD mdiag {label} target not opened')
+            if not diag & (1 << 26):
+                errors.append(f'VREAD mdiag {label} volume not found')
     if os_size < VREAD_SEQ_BYTES or os_size < 1536:
         errors.append('VREAD OS window is too small for the cases')
         return errors
@@ -796,7 +812,8 @@ def self_test():
             data[os_off:os_off + (4 << 20)]).hexdigest()[:32]
         vread = (f'{VREAD_LABEL}cases=8 passed=8 failed=0 reason=0 '
                  f'mask=ff windows=2 msize={os_size} mwhole=1 '
-                 f'vst=00000000 spans=1030 mismatches=0 write=1 '
+                 f'vst=00000000 mdiag=06000203/06000203 spans=1030 '
+                 f'mismatches=0 write=1 '
                  f'exports=7 seq_ms=1000 seq_bytes=4194304 '
                  f'failcase=4294967295 failstatus=00000000 failblock=0 '
                  f'failactual=0 dig={case_hash.hexdigest()[:32]} '
@@ -810,6 +827,15 @@ def self_test():
                 (vread.replace('mwhole=1', 'mwhole=0'), 'vread mwhole'),
                 (vread.replace('vst=00000000', 'vst=00000001'),
                  'vread target status'),
+                (vread.replace('mdiag=06000203/06000203',
+                               'mdiag=06010203/06000203'),
+                 'vread target code'),
+                (vread.replace('mdiag=06000203/06000203',
+                               'mdiag=04000203/06000203'),
+                 'vread target not opened'),
+                (vread.replace('mdiag=06000203/06000203',
+                               'mdiag=02000203/06000203'),
+                 'vread volume missing'),
                 (vread.replace('spans=1030', 'spans=1029'), 'vread spans'),
                 (vread.replace('write=1', 'write=0'), 'vread write'),
                 (vread.replace('exports=7', 'exports=3'), 'vread exports'),

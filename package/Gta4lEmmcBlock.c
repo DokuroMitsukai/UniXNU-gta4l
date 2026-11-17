@@ -4900,6 +4900,11 @@ gta4l_emmc_block_report_format(char *buffer, uint32_t size,
 		gta4l_emmc_block_put_key(&writer, "vst");
 		gta4l_emmc_block_put_hex(&writer, report->vread_case_status, 8u);
 		gta4l_emmc_block_put_char(&writer, ' ');
+		gta4l_emmc_block_put_key(&writer, "mdiag");
+		gta4l_emmc_block_put_hex(&writer, report->vread_mdiag[0], 8u);
+		gta4l_emmc_block_put_char(&writer, '/');
+		gta4l_emmc_block_put_hex(&writer, report->vread_mdiag[1], 8u);
+		gta4l_emmc_block_put_char(&writer, ' ');
 		gta4l_emmc_block_put_key(&writer, "spans");
 		gta4l_emmc_block_put_u64(&writer, report->vread_spans);
 		gta4l_emmc_block_put_char(&writer, ' ');

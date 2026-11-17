@@ -14997,6 +14997,8 @@ screen_windows(struct gta4l_emmc_block_report *report)
 	report->vread_msize = UINT64_MAX;
 	report->vread_mwhole = 1u;
 	report->vread_case_status = 0xffffffffu;
+	report->vread_mdiag[0] = 0xffffffffu;
+	report->vread_mdiag[1] = 0xffffffffu;
 	report->vread_spans = 0xffffffffu;
 	report->vread_mismatches = 0xffffffffu;
 	report->vread_write = 0xffffffffu;
