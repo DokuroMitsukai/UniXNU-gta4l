@@ -10422,3 +10422,30 @@ boot manifest and Data mount enabled; `XNU_NATIVE_RAM_BLOCK` stays off.
 The optional GPU-addon mount references `native_ram_block_gpu_addon`;
 this board's eMMC archive supplies a guarded zero-return stub because it
 does not use the NativeRamBlock provider.
+
+### 5.4.21 S5e-full candidate: full-root kernel and BOOT (2026-11-17)
+
+`configs/gta4l_fullroot_defconfig` enables the trust-on baseline plus
+`XNU_OWNER_CACHE_MOUNT=1`, `XNU_OWNER_CACHE_STARTUP=1`,
+`XNU_OWNER_BOOT_MANIFEST=1` and `XNU_OWNER_DATA_MOUNT=1`, with
+`XNU_NATIVE_RAM_BLOCK` off. The eMMC archive supplies a guarded
+zero-return `native_ram_block_gpu_addon` stub because the board does not
+use the NativeRamBlock provider; the provider's own function has the
+same signature and returns 0 when no `GpuAddon` mapping exists.
+
+The first full-root link (`8b679787…`) exposed a stale archive binding:
+the `IOService` service metaclass moved to `…b57738` while the archive
+had been built with `…b4f5b8`. Copying that kernel's audit into the
+bootstrap path and relinking produced `2eebafbf…` (51,748,864 bytes);
+its audit has the same vtable/metaclass and service `…b57738`, so the
+archive `796aa9ad…` now matches the exact kernel. The audit is
+`out/gta4l/storage-abi-2eebafbf` PASS (190 slots, 181 bindings).
+
+Candidate: payload `ad93d160…` (83,886,080 bytes, 146 contract checks,
+packed Data `97789988…` logical 32 MiB `d2c4bc74…`, original trust
+bundle `7416ca4f…`, no `rd=`) and BOOT `5b6f3b9b…` (85,688,320 bytes,
+gate 18/18, first 4 KiB `a169cd5d…`). The full-root payload still fits
+the 80 MiB layout. `test-gta4l-storage-abi.py` gained `--kernel/--plan`
+so the full-root audit is checked directly; it PASSes. The block suite
+is green at 528 adapter PASS lines, 25 verified-read scenarios and core
+47/35. No flash or boot yet.
