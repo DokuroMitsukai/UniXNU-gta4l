@@ -10244,5 +10244,10 @@ gate 18/18, first 4 KiB `8cde4e8a…`). The retained S5d⁗ image
 `0c25d559…` is again the packaging baseline because the v5 file is
 absent; the gate checks the same pinned header, kernel section
 `a4b054e0…`, padding, firmware and boot DTB. The expected console adds
-the explicit absence of the `Gta4lEmmcBlock` registry panic. Not
-flashed or booted yet.
+the explicit absence of the `Gta4lEmmcBlock` registry panic. The TWRP
+preflight matched (p69 `c5b196a1…`, first 4 KiB `425b24a2…`, userdata
+manifest `3ddf4d4f…`, both vroots and the protected partitions). The
+BOOT-only flash wrote `da670456…` (20,920 blocks); the region read-back
+matched, the first 4 KiB is `8cde4e8a…` and the full p69 is
+`ae9b0ada…`. The tablet stays in TWRP for the one owner-triggered boot;
+no boot or reboot was performed.
