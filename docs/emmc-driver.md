@@ -10448,4 +10448,9 @@ gate 18/18, first 4 KiB `a169cd5d…`). The full-root payload still fits
 the 80 MiB layout. `test-gta4l-storage-abi.py` gained `--kernel/--plan`
 so the full-root audit is checked directly; it PASSes. The block suite
 is green at 528 adapter PASS lines, 25 verified-read scenarios and core
-47/35. No flash or boot yet.
+47/35. The TWRP preflight matched (p69 `08c4beda…`, first 4 KiB
+`1746dd20…`, userdata manifest `3ddf4d4f…`, both vroots and the
+protected partitions). The BOOT-only flash wrote `5b6f3b9b…` and the
+region read-back matched, first 4 KiB `a169cd5d…`, full p69
+`01e7439e…`. One owner-triggered full-root boot is pending;
+`5b6f3b9b…` is the one-shot candidate.
