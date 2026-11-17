@@ -66,7 +66,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifacts", type=Path, default=ARTIFACTS,
                         help="storage-ABI artifact directory")
+    parser.add_argument("--kernel", type=Path,
+                        help="prelinked kernel matching the artifacts "
+                             "(default: the canonical gta4l build)")
+    parser.add_argument("--plan", type=Path,
+                        help="kernel.json matching --kernel (default: beside it)")
     args = parser.parse_args()
+    global KERNEL, PLAN
+    if args.kernel is not None:
+        KERNEL = args.kernel.resolve()
+        PLAN = KERNEL.with_suffix('.json')
+    if args.plan is not None:
+        PLAN = args.plan.resolve()
     ARTIFACTS = args.artifacts.resolve()
     DERIVE = ARTIFACTS / "audit" / "derive.json"
     SNAPSHOT = ARTIFACTS / "gdb-stop.json"
@@ -256,7 +267,8 @@ def main() -> int:
         copied = work / "artifacts"
         shutil.copytree(ARTIFACTS, copied)
         result = subprocess.run(
-            [sys.executable, "-B", str(HARNESS), "--skip-qemu", "--out", str(copied)],
+            [sys.executable, "-B", str(HARNESS), "--skip-qemu",
+             "--kernel", str(KERNEL), "--out", str(copied)],
             text=True, capture_output=True)
         require(result.returncode == 0,
                 "harness --skip-qemu failed:\n" + (result.stdout + result.stderr)[-2000:])
@@ -272,7 +284,8 @@ def main() -> int:
         changed["pc"] = "0xfffffff000000000"
         copied_snapshot.write_text(json.dumps(changed, indent=2) + "\n")
         result = subprocess.run(
-            [sys.executable, "-B", str(HARNESS), "--skip-qemu", "--out", str(copied)],
+            [sys.executable, "-B", str(HARNESS), "--skip-qemu",
+             "--kernel", str(KERNEL), "--out", str(copied)],
             text=True, capture_output=True)
         require(result.returncode != 0, "mutated snapshot unexpectedly passed")
         require("run.json snapshot mismatch" in result.stdout + result.stderr,
@@ -282,7 +295,8 @@ def main() -> int:
         copied_run["kernel_args"] += " extra=1"
         (copied / "run.json").write_text(json.dumps(copied_run, indent=2) + "\n")
         result = subprocess.run(
-            [sys.executable, "-B", str(HARNESS), "--skip-qemu", "--out", str(copied)],
+            [sys.executable, "-B", str(HARNESS), "--skip-qemu",
+             "--kernel", str(KERNEL), "--out", str(copied)],
             text=True, capture_output=True)
         require(result.returncode != 0, "changed kernel arguments unexpectedly passed")
         require("kernel arguments differ from the recorded run" in
