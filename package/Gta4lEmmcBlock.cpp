@@ -404,6 +404,9 @@ static_assert(GTA4L_EMMC_BLOCK_SWEEP_READ_BLOCKS == 8u,
     "SWEEP must advertise the eight-block read limit");
 static_assert(GTA4L_EMMC_BLOCK_SWEEP_READ_MAX_BYTES == 4096u,
     "SWEEP must advertise the 4,096-byte read limit");
+static_assert(GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES ==
+    GTA4L_EMMC_BLOCK_MAX_BYTES,
+    "one verified 8-page group must equal the 64-block request maximum");
 static_assert(GTA4L_EMMC_BLOCK_SWEEP_SEGMENTS == 1u,
     "SWEEP must advertise the single-segment path");
 static_assert(GTA4L_EMMC_BLOCK_SWEEP_CASES ==
@@ -1688,9 +1691,9 @@ Gta4lEmmcBlock::initializeHardware(void)
 	capacityBlocks = host.capacity_blocks;
 	io.context = this;
 	io.read_block = readBlockCallback;
-	io.read_multi = (chunkedMode) ? readMultiCallback : nullptr;
-	io.chunk_buffer = (chunkedMode) ? chunk : nullptr;
-	io.chunk_buffer_bytes = (chunkedMode) ?
+	io.read_multi = (chunk != nullptr) ? readMultiCallback : nullptr;
+	io.chunk_buffer = chunk;
+	io.chunk_buffer_bytes = (chunk != nullptr) ?
 	    GTA4L_EMMC_BLOCK_CHUNK_BYTES : 0u;
 	io.copy_out = copyOutCallback;
 	gta4l_emmc_block_init(&block, &io, capacityBlocks);
@@ -2972,11 +2975,13 @@ Gta4lEmmcBlock::start(IOService *provider)
 	}
 	reportMode = true;
 	chunkedMode = (mode == GTA4L_EMMC_BLOCK_SELECT_REPORT_CHUNKED);
-	if (chunkedMode) {
-		/* One 64-block CMD18 reads into this bounce. The 32 KiB
-		 * buffer is too large for the adapter instance, so it is
+	if (chunkedMode || windowsMode) {
+		/* One 64-block CMD18 reads into this bounce. The buffer
+		 * is too large for the adapter instance, so it is
 		 * allocated with the same checked failure path as the
-		 * report buffers. */
+		 * report buffers. Windows use it so a verified 32 KiB
+		 * group is one multi-block read rather than eight
+		 * single-block commands. */
 		chunk = (uint8_t *)IOMallocAligned(
 		    GTA4L_EMMC_BLOCK_CHUNK_BYTES, PAGE_SIZE);
 		if (chunk == nullptr) {
@@ -3474,7 +3479,8 @@ Gta4lEmmcBlock::start(IOService *provider)
 	    (unsigned long long)(sweepMode ?
 	    GTA4L_EMMC_BLOCK_SWEEP_SEGMENTS : breakupMode ?
 	    GTA4L_EMMC_BLOCK_BREAKUP_SEGMENTS : deblockMode ?
-	    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : 1u), 32)) {
+	    GTA4L_EMMC_BLOCK_DEBLOCK_SEGMENTS : windowsMode ?
+	    GTA4L_EMMC_BLOCK_VERIFY_SEGMENTS : 1u), 32)) {
 		IOLog("GTA4L-EMMC P5 FAILED: segment limit property\n");
 		if (slowMode) {
 			speedLatchFailure(
@@ -3845,10 +3851,12 @@ Gta4lEmmcBlock::configureWindow(Gta4lEmmcBlock *owner, const char *name,
 #if GTA4L_EMMC_BLOCK_VERIFY_BUILT
 	verifyLock = IOLockAlloc();
 	verifiedSpan = (uint8_t *)IOMallocAligned(
+	    GTA4L_EMMC_BLOCK_VERIFY_MAX_SPANS *
 	    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES, PAGE_SIZE);
 	if ((verifyLock == nullptr) || (verifiedSpan == nullptr)) {
 		if (verifiedSpan != nullptr) {
 			IOFreeAligned(verifiedSpan,
+			    GTA4L_EMMC_BLOCK_VERIFY_MAX_SPANS *
 			    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES);
 			verifiedSpan = nullptr;
 		}
@@ -3882,7 +3890,8 @@ Gta4lEmmcBlock::startWindow(IOService *provider)
 	    (unsigned long long)GTA4L_EMMC_BLOCK_MAX_BLOCKS, 32) ||
 	    !setProperty(kIOMaximumByteCountReadKey,
 	    (unsigned long long)GTA4L_EMMC_BLOCK_MAX_BYTES, 32) ||
-	    !setProperty(kIOMaximumSegmentCountReadKey, 1ull, 32)) {
+	    !setProperty(kIOMaximumSegmentCountReadKey,
+	    (unsigned long long)GTA4L_EMMC_BLOCK_VERIFY_SEGMENTS, 32)) {
 		return false;
 	}
 	if (!IOBlockStorageDevice::start(provider)) {
@@ -3997,6 +4006,7 @@ Gta4lEmmcBlock::free()
 	windowRole = false;
 	if (verifiedSpan != nullptr) {
 		IOFreeAligned(verifiedSpan,
+		    GTA4L_EMMC_BLOCK_VERIFY_MAX_SPANS *
 		    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES);
 		verifiedSpan = nullptr;
 	}
@@ -12071,6 +12081,11 @@ Gta4lEmmcBlock::verifiedWindowRead(IOMemoryDescriptor *buffer,
 	uint64_t start;
 	uint64_t end;
 	uint64_t imageBytes;
+	uint64_t groupStart;
+	uint64_t groupEnd;
+	uint32_t groupBytes;
+	uint32_t groupFirst;
+	uint32_t groupLast;
 	uint32_t count;
 	uint32_t index;
 
@@ -12112,85 +12127,134 @@ Gta4lEmmcBlock::verifiedWindowRead(IOMemoryDescriptor *buffer,
 		*status = kIOReturnNoMedia;
 		return true;
 	}
-	for (index = 0; index < count; index++) {
-		struct gta4l_verify_completion record = {};
-		IOStorageCompletion completion;
-		IOMemoryDescriptor *descriptor;
-		uint64_t copyStart;
-		uint64_t copyEnd;
-		IOReturn result;
+	/* The spans are contiguous and 4 KiB aligned. Read as many spans as
+	 * one transport request accepts, and verify each 4 KiB span from that
+	 * buffer, so a parent request pays one command per group rather than
+	 * one per span. */
+	for (groupFirst = 0; groupFirst < count; ) {
+		groupLast = groupFirst;
+		groupStart = spans[groupFirst].start;
+		while (groupLast + 1u < count) {
+			uint64_t nextStart = spans[groupLast + 1u].start;
+			uint64_t nextEnd = nextStart + spans[groupLast + 1u].bytes;
+			uint64_t previousEnd = spans[groupLast].start +
+			    spans[groupLast].bytes;
 
-		descriptor = IOMemoryDescriptor::withAddress(verifiedSpan,
-		    spans[index].bytes, kIODirectionIn);
-		if (descriptor == nullptr) {
-			IOLockUnlock(verifyLock);
-			*status = kIOReturnNoMemory;
-			return true;
-		}
-		completion.target = &record;
-		completion.action = gta4l_verify_completion_action;
-		completion.parameter = nullptr;
-		if (descriptor->prepare(kIODirectionIn) !=
-		    kIOReturnSuccess) {
-			descriptor->release();
-			IOLockUnlock(verifyLock);
-			*status = kIOReturnNoMemory;
-			return true;
-		}
-		result = windowOwner->doAsyncReadWrite(descriptor,
-		    windowBaseBlock + spans[index].start /
-		    GTA4L_EMMC_BLOCK_BYTES,
-		    spans[index].bytes / GTA4L_EMMC_BLOCK_BYTES,
-		    nullptr, &completion);
-		(void)descriptor->complete(kIODirectionIn);
-		descriptor->release();
-		if ((result != kIOReturnSuccess) || !record.called ||
-		    (record.status != kIOReturnSuccess) ||
-		    (record.actual != spans[index].bytes)) {
-			IOLockUnlock(verifyLock);
-			*status = (result != kIOReturnSuccess) ? result :
-			    ((record.called &&
-			    (record.status != kIOReturnSuccess)) ?
-			    record.status : kIOReturnIOError);
-			if (lifetimeRootFailure(false, blockNumber, *status)) {
-				IOLockLock(verifyLock);
-				if (state->ready == 0u) {
-					IOLockUnlock(verifyLock);
-					*status = kIOReturnNoMedia;
-					return true;
-				}
-				index--;
-				continue;
+			if ((nextStart != previousEnd) ||
+			    ((nextEnd - groupStart) >
+			    GTA4L_EMMC_BLOCK_MAX_BYTES)) {
+				break;
 			}
-			return true;
+			groupLast++;
 		}
-		if (vr_verify_block(&state->view,
-		    spans[index].start / GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,
-		    verifiedSpan, spans[index].bytes,
-		    &vr_xnu_crypto) != VR_OK) {
-			state->ready = 0u;
-			online = false;
+		groupEnd = spans[groupLast].start + spans[groupLast].bytes;
+		groupBytes = (uint32_t)(groupEnd - groupStart);
+		if ((groupBytes == 0u) ||
+		    (groupBytes > GTA4L_EMMC_BLOCK_MAX_BYTES) ||
+		    ((groupBytes % GTA4L_EMMC_BLOCK_BYTES) != 0u)) {
 			IOLockUnlock(verifyLock);
-			*status = kIOReturnNotPermitted;
-			(void)lifetimeRootFailure(true, blockNumber, *status);
+			*status = kIOReturnBadArgument;
 			return true;
 		}
-		__atomic_fetch_add(&gta4l_emmc_verify_spans, 1,
-		    __ATOMIC_RELAXED);
-		__atomic_fetch_add(&gta4l_emmc_verify_bytes,
-		    spans[index].bytes, __ATOMIC_RELAXED);
-		copyStart = (start > spans[index].start) ?
-		    start : spans[index].start;
-		copyEnd = (end < spans[index].start + spans[index].bytes) ?
-		    end : spans[index].start + spans[index].bytes;
-		if (buffer->writeBytes((IOByteCount)(copyStart - start),
-		    verifiedSpan + (copyStart - spans[index].start),
-		    (IOByteCount)(copyEnd - copyStart)) !=
-		    (IOByteCount)(copyEnd - copyStart)) {
-			IOLockUnlock(verifyLock);
-			*status = kIOReturnNoMemory;
-			return true;
+		for (;;) {
+			struct gta4l_verify_completion record = {};
+			IOStorageCompletion completion;
+			IOMemoryDescriptor *descriptor;
+			IOReturn result;
+
+			descriptor = IOMemoryDescriptor::withAddress(verifiedSpan,
+			    groupBytes, kIODirectionIn);
+			if (descriptor == nullptr) {
+				IOLockUnlock(verifyLock);
+				*status = kIOReturnNoMemory;
+				return true;
+			}
+			completion.target = &record;
+			completion.action = gta4l_verify_completion_action;
+			completion.parameter = nullptr;
+			if (descriptor->prepare(kIODirectionIn) !=
+			    kIOReturnSuccess) {
+				descriptor->release();
+				IOLockUnlock(verifyLock);
+				*status = kIOReturnNoMemory;
+				return true;
+			}
+			result = windowOwner->doAsyncReadWrite(descriptor,
+			    windowBaseBlock + groupStart /
+			    GTA4L_EMMC_BLOCK_BYTES,
+			    groupBytes / GTA4L_EMMC_BLOCK_BYTES,
+			    nullptr, &completion);
+			(void)descriptor->complete(kIODirectionIn);
+			descriptor->release();
+			if ((result != kIOReturnSuccess) || !record.called ||
+			    (record.status != kIOReturnSuccess) ||
+			    (record.actual != groupBytes)) {
+				IOLockUnlock(verifyLock);
+				*status = (result != kIOReturnSuccess) ? result :
+				    ((record.called &&
+				    (record.status != kIOReturnSuccess)) ?
+				    record.status : kIOReturnIOError);
+				if (lifetimeRootFailure(false, blockNumber,
+				    *status)) {
+					IOLockLock(verifyLock);
+					if (state->ready == 0u) {
+						IOLockUnlock(verifyLock);
+						*status = kIOReturnNoMedia;
+						return true;
+					}
+					continue;
+				}
+				return true;
+			}
+			break;
 		}
+		for (index = groupFirst; index <= groupLast; index++) {
+			uint64_t spanOffset;
+			uint64_t copyStart;
+			uint64_t copyEnd;
+			uint8_t *spanData;
+
+			spanOffset = spans[index].start - groupStart;
+			if ((spanOffset > groupBytes) ||
+			    ((uint64_t)spans[index].bytes >
+			    (uint64_t)groupBytes - spanOffset)) {
+				IOLockUnlock(verifyLock);
+				*status = kIOReturnBadArgument;
+				return true;
+			}
+			spanData = verifiedSpan + spanOffset;
+			if (vr_verify_block(&state->view,
+			    spans[index].start /
+			    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,
+			    spanData, spans[index].bytes,
+			    &vr_xnu_crypto) != VR_OK) {
+				state->ready = 0u;
+				online = false;
+				IOLockUnlock(verifyLock);
+				*status = kIOReturnNotPermitted;
+				(void)lifetimeRootFailure(true, blockNumber,
+				    *status);
+				return true;
+			}
+			__atomic_fetch_add(&gta4l_emmc_verify_spans, 1,
+			    __ATOMIC_RELAXED);
+			__atomic_fetch_add(&gta4l_emmc_verify_bytes,
+			    spans[index].bytes, __ATOMIC_RELAXED);
+			copyStart = (start > spans[index].start) ?
+			    start : spans[index].start;
+			copyEnd = (end <
+			    spans[index].start + spans[index].bytes) ?
+			    end : spans[index].start + spans[index].bytes;
+			if (buffer->writeBytes((IOByteCount)(copyStart - start),
+			    spanData + (copyStart - spans[index].start),
+			    (IOByteCount)(copyEnd - copyStart)) !=
+			    (IOByteCount)(copyEnd - copyStart)) {
+				IOLockUnlock(verifyLock);
+				*status = kIOReturnNoMemory;
+				return true;
+			}
+		}
+		groupFirst = groupLast + 1u;
 	}
 	IOLockUnlock(verifyLock);
 	*status = kIOReturnSuccess;

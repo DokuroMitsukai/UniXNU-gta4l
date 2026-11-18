@@ -483,6 +483,126 @@ scenario_read_tamper(void)
 }
 
 static int
+scenario_multi_span(void)
+{
+	uint8_t buffer[GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES];
+	IOReturn returned = kIOReturnError;
+	IOReturn completed = kIOReturnError;
+	IOByteCount actual = 0;
+	uint64_t spans_before;
+	uint64_t bytes_before;
+	uint64_t blocks = GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES /
+	    GTA4L_EMMC_BLOCK_BYTES;
+	uint32_t calls;
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	CHECK(open_windows() == 0);
+	memset(buffer, 0xa5, sizeof(buffer));
+	spans_before = gta4l_emmc_verify_spans;
+	bytes_before = gta4l_emmc_verify_bytes;
+	calls = g_owner_calls;
+	CHECK(window_read(g_window_os, 0u, blocks, kIODirectionIn, buffer,
+	    &returned, &completed, &actual) == 0);
+	CHECK(returned == kIOReturnSuccess);
+	CHECK(completed == kIOReturnSuccess);
+	CHECK(actual == sizeof(buffer));
+	CHECK(g_owner_calls == calls + 1u);
+	CHECK(gta4l_emmc_verify_spans == spans_before + 8u);
+	CHECK(gta4l_emmc_verify_bytes == bytes_before +
+	    GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES);
+	CHECK(memcmp(buffer, g_fixture.image.data() + g_fixture.os_offset,
+	    sizeof(buffer)) == 0);
+	return 0;
+}
+
+static int
+scenario_multi_span_unaligned(void)
+{
+	uint8_t buffer[64u * GTA4L_EMMC_BLOCK_BYTES];
+	IOReturn returned = kIOReturnError;
+	IOReturn completed = kIOReturnError;
+	IOByteCount actual = 0;
+	uint32_t calls;
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	CHECK(open_windows() == 0);
+	memset(buffer, 0xa5, sizeof(buffer));
+	calls = g_owner_calls;
+	CHECK(window_read(g_window_os, 1u, 64u, kIODirectionIn, buffer,
+	    &returned, &completed, &actual) == 0);
+	CHECK(returned == kIOReturnSuccess);
+	CHECK(completed == kIOReturnSuccess);
+	CHECK(actual == sizeof(buffer));
+	/* A 32 KiB group plus the single trailing aligned span. */
+	CHECK(g_owner_calls == calls + 2u);
+	CHECK(memcmp(buffer,
+	    g_fixture.image.data() + g_fixture.os_offset +
+	    GTA4L_EMMC_BLOCK_BYTES, sizeof(buffer)) == 0);
+	return 0;
+}
+
+static int
+scenario_multi_span_tamper(void)
+{
+	uint8_t buffer[GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES];
+	IOReturn returned = kIOReturnError;
+	IOReturn completed = kIOReturnError;
+	IOByteCount actual = 0;
+	uint64_t blocks = GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES /
+	    GTA4L_EMMC_BLOCK_BYTES;
+	uint32_t calls;
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	CHECK(open_windows() == 0);
+	g_fixture.image[g_fixture.os_offset +
+	    5u * GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES + 7u] ^= 1u;
+	memset(buffer, 0xa5, sizeof(buffer));
+	calls = g_owner_calls;
+	CHECK(window_read(g_window_os, 0u, blocks, kIODirectionIn, buffer,
+	    &returned, &completed, &actual) == 0);
+	CHECK(returned == kIOReturnSuccess);
+	CHECK(completed == kIOReturnNotPermitted);
+	CHECK(g_owner_calls == calls + 1u);
+	CHECK(buffer[6u * GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES] == 0xa5u);
+	CHECK(gta4l_verified_window[0].ready == 0u);
+	CHECK(g_window_os->online == false);
+	g_fixture.image = g_fixture.original;
+	return 0;
+}
+
+static int
+scenario_multi_span_short(void)
+{
+	uint8_t buffer[GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES];
+	IOReturn returned = kIOReturnError;
+	IOReturn completed = kIOReturnError;
+	IOByteCount actual = 0;
+	uint64_t blocks = GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES /
+	    GTA4L_EMMC_BLOCK_BYTES;
+
+	CHECK(prepare_verify("gta4l-emmc-block=3 gta4l-emmc-windows=1 "
+	    "gta4l-emmc-verify=1") == 0);
+	CHECK(run_verify() == 0);
+	CHECK(open_windows() == 0);
+	g_owner_short_at = 1;
+	g_owner_calls = 0;
+	memset(buffer, 0xa5, sizeof(buffer));
+	CHECK(window_read(g_window_os, 0u, blocks, kIODirectionIn, buffer,
+	    &returned, &completed, &actual) == 0);
+	CHECK(returned == kIOReturnSuccess);
+	CHECK(completed == kIOReturnIOError);
+	CHECK(buffer[0] == 0xa5u);
+	CHECK(gta4l_verified_window[0].ready == 1u);
+	return 0;
+}
+
+static int
 scenario_write_refused(void)
 {
 	uint8_t buffer[GTA4L_EMMC_BLOCK_BYTES];
@@ -1218,6 +1338,10 @@ static const struct scenario g_scenarios[] = {
 	{ "load-wrong-anchor", scenario_load_wrong_anchor },
 	{ "load-wrong-uuid", scenario_load_wrong_uuid },
 	{ "read-tamper", scenario_read_tamper },
+	{ "multi-span", scenario_multi_span },
+	{ "multi-span-unaligned", scenario_multi_span_unaligned },
+	{ "multi-span-tamper", scenario_multi_span_tamper },
+	{ "multi-span-short", scenario_multi_span_short },
 	{ "write-refused", scenario_write_refused },
 	{ "no-policy-refused", scenario_no_policy_refused },
 	{ "root-no-policy", scenario_root_no_policy },

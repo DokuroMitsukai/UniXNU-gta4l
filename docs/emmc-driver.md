@@ -10732,11 +10732,12 @@ owner-triggered S5i boot is pending; `a422425b…` stays retired.
 
 The S5i physical LBAs map into SystemOS (`0x1a47ae0` and `0x1a47950` ->
 SystemOS bytes `0x0e9dc000`/`0x0e9aa000`). The SystemOS is the sealed
-`SystemCryptex` volume `8846FE78-2910-4297-AF97-D59BB6F8FC16`. Its
-aligned dyld subcache at `0x8592000` is 113.8 MB; the sampled offsets
-are about 105 MB in, near its end. 633.7 MiB requested in 90 s is about
-5.6 times that subcache with 99.8% sketch hits, so the stream is
-re-reading the same cache file, not one sequential pass.
+`SystemCryptex` volume `8846FE78-2910-4297-AF97-D59BB6F8FC16`. The
+header scan found six subcache headers, but the "5.6 times one 113.8 MB
+subcache" inference was wrong: the volume holds 54 dyld cache files
+totalling 3,148.6 MiB (plus 654.0 MiB of `.symbols`), spanning most of
+the 3.3 GB window. S5j's lifetime range covers essentially the whole
+volume, so this is one broad pre-read, not a localized re-read.
 `VerifiedRoot/src/verified_root.c` `vr_verify_block` hashes bytes
 already supplied and compares with in-memory hashes; it adds no disk
 I/O. `ubc_subr.c` `cs_validate_page` receives the page. The open
@@ -10766,7 +10767,58 @@ userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot
 `e3cbe583…`, efs `51fa824c…`, sec_efs `3a265d58…` and recovery
 `14e11370…`. The BOOT-only flash wrote `ea56c1d1…` (20,920 blocks);
 the region read-back matched, first 4 KiB `34043244…`, full p69
-`417ec5bb…`. One owner-triggered S5j boot is pending. The kernel is
-`cff6b491…`, payload `1deea675…`, args `sheng-pmgr=2
-gta4l-deadline=120`; the block suite is green (528/25/47+35). No boot,
-reboot or other write; userdata stays `ae6e18e7…`.
+`417ec5bb…`. The owner booted this image once; it is consumed and must
+not be booted again. The kernel is `cff6b491…`, payload `1deea675…`,
+args `sheng-pmgr=2 gta4l-deadline=120`; the block suite is green
+(528/25/47+35). No other write; userdata stays `ae6e18e7…`.
+
+
+### 5.4.31 S5j result and S5k verified-read batching (2026-11-18)
+
+The S5j deadline reported 210,922 SystemOS parent requests, **all
+≤4 KiB** (4,095.9 bytes average), 823.9 MiB total, zero errors, and
+99.97% issued from PID 1 context. The lifetime range ran from SystemOS
+byte 0 to `0xbf148000` (about 3.06 GB of the 3.3 GB window) at
+6.9 MiB/s. RAM had 57 reads, zero writes and zero failures; the process
+count stayed 1.
+
+The SystemCryptex contains 54 dyld cache files totalling 3,148.6 MiB
+(`.symbols` excluded). `dyld_shared_cache_arm64.03` is 114,229,248
+bytes with a SHA-256 CodeDirectory (`version 0x20400`,
+`pageSize = 14`, 6,958 code slots, `codeLimit = 113,999,872`). On this
+4 KiB-page kernel, `cs_native4k_prepare` therefore takes the whole-file
+path for every cache file over 32 MiB: 1 MiB `vn_rdwr` chunks with
+`IO_NOCACHE`, hashing each 16 KiB block and deriving 4 KiB hashes. The
+pre-read totals about 3.1 GiB and accounts for the PID 1 reads, the
+absence of children/writes and the flat process count. The earlier
+"5.6× one 113.8 MB subcache" statement is retracted.
+
+The old verified windows advertised `kIOMaximumSegmentCountReadKey = 1`
+and issued one 4 KiB transport read per verified span. Both driver read
+paths copy into the caller and never DMA into client memory:
+`verifiedWindowRead` reads into `verifiedSpan` and calls
+`buffer->writeBytes`, and `copyOutCallback` calls
+`requestBuffer->writeBytes`. S5k therefore:
+
+- advertises `GTA4L_EMMC_BLOCK_VERIFY_SEGMENTS` = 8 (32 KiB) on the
+  windows and the whole device;
+- reads each contiguous group of 4 KiB spans as one request of at most
+  `GTA4L_EMMC_BLOCK_MAX_BYTES` (64 blocks / 32 KiB), splitting an
+  unaligned range at that limit;
+- verifies every 4 KiB span from the group buffer before copying it to
+  the caller, keeping the fail-closed mismatch latch;
+- allocates the 32 KiB chunk and enables `read_multi` in windows mode,
+  so the group is one CMD18 (DMA or PIO) instead of up to eight CMD17
+  requests.
+
+The verified-read host suite is **green**: 29 scenarios (including
+multi-span, unaligned two-group, middle-span tamper and short group)
+and 21 mutation controls (including `group-one-span`). The full block
+suite is also **green**: 528 adapter scenarios, 29 verified-read
+scenarios and core 47 with 35 mutation controls. Kernel
+`6d1a0728…` (51,802,112 bytes) passes the exact-kernel storage audit
+and ABI test. Payload `36731be7…` (83,886,080 bytes) packages BOOT
+`f8c414e4…` (85,688,320 bytes, gate 18/18, first 4 KiB `c0a5cdf8…`)
+with args `sheng-pmgr=2 gta4l-deadline=300`. The longer deadline lets
+the pre-read finish; at the measured 25.8 MB/s CMD18 rate, 3.1 GiB
+takes about 2 minutes.

@@ -16442,7 +16442,7 @@ scenario_windows_publish(void)
 		CHECK(blocks != 0 && bytes != 0 && segments != 0);
 		CHECK(blockValue == GTA4L_EMMC_BLOCK_MAX_BLOCKS);
 		CHECK(byteValue == GTA4L_EMMC_BLOCK_MAX_BYTES);
-		CHECK(segmentValue == 1u);
+		CHECK(segmentValue == GTA4L_EMMC_BLOCK_VERIFY_SEGMENTS);
 	}
 	status = issue_device_read(g_windows_device[1], 0, 1, 512);
 	CHECK(status == kIOReturnSuccess);

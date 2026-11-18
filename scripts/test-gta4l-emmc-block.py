@@ -2338,26 +2338,31 @@ POLICY_MUTATIONS = [
 ]
 
 VERIFY_MUTATIONS = [
+    ('group-one-span',
+     [('\tgroupBytes = (uint32_t)(groupEnd - groupStart);\n',
+       '\tgroupBytes = (uint32_t)(groupEnd - groupStart);\n'
+       '\tgroupBytes = spans[0].bytes;\n')],
+     'multi-span'),
     ('skip-verify',
-     [('\t\tif (vr_verify_block(&state->view,\n'
-       '\t\t    spans[index].start / '
-       'GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,\n'
-       '\t\t    verifiedSpan, spans[index].bytes,\n'
-       '\t\t    &vr_xnu_crypto) != VR_OK) {\n',
-       '\t\tif (0) {\n')],
+     [('\t\t\tif (vr_verify_block(&state->view,\n'
+       '\t\t\t    spans[index].start /\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,\n'
+       '\t\t\t    spanData, spans[index].bytes,\n'
+       '\t\t\t    &vr_xnu_crypto) != VR_OK) {\n',
+       '\t\t\tif (0) {\n')],
      'read-tamper'),
     ('wrong-block',
-     [('\t\t    spans[index].start / '
-       'GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,\n'
-       '\t\t    verifiedSpan, spans[index].bytes,\n',
-       '\t\t    (spans[index].start / '
+     [('\t\t\t    spans[index].start /\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,\n'
+       '\t\t\t    spanData, spans[index].bytes,\n',
+       '\t\t\t    (spans[index].start / '
        'GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES) + 1u,\n'
-       '\t\t    verifiedSpan, spans[index].bytes,\n')],
+       '\t\t\t    spanData, spans[index].bytes,\n')],
      'load-and-read'),
     ('drop-offline-latch',
-     [('\t\t\tstate->ready = 0u;\n'
-       '\t\t\tonline = false;\n',
-       '\t\t\t/* latch dropped */\n')],
+     [('\t\t\t\tstate->ready = 0u;\n'
+       '\t\t\t\tonline = false;\n',
+       '\t\t\t\t/* latch dropped */\n')],
      'read-tamper'),
     ('restore-passthrough',
      [('\tstate = gta4l_verified_by_label(windowLabel);\n'
@@ -2388,30 +2393,29 @@ VERIFY_MUTATIONS = [
        '\t\t}\n')],
      'write-refused'),
     ('accept-missing-completion',
-     [('\t\tif ((result != kIOReturnSuccess) || !record.called ||\n'
-       '\t\t    (record.status != kIOReturnSuccess) ||\n'
-       '\t\t    (record.actual != spans[index].bytes)) {\n',
-       '\t\tif (result != kIOReturnSuccess) {\n')],
+     [('\t\t\tif ((result != kIOReturnSuccess) || !record.called ||\n'
+       '\t\t\t    (record.status != kIOReturnSuccess) ||\n'
+       '\t\t\t    (record.actual != groupBytes)) {\n',
+       '\t\t\tif (result != kIOReturnSuccess) {\n')],
      'completion-skipped'),
     ('copy-before-verify',
-     [('\t\tif (vr_verify_block(&state->view,\n'
-       '\t\t    spans[index].start / '
-       'GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,\n'
-       '\t\t    verifiedSpan, spans[index].bytes,\n'
-       '\t\t    &vr_xnu_crypto) != VR_OK) {\n',
-       '\t\tcopyStart = (start > spans[index].start) ?\n'
-       '\t\t    start : spans[index].start;\n'
-       '\t\tcopyEnd = (end < spans[index].start + '
+     [('\t\t\tif (vr_verify_block(&state->view,\n'       '\t\t\t    spans[index].start /\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,\n'
+       '\t\t\t    spanData, spans[index].bytes,\n'
+       '\t\t\t    &vr_xnu_crypto) != VR_OK) {\n',
+       '\t\t\tcopyStart = (start > spans[index].start) ?\n'
+       '\t\t\t    start : spans[index].start;\n'
+       '\t\t\tcopyEnd = (end < spans[index].start + '
        'spans[index].bytes) ?\n'
-       '\t\t    end : spans[index].start + spans[index].bytes;\n'
-       '\t\t(void)buffer->writeBytes((IOByteCount)(copyStart - start),\n'
-       '\t\t    verifiedSpan + (copyStart - spans[index].start),\n'
-       '\t\t    (IOByteCount)(copyEnd - copyStart));\n'
-       '\t\tif (vr_verify_block(&state->view,\n'
-       '\t\t    spans[index].start / '
-       'GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,\n'
-       '\t\t    verifiedSpan, spans[index].bytes,\n'
-       '\t\t    &vr_xnu_crypto) != VR_OK) {\n')],
+       '\t\t\t    end : spans[index].start + spans[index].bytes;\n'
+       '\t\t\t(void)buffer->writeBytes((IOByteCount)(copyStart - start),\n'
+       '\t\t\t    spanData + (copyStart - spans[index].start),\n'
+       '\t\t\t    (IOByteCount)(copyEnd - copyStart));\n'
+       '\t\t\tif (vr_verify_block(&state->view,\n'
+       '\t\t\t    spans[index].start /\n'
+       '\t\t\t    GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES,\n'
+       '\t\t\t    spanData, spans[index].bytes,\n'
+       '\t\t\t    &vr_xnu_crypto) != VR_OK) {\n')],
      'read-tamper'),
     ('lifetime-no-recovery',
      [('\t\tretry = windowOwner->speedRecover();\n',
@@ -3552,8 +3556,8 @@ def check_verify_adapter(compiler, cxx, temp):
         'verified-read scenarios failed:\n' + run.stdout + run.stderr)
     assert 'PASS gta4l verified read adapter' in run.stdout, run.stdout
     passes = run.stdout.count('PASS ')
-    assert passes == 26, f'expected 26 verified-read PASS lines, got {passes}'
-    print('PASS verified-read adapter: 25 scenarios against real runVerify '
+    assert passes == 30, f'expected 30 verified-read PASS lines, got {passes}'
+    print('PASS verified-read adapter: 29 scenarios against real runVerify '
           'and verifiedWindowRead')
     for name, replacements, scenario in VERIFY_MUTATIONS:
         mirror = temp / f'verify-{name}'

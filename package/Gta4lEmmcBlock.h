@@ -982,6 +982,13 @@ struct gta4l_emmc_block_part {
 #define GTA4L_EMMC_BLOCK_VERIFY_SIGNATURE_BYTES 384u
 #define GTA4L_EMMC_BLOCK_VERIFY_KEY_BYTES 395u
 #define GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES 4096u
+/* The verified windows advertise eight 4 KiB segments and read one
+ * aligned group per parent request, so a 32 KiB pre-read costs one
+ * transport command instead of eight. */
+#define GTA4L_EMMC_BLOCK_VERIFY_SEGMENTS 8u
+#define GTA4L_EMMC_BLOCK_VERIFY_READ_BYTES \
+	(GTA4L_EMMC_BLOCK_VERIFY_SEGMENTS * \
+	GTA4L_EMMC_BLOCK_VERIFY_BLOCK_BYTES)
 #define GTA4L_EMMC_BLOCK_VERIFY_GENERATION 1u
 #define GTA4L_EMMC_BLOCK_VERIFY_OS_BLOCKS 1483785u
 #define GTA4L_EMMC_BLOCK_VERIFY_SYSTEMOS_BLOCKS 806400u
