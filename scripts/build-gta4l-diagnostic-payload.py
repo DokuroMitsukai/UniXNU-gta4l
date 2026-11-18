@@ -32,6 +32,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import plistlib
 import re
 import shutil
 import subprocess
@@ -43,6 +44,94 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / 'scripts/check-gta4l-payload.py'
+
+# The one launchd override allowed on the mutable Data seed. launchd only
+# honours disabled.plist when the file is owned by uid 0, so the seed builder
+# runs as root on the Mac and records the exact ownership here.
+WATCHDOG_POLICY_PATH = '/private/var/db/com.apple.xpc.launchd/disabled.plist'
+WATCHDOG_POLICY_TREE_PATH = '/db/com.apple.xpc.launchd/disabled.plist'
+WATCHDOG_POLICY = {'com.apple.watchdogd': True}
+WATCHDOG_POLICY_BYTES = plistlib.dumps(WATCHDOG_POLICY,
+                                       fmt=plistlib.FMT_BINARY)
+WATCHDOG_POLICY_SHA256 = hashlib.sha256(WATCHDOG_POLICY_BYTES).hexdigest()
+BASE_SEED_RAW_SHA256 = (
+    'd2c4bc743d05a33246f1523d2cc3b5cd2c2217628f91ac0315bc09261f50b02f')
+BASE_SEED_REGULAR_FILES = 39
+BASE_SEED_REGULAR_BYTES = 611715
+
+
+def check_launchd_watchdog_policy(seed, report, report_sha256, dbr, label):
+    """Require exactly one added, root-owned launchd policy file."""
+    def need(condition, message):
+        if not condition:
+            raise SystemExit(f'{label}: {message}')
+
+    policy = seed.get('launchd_disabled')
+    need(isinstance(policy, dict), 'launchd_disabled must be an object')
+    expected = {
+        'path': WATCHDOG_POLICY_PATH,
+        'plist': WATCHDOG_POLICY,
+        'uid': 0,
+        'gid': 0,
+        'mode': '0644',
+        'bytes': len(WATCHDOG_POLICY_BYTES),
+        'sha256': WATCHDOG_POLICY_SHA256,
+    }
+    for key, value in expected.items():
+        need(policy.get(key) == value,
+             f'launchd_disabled.{key} must be {value!r}')
+    need(policy.get('tree_added') == [WATCHDOG_POLICY_TREE_PATH],
+         'launchd_disabled.tree_added must name only the policy file')
+    need(policy.get('tree_removed') == [] and
+         policy.get('tree_changed') == [],
+         'launchd_disabled must not remove or change other entries')
+
+    need(report.get('run_as_uid') == 0,
+         'seed report must come from a root build')
+    need(report.get('mounted_with_owners') is True,
+         'seed report must mount the image with owners enabled')
+    need(report.get('source_raw_sha256') == BASE_SEED_RAW_SHA256,
+         'seed report source is not the recorded original')
+
+    raw = report.get('output_raw_sha256')
+    need(raw == seed.get('sha256'),
+         'seed report raw hash does not match the manifest')
+    need(report.get('output_raw_logical_bytes') == seed.get('bytes'),
+         'seed report logical size does not match the manifest')
+    need(report.get('output_dbr_sha256') ==
+         hashlib.sha256(dbr.read_bytes()).hexdigest(),
+         'seed report packed hash does not match the DBRDISK1 file')
+
+    need(report.get('tree_added') == [WATCHDOG_POLICY_TREE_PATH],
+         'seed report added tree entries differ')
+    need(report.get('tree_removed') == [] and
+         report.get('tree_changed') == [],
+         'seed report removed or changed tree entries')
+    reported = report.get('policy')
+    need(isinstance(reported, dict), 'seed report policy must be an object')
+    for key, value in expected.items():
+        if key == 'sha256':
+            continue
+        need(reported.get(key) == value,
+             f'seed report policy.{key} must be {value!r}')
+    need(report.get('policy_bytes_sha256') == WATCHDOG_POLICY_SHA256,
+         'seed report policy bytes differ from the canonical plist')
+    need(report.get('source_regular_files') == BASE_SEED_REGULAR_FILES + 1,
+         'seed report must add exactly one regular file')
+    need(report.get('source_regular_bytes') ==
+         BASE_SEED_REGULAR_BYTES + len(WATCHDOG_POLICY_BYTES),
+         'seed report added bytes differ from the policy file')
+    need(seed.get('source_regular_files') ==
+         report.get('source_regular_files') and
+         seed.get('source_regular_bytes') ==
+         report.get('source_regular_bytes'),
+         'seed manifest and report file totals differ')
+    need(seed.get('os_inputs_modified') is False,
+         'seed manifest must keep os_inputs_modified false')
+    need(policy.get('builder_report_sha256') == report_sha256,
+         'seed manifest builder_report_sha256 does not match the report')
+
+
 DIAGNOSTICS = {
     'host-init': 'gta4l-sdhci-host-init=1',
     'audit': 'gta4l-sdhci-audit=1',
@@ -173,6 +262,12 @@ def main():
     parser.add_argument('--data-seed-manifest', type=Path,
                         help='seed.json describing the packed owner Data seed; '
                              'required for emmc-block-3-root-data')
+    parser.add_argument('--data-seed-report', type=Path,
+                        help='seed-build.json from the root seed builder; '
+                             'required when the seed declares launchd_disabled')
+    parser.add_argument('--require-launchd-watchdog-policy', action='store_true',
+                        help='fail unless the seed adds exactly the root-owned '
+                             'com.apple.watchdogd disabled.plist')
     parser.add_argument('--trust-cache', type=Path)
     parser.add_argument('--owner-trust-cache', action='store_true',
                         help='use --owner-trust-cache instead of --trust-cache')
@@ -334,6 +429,37 @@ def main():
                     f'{args.data_seed_manifest}: logical seed does not match '
                     'the packed image')
             data_seed['packed'] = packed
+            if args.data_seed_report is not None and not data_seed.get(
+                    'launchd_disabled'):
+                raise SystemExit(
+                    f'{args.data_seed_report}: a seed report requires a seed '
+                    'that declares launchd_disabled')
+            if data_seed.get('launchd_disabled'):
+                if args.data_seed_report is None:
+                    raise SystemExit(
+                        f'{args.data_seed_manifest}: launchd_disabled requires '
+                        '--data-seed-report')
+                if not args.data_seed_report.is_file():
+                    raise SystemExit(
+                        f'{args.data_seed_report}: seed report not found')
+                try:
+                    seed_report = json.loads(
+                        args.data_seed_report.read_text())
+                except json.JSONDecodeError as error:
+                    raise SystemExit(
+                        f'{args.data_seed_report}: invalid JSON: {error}')
+                check_launchd_watchdog_policy(
+                    data_seed, seed_report, sha(args.data_seed_report),
+                    args.data_ramdisk, str(args.data_seed_manifest))
+                data_seed['report'] = {
+                    'path': str(args.data_seed_report.resolve()),
+                    'sha256': sha(args.data_seed_report),
+                }
+            elif args.require_launchd_watchdog_policy:
+                raise SystemExit(
+                    f'{args.data_seed_manifest}: '
+                    '--require-launchd-watchdog-policy needs the exact '
+                    'root-owned watchdogd disabled.plist')
         else:
             if data_seed.get('sha256') != data_hash:
                 raise SystemExit(
@@ -441,6 +567,8 @@ def main():
                 'volume_uuid': data_seed['volume_uuid'],
                 'seed': data_seed.get('seed'),
                 'packed': data_seed.get('packed'),
+                'launchd_disabled': data_seed.get('launchd_disabled'),
+                'report': data_seed.get('report'),
             } if data_seed else None),
             'trust_cache': {
                 'path': str(args.trust_cache.resolve()),

@@ -11,6 +11,7 @@ import importlib.util
 import io
 import json
 import os
+import plistlib
 import struct
 import sys
 import tempfile
@@ -735,6 +736,135 @@ def test_emmc_block_3_root_data_rejects_raw(base):
     assert not output.exists()
     assert not manifest.exists()
     print('PASS emmc-block-3-root-data refuses a raw Data seed')
+
+
+def test_emmc_block_3_root_data_launchd_policy(base):
+    unixnu, uefi, device, kernel, data, trust, checker = make_tree(base)
+    os.environ['FAKE_UNIXNU_RECORD'] = str(base / 'argv.json')
+    os.environ['FAKE_UNIXNU_BOARD'] = str(base / 'board.json')
+    packed_module = unixnu / 'drivers/DarwinBoot/Test'
+    packed_module.mkdir(parents=True)
+    (packed_module / 'packed_ramdisk.py').write_text(FAKE_PACKED)
+    packed = base / 'owner-data-32.dbr'
+    packed.write_bytes(struct.pack('<8sIIQQ', b'DBRDISK1', 1, 4096,
+                                   33554432, 0))
+    module = load_builder(checker)
+    policy_bytes = plistlib.dumps({'com.apple.watchdogd': True},
+                                  fmt=plistlib.FMT_BINARY)
+    policy_sha = hashlib.sha256(policy_bytes).hexdigest()
+    seed_path = base / 'seed.json'
+    report_path = base / 'seed-build.json'
+    report = {
+        'source_raw_sha256': module.BASE_SEED_RAW_SHA256,
+        'output_raw_logical_bytes': 33554432,
+        'output_raw_sha256': 'a' * 64,
+        'output_dbr_sha256': hashlib.sha256(packed.read_bytes()).hexdigest(),
+        'source_regular_files': 40,
+        'source_regular_bytes': 611715 + len(policy_bytes),
+        'tree_added': ['/db/com.apple.xpc.launchd/disabled.plist'],
+        'tree_removed': [],
+        'tree_changed': [],
+        'policy': {
+            'path': '/private/var/db/com.apple.xpc.launchd/disabled.plist',
+            'plist': {'com.apple.watchdogd': True},
+            'uid': 0,
+            'gid': 0,
+            'mode': '0644',
+            'bytes': len(policy_bytes),
+        },
+        'policy_bytes_sha256': policy_sha,
+        'run_as_uid': 0,
+        'mounted_with_owners': True,
+    }
+    report_path.write_text(json.dumps(report, indent=2) + '\n')
+    report_sha = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    manifest = {
+        'sha256': 'a' * 64,
+        'bytes': 33554432,
+        'volume_uuid': 'A3168F05-0F99-42FE-AA9F-F0276C1AFBB1',
+        'seed': 'test owner Data with the watchdogd override',
+        'guest_mutable': True,
+        'owner_keybag_created': False,
+        'os_inputs_modified': False,
+        'source_regular_files': 40,
+        'source_regular_bytes': 611715 + len(policy_bytes),
+        'launchd_disabled': {
+            'path': '/private/var/db/com.apple.xpc.launchd/disabled.plist',
+            'plist': {'com.apple.watchdogd': True},
+            'uid': 0,
+            'gid': 0,
+            'mode': '0644',
+            'bytes': len(policy_bytes),
+            'sha256': policy_sha,
+            'tree_added': ['/db/com.apple.xpc.launchd/disabled.plist'],
+            'tree_removed': [],
+            'tree_changed': [],
+            'builder_report_sha256': report_sha,
+        },
+    }
+    seed_path.write_text(json.dumps(manifest) + '\n')
+
+    def try_build(name, manifest_text, report_text, extra):
+        path = base / f'{name}.json'
+        path.write_text(manifest_text)
+        report_arg = []
+        if report_text is not None:
+            report = base / f'{name}-report.json'
+            report.write_text(report_text)
+            report_arg = ['--data-seed-report', str(report)]
+        output = base / f'{name}.img'
+        out_manifest = base / f'{name}.manifest.json'
+        args = common_arguments(unixnu, uefi, device, data, trust)
+        args[args.index('--data-ramdisk') + 1] = str(packed)
+        index = args.index('rd=md0')
+        del args[index - 1:index + 1]
+        args[args.index('--diagnostic') + 1] = 'emmc-block-3-root-data'
+        args += ['--data-seed-manifest', str(path), *report_arg, *extra]
+        try:
+            code = run(module, [
+                *args,
+                '--kernel', str(kernel),
+                '--output', str(output),
+                '--manifest', str(out_manifest),
+            ])
+        except SystemExit as error:
+            return str(error)
+        assert code == 0
+        return json.loads(out_manifest.read_text())
+
+    built = try_build('good', json.dumps(manifest) + '\n',
+                      report_path.read_text(),
+                      ['--require-launchd-watchdog-policy'])
+    assert isinstance(built, dict), built
+    assert built['data_seed']['launchd_disabled']['uid'] == 0, built
+    assert built['data_seed']['report']['sha256'] == report_sha, built
+    print('PASS root-data accepts exactly the root-owned watchdogd override')
+
+    missing = try_build('missing', json.dumps(manifest) + '\n', None, [])
+    assert 'requires --data-seed-report' in missing, missing
+    changed = dict(report)
+    changed['tree_changed'] = ['/db/com.apple.xpc.launchd']
+    changed_report = json.dumps(changed, indent=2) + '\n'
+    seed_with_changed_report = json.loads(json.dumps(manifest))
+    seed_with_changed_report['launchd_disabled'][
+        'builder_report_sha256'] = hashlib.sha256(
+            changed_report.encode()).hexdigest()
+    wrong = try_build('changed', json.dumps(seed_with_changed_report) + '\n',
+                      changed_report, ['--require-launchd-watchdog-policy'])
+    assert 'removed or changed' in wrong, wrong
+    nonroot = json.loads(json.dumps(manifest))
+    nonroot['launchd_disabled']['uid'] = 501
+    bad = try_build('nonroot', json.dumps(nonroot) + '\n',
+                    report_path.read_text(),
+                    ['--require-launchd-watchdog-policy'])
+    assert 'uid must be 0' in bad, bad
+    plain = json.loads(json.dumps(manifest))
+    del plain['launchd_disabled']
+    required = try_build('plain', json.dumps(plain) + '\n', None,
+                         ['--require-launchd-watchdog-policy'])
+    assert 'needs the exact' in required, required
+    print('PASS root-data refuses a missing report, a changed tree and a '
+          'non-root policy')
 
 
 def test_emmc_block_3_live(base):
@@ -1891,6 +2021,7 @@ def main():
              test_emmc_block_3_root_rejects_data_ramdisk,
              test_emmc_block_3_root_data,
              test_emmc_block_3_root_data_rejects_raw,
+             test_emmc_block_3_root_data_launchd_policy,
              test_emmc_block_3_live,
              test_partobs_rejects_early_panic_fixture,
              test_partcmp_rejects_early_panic_fixture,

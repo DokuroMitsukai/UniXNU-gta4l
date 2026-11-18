@@ -11045,8 +11045,10 @@ final count is 3,086 MB. That is about 11.5 MB/s to the sample and
 8.7 MB/s after it, so the pre-read took roughly 270-300 s and launchd had
 only about 30 s of userland before the timer. No read/hash split was
 printed, so the 11.5 MB/s bottleneck (transport, per-4 KiB verification
-or kernel rehash) remains unmeasured. Free pages were `0x49dbe` of
-`0x79d0e` (about 61%), so there was no memory pressure.
+or kernel rehash) remained unmeasured. The later S5m split answered it:
+reads took 229.7 s and kernel hashing 49.5 s, so the read path dominates
+(5.4.38). Free pages were `0x49dbe` of `0x79d0e` (about 61%), so there
+was no memory pressure.
 
 The `p0`/`p1` position fields are unreliable: `p0` reports
 `n=19d2c00 > x=19c2b72` (min above max) and both windows report the same
@@ -11107,3 +11109,111 @@ time between transport and hashing; `ex=`/`last=` show exec/exit activity.
 A namespace-7 `_container_init(): sandbox_get_container_expected()` panic
 is the QEMU-observed next wall. A 900 s deadline with stable/growing `np`
 means userland stayed alive, and display is the next step.
+
+
+### 5.4.38 S5m result: watchdogd SIGTRAP at 367 s (2026-11-18)
+
+BOOT `e7bd0ff9…` (kernel `2ddaceae…`, payload `bdd39c63…`) is consumed; it
+was booted once and must not be booted again. Owner transcription, wraps
+joined (`watchdog[94]` is the truncated `watchdogd[94]`, `l1` read as `ll`,
+`owner=root` as `owner-root`):
+
+```
+watchdogd[94] exited -- exit reason namespace 2 subcode 0x5 description: none
+gta4l s5m: cache=0/0/6 data=0/4 up=367 pid1=launchd pb=1
+t0 ram=66/2/0 emmc=103189/6004280 vrfy=748473/3065745408 np=11
+ram=67/43/0 emmc=120139/6301112 vrfy=785578/3217727488 np=80
+p0 r=1279 b=22211 e=0 bin=987/292/0
+p1 r=118471 b=6252159 e=0 bin=23422/95049/0
+hc=3294543872/201083/53 bad=0 le=0 ll=0 lo=0 tick=rd=229726 h=49544
+sr=1/3/0/0/54 car=53/0 ex=3/57 last=watchdogd/94/5/2/5
+owner-root: trust=1 apple=80 decision=1 accepted=1 ro=1 mdev=100005a
+sdev=100005a drv=online=1 win=2 errors=0 recov=0 offline=0 mount=1
+frames (13, kernel exit path) pages=0x79d0e free=0x40cd0
+```
+
+The panic is a critical-process exit, not the 900 s deadline. `namespace 2`
+is `OS_REASON_SIGNAL` (`bsd/sys/reason.h:89`) and code 5 is `SIGTRAP`
+(`signal.h:88`); `last=…/5/2/5` agrees (rv 5 means signalled by 5). The
+kernel's `proc_handle_critical_exit()` prints the `%s[%d] exited` prefix for
+a non-init process; `watchdogd`'s launch plist (`3c05ece7…`) sets
+`_PanicOnCrash = {PanicOnConsecutiveCrash = true}`, so a signalled exit is
+fatal. PID 94 suggests at least one earlier crash, but the consecutive-crash
+counter is not directly observable; `ex=3/57` only counts instrumented
+`execve` calls, not `posix_spawn` or process creation.
+
+Userland progressed: `np` 11 -> 80 and Data writes 2 -> 43 between the sample
+and the panic, so this was not an early boot failure. Storage, verified root
+and the driver stayed clean: 53 ready blobs, `car=53/0`, map error 0,
+`bad=0`, `drv` online with no errors, recoveries or offline transition.
+Free pages were `0x40cd0` of `0x79d0e` (about 53%).
+
+**watchdogd audit (strong, offline).** Extracting the root image
+`044-76040-038` gives `/usr/libexec/watchdogd` `ded4c688…`, exactly the
+revision `UniXNU/scripts/check-watchdogd-branches.py` qualifies. That
+emulation of its real connection code shows: with `kern.hv_vmm_present = 0`
+and no `IOWatchdog` service, it executes `brk #1` at `0x10000ab0c` with
+"unable to lookup" (SIGTRAP); with `hv_vmm_present = 1` it exits 0; an open
+error also `brk`s. QEMU is a VM and takes the exit-0 branch, which is why it
+never hit this. The hardware exception PC was not captured; the evidence is
+the identical binary and the emulated branch. `dts/gta4l.dts` and the SM6115
+DTSI have no watchdog node. The only Apple watchdog driver matches
+`wdt,s5l8960x` on `AppleARMIODevice`; no `IOWatchdog` provider exists.
+OnePlus 5 (`cheeseburger`) hits the same SIGTRAP.
+
+**Timing split (correction).** `tick=rd=229726` is 229.7 s in vnode reads and
+`h=49544` is 49.5 s in the 16 KiB/4 KiB hashing, so reads are about 82% and
+kernel hashing about 18% of the 279.3 s preparation. The earlier S5l guess
+that hashing dominated was wrong. The read time includes APFS/decmpfs work,
+verified-root checking, transport and per-request overhead; it is a sum
+across threads, not wall time. A speed fix must target the read path and
+needs driver-side transport vs `vr_verify_block` ticks first.
+
+**Close-out.** The read-only TWRP check after the boot matched p69
+`d75d1b2f…`, first 4 KiB `3bba98d1…`, userdata manifest `3ddf4d4f…`,
+OS.vroot `5f14cb46…`, SystemOS.vroot `e3cbe583…`, efs `51fa824c…`, sec_efs
+`3a265d58…` and recovery `14e11370…`. No device write followed the S5m
+flash. The next step is the launchd policy override (S5n, 5.4.39); the
+alternative, a real SM6115 `IOWatchdog` provider, is deferred.
+
+### 5.4.39 S5n seed and BOOT: launchd watchdogd policy (2026-11-18)
+
+The owner chose the small supported override first: a root-owned launchd
+`disabled.plist` on the mutable Data seed that disables only
+`com.apple.watchdogd`, with a real SM6115 `IOWatchdog` provider as a later,
+separate track. The seed builder ran on the Mac as root, mounted the APFS
+image with owners enabled, and added exactly
+`/private/var/db/com.apple.xpc.launchd/disabled.plist` =
+`{com.apple.watchdogd = true}`, `root:wheel` mode 0644, 69 bytes. No other
+tree entry was added, removed or changed; `os_inputs_modified` stays false.
+The base packed seed `97789988…` (raw `d2c4bc74…`) became dbr `9303e3fc…`
+(raw `362edc1c…`, 1,282,128 encoded bytes). The policy bytes are
+`26c43c53…`. The builder report is `04722603…` and is required by the
+payload gate.
+
+Gates: `UniXNU/scripts/check-launchd-watchdog-policy.py` against launchd
+`8cec9a3c…` and the generated plist PASSes (root policy disables watchdogd
+only; uid 501/502/1000 are rejected). The payload builder now refuses a
+seed whose reported tree delta is not exactly that one file, whose policy
+owner/mode/bytes/hash differ, or whose report does not match the DBRDISK1
+file; the new host test covers the positive and negative cases. The payload
+manifest records the policy and the seed report hash.
+
+Kernel `2ddaceae…` is reused unchanged, so there is no new kernel audit and
+the panic label remains `gta4l s5m:`. Payload `1ac4b1ef…` (83,886,080
+bytes) carries the new seed, the original trust bundle `7416ca4f…` and
+`sheng-pmgr=2 gta4l-deadline=900 gta4l-sample=300`. BOOT `0a75d8f6…`
+(85,688,320 bytes) passes the 18/18 component gate with
+`only_ramdisk_differs=true`; first 4 KiB `4878ea80…`; xz `8ba57a4a…`; the
+Mac decode matched. The preflight immediately before the flash matched p69
+`d75d1b2f…` and the unchanged regions; the BOOT-only flash read back the
+region exactly, first 4 KiB `4878ea80…`, full p69 `bd2e509c…`.
+
+The Data mount payload passes `uid/gid = 99` with mount flags 0. Source
+reading: the VFS applies `mnt_fsowner` only when `MNT_IGNORE_OWNERSHIP` is
+set, and the request does not set it, so the on-disk owner should be what
+launchd sees. This is not yet hardware-confirmed; the S5n boot is the
+confirmation. If `watchdogd` still exits, the override was not applied and
+the next step is to audit mount ownership visibility, not to weaken the
+panic policy. One owner-triggered S5n boot is pending; do not boot the
+image twice.
