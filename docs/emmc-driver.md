@@ -10822,3 +10822,15 @@ and ABI test. Payload `36731be7…` (83,886,080 bytes) packages BOOT
 with args `sheng-pmgr=2 gta4l-deadline=300`. The longer deadline lets
 the pre-read finish; at the measured 25.8 MB/s CMD18 rate, 3.1 GiB
 takes about 2 minutes.
+
+### 5.4.32 S5k-batch BOOT-only flash (2026-11-18)
+
+The re-preflight matched p69 `417ec5bb…`, first 4 KiB `34043244…`,
+userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot
+`e3cbe583…`, efs `51fa824c…`, sec_efs `3a265d58…` and recovery
+`14e11370…`. The BOOT-only flash wrote `f8c414e4…` (20,920 blocks);
+the region read-back matched, first 4 KiB `c0a5cdf8…`, full p69
+`06cfc20f…`. The Mac-side xz decode also matched `f8c414e4…`. One
+owner-triggered S5k boot is pending. The kernel is `6d1a0728…`,
+payload `36731be7…`, args `sheng-pmgr=2 gta4l-deadline=300`. No boot,
+reboot or other write; userdata stays `ae6e18e7…`.
