@@ -22,7 +22,9 @@ gta4l-emmc-block.patch
 # the shared owner-root patch after all boot work is finished.
 gta4l-owner-root-panic.patch
 
-# Board-only diagnostic suffix for the initproc failed-to-start panic: the
-# last native-4K preparation result, shared-region map attempt/result/carrier
-# counts, uptime and the existing driver/window counters. Printing only.
+# Board-only diagnostic suffix for the initproc failed-to-start and deadline
+# panics: the last native-4K preparation result, shared-region map
+# attempt/result/carrier counts, uptime, the pre-read read/hash tick split,
+# exec/exit activity with the last exiting process, and the existing driver
+# counters. Printing only.
 gta4l-owner-root-panic2.patch

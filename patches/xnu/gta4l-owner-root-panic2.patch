@@ -1,8 +1,8 @@
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index 5c506b0..7132f97 100644
+index 5c506b0..bd990c0 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -7975,41 +7975,67 @@ gta4l_deadline_sample(thread_call_param_t p0 __unused,
+@@ -7975,41 +7975,78 @@ gta4l_deadline_sample(thread_call_param_t p0 __unused,
  }
  
  static void
@@ -28,11 +28,20 @@ index 5c506b0..7132f97 100644
 +	    __attribute__((weak_import));
 +	extern unsigned long native_owner_cache_carrier_rejects
 +	    __attribute__((weak_import));
++	extern uint64_t cs_native4k_read_ticks;
++	extern uint64_t cs_native4k_hash_ticks;
++	extern volatile uint64_t gta4l_exec_count;
++	extern volatile uint64_t gta4l_exit_count;
++	extern volatile int gta4l_exit_pid;
++	extern volatile int gta4l_exit_status;
++	extern volatile int gta4l_exit_ns;
++	extern volatile uint64_t gta4l_exit_code;
++	extern char gta4l_exit_name[32];
  	char summary[192];
  	struct gta4l_deadline_sample now;
  	uint64_t win0[15] = {0};
  	uint64_t win1[15] = {0};
-+	uint64_t up_ns = 0;
++	uint64_t up_ns = 0, read_ns = 0, hash_ns = 0;
 +	unsigned long carrier_accepts = 0;
 +	unsigned long carrier_rejects = 0;
  	proc_t p = initproc;
@@ -68,16 +77,18 @@ index 5c506b0..7132f97 100644
 -	    "p1 r=%llu b=%llu e=%llu l=%llx n=%llx x=%llx bin=%llu/%llu/%llu "
 -	    "pid=%llu/%llu/%llu %s",
 +	absolutetime_to_nanoseconds(now.uptime, &up_ns);
++	absolutetime_to_nanoseconds(cs_native4k_read_ticks, &read_ns);
++	absolutetime_to_nanoseconds(cs_native4k_hash_ticks, &hash_ns);
 +	snprintf(buffer, size,
-+	    "gta4l s5l: cache=%d/%d/%d data=%d/%d up=%llu pid1=%s pb=%d "
++	    "gta4l s5m: cache=%d/%d/%d data=%d/%d up=%llu pid1=%s pb=%d "
 +	    "t0 ram=%llu/%llu/%llu emmc=%llu/%llu vrfy=%llu/%llu np=%d "
 +	    "ram=%llu/%llu/%llu emmc=%llu/%llu vrfy=%llu/%llu np=%d "
-+	    "p0 r=%llu b=%llu e=%llu l=%llx n=%llx x=%llx "
-+	    "bin=%llu/%llu/%llu "
-+	    "p1 r=%llu b=%llu e=%llu l=%llx n=%llx x=%llx "
-+	    "bin=%llu/%llu/%llu "
++	    "p0 r=%llu b=%llu e=%llu bin=%llu/%llu/%llu "
++	    "p1 r=%llu b=%llu e=%llu bin=%llu/%llu/%llu "
 +	    "hc=%llu/%lu/%lu bad=%lu le=%lu ll=%llx lo=%llx "
-+	    "sr=%d/%d/%d/%x/%d car=%lu/%lu %s",
++	    "tick=rd=%llu h=%llu "
++	    "sr=%d/%d/%d/%x/%d car=%lu/%lu "
++	    "ex=%llu/%llu last=%s/%d/%d/%d/%llx %s",
  	    native_owner_cache_status, native_owner_cache_mount_status,
  	    native_owner_cache_stage, native_owner_data_status,
 -	    native_owner_data_stage, (unsigned)native_owner_data_device,
@@ -87,32 +98,40 @@ index 5c506b0..7132f97 100644
  	    (unsigned long long)gta4l_first_sample.ram_reads,
  	    (unsigned long long)gta4l_first_sample.ram_writes,
  	    (unsigned long long)gta4l_first_sample.ram_failures,
-@@ -8025,21 +8051,42 @@ gta4l_deadline_fire(thread_call_param_t p0 __unused,
+@@ -8025,21 +8062,44 @@ gta4l_deadline_fire(thread_call_param_t p0 __unused,
  	    (unsigned long long)now.emmc_blocks,
  	    (unsigned long long)now.verify_spans,
  	    (unsigned long long)now.verify_bytes, now.procs,
 -	    (unsigned long long)(delta_ns / 1000000ULL),
  	    (unsigned long long)win0[0], (unsigned long long)win0[1],
- 	    (unsigned long long)win0[2], (unsigned long long)win0[4],
- 	    (unsigned long long)win0[5], (unsigned long long)win0[6],
- 	    (unsigned long long)win0[7], (unsigned long long)win0[8],
+-	    (unsigned long long)win0[2], (unsigned long long)win0[4],
+-	    (unsigned long long)win0[5], (unsigned long long)win0[6],
+-	    (unsigned long long)win0[7], (unsigned long long)win0[8],
 -	    (unsigned long long)win0[9], (unsigned long long)win0[10],
 -	    (unsigned long long)win0[11], (unsigned long long)win0[12],
-+	    (unsigned long long)win0[9],
++	    (unsigned long long)win0[2], (unsigned long long)win0[7],
++	    (unsigned long long)win0[8], (unsigned long long)win0[9],
  	    (unsigned long long)win1[0], (unsigned long long)win1[1],
- 	    (unsigned long long)win1[2], (unsigned long long)win1[4],
- 	    (unsigned long long)win1[5], (unsigned long long)win1[6],
- 	    (unsigned long long)win1[7], (unsigned long long)win1[8],
+-	    (unsigned long long)win1[2], (unsigned long long)win1[4],
+-	    (unsigned long long)win1[5], (unsigned long long)win1[6],
+-	    (unsigned long long)win1[7], (unsigned long long)win1[8],
 -	    (unsigned long long)win1[9], (unsigned long long)win1[10],
 -	    (unsigned long long)win1[11], (unsigned long long)win1[12],
-+	    (unsigned long long)win1[9],
++	    (unsigned long long)win1[2], (unsigned long long)win1[7],
++	    (unsigned long long)win1[8], (unsigned long long)win1[9],
 +	    (unsigned long long)cs_native4k_bytes,
 +	    cs_native4k_full_blocks, cs_native4k_ready_blobs,
 +	    cs_validate_page_bad_hash, cs_native4k_last_error,
 +	    cs_native4k_last_limit, cs_native4k_last_offset,
++	    (unsigned long long)(read_ns / 1000000ULL),
++	    (unsigned long long)(hash_ns / 1000000ULL),
 +	    native_owner_sr_calls, native_owner_sr_stage,
 +	    native_owner_sr_error, (unsigned)native_owner_sr_kr,
 +	    native_owner_sr_files, carrier_accepts, carrier_rejects,
++	    (unsigned long long)gta4l_exec_count,
++	    (unsigned long long)gta4l_exit_count,
++	    gta4l_exit_name, gta4l_exit_pid, gta4l_exit_status,
++	    gta4l_exit_ns, (unsigned long long)gta4l_exit_code,
  	    summary);
  }
 +
@@ -135,6 +154,23 @@ index 5c506b0..7132f97 100644
  #endif
  
  static int
+@@ -8189,8 +8249,15 @@ load_init_program(proc_t p)
+ 		    sizeof(seconds)) && seconds) {
+ 			static thread_call_t sample_call;
+ 			static thread_call_t fire_call;
+-			uint32_t early = seconds / 4u;
++			uint32_t early = 0;
+ 
++			/* The cache pre-read dominates the first minutes, so
++			 * the comparison sample can be set explicitly. */
++			if (!PE_parse_boot_argn("gta4l-sample", &early,
++			    sizeof(early)) || (early == 0u) ||
++			    (early >= seconds)) {
++				early = seconds / 4u;
++			}
+ 			if (early == 0u) {
+ 				early = 1u;
+ 			}
 diff --git a/bsd/kern/kern_exit.c b/bsd/kern/kern_exit.c
 index 2bd8bda..0d91515 100644
 --- a/bsd/kern/kern_exit.c

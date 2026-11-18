@@ -10990,9 +10990,9 @@ userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot
 `e3cbe583…`, efs `51fa824c…`, sec_efs `3a265d58…` and recovery
 `14e11370…`. The BOOT-only flash wrote `702f62cf…` (20,920 blocks);
 the region read-back matched, first 4 KiB `969f5f14…`, full p69
-`7d15e745…`. The Mac-side xz decode also matched. One owner-triggered
-S5l boot is pending; no boot, reboot or other write, userdata stays
-`ae6e18e7…`.
+`7d15e745…`. The Mac-side xz decode also matched. The owner then booted
+the image once; it is consumed and must not be booted again. No other
+write; userdata stays `ae6e18e7…`. See 5.4.36 for the result.
 
 Expected S5l outcome: the pre-read completes, `car=53/0` and
 `sr=…/3/0/0/53` show every cache file accepted and the shared-region
@@ -11001,3 +11001,109 @@ records (`_container_init(): sandbox_get_container_expected()`,
 namespace 7) rather than the namespace-6 missing-library exit. If the
 carrier or map still fails, the suffix reports the exact stage and
 error.
+
+
+### 5.4.36 S5l result: cache mapped, launchd running (2026-11-18)
+
+BOOT `702f62cf679363246738f7fabb573082861fc624754056d87aefa484f80e97c9`
+is consumed (one boot). Owner transcription, wraps joined; the screen
+showed `s51`/`l1`, read here as `s5l`/`ll`:
+
+```
+gta4l s5l: cache=0/0/6 data=0/4 up=330 pid1=launchd pb=1
+t0 ram=57/0/0 emmc=27652/1704424 vrfy=210992/864223232 np=1
+ram=66/2/0 emmc=105671/6044120 vrfy=753453/3086143488 np=22
+p0 r=742 b=10867 e=0 l=1c2cda0 n=19d2c00 x=19c2b72 bin=627/115/0
+p1 r=104603 b=6010807 e=0 l=1c2cda0 n=19d2c00 x=1fcb640 bin=12041/92562/0
+hc=3294543872/201083/53 bad=0 le=0 ll=0 lo=0 sr=1/3/0/0/54 car=53/0
+owner-root: trust=1 apple=80 decision=1 accepted=1 ro=1 mdev=100005a
+sdev=100005a drv=online=1 win=2 errors=0 recov=0 offline=0 mount=1
+@kern_exec.c:8088
+pages=0x79d0e free=0x49dbe
+```
+
+The panic is the 300 s deadline (`gta4l_deadline_fire`,
+`@kern_exec.c:8088`), not an `initproc` exit: nothing fatal happened
+before 330 s of uptime. The carrier fix is confirmed: `car=53/0` (all 53
+cache files accepted, none rejected) and `sr=1/3/0/0/54` (one map call,
+final stage, error 0, `kr` 0). The 54 mapped entries are probably the 53
+files plus one `fd = -1` in-memory data entry that skips the carrier
+check; this is not proven. Hash preparation matches QEMU exactly:
+201,083 full 16 KiB blocks and 53 ready blobs, 3,294,543,872 logical
+bytes, `bad=0`.
+
+Userland started: `np` rose 1 -> 22 and RAM Data writes rose 0 -> 2, the
+first hardware boot where launchd got past the cache and spawned
+processes. The driver stayed online with `errors=0 recov=0 offline=0`,
+and the S5k batching path is qualified: `p1` averages about 29 KiB per
+request (6,010,807 blocks x 512 / 104,603), with 92,562 requests in the
+over-4-KiB, up-to-64-KiB bin.
+
+Measured timing: `up=330` is the 300 s deadline plus about 30 s to
+`load_init_program`. The first sample at 75 s had verified 864 MB; the
+final count is 3,086 MB. That is about 11.5 MB/s to the sample and
+8.7 MB/s after it, so the pre-read took roughly 270-300 s and launchd had
+only about 30 s of userland before the timer. No read/hash split was
+printed, so the 11.5 MB/s bottleneck (transport, per-4 KiB verification
+or kernel rehash) remains unmeasured. Free pages were `0x49dbe` of
+`0x79d0e` (about 61%), so there was no memory pressure.
+
+The `p0`/`p1` position fields are unreliable: `p0` reports
+`n=19d2c00 > x=19c2b72` (min above max) and both windows report the same
+last LBA, while `p0`'s range lies inside the SystemOS window. The counts
+and size bins are internally consistent (`p0` 627+115=742,
+`p1` 12,041+92,562=104,603). The fields were removed from the S5m print
+rather than guessed at.
+
+The read-only close-out after the boot matched p69 `7d15e745…`, first
+4 KiB `969f5f14…`, userdata manifest `3ddf4d4f…`, OS.vroot
+`5f14cb46…`, SystemOS.vroot `e3cbe583…`, efs `51fa824c…`, sec_efs
+`3a265d58…` and recovery `14e11370…`. No device write followed the S5l
+flash.
+
+S5m is the next image: a printing-only change that adds the exec/exit
+totals and the last exiting process (name, pid, status, namespace, code),
+the `cs_native4k` read/hash tick split in milliseconds, an explicit
+`gta4l-sample=<seconds>` boot argument for the comparison sample, and
+`gta4l-deadline=900`. Storage, trust and driver behaviour are unchanged.
+If launchd hits a fatal exit before the deadline, the `initproc` panic
+now prints the same suffix; otherwise the 900 s deadline shows how far
+userland gets.
+
+
+### 5.4.37 S5m build and BOOT-only flash (2026-11-18)
+
+S5m is a printing-only change on top of S5l. `gta4l-owner-root-panic2.patch`
+now also records the last process exit in the existing `gta4l_exit_*`
+globals and prints the exec/exit totals, the last exit (name, pid, status,
+namespace, code), and the `cs_native4k_read_ticks`/`hash_ticks` split in
+milliseconds. The unreliable `p0`/`p1` position fields are not printed.
+`load_init_program` accepts an explicit `gta4l-sample=<seconds>` boot
+argument for the comparison sample (default stays `deadline/4`). Storage,
+trust and driver behaviour are unchanged.
+
+Kernel `2ddaceae…` (51,806,208 bytes) has the carrier, `gta4l_panic_suffix`,
+`gta4l_exit_name`, `gta4l_exit_count`, `gta4l_exec_count` and
+`cs_native4k_read_ticks` linked, and still contains the `gta4l s5m:`
+format. It passes the exact-kernel storage audit (`storage-abi-2ddaceae`)
+and the ABI test. Payload `bdd39c63…` (83,886,080 bytes) keeps the original
+trust bundle `7416ca4f…`, the packed seed and the Data volume, with
+`sheng-pmgr=2 gta4l-deadline=900 gta4l-sample=300`. BOOT `e7bd0ff9…`
+(85,688,320 bytes) passes the 18/18 component gate; first 4 KiB
+`3bba98d1…`.
+
+The preflight immediately before the flash matched p69 `7d15e745…`, first
+4 KiB `969f5f14…`, userdata manifest `3ddf4d4f…`, OS.vroot
+`5f14cb46…`, SystemOS.vroot `e3cbe583…`, efs `51fa824c…`, sec_efs
+`3a265d58…` and recovery `14e11370…`. The BOOT-only flash wrote
+`e7bd0ff9…` (20,920 blocks); the region read-back matched, first 4 KiB
+`3bba98d1…`, full p69 `d75d1b2f…`, and the Mac-side xz decode
+`04f21a12…` matched. One owner-triggered S5m boot is pending; no boot,
+reboot or other write.
+
+Expected reading: the sample at 300 s is after the cache pre-read, so
+`t0` -> deadline covers userland only; `tick=rd=`/`h=` splits the pre-read
+time between transport and hashing; `ex=`/`last=` show exec/exit activity.
+A namespace-7 `_container_init(): sandbox_get_container_expected()` panic
+is the QEMU-observed next wall. A 900 s deadline with stable/growing `np`
+means userland stayed alive, and display is the next step.
