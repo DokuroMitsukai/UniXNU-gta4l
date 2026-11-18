@@ -11222,3 +11222,109 @@ This is not yet hardware-confirmed; the S5n boot is the confirmation. If `watchd
 the next step is to audit mount ownership visibility, not to weaken the
 panic policy. One owner-triggered S5n boot is pending; do not boot the
 image twice.
+
+
+### 5.4.40 S5n result: userland survived the 900 s deadline (2026-11-18)
+
+BOOT `0a75d8f6…` (kernel `2ddaceae…`, payload `1ac4b1ef…`) is consumed; it
+was booted once and must not be booted again. Owner transcription, wraps
+joined (`l1` read as `ll`, `owner=root` as `owner-root`):
+
+```
+gta4l s5m: cache=0/0/6 data=0/4 up=932 pid1=launchd pb=1
+t0 ram=67/2/0 emmc=104531/6026336 vrfy=751230/3077038080 np=15
+ram=70/16953/0 emmc=169987/7406704 vrfy=923777/3783790592 np=110
+p0 r=9195 b=200051 e=0 bin=6122/3073/0
+p1 r=159226 b=7116583 e=0 bin=53827/105399/0
+hc=3294543872/201083/53 bad=0 le=0 ll=0 lo=0 tick=rd=228797 h=49022
+sr=1/3/0/0/54 car=53/0 ex=3/569 last=assistantd/359/6/8/1
+owner-root: trust=1 apple=80 decision=1 accepted=1 ro=1 mdev=100005a
+sdev=100005a drv=online=1 win=2 errors=0 recov=0 offline=0 mount=1
+@kern_exec.c:8101
+frames (4) pages=0x79cc2 free=0x6fd0
+```
+
+The panic is the deadline, not a crash. `kern_exec.c:8101` is the
+`panic("%s", line)` in `gta4l_deadline_fire()`; `up=932` is the 900 s
+deadline plus about 32 s to `load_init_program`. There is no
+`%s[%d] exited` banner, so no critical-exit panic occurred in about 600 s
+of userland.
+
+**The watchdogd override held (strong, indirect).** `watchdogd` has
+`KeepAlive {SuccessfulExit=false}` and `PanicOnConsecutiveCrash`; if
+launchd had still started it, its physical-branch `brk` would have recurred
+and panicked well within 600 s. `last=` names only the final exit, so this
+does not prove `watchdogd` never ran, but it is the expected outcome of the
+root-owned `disabled.plist` and the migration path. Mount ownership
+(`uid/gid = 99`, flags 0) did not hide the on-disk root owner, consistent
+with the source reading. The QEMU-observed namespace-7
+`_container_init` wall did **not** appear on hardware.
+
+Userland grew and kept working: `np` 15 -> 110 and Data writes 2 -> 16,953
+with 0 block failures. `ex=3/569` means 569 exits in about 10 minutes;
+with `np` at 110 this is crash/respawn churn, not a quiet steady state.
+`last=assistantd/359/6/8/1`: rv 6 is SIGABRT, namespace 8 is
+`OS_REASON_OBJC`, code 1. One crasher among many, not a cause by itself.
+
+Storage, cache and trust stayed clean: `car=53/0`, `sr=1/3/0/0/54`,
+`hc` 201,083/53, `bad=0`, driver online with `errors=0 recov=0
+offline=0`. Userland kept reading cleanly: +65,456 eMMC requests,
++1,380,368 blocks (about 707 MB), verified bytes 3,077 -> 3,784 MB. The
+timing split repeated: 228.8 s reads and 49.0 s hashing.
+
+Two observations are not yet explained: free pages fell to `0x6fd0` of
+`0x79cc2` (about 5.7%, roughly 112 MiB), and the 32 MiB RAM Data volume
+took 16,953 writes. The RAM disk is sparse and bounded by its 32 MiB
+logical size, and the block layer reported no failures, so the memory
+drop is not the Data disk; an APFS-level full volume (ENOSPC) is still
+possible. S5o adds printing-only per-namespace exit counts, the last four
+distinct exits, the most frequent exiting name, Data free space,
+free/wired pages and key daemon presence to decide the next step.
+
+The read-only TWRP close-out after the boot matched p69 `bd2e509c…`, first
+4 KiB `4878ea80…`, userdata manifest `3ddf4d4f…`, OS.vroot
+`5f14cb46…`, SystemOS.vroot `e3cbe583…`, efs `51fa824c…`, sec_efs
+`3a265d58…` and recovery `14e11370…`. No device write followed the S5n
+flash.
+
+
+### 5.4.41 S5o build and BOOT-only flash: exit diagnostics (2026-11-18)
+
+S5n left userland alive for the full 900 s but with 569 exits and free
+pages down to about 5.7%. S5o adds printing-only diagnostics to decide
+whether that is Data-volume exhaustion, jetsam, one dominant crasher or a
+normal iOS churn. Storage, trust, driver and the S5n seed are unchanged.
+
+The board-only `gta4l-owner-root-panic2.patch` now also keeps per-namespace
+exit counters (`OS_REASON_JETSAM` 1, `SIGNAL` 2, `CODESIGNING` 3,
+`LIBXPC` 7, `OBJC` 8, `EXEC` 9, `SANDBOX` 25 and other), a four-slot
+distinct-by-name exit ring with pid/rv/ns/code, an eight-slot most-frequent
+name table, `vfs_statfs` of the mounted `/private/var` (blocks/free/files/
+free files), `vm_page_free_count`/`vm_page_wire_count`, and presence of
+`logd`, `configd`, `backboardd`, `SpringBoard` and `mediaserverd`. The
+example panic label is `gta4l s5o:`; the existing cache, carrier, trust,
+driver, read/hash tick and last-exit fields are retained.
+
+Kernel `77dae596…` (51,806,208 bytes) is the fixpoint after the bootstrap
+pass; the exact-kernel audit `storage-abi-77dae596` PASSes and the ABI
+test PASSes. The first build stopped on two host errors that are fixed:
+`vm/vm_page.h` is not exported to this build (the counters are declared
+locally), and `vfs_statfs` returns `struct vfsstatfs *`, not `struct
+statfs *`. Payload `6fec80aa…` (83,886,080 bytes) keeps the S5n seed
+`9303e3fc…`, the root-owned policy, trust `7416ca4f…` and
+`sheng-pmgr=2 gta4l-deadline=900 gta4l-sample=300`. BOOT `1e638726…`
+(85,688,320 bytes) passes 18/18 with `only_ramdisk_differs=true`; first
+4 KiB `f4e6e4fa…`; xz `95961025…`; the Mac decode matched. The block suite
+is green: 528 adapter, 29 verified-read, core 47 + 35 mutation controls.
+
+The preflight immediately before the flash matched p69 `bd2e509c…`, first
+4 KiB `4878ea80…`, and the unchanged userdata/vroot/protected partitions.
+The BOOT-only flash read back the region exactly; first 4 KiB
+`f4e6e4fa…`, full p69 `78c37026…`. One owner-triggered S5o boot is
+pending; do not boot the image twice.
+
+Interpretation: a nearly zero `data` free-block count confirms the Data
+volume filled (next: a larger RAM seed or less logging, sized against
+free memory). A dominant `ns=1` is jetsam memory pressure. A dominant
+`top=` name is the crasher to audit like watchdogd. `spring=1` or
+`backboard=1` means display is the next milestone, not storage.

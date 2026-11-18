@@ -25,6 +25,7 @@ gta4l-owner-root-panic.patch
 # Board-only diagnostic suffix for the initproc failed-to-start and deadline
 # panics: the last native-4K preparation result, shared-region map
 # attempt/result/carrier counts, uptime, the pre-read read/hash tick split,
-# exec/exit activity with the last exiting process, and the existing driver
-# counters. Printing only.
+# exec/exit activity with the last exiting process and the last four distinct
+# names, per-namespace exit counts, the most frequent exiting name, the Data
+# volume free space, free/wired pages and key daemon presence. Printing only.
 gta4l-owner-root-panic2.patch

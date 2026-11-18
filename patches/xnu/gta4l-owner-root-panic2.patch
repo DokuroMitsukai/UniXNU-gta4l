@@ -1,10 +1,160 @@
 diff --git a/bsd/kern/kern_exec.c b/bsd/kern/kern_exec.c
-index 5c506b0..bd990c0 100644
+index 5c506b0..27542db 100644
 --- a/bsd/kern/kern_exec.c
 +++ b/bsd/kern/kern_exec.c
-@@ -7975,41 +7975,78 @@ gta4l_deadline_sample(thread_call_param_t p0 __unused,
+@@ -5123,6 +5123,20 @@ proc_exec_switch_task(proc_t old_proc, proc_t new_proc, task_t old_task, task_t
+  * TODO:	Dynamic linker header address on stack is copied via suword()
+  */
+ /* Device diagnostic: total exec/exit activity for the boot deadline. */
++#define GTA4L_EXIT_NS 40
++#define GTA4L_EXIT_RING 4
++#define GTA4L_EXIT_TOP 8
++struct gta4l_exit_seen {
++	char name[32];
++	int pid;
++	int status;
++	int ns;
++	uint64_t code;
++};
++struct gta4l_exit_top {
++	char name[32];
++	uint64_t count;
++};
+ volatile uint64_t gta4l_exec_count = 0;
+ volatile uint64_t gta4l_exit_count = 0;
+ volatile int gta4l_exit_pid = -1;
+@@ -5130,18 +5144,89 @@ volatile int gta4l_exit_status = 0;
+ volatile int gta4l_exit_ns = 0;
+ volatile uint64_t gta4l_exit_code = 0;
+ char gta4l_exit_name[32] = "none";
++static uint64_t gta4l_exit_ns_count[GTA4L_EXIT_NS];
++static struct gta4l_exit_seen gta4l_exit_seen[GTA4L_EXIT_RING];
++static int gta4l_exit_seen_count, gta4l_exit_seen_next;
++static struct gta4l_exit_top gta4l_exit_top[GTA4L_EXIT_TOP];
++static int gta4l_exit_top_count;
++
++/* Remember the most frequent exiting names without allocating: eight slots,
++ * replacing the least frequent when full. Diagnostics only; a lost update
++ * under concurrent exits is acceptable. */
++static void
++gta4l_note_exit_top(const char *name)
++{
++	int i, smallest;
++
++	for (i = 0; i < gta4l_exit_top_count; i++) {
++		if (strcmp(gta4l_exit_top[i].name, name) == 0) {
++			gta4l_exit_top[i].count++;
++			return;
++		}
++	}
++	if (gta4l_exit_top_count < GTA4L_EXIT_TOP) {
++		i = gta4l_exit_top_count++;
++	} else {
++		smallest = 0;
++		for (i = 1; i < GTA4L_EXIT_TOP; i++) {
++			if (gta4l_exit_top[i].count <
++			    gta4l_exit_top[smallest].count) {
++				smallest = i;
++			}
++		}
++		i = smallest;
++	}
++	strlcpy(gta4l_exit_top[i].name, name,
++	    sizeof(gta4l_exit_top[i].name));
++	gta4l_exit_top[i].count = 1;
++}
+ 
+ void
+ gta4l_note_exit(int pid, const char *name, int status, int ns, uint64_t code)
+ {
+-	if (name != NULL) {
+-		strlcpy(gta4l_exit_name, name, sizeof(gta4l_exit_name));
++	unsigned index = (ns >= 0 && ns < GTA4L_EXIT_NS) ? (unsigned)ns : 0u;
++	int last;
++
++	if (name == NULL) {
++		name = "?";
+ 	}
++	strlcpy(gta4l_exit_name, name, sizeof(gta4l_exit_name));
+ 	gta4l_exit_pid = pid;
+ 	gta4l_exit_status = status;
+ 	gta4l_exit_ns = ns;
+ 	gta4l_exit_code = code;
+ 	__atomic_fetch_add(&gta4l_exit_count, 1, __ATOMIC_RELAXED);
++	__atomic_fetch_add(&gta4l_exit_ns_count[index], 1, __ATOMIC_RELAXED);
++
++	/* Coalesce repeats of the newest name so the four slots show variety. */
++	if (gta4l_exit_seen_count > 0) {
++		last = (gta4l_exit_seen_next + GTA4L_EXIT_RING - 1) %
++		    GTA4L_EXIT_RING;
++		if (strcmp(gta4l_exit_seen[last].name, name) == 0) {
++			gta4l_exit_seen[last].pid = pid;
++			gta4l_exit_seen[last].status = status;
++			gta4l_exit_seen[last].ns = ns;
++			gta4l_exit_seen[last].code = code;
++			gta4l_note_exit_top(name);
++			return;
++		}
++	}
++	{
++		struct gta4l_exit_seen *slot =
++		    &gta4l_exit_seen[gta4l_exit_seen_next];
++
++		strlcpy(slot->name, name, sizeof(slot->name));
++		slot->pid = pid;
++		slot->status = status;
++		slot->ns = ns;
++		slot->code = code;
++		gta4l_exit_seen_next = (gta4l_exit_seen_next + 1) %
++		    GTA4L_EXIT_RING;
++		if (gta4l_exit_seen_count < GTA4L_EXIT_RING) {
++			gta4l_exit_seen_count++;
++		}
++	}
++	gta4l_note_exit_top(name);
  }
  
+ /* ARGSUSED */
+@@ -7224,6 +7309,7 @@ volatile dev_t native_owner_data_device = NODEV;
+ uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
+ uint8_t native_owner_data_seed_sha256[32];
+ char native_owner_data_device_path[64];
++mount_t gta4l_owner_data_mount = NULL;
+ 
+ /* Boot-time read-only union views of owner-provided GPU addon content over sealed system directories, mounted after the Data mount and
+  * before launchd starts: the Adreno Metal plugin bundle over /System/Library/Extensions (the original Metal discovery loads
+@@ -7905,6 +7991,7 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
+ 	if (actual != device || (vfs_flags(data_mount) & MNT_RDONLY) ||
+ 	    strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs")) error = EINVAL;
+ 	if (!error) native_owner_data_stage = 4;
++	if (!error) gta4l_owner_data_mount = data_mount;
+ 	if (!error) native_gpu_addon_prepare(p, scratch);
+ 	if (!error) native_staged_apps_prepare(p, scratch, data_mount);
+ done:
+@@ -7974,50 +8061,151 @@ gta4l_deadline_sample(thread_call_param_t p0 __unused,
+ 	gta4l_first_sample_valid = 1;
+ }
+ 
++static int
++gta4l_proc_named(const char *name)
++{
++	proc_t p;
++	int found = 0;
++
++	proc_list_lock();
++	ALLPROC_FOREACH(p) {
++		if (p->p_stat == SIDL || proc_is_shadow(p)) {
++			continue;
++		}
++		if (strcmp(p->p_name, name) == 0) {
++			found = 1;
++			break;
++		}
++	}
++	proc_list_unlock();
++	return found;
++}
++
  static void
 -gta4l_deadline_fire(thread_call_param_t p0 __unused,
 -    thread_call_param_t p1 __unused)
@@ -30,20 +180,29 @@ index 5c506b0..bd990c0 100644
 +	    __attribute__((weak_import));
 +	extern uint64_t cs_native4k_read_ticks;
 +	extern uint64_t cs_native4k_hash_ticks;
-+	extern volatile uint64_t gta4l_exec_count;
-+	extern volatile uint64_t gta4l_exit_count;
-+	extern volatile int gta4l_exit_pid;
-+	extern volatile int gta4l_exit_status;
-+	extern volatile int gta4l_exit_ns;
-+	extern volatile uint64_t gta4l_exit_code;
-+	extern char gta4l_exit_name[32];
++	extern unsigned int vm_page_free_count;
++	extern unsigned int vm_page_wire_count;
  	char summary[192];
++	char last4[4 * 72 + 1] = "none";
++	char top[40] = "none/0";
  	struct gta4l_deadline_sample now;
- 	uint64_t win0[15] = {0};
- 	uint64_t win1[15] = {0};
+-	uint64_t win0[15] = {0};
+-	uint64_t win1[15] = {0};
++	struct vfsstatfs *sfs;
 +	uint64_t up_ns = 0, read_ns = 0, hash_ns = 0;
++	uint64_t ns_1, ns_2, ns_3, ns_7, ns_8, ns_9, ns_25, ns_other;
++	uint64_t ns_printed;
++	uint64_t data_blocks = 0, data_bfree = 0;
++	uint64_t data_files = 0, data_ffree = 0;
++	uint64_t top_count = 0;
++	const char *top_name = "none";
 +	unsigned long carrier_accepts = 0;
 +	unsigned long carrier_rejects = 0;
++	unsigned int mem_free = 0, mem_wire = 0;
++	int alive_logd, alive_configd, alive_backboard;
++	int alive_spring, alive_media;
++	size_t pos = 0;
++	int i;
  	proc_t p = initproc;
  	const char *name = (p != PROC_NULL) ? p->p_name : "none";
  	int pbin = (p != PROC_NULL) ? csproc_get_platform_binary(p) : -1;
@@ -60,10 +219,10 @@ index 5c506b0..bd990c0 100644
 +	}
  	native_owner_root_panic_summary(summary, sizeof(summary));
  	gta4l_deadline_read(&now);
- 	if (native_gta4l_emmc_window != NULL) {
- 		native_gta4l_emmc_window(0, win0);
- 		native_gta4l_emmc_window(1, win1);
- 	}
+-	if (native_gta4l_emmc_window != NULL) {
+-		native_gta4l_emmc_window(0, win0);
+-		native_gta4l_emmc_window(1, win1);
+-	}
 -	if (gta4l_first_sample_valid &&
 -	    (now.uptime > gta4l_first_sample.uptime)) {
 -		absolutetime_to_nanoseconds(now.uptime -
@@ -79,50 +238,103 @@ index 5c506b0..bd990c0 100644
 +	absolutetime_to_nanoseconds(now.uptime, &up_ns);
 +	absolutetime_to_nanoseconds(cs_native4k_read_ticks, &read_ns);
 +	absolutetime_to_nanoseconds(cs_native4k_hash_ticks, &hash_ns);
++
++	for (i = 0; i < gta4l_exit_seen_count; i++) {
++		int slot = (gta4l_exit_seen_next + GTA4L_EXIT_RING -
++		    gta4l_exit_seen_count + i) % GTA4L_EXIT_RING;
++
++		pos += snprintf(last4 + pos, sizeof(last4) - pos,
++		    "%s%.12s/%d/%d/%d/%llx", i ? ";" : "",
++		    gta4l_exit_seen[slot].name, gta4l_exit_seen[slot].pid,
++		    gta4l_exit_seen[slot].status,
++		    gta4l_exit_seen[slot].ns,
++		    (unsigned long long)gta4l_exit_seen[slot].code);
++	}
++	for (i = 0; i < gta4l_exit_top_count; i++) {
++		if (gta4l_exit_top[i].count > top_count) {
++			top_count = gta4l_exit_top[i].count;
++			top_name = gta4l_exit_top[i].name;
++		}
++	}
++	snprintf(top, sizeof(top), "%.12s/%llu", top_name,
++	    (unsigned long long)top_count);
++
++	ns_1 = gta4l_exit_ns_count[1];
++	ns_2 = gta4l_exit_ns_count[2];
++	ns_3 = gta4l_exit_ns_count[3];
++	ns_7 = gta4l_exit_ns_count[7];
++	ns_8 = gta4l_exit_ns_count[8];
++	ns_9 = gta4l_exit_ns_count[9];
++	ns_25 = gta4l_exit_ns_count[25];
++	ns_printed = ns_1 + ns_2 + ns_3 + ns_7 + ns_8 + ns_9 + ns_25;
++	ns_other = (gta4l_exit_count > ns_printed) ?
++	    gta4l_exit_count - ns_printed : 0;
++
++	sfs = (gta4l_owner_data_mount != NULL) ?
++	    vfs_statfs(gta4l_owner_data_mount) : NULL;
++	if (sfs != NULL) {
++		data_blocks = (uint64_t)sfs->f_blocks;
++		data_bfree = (uint64_t)sfs->f_bfree;
++		data_files = (uint64_t)sfs->f_files;
++		data_ffree = (uint64_t)sfs->f_ffree;
++	}
++	mem_free = vm_page_free_count;
++	mem_wire = vm_page_wire_count;
++	alive_logd = gta4l_proc_named("logd");
++	alive_configd = gta4l_proc_named("configd");
++	alive_backboard = gta4l_proc_named("backboardd");
++	alive_spring = gta4l_proc_named("SpringBoard");
++	alive_media = gta4l_proc_named("mediaserverd");
++
 +	snprintf(buffer, size,
-+	    "gta4l s5m: cache=%d/%d/%d data=%d/%d up=%llu pid1=%s pb=%d "
-+	    "t0 ram=%llu/%llu/%llu emmc=%llu/%llu vrfy=%llu/%llu np=%d "
++	    "gta4l s5o: cache=%d/%d/%d data=%d/%d up=%llu pid1=%s pb=%d "
 +	    "ram=%llu/%llu/%llu emmc=%llu/%llu vrfy=%llu/%llu np=%d "
-+	    "p0 r=%llu b=%llu e=%llu bin=%llu/%llu/%llu "
-+	    "p1 r=%llu b=%llu e=%llu bin=%llu/%llu/%llu "
-+	    "hc=%llu/%lu/%lu bad=%lu le=%lu ll=%llx lo=%llx "
++	    "hc=%llu/%lu/%lu bad=%lu le=%lu "
 +	    "tick=rd=%llu h=%llu "
 +	    "sr=%d/%d/%d/%x/%d car=%lu/%lu "
-+	    "ex=%llu/%llu last=%s/%d/%d/%d/%llx %s",
++	    "ex=%llu/%llu last=%s/%d/%d/%d/%llx "
++	    "ns=1/2/3/7/8/9/25/o=%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu "
++	    "last4=%s top=%s "
++	    "data=%llu/%llu/%llu/%llu mem=%u/%u "
++	    "alive=logd%d/configd%d/backboard%d/spring%d/media%d %s",
  	    native_owner_cache_status, native_owner_cache_mount_status,
  	    native_owner_cache_stage, native_owner_data_status,
 -	    native_owner_data_stage, (unsigned)native_owner_data_device,
 -	    (unsigned long long)native_owner_data_seed_size, name, pbin,
+-	    (unsigned long long)gta4l_first_sample.ram_reads,
+-	    (unsigned long long)gta4l_first_sample.ram_writes,
+-	    (unsigned long long)gta4l_first_sample.ram_failures,
+-	    (unsigned long long)gta4l_first_sample.emmc_requests,
+-	    (unsigned long long)gta4l_first_sample.emmc_blocks,
+-	    (unsigned long long)gta4l_first_sample.verify_spans,
+-	    (unsigned long long)gta4l_first_sample.verify_bytes,
+-	    gta4l_first_sample.procs,
 +	    native_owner_data_stage,
 +	    (unsigned long long)(up_ns / 1000000000ULL), name, pbin,
- 	    (unsigned long long)gta4l_first_sample.ram_reads,
- 	    (unsigned long long)gta4l_first_sample.ram_writes,
- 	    (unsigned long long)gta4l_first_sample.ram_failures,
-@@ -8025,21 +8062,44 @@ gta4l_deadline_fire(thread_call_param_t p0 __unused,
+ 	    (unsigned long long)now.ram_reads,
+ 	    (unsigned long long)now.ram_writes,
+ 	    (unsigned long long)now.ram_failures,
+@@ -8025,20 +8213,46 @@ gta4l_deadline_fire(thread_call_param_t p0 __unused,
  	    (unsigned long long)now.emmc_blocks,
  	    (unsigned long long)now.verify_spans,
  	    (unsigned long long)now.verify_bytes, now.procs,
 -	    (unsigned long long)(delta_ns / 1000000ULL),
- 	    (unsigned long long)win0[0], (unsigned long long)win0[1],
+-	    (unsigned long long)win0[0], (unsigned long long)win0[1],
 -	    (unsigned long long)win0[2], (unsigned long long)win0[4],
 -	    (unsigned long long)win0[5], (unsigned long long)win0[6],
 -	    (unsigned long long)win0[7], (unsigned long long)win0[8],
 -	    (unsigned long long)win0[9], (unsigned long long)win0[10],
 -	    (unsigned long long)win0[11], (unsigned long long)win0[12],
-+	    (unsigned long long)win0[2], (unsigned long long)win0[7],
-+	    (unsigned long long)win0[8], (unsigned long long)win0[9],
- 	    (unsigned long long)win1[0], (unsigned long long)win1[1],
+-	    (unsigned long long)win1[0], (unsigned long long)win1[1],
 -	    (unsigned long long)win1[2], (unsigned long long)win1[4],
 -	    (unsigned long long)win1[5], (unsigned long long)win1[6],
 -	    (unsigned long long)win1[7], (unsigned long long)win1[8],
 -	    (unsigned long long)win1[9], (unsigned long long)win1[10],
 -	    (unsigned long long)win1[11], (unsigned long long)win1[12],
-+	    (unsigned long long)win1[2], (unsigned long long)win1[7],
-+	    (unsigned long long)win1[8], (unsigned long long)win1[9],
+-	    summary);
 +	    (unsigned long long)cs_native4k_bytes,
 +	    cs_native4k_full_blocks, cs_native4k_ready_blobs,
 +	    cs_validate_page_bad_hash, cs_native4k_last_error,
-+	    cs_native4k_last_limit, cs_native4k_last_offset,
 +	    (unsigned long long)(read_ns / 1000000ULL),
 +	    (unsigned long long)(hash_ns / 1000000ULL),
 +	    native_owner_sr_calls, native_owner_sr_stage,
@@ -132,8 +344,18 @@ index 5c506b0..bd990c0 100644
 +	    (unsigned long long)gta4l_exit_count,
 +	    gta4l_exit_name, gta4l_exit_pid, gta4l_exit_status,
 +	    gta4l_exit_ns, (unsigned long long)gta4l_exit_code,
- 	    summary);
- }
++	    (unsigned long long)ns_1, (unsigned long long)ns_2,
++	    (unsigned long long)ns_3, (unsigned long long)ns_7,
++	    (unsigned long long)ns_8, (unsigned long long)ns_9,
++	    (unsigned long long)ns_25, (unsigned long long)ns_other,
++	    last4, top,
++	    (unsigned long long)data_blocks,
++	    (unsigned long long)data_bfree,
++	    (unsigned long long)data_files,
++	    (unsigned long long)data_ffree, mem_free, mem_wire,
++	    alive_logd, alive_configd, alive_backboard, alive_spring,
++	    alive_media, summary);
++}
 +
 +void gta4l_panic_suffix(char *, size_t);
 +void
@@ -150,11 +372,10 @@ index 5c506b0..bd990c0 100644
 +
 +	gta4l_build_summary(line, sizeof(line));
 +	panic("%s", line);
-+}
+ }
  #endif
  
- static int
-@@ -8189,8 +8249,15 @@ load_init_program(proc_t p)
+@@ -8189,8 +8403,15 @@ load_init_program(proc_t p)
  		    sizeof(seconds)) && seconds) {
  			static thread_call_t sample_call;
  			static thread_call_t fire_call;
