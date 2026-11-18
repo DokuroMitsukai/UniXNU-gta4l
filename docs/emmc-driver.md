@@ -11212,8 +11212,13 @@ region exactly, first 4 KiB `4878ea80…`, full p69 `bd2e509c…`.
 The Data mount payload passes `uid/gid = 99` with mount flags 0. Source
 reading: the VFS applies `mnt_fsowner` only when `MNT_IGNORE_OWNERSHIP` is
 set, and the request does not set it, so the on-disk owner should be what
-launchd sees. This is not yet hardware-confirmed; the S5n boot is the
-confirmation. If `watchdogd` still exits, the override was not applied and
+launchd sees. The seed has no `disabled.migrated`, so launchd takes its
+migration path; disassembly of launchd `8cec9a3c…` shows that path opens
+`disabled.plist` with `O_CREAT` (0x200) and mode 0666, without truncation,
+closes it and then reads it. The seed has no old `overrides.plist`, so
+nothing is migrated. The exact checker emulates the marker-present path;
+this boot confirms the migration path preserves the root-owned file.
+This is not yet hardware-confirmed; the S5n boot is the confirmation. If `watchdogd` still exits, the override was not applied and
 the next step is to audit mount ownership visibility, not to weaken the
 panic policy. One owner-triggered S5n boot is pending; do not boot the
 image twice.
