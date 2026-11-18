@@ -11261,9 +11261,10 @@ with the source reading. The QEMU-observed namespace-7
 `_container_init` wall did **not** appear on hardware.
 
 Userland grew and kept working: `np` 15 -> 110 and Data writes 2 -> 16,953
-with 0 block failures. `ex=3/569` means 569 exits in about 10 minutes;
-with `np` at 110 this is crash/respawn churn, not a quiet steady state.
-`last=assistantd/359/6/8/1`: rv 6 is SIGABRT, namespace 8 is
+with 0 block failures. `ex=3/569` counts 569 exit-path events in about
+10 minutes; S5o later showed that most of them are exec handoffs, not
+crashes (see 5.4.42), so the earlier "crash/respawn churn" reading was
+wrong. `last=assistantd/359/6/8/1`: rv 6 is SIGABRT, namespace 8 is
 `OS_REASON_OBJC`, code 1. One crasher among many, not a cause by itself.
 
 Storage, cache and trust stayed clean: `car=53/0`, `sr=1/3/0/0/54`,
@@ -11328,3 +11329,125 @@ volume filled (next: a larger RAM seed or less logging, sized against
 free memory). A dominant `ns=1` is jetsam memory pressure. A dominant
 `top=` name is the crasher to audit like watchdogd. `spring=1` or
 `backboard=1` means display is the next milestone, not storage.
+
+
+### 5.4.42 S5o result: the exits are mostly exec handoffs (2026-11-18)
+
+BOOT `1e638726…` (kernel `77dae596…`, payload `6fec80aa…`) is consumed;
+it was booted once and must not be booted again. Owner transcription,
+wraps joined (`owner=root` read as `owner-root`):
+
+```
+gta4l s5o: cache=0/0/6 data=0/4 up=932 pid1=launchd pb=1
+ram=70/18359/0 emmc=169927/7379032 vrfy=920318/3769622528 np=108
+hc=3294543872/201083/53 bad=0 le=0 tick=rd=229646 h=49063
+sr=1/3/0/0/54 car=53/0 ex=3/619 last=coresymbolicationd/384/0/0/0
+ns=1/2/3/7/8/9/25/o=0/8/0/0/166/0/0/445
+last4=xpcproxy/383/0/0/0;fairplayd.A2/383/0/0/0;xpcproxy/384/0/0/0;coresymbolic/384/0/0/0
+top=xpcproxy/340 data=8192/1564/63482/62560 mem=45758/80054
+alive=logd1/configd1/backboard1/spring0/media1
+owner-root: trust=1 apple=80 decision=1 accepted=1 ro=1 mdev=100005a
+sdev=100005a drv=online=1 win=2 errors=0 recov=0 offline=0 mount=1
+@kern_exec.c:8255
+frames (4) pages=0x79cc1 free=0xb2be
+```
+
+`kern_exec.c:8255` in the S5o patch is `panic("%s", line)` inside
+`gta4l_deadline_fire()`; `up=932` is the 900 s deadline plus about 32 s
+to `load_init_program`. Storage, cache, trust and the driver are
+unchanged and clean: `car=53/0`, `sr=1/3/0/0/54`, `hc` 201,083/53,
+`bad=0`, `drv=online=1 errors=0 recov=0 offline=0 mount=1`. The timing
+split repeats (229.6 s reads, 49.1 s hashing).
+
+**Most exits are exec handoffs, not crashes.** On an exec such as
+`xpcproxy` becoming an on-demand service, `proc_exec_switch_task()`
+moves `P_REF_SHADOW` from the new proc record to the old one
+(`kern_exec.c:5054`); the old record then traverses the exit path, where
+`gta4l_note_exit()` sits in `proc_prepareexit()`. `last4` shows the pairs
+(`xpcproxy/383` then `fairplayd.A2/383`, `xpcproxy/384` then
+`coresymbolicationd/384`) and `top=xpcproxy/340`. The S5n reading of 569
+exits as crash/respawn churn was therefore wrong; `o=445` includes
+namespace 0 (no exit reason) for the handoffs and normal idle exits.
+The clean `fairplayd.A2` and `coresymbolicationd` exits confirm the
+on-demand daemon pattern.
+
+**The Data volume was not full at the deadline:** 8,192 4 KiB blocks
+(32 MiB), 1,564 free (~6.1 MiB, 19%) and 62,560 free files. **No jetsam
+pressure:** `ns=1` is 0. Free memory is 45,758 pages (~179 MiB, 9.2%),
+matching the panic's `free=0xb2be`; 80,054 pages are wired (~313 MiB).
+
+**Real leads:** 166 `OS_REASON_OBJC` aborts, 8 `OS_REASON_SIGNAL` exits,
+and `backboardd` alive while `SpringBoard` is absent at the deadline. The
+eight-slot name table is swamped by `xpcproxy`, so the aborting names are
+not visible. `exit_reason_get_string_desc()` (`bsd/sys/reason.h:64`,
+implemented in `kern_exit.c:1303`) can read the Objective-C abort text
+from the exit reason kcdata buffer.
+
+**New ownership lead, not yet proven.** `out/gta4l/owner-data-fixture-s5n/
+seed-tree-after.txt` lists 208 seed entries, 207 owned `99:99` and only
+the launchd policy `0:0`. The original image was populated with ownership
+ignored, so the intended root/mobile owners were not stored. XNU maps a
+reported 99 uid/gid to the caller's uid for non-root callers and root
+bypasses most checks, so many accesses still work, but explicit ownership
+checks (as launchd performs for `disabled.plist`) and containers that
+expect `mobile` ownership may refuse or abort. No measurement ties this
+to the Objective-C aborts; S5p is designed to name them before any seed
+change.
+
+S5p is printing only: it counts exec handoffs apart, ranks abnormal exits
+only, prints the leading ObjC and signal names plus the last ObjC abort
+description, and reports SpringBoard starts/exits/last status and
+`backboardd`'s pid.
+
+
+### 5.4.43 S5p build and BOOT-only flash: abnormal exits (2026-11-18)
+
+S5o showed that 340 of 619 exit-path events were exec handoffs, leaving
+166 Objective-C aborts, 8 signal exits, and SpringBoard absent while
+backboardd stayed alive. S5p is printing only: it separates handoffs,
+ranks abnormal exits only, prints the leading ObjC and signal names and
+the last ObjC abort text, and tracks SpringBoard. Storage, trust, driver
+and the S5n seed are unchanged.
+
+The board-only `gta4l-owner-root-panic2.patch` now passes
+`proc_is_shadow(p)` from `proc_prepareexit`; shadow records increment
+`xh` and return before touching `ns=`, `last=`, `abn4=`, `top3=`,
+`objc=`, `sig=` or the SpringBoard counters. Abnormal exits (`ns != 0`
+or `rv != 0`) feed a four-slot distinct-by-name ring and an eight-slot
+name table; `top3=` prints the three most frequent names, `objc=` and
+`sig=` the leading namespace-8 and namespace-2 names. Namespace 8 also
+copies up to 80 printable characters of
+`exit_reason_get_string_desc(p->p_exit_reason)` into `odesc=`.
+`proc_exec_switch_task()` counts a successful exec whose new proc name is
+`SpringBoard`; real SpringBoard exits record the last rv/ns/code. The
+deadline summary prints `sb=<starts>/<exits>/<last rv>/<ns>/<code>` and
+`bbpid=` for backboardd. The panic label is `gta4l s5p:`.
+
+Kernel `270ba1c2…` (51,806,208 bytes) is the exact packaged build; the
+exact-kernel audit `storage-abi-270ba1c2` PASSes and the ABI test PASSes.
+The build needed four passes: the archive gate compares the stable
+`out/gta4l/storage-abi` audit to the current kernel, and every relink
+changes the kernel hash because archive inputs are rebuilt. The final
+kernel was audited and copied to `out/gta4l/storage-abi`, and no kernel
+build followed that audit. Payload `b1ad173a…` (83,886,080 bytes) keeps
+the S5n seed `9303e3fc…`, the root-owned policy, trust `7416ca4f…` and
+`sheng-pmgr=2 gta4l-deadline=900 gta4l-sample=300`. BOOT
+`94abfb1c…` (85,688,320 bytes) passes 18/18 with
+`only_ramdisk_differs=true`; first 4 KiB `cbb0d675…`; xz
+`2333e0c0…`; the Mac decode matched.
+
+The preflight immediately before the flash matched p69 `78c37026…`, first
+4 KiB `f4e6e4fa…`, and the unchanged userdata/vroot/protected partitions.
+The BOOT-only flash read back the region exactly; first 4 KiB
+`cbb0d675…`, full p69
+`0f070d2005f247c95102caf8ee7267cc39adcd5f19d0ee09f873ae3f9a6769cb`.
+The block suite passed: 528 adapter, 29 verified-read, core 47 + 35
+mutation controls. One owner-triggered S5p boot is pending; do not boot
+the image twice.
+
+Expected reading: `xh` plus the eight `ns=` values equals the middle
+`ex=` value. `abn4`, `top3`, `objc`, `sig` and `odesc` name the
+aborting processes. `sb=0/0/…` means SpringBoard never exec'd;
+`sb=<n>/<m>/…` with `n>m` means it started and exited, and its last
+status plus `odesc` should say why. `bbpid=-1` would mean backboardd was
+gone at the deadline.
