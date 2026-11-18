@@ -10758,3 +10758,15 @@ final BOOT is staged but **not flashed**: the one S5j boot is pending
 the owner. p69 remains the consumed S5i `12333314…`; do not boot it.
 On the next session, re-preflight and flash `ea56c1d1…` for that one
 boot.
+
+### 5.4.30 S5j-window BOOT-only flash (2026-11-18)
+
+The re-preflight matched p69 `770f8c75…`, first 4 KiB `7c921e66…`,
+userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot
+`e3cbe583…`, efs `51fa824c…`, sec_efs `3a265d58…` and recovery
+`14e11370…`. The BOOT-only flash wrote `ea56c1d1…` (20,920 blocks);
+the region read-back matched, first 4 KiB `34043244…`, full p69
+`417ec5bb…`. One owner-triggered S5j boot is pending. The kernel is
+`cff6b491…`, payload `1deea675…`, args `sheng-pmgr=2
+gta4l-deadline=120`; the block suite is green (528/25/47+35). No boot,
+reboot or other write; userdata stays `ae6e18e7…`.
