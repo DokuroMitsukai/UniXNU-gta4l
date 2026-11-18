@@ -34,5 +34,11 @@ CONFIG_XNU_OWNER_ROOT_TRUST=y
 CONFIG_XNU_VERIFIED_BLOCK_PROVIDER="gta4l-emmc"
 CONFIG_XNU_OWNER_CACHE_MOUNT=y
 CONFIG_XNU_OWNER_CACHE_STARTUP=y
+# The SystemOS volume is mounted at /private/preboot, not unioned over /, so
+# the generic shared-region check (root or /private/preboot/Cryptexes) cannot
+# accept its cache files. The carrier validates the SystemOS volume UUID and
+# the exact cache directory instead; without it the map returns EPERM after
+# the whole-cache signature pre-read.
+CONFIG_XNU_OWNER_CACHE_CARRIER=y
 CONFIG_XNU_OWNER_BOOT_MANIFEST=y
 CONFIG_XNU_OWNER_DATA_MOUNT=y

@@ -10734,8 +10734,8 @@ The S5i physical LBAs map into SystemOS (`0x1a47ae0` and `0x1a47950` ->
 SystemOS bytes `0x0e9dc000`/`0x0e9aa000`). The SystemOS is the sealed
 `SystemCryptex` volume `8846FE78-2910-4297-AF97-D59BB6F8FC16`. The
 header scan found six subcache headers, but the "5.6 times one 113.8 MB
-subcache" inference was wrong: the volume holds 54 dyld cache files
-totalling 3,148.6 MiB (plus 654.0 MiB of `.symbols`), spanning most of
+subcache" inference was wrong: the volume holds 53 dyld cache files
+totalling 3,148.6 MiB (plus a 654.0 MiB `.symbols` file), spanning most of
 the 3.3 GB window. S5j's lifetime range covers essentially the whole
 volume, so this is one broad pre-read, not a localized re-read.
 `VerifiedRoot/src/verified_root.c` `vr_verify_block` hashes bytes
@@ -10782,8 +10782,11 @@ byte 0 to `0xbf148000` (about 3.06 GB of the 3.3 GB window) at
 6.9 MiB/s. RAM had 57 reads, zero writes and zero failures; the process
 count stayed 1.
 
-The SystemCryptex contains 54 dyld cache files totalling 3,148.6 MiB
-(`.symbols` excluded). `dyld_shared_cache_arm64.03` is 114,229,248
+The SystemCryptex contains **53** dyld cache files (49 numbered
+subcaches, two `.dylddata` and two `.dyldlinkedit` companions) totalling
+3,148.6 MiB, plus one 685,817,856-byte `.symbols` file. The earlier
+"54 cache files" count was off by one. `dyld_shared_cache_arm64.03` is
+114,229,248
 bytes with a SHA-256 CodeDirectory (`version 0x20400`,
 `pageSize = 14`, 6,958 code slots, `codeLimit = 113,999,872`). On this
 4 KiB-page kernel, `cs_native4k_prepare` therefore takes the whole-file
@@ -10830,7 +10833,171 @@ userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot
 `e3cbe583…`, efs `51fa824c…`, sec_efs `3a265d58…` and recovery
 `14e11370…`. The BOOT-only flash wrote `f8c414e4…` (20,920 blocks);
 the region read-back matched, first 4 KiB `c0a5cdf8…`, full p69
-`06cfc20f…`. The Mac-side xz decode also matched `f8c414e4…`. One
-owner-triggered S5k boot is pending. The kernel is `6d1a0728…`,
-payload `36731be7…`, args `sheng-pmgr=2 gta4l-deadline=300`. No boot,
-reboot or other write; userdata stays `ae6e18e7…`.
+`06cfc20f…`. The Mac-side xz decode also matched `f8c414e4…`. The
+owner booted this image once; it is consumed and must not be booted
+again. The kernel is `6d1a0728…`, payload `36731be7…`, args
+`sheng-pmgr=2 gta4l-deadline=300`. No other write; userdata stays
+`ae6e18e7…`.
+
+### 5.4.33 S5k result: launchd exited without a dyld cache (2026-11-18)
+
+The batched verified reads moved launchd past the S5j pre-read stall,
+but it then exited instead of continuing:
+
+```
+initproc failed to start -- exit reason namespace 6 subcode 0x1
+description: Library not loaded: /usr/lib/libSystem.B.dylib
+  Referenced from: <4B525992-8C69-315E-A51A-CC9433E45B51> /sbin/launchd
+  Reason: tried: '/usr/lib/libSystem.B.dylib' (no such file, no dyld cache)
+frames ffffffff007a64ccc ffffffff00772da10 ffffffff00772cf14 ffffffff0077482cc
+       ffffffff007748618 ffffffff007282688 ffffffff0074259fc ffffffff0074255d8
+pages=0x79d0e free=0x4f40f
+```
+
+This is a new terminal state: dyld in launchd resolved its first
+dependency and concluded there was neither a shared cache nor a
+standalone `libSystem` (on iPadOS 17 the library exists only in the
+cache). Free pages fell from `0x73231` (94%) at the S5j deadline to
+`0x4f40f` (65%), about 574 MiB more in use, which suggests the run read
+or mapped substantially more than S5j but does not prove the pre-read
+finished.
+
+The panic is XNU's `initproc failed to start` path in `kern_exit.c`.
+`gta4l-owner-root-panic.patch` attaches the owner summary to the
+`kern_sig.c` SIGKILL-of-initproc panic and the deadline panic, not to
+this path, so no `drv=`, `p0`/`p1` or hash-cache counters printed. The
+owner timing is a rough guess (about 5.5–6 min from power-on, not
+measured); the deadline at 300 s fires about 5.5 min after power-on
+once `load_init_program` has run, so launchd may have exited at about
+the deadline. Do not rest conclusions on the estimate; S5l must print
+uptime at the panic.
+
+The S5k "about 2 minutes" estimate is retracted. It counted only raw
+transport at 25.8 MB/s and ignored APFS page-in, per-4 KiB
+`vr_verify_block` hashing, the kernel's 16 KiB/4 KiB rehash and launchd
+work. If most of the 3.1 GiB completed in 4.5–5 min, observed
+throughput was about 10–12 MiB/s, only about 1.5× S5j, so either the
+batching did not take effect or the per-4 KiB verification cost
+dominates. S5l must report the `p1` request-size bins and the
+`cs_native4k_read_ticks`/`hash_ticks` split.
+
+QEMU reference for the same image: the whole-cache pre-read completes
+with 53 ready signature blobs (`_cs_native4k_full_blocks=201083`,
+about 3.07 GiB) and launchd reaches `main`
+(`scripts/check-owner-cache-carrier-checkpoints.py:78`,
+`check-original-launchd-main-checkpoints.py:84`). Hardware must be
+explained against that baseline.
+
+Ranked hypotheses for S5l to separate:
+
+1. **The verified window went offline late in the run.** S5k is the
+   first hardware use of the 64-block CMD18/DMA path for root
+   (lifetime) reads. After the root mount, `lifetimeRootFailure` makes
+   one `speedRecover()`; if that fails the window goes offline silently
+   (no panic). Later reads then return `kIOReturnNoMedia`, the
+   signature is never attached and there is no cache. A late hash
+   mismatch (`state->ready = 0`) looks identical from userland.
+2. **One cache file is rejected by `cs_native4k_prepare`** (scatter
+   vector, `codeLimit64`, a size/slot mismatch): a format-level
+   `ENOTSUP`/`EBADEXEC` would leave that blob unusable.
+3. **Shared-region map failure unrelated to storage** (address/slide or
+   4 KiB-page mapping limits).
+4. **Cache path/visibility**: the owner-cache mount is not where dyld
+   looks. Earlier rungs printed `cache=0/0/6` and QEMU uses the same
+   mount code, so this is least likely.
+
+The close-out read-only check matched p69 `06cfc20f…`, first 4 KiB
+`c0a5cdf8…`, userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`,
+SystemOS.vroot `e3cbe583…`, efs `51fa824c…`, sec_efs `3a265d58…` and
+recovery `14e11370…`. No device write occurred after the S5k flash.
+
+
+### 5.4.34 S5k root cause: owner cache carrier not compiled in (2026-11-18)
+
+The S5k pre-read finished and the shared-region map then rejected the
+cache. The kernel was compiled with **`XNU_OWNER_CACHE_CARRIER=0`**
+(confirmed in `compile_commands.json` for `vm_unix.c`; the linked kernel
+has no `native_owner_cache_carrier_*` symbols). With `CONFIG_CSR` off,
+`shared_region_map_and_slide_setup()` accepts a cache file only when it
+is on the process root mount or on the mount of
+`/private/preboot/Cryptexes`. This board mounts the SystemOS at
+`/private/preboot`, and that volume's root contains only `System` and
+`usr` (no `Cryptexes`), so the first cache file fails the check with
+`EPERM`; `_shared_region_map_and_slide()` returns it before
+`vm_shared_region_map_file()` runs. dyld then falls back to a standalone
+`libSystem`, which does not exist on iPadOS 17, and launchd exits with
+"no dyld cache". This is deterministic and independent of the eMMC
+transport: the S5k driver read the whole 3.1 GiB, then the map failed.
+
+The memory evidence fits: free pages fell by about 574 MiB, close to the
+combined logical size of the two decmpfs-compressed `.dyldlinkedit`
+files, whose decompression retains pages even with `IO_NOCACHE`. The
+pre-read therefore completed rather than timing out.
+
+Fix selected: **`CONFIG_XNU_OWNER_CACHE_CARRIER=y`** in
+`configs/gta4l_fullroot_defconfig`. The carrier validates the OS root
+volume UUID `04769D26-…`, the SystemOS UUID `8846FE78-…`, both
+read-only APFS mounts and the exact
+`/private/preboot/System/Library/Caches/com.apple.dyld` parent before
+accepting a file (`offline-owner-cache-carrier.patch`). It is the
+configuration QEMU's owner-cache checkpoint measures (53 accepts); it is
+not a code-signing or verification bypass.
+
+Host audit of the 53 files: 51 decodable files all have CodeDirectory
+`version 0x20400`, SHA-256, `pageSize = 14`, no scatter,
+`codeLimit64 = 0` and `nCodeSlots == ceil(codeLimit / 16384)`. The two
+`.dyldlinkedit` files are decmpfs-compressed (7z cannot extract the
+payload) but the QEMU checkpoint's 53 ready blobs cover the same 53
+files. No format-level rejection remains.
+
+S5l adds a printing-only suffix to the `initproc failed to start` panic
+(`gta4l-owner-root-panic2.patch`): uptime, the last
+`cs_native4k_prepare` error and position, `cs_native4k` bytes/full
+blocks/ready blobs, bad hashes, shared-region map calls/stage/error/kr/
+file count, carrier accepts/rejects, the existing driver summary and the
+`p0`/`p1` window counters. If the carrier fix works, the cache maps and
+launchd should reach the same later sandbox refusal QEMU records
+(`_container_init(): sandbox_get_container_expected()`); if not, this
+line identifies the exact failure without another blind boot.
+
+
+### 5.4.35 S5l carrier build and BOOT-only flash (2026-11-18)
+
+S5l enables `CONFIG_XNU_OWNER_CACHE_CARRIER=y` and adds
+`gta4l-owner-root-panic2.patch` (board series): a printing-only suffix on
+the `initproc failed to start` and deadline panics with uptime, the last
+`cs_native4k_prepare` error/limit/offset, `cs_native4k` bytes/full
+blocks/ready blobs/bad hashes, shared-region map calls/stage/error/kr/
+file count, carrier accepts/rejects, the driver summary and the `p0`/`p1`
+window counters. The S5k driver is unchanged.
+
+Build results: kernel `f4154496…` (51,806,208 bytes) has
+`native_owner_cache_carrier_accepts/rejects`, `gta4l_panic_suffix`,
+`cs_native4k_last_error` and `native_owner_sr_calls` linked;
+`vm_unix.c` compiles with `XNU_OWNER_CACHE_CARRIER=1`. It passes the
+exact-kernel storage audit (`storage-abi-f4154496`) and the ABI test.
+The block suite is **green** (528 adapter, 29 verified-read, core
+47/35). Payload `f6f19a1a…` (83,886,080 bytes) keeps the original trust
+bundle `7416ca4f…`, the packed seed `97789988…`, the
+`A3168F05-…` Data volume and the diagnostic
+`gta4l-emmc-block=3 gta4l-emmc-windows=1 gta4l-emmc-verify=1
+gta4l-emmc-dma=1 gta4l-emmc-root=1`; args stay
+`sheng-pmgr=2 gta4l-deadline=300`. BOOT `702f62cf…` (85,688,320 bytes)
+passes the 18/18 component gate; first 4 KiB `969f5f14…`.
+
+The preflight matched p69 `06cfc20f…`, first 4 KiB `c0a5cdf8…`,
+userdata manifest `3ddf4d4f…`, OS.vroot `5f14cb46…`, SystemOS.vroot
+`e3cbe583…`, efs `51fa824c…`, sec_efs `3a265d58…` and recovery
+`14e11370…`. The BOOT-only flash wrote `702f62cf…` (20,920 blocks);
+the region read-back matched, first 4 KiB `969f5f14…`, full p69
+`7d15e745…`. The Mac-side xz decode also matched. One owner-triggered
+S5l boot is pending; no boot, reboot or other write, userdata stays
+`ae6e18e7…`.
+
+Expected S5l outcome: the pre-read completes, `car=53/0` and
+`sr=…/3/0/0/53` show every cache file accepted and the shared-region
+map returned 0, and launchd proceeds to the later Sandbox refusal QEMU
+records (`_container_init(): sandbox_get_container_expected()`,
+namespace 7) rather than the namespace-6 missing-library exit. If the
+carrier or map still fails, the suffix reports the exact stage and
+error.
